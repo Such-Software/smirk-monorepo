@@ -296,7 +296,6 @@ impl Algorithm<Ed25519> for ClsagMultisig {
     *nonces[0] - dfg::Scalar(sign_core.key_challenge) * view.secret_share().deref()
   }
 
-  #[must_use]
   fn verify(
     &self,
     _: dfg::EdwardsPoint,

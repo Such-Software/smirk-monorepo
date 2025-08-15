@@ -19,8 +19,7 @@ async fn test_rpc() {
 
   let guard = SEQUENTIAL.lock().await;
 
-  let rpc =
-    SimpleRequestRpc::new("http://monero:oxide@127.0.0.1:18081".to_string()).await.unwrap();
+  let rpc = SimpleRequestRpc::new("http://monero:oxide@127.0.0.1:18081".to_string()).await.unwrap();
 
   {
     // Test get_height
@@ -70,8 +69,7 @@ async fn test_decoy_rpc() {
 
   let guard = SEQUENTIAL.lock().await;
 
-  let rpc =
-    SimpleRequestRpc::new("http://monero:oxide@127.0.0.1:18081".to_string()).await.unwrap();
+  let rpc = SimpleRequestRpc::new("http://monero:oxide@127.0.0.1:18081".to_string()).await.unwrap();
 
   // Ensure there's blocks on-chain
   rpc
