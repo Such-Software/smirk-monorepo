@@ -49,14 +49,13 @@ const LOG_COMMITMENT_BITS: usize = COMMITMENT_BITS.ilog2() as usize;
 const MAX_LR: usize = (MAX_COMMITMENTS.ilog2() as usize) + LOG_COMMITMENT_BITS;
 
 /// An error from proving/verifying Bulletproofs(+).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum BulletproofError {
   /// Proving/verifying a Bulletproof(+) range proof with no commitments.
-  #[cfg_attr(feature = "std", error("no commitments to prove the range for"))]
+  #[error("no commitments to prove the range for")]
   NoCommitments,
   /// Proving/verifying a Bulletproof(+) range proof with more commitments than supported.
-  #[cfg_attr(feature = "std", error("too many commitments to prove the range for"))]
+  #[error("too many commitments to prove the range for")]
   TooManyCommitments,
 }
 

@@ -276,7 +276,7 @@ dependencies = [
  "rand_core",
  "schnorr-signatures",
  "std-shims",
- "thiserror",
+ "thiserror 1.0.69",
  "zeroize",
 ]
 
@@ -626,7 +626,7 @@ dependencies = [
  "rand_core",
  "schnorr-signatures",
  "subtle",
- "thiserror",
+ "thiserror 1.0.69",
  "zeroize",
 ]
 
@@ -643,7 +643,7 @@ dependencies = [
  "serde",
  "serde_json",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.14",
  "zeroize",
 ]
 
@@ -670,7 +670,7 @@ dependencies = [
  "monero-primitives",
  "rand_core",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.14",
  "zeroize",
 ]
 
@@ -690,7 +690,7 @@ dependencies = [
  "rand_core",
  "std-shims",
  "subtle",
- "thiserror",
+ "thiserror 2.0.14",
  "zeroize",
 ]
 
@@ -725,7 +725,7 @@ dependencies = [
  "monero-io",
  "monero-primitives",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.14",
  "zeroize",
 ]
 
@@ -795,7 +795,7 @@ dependencies = [
  "serde",
  "serde_json",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.14",
  "zeroize",
 ]
 
@@ -834,7 +834,7 @@ dependencies = [
  "serde",
  "serde_json",
  "std-shims",
- "thiserror",
+ "thiserror 2.0.14",
  "tokio",
  "zeroize",
 ]
@@ -1248,7 +1248,16 @@ version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b0949c3a6c842cbde3f1686d6eea5a010516deb7085f79db747562d4102f41e"
+dependencies = [
+ "thiserror-impl 2.0.14",
 ]
 
 [[package]]
@@ -1256,6 +1265,17 @@ name = "thiserror-impl"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc5b44b4ab9c2fdd0e0512e6bece8388e214c0749f5862b114cc5b7a25daf227"
 dependencies = [
  "proc-macro2",
  "quote",
