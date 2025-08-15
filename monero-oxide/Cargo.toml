@@ -30,7 +30,7 @@ monero-clsag = { path = "ringct/clsag", version = "0.1", default-features = fals
 monero-borromean = { path = "ringct/borromean", version = "0.1", default-features = false }
 monero-bulletproofs = { path = "ringct/bulletproofs", version = "0.1", default-features = false }
 
-hex-literal = "0.4"
+hex-literal = { version = ">= 0.4, <= 1", default-features = false }
 
 [dev-dependencies]
 hex = { version = "0.4", default-features = false, features = ["std"] }
