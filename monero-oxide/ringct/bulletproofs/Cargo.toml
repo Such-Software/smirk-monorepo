@@ -36,7 +36,7 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 monero-generators = { path = "../../generators", version = "0.4", default-features = false }
 
 [dev-dependencies]
-hex-literal = "0.4"
+hex-literal = { version = ">= 0.4, <= 1", default-features = false }
 
 [features]
 std = [

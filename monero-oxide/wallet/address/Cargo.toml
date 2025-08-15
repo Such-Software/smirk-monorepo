@@ -30,7 +30,7 @@ monero-primitives = { path = "../../primitives", default-features = false }
 [dev-dependencies]
 rand_core = { version = "0.6", default-features = false, features = ["std"] }
 
-hex-literal = { version = "0.4", default-features = false }
+hex-literal = { version = ">= 0.4, <= 1", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
