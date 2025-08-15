@@ -265,17 +265,20 @@ impl TransactionPrefix {
   }
 }
 
+#[allow(private_bounds)]
 mod sealed {
   use core::fmt::Debug;
   use crate::ringct::*;
   use super::*;
 
-  pub(crate) trait RingSignatures: Clone + PartialEq + Eq + Default + Debug {
+  pub(crate) trait PotentiallyPrunedRingSignatures:
+    Clone + PartialEq + Eq + Default + Debug
+  {
     fn signatures_to_write(&self) -> &[RingSignature];
     fn read_signatures(inputs: &[Input], r: &mut impl Read) -> io::Result<Self>;
   }
 
-  impl RingSignatures for Vec<RingSignature> {
+  impl PotentiallyPrunedRingSignatures for Vec<RingSignature> {
     fn signatures_to_write(&self) -> &[RingSignature] {
       self
     }
@@ -293,7 +296,7 @@ mod sealed {
     }
   }
 
-  impl RingSignatures for () {
+  impl PotentiallyPrunedRingSignatures for () {
     fn signatures_to_write(&self) -> &[RingSignature] {
       &[]
     }
@@ -302,7 +305,7 @@ mod sealed {
     }
   }
 
-  pub(crate) trait RctProofsTrait: Clone + PartialEq + Eq + Debug {
+  pub(crate) trait PotentiallyPrunedRctProofs: Clone + PartialEq + Eq + Debug {
     fn write(&self, w: &mut impl Write) -> io::Result<()>;
     fn read(
       ring_length: usize,
@@ -314,7 +317,7 @@ mod sealed {
     fn base(&self) -> &RctBase;
   }
 
-  impl RctProofsTrait for RctProofs {
+  impl PotentiallyPrunedRctProofs for RctProofs {
     fn write(&self, w: &mut impl Write) -> io::Result<()> {
       self.write(w)
     }
@@ -334,7 +337,7 @@ mod sealed {
     }
   }
 
-  impl RctProofsTrait for PrunedRctProofs {
+  impl PotentiallyPrunedRctProofs for PrunedRctProofs {
     fn write(&self, w: &mut impl Write) -> io::Result<()> {
       self.base.write(w, self.rct_type)
     }
@@ -354,20 +357,27 @@ mod sealed {
     }
   }
 
-  pub(crate) trait PotentiallyPruned {
-    type RingSignatures: RingSignatures;
-    type RctProofs: RctProofsTrait;
+  trait Sealed {}
+
+  /// A trait representing either pruned or not pruned proofs.
+  pub trait PotentiallyPruned: Sealed {
+    /// Potentially-pruned ring signatures.
+    type RingSignatures: PotentiallyPrunedRingSignatures;
+    /// Potentially-pruned RingCT proofs.
+    type RctProofs: PotentiallyPrunedRctProofs;
   }
-  /// A transaction which isn't pruned.
+  /// A marker for an object which isn't pruned.
   #[derive(Clone, PartialEq, Eq, Debug)]
   pub struct NotPruned;
+  impl Sealed for NotPruned {}
   impl PotentiallyPruned for NotPruned {
     type RingSignatures = Vec<RingSignature>;
     type RctProofs = RctProofs;
   }
-  /// A transaction which is pruned.
+  /// A marker for an object which is pruned.
   #[derive(Clone, PartialEq, Eq, Debug)]
   pub struct Pruned;
+  impl Sealed for Pruned {}
   impl PotentiallyPruned for Pruned {
     type RingSignatures = ();
     type RctProofs = PrunedRctProofs;
@@ -376,7 +386,7 @@ mod sealed {
 pub use sealed::*;
 
 /// A Monero transaction.
-#[allow(private_bounds, private_interfaces, clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Transaction<P: PotentiallyPruned = NotPruned> {
   /// A version 1 transaction, used by the original Cryptonote codebase.
