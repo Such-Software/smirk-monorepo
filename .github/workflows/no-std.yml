@@ -3,7 +3,7 @@ name: no-std build
 on:
   push:
     branches:
-      - develop
+      - main
     paths:
       - "monero-oxide/**"
       - "tests/no-std/**"
