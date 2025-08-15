@@ -171,6 +171,15 @@ async fn select_n(
 
       // If this is an unlocked output, push it to the result
       if let Some(output) = output.take() {
+        // Unless torsion is present
+        // https://github.com/monero-project/monero/blob/893916ad091a92e765ce3241b94e706ad012b62a
+        //   /src/wallet/wallet2.cpp#L9050-L9060
+        {
+          let [key, commitment] = output;
+          if !(key.is_torsion_free() && commitment.is_torsion_free()) {
+            continue;
+          }
+        }
         res.push((candidates[i], output));
       }
     }
