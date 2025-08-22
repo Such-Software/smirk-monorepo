@@ -1,4 +1,4 @@
-use crate::{decompress_point, hash_to_point};
+use crate::{decompress_point, biased_hash_to_point};
 
 #[test]
 fn test_vectors() {
@@ -27,7 +27,7 @@ fn test_vectors() {
         let bytes = words.next().unwrap();
         let expected = words.next().unwrap();
 
-        let actual = hash_to_point(hex::decode(bytes).unwrap().try_into().unwrap());
+        let actual = biased_hash_to_point(hex::decode(bytes).unwrap().try_into().unwrap());
         assert_eq!(hex::encode(actual.compress().to_bytes()), expected);
       }
       _ => unreachable!("unknown command"),
