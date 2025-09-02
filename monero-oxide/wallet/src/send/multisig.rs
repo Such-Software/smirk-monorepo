@@ -20,6 +20,7 @@ use frost::{
 };
 
 use monero_oxide::{
+  io::CompressedPoint,
   ringct::{
     clsag::{ClsagContext, ClsagMultisigMaskSender, ClsagAddendum, ClsagMultisig},
     RctPrunable, RctProofs,
@@ -223,12 +224,15 @@ impl SignMachine<Transaction> for TransactionSignMachine {
       })
       .collect::<Result<Vec<_>, _>>()?;
 
-    for (key_image, (generator, (scalar, offset))) in
-      key_images.iter_mut().zip(&self.key_image_generators_and_lincombs)
-    {
-      *key_image *= scalar;
-      *key_image += generator * offset;
-    }
+    let key_images: Vec<_> = key_images
+      .into_iter()
+      .zip(&self.key_image_generators_and_lincombs)
+      .map(|(mut key_image, (generator, (scalar, offset)))| {
+        key_image *= scalar;
+        key_image += generator * offset;
+        CompressedPoint::from(key_image.compress())
+      })
+      .collect();
 
     // The above inserted our own preprocess into these maps (which is unnecessary)
     // Remove it now
@@ -310,7 +314,7 @@ impl SignatureMachine<Transaction> for TransactionSignatureMachine {
             shares.iter().map(|(l, shares)| (*l, shares[c].clone())).collect::<HashMap<_, _>>(),
           )?;
           clsags.push(clsag);
-          pseudo_outs.push(pseudo_out);
+          pseudo_outs.push(CompressedPoint::from(pseudo_out.compress()));
         }
       }
       _ => unreachable!("attempted to sign a multisig TX which wasn't CLSAG"),

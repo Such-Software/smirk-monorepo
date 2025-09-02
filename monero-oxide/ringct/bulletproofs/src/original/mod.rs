@@ -8,6 +8,8 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar, EdwardsPoint}
 
 use monero_generators::{H as MONERO_H, Generators, COMMITMENT_BITS};
 use monero_primitives::{Commitment, INV_EIGHT, keccak256_to_scalar};
+use monero_io::CompressedPoint;
+
 use crate::{
   core::{MAX_COMMITMENTS, multiexp},
   scalar_vector::ScalarVector,
@@ -32,10 +34,10 @@ pub(crate) struct AggregateRangeWitness {
 
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
 pub struct AggregateRangeProof {
-  pub(crate) A: EdwardsPoint,
-  pub(crate) S: EdwardsPoint,
-  pub(crate) T1: EdwardsPoint,
-  pub(crate) T2: EdwardsPoint,
+  pub(crate) A: CompressedPoint,
+  pub(crate) S: CompressedPoint,
+  pub(crate) T1: CompressedPoint,
+  pub(crate) T2: CompressedPoint,
   pub(crate) tau_x: Scalar,
   pub(crate) mu: Scalar,
   pub(crate) t_hat: Scalar,
@@ -66,22 +68,26 @@ impl<'a> AggregateRangeStatement<'a> {
     (keccak256_to_scalar(V.iter().flat_map(|V| V.compress().to_bytes()).collect::<Vec<_>>()), V)
   }
 
-  fn transcript_A_S(transcript: Scalar, A: EdwardsPoint, S: EdwardsPoint) -> (Scalar, Scalar) {
+  fn transcript_A_S(
+    transcript: Scalar,
+    A: CompressedPoint,
+    S: CompressedPoint,
+  ) -> (Scalar, Scalar) {
     let mut buf = Vec::with_capacity(96);
     buf.extend(transcript.to_bytes());
-    buf.extend(A.compress().to_bytes());
-    buf.extend(S.compress().to_bytes());
+    buf.extend_from_slice(A.as_bytes());
+    buf.extend_from_slice(S.as_bytes());
     let y = keccak256_to_scalar(buf);
     let z = keccak256_to_scalar(y.to_bytes());
     (y, z)
   }
 
-  fn transcript_T12(transcript: Scalar, T1: EdwardsPoint, T2: EdwardsPoint) -> Scalar {
+  fn transcript_T12(transcript: Scalar, T1: CompressedPoint, T2: CompressedPoint) -> Scalar {
     let mut buf = Vec::with_capacity(128);
-    buf.extend(transcript.to_bytes());
-    buf.extend(transcript.to_bytes());
-    buf.extend(T1.compress().to_bytes());
-    buf.extend(T2.compress().to_bytes());
+    buf.extend_from_slice(transcript.as_bytes());
+    buf.extend_from_slice(transcript.as_bytes());
+    buf.extend_from_slice(T1.as_bytes());
+    buf.extend_from_slice(T2.as_bytes());
     keccak256_to_scalar(buf)
   }
 
@@ -133,19 +139,22 @@ impl<'a> AggregateRangeStatement<'a> {
 
     let alpha = Scalar::random(&mut *rng);
 
-    let A = {
-      let mut terms = Vec::with_capacity(1 + (2 * aL.len()));
-      terms.push((alpha, ED25519_BASEPOINT_POINT));
-      for (aL, G) in aL.0.iter().zip(&generators.G) {
-        terms.push((*aL, *G));
+    let A = CompressedPoint::from(
+      {
+        let mut terms = Vec::with_capacity(1 + (2 * aL.len()));
+        terms.push((alpha, ED25519_BASEPOINT_POINT));
+        for (aL, G) in aL.0.iter().zip(&generators.G) {
+          terms.push((*aL, *G));
+        }
+        for (aR, H) in aR.0.iter().zip(&generators.H) {
+          terms.push((*aR, *H));
+        }
+        let res = multiexp(&terms) * INV_EIGHT();
+        terms.zeroize();
+        res
       }
-      for (aR, H) in aR.0.iter().zip(&generators.H) {
-        terms.push((*aR, *H));
-      }
-      let res = multiexp(&terms) * INV_EIGHT();
-      terms.zeroize();
-      res
-    };
+      .compress(),
+    );
 
     let mut sL = ScalarVector::new(padded_pow_of_2 * COMMITMENT_BITS);
     let mut sR = ScalarVector::new(padded_pow_of_2 * COMMITMENT_BITS);
@@ -155,19 +164,22 @@ impl<'a> AggregateRangeStatement<'a> {
     }
     let rho = Scalar::random(&mut *rng);
 
-    let S = {
-      let mut terms = Vec::with_capacity(1 + (2 * sL.len()));
-      terms.push((rho, ED25519_BASEPOINT_POINT));
-      for (sL, G) in sL.0.iter().zip(&generators.G) {
-        terms.push((*sL, *G));
+    let S = CompressedPoint::from(
+      {
+        let mut terms = Vec::with_capacity(1 + (2 * sL.len()));
+        terms.push((rho, ED25519_BASEPOINT_POINT));
+        for (sL, G) in sL.0.iter().zip(&generators.G) {
+          terms.push((*sL, *G));
+        }
+        for (sR, H) in sR.0.iter().zip(&generators.H) {
+          terms.push((*sR, *H));
+        }
+        let res = multiexp(&terms) * INV_EIGHT();
+        terms.zeroize();
+        res
       }
-      for (sR, H) in sR.0.iter().zip(&generators.H) {
-        terms.push((*sR, *H));
-      }
-      let res = multiexp(&terms) * INV_EIGHT();
-      terms.zeroize();
-      res
-    };
+      .compress(),
+    );
 
     let (y, z) = Self::transcript_A_S(transcript, A, S);
     transcript = z;
@@ -189,25 +201,31 @@ impl<'a> AggregateRangeStatement<'a> {
     let t2 = l[1].clone().inner_product(&r[1]);
 
     let tau_1 = Scalar::random(&mut *rng);
-    let T1 = {
-      let mut T1_terms = [(t1, *MONERO_H), (tau_1, ED25519_BASEPOINT_POINT)];
-      for term in &mut T1_terms {
-        term.0 *= INV_EIGHT();
+    let T1 = CompressedPoint::from(
+      {
+        let mut T1_terms = [(t1, *MONERO_H), (tau_1, ED25519_BASEPOINT_POINT)];
+        for term in &mut T1_terms {
+          term.0 *= INV_EIGHT();
+        }
+        let T1 = multiexp(&T1_terms);
+        T1_terms.zeroize();
+        T1
       }
-      let T1 = multiexp(&T1_terms);
-      T1_terms.zeroize();
-      T1
-    };
+      .compress(),
+    );
     let tau_2 = Scalar::random(&mut *rng);
-    let T2 = {
-      let mut T2_terms = [(t2, *MONERO_H), (tau_2, ED25519_BASEPOINT_POINT)];
-      for term in &mut T2_terms {
-        term.0 *= INV_EIGHT();
+    let T2 = CompressedPoint::from(
+      {
+        let mut T2_terms = [(t2, *MONERO_H), (tau_2, ED25519_BASEPOINT_POINT)];
+        for term in &mut T2_terms {
+          term.0 *= INV_EIGHT();
+        }
+        let T2 = multiexp(&T2_terms);
+        T2_terms.zeroize();
+        T2
       }
-      let T2 = multiexp(&T2_terms);
-      T2_terms.zeroize();
-      T2
-    };
+      .compress(),
+    );
 
     transcript = Self::transcript_T12(transcript, T1, T2);
     let x = transcript;
@@ -252,7 +270,7 @@ impl<'a> AggregateRangeStatement<'a> {
     self,
     rng: &mut (impl RngCore + CryptoRng),
     verifier: &mut BulletproofsBatchVerifier,
-    mut proof: AggregateRangeProof,
+    AggregateRangeProof { A, S, T1, T2, tau_x, mu, t_hat, ip }: AggregateRangeProof,
   ) -> bool {
     let mut padded_pow_of_2 = 1;
     while padded_pow_of_2 < self.commitments.len() {
@@ -270,18 +288,25 @@ impl<'a> AggregateRangeStatement<'a> {
       *commitment = commitment.mul_by_cofactor();
     }
 
-    let (y, z) = Self::transcript_A_S(transcript, proof.A, proof.S);
+    let (y, z) = Self::transcript_A_S(transcript, A, S);
     transcript = z;
     let z = ScalarVector::powers(z, 3 + padded_pow_of_2);
-    transcript = Self::transcript_T12(transcript, proof.T1, proof.T2);
+    transcript = Self::transcript_T12(transcript, T1, T2);
     let x = transcript;
-    transcript = Self::transcript_tau_x_mu_t_hat(transcript, proof.tau_x, proof.mu, proof.t_hat);
+    transcript = Self::transcript_tau_x_mu_t_hat(transcript, tau_x, mu, t_hat);
     let x_ip = transcript;
 
-    proof.A = proof.A.mul_by_cofactor();
-    proof.S = proof.S.mul_by_cofactor();
-    proof.T1 = proof.T1.mul_by_cofactor();
-    proof.T2 = proof.T2.mul_by_cofactor();
+    let decomp_mul_cofactor =
+      |p| CompressedPoint::decompress(&p).map(|p| EdwardsPoint::mul_by_cofactor(&p));
+
+    let (Some(A), Some(S), Some(T1), Some(T2)) = (
+      decomp_mul_cofactor(A),
+      decomp_mul_cofactor(S),
+      decomp_mul_cofactor(T1),
+      decomp_mul_cofactor(T2),
+    ) else {
+      return false;
+    };
 
     let y_pow_n = ScalarVector::powers(y, ip_rows);
     let y_inv_pow_n = ScalarVector::powers(y.invert(), ip_rows);
@@ -291,8 +316,8 @@ impl<'a> AggregateRangeStatement<'a> {
     // 65
     {
       let weight = Scalar::random(&mut *rng);
-      verifier.0.h += weight * proof.t_hat;
-      verifier.0.g += weight * proof.tau_x;
+      verifier.0.h += weight * t_hat;
+      verifier.0.g += weight * tau_x;
 
       // Now that we've accumulated the lhs, negate the weight and accumulate the rhs
       // These will now sum to 0 if equal
@@ -307,15 +332,15 @@ impl<'a> AggregateRangeStatement<'a> {
       for i in 0 .. padded_pow_of_2 {
         verifier.0.h -= weight * z[3 + i] * twos.clone().sum();
       }
-      verifier.0.other.push((weight * x, proof.T1));
-      verifier.0.other.push((weight * (x * x), proof.T2));
+      verifier.0.other.push((weight * x, T1));
+      verifier.0.other.push((weight * (x * x), T2));
     }
 
     let ip_weight = Scalar::random(&mut *rng);
 
     // 66
-    verifier.0.other.push((ip_weight, proof.A));
-    verifier.0.other.push((ip_weight * x, proof.S));
+    verifier.0.other.push((ip_weight, A));
+    verifier.0.other.push((ip_weight * x, S));
     // We can replace these with a g_sum, h_sum scalar in the batch verifier
     // It'd trade `2 * ip_rows` scalar additions (per proof) for one scalar addition and an
     // additional term in the MSM
@@ -335,12 +360,12 @@ impl<'a> AggregateRangeStatement<'a> {
         }
       }
     }
-    verifier.0.h += ip_weight * x_ip * proof.t_hat;
+    verifier.0.h += ip_weight * x_ip * t_hat;
 
     // 67, 68
-    verifier.0.g += ip_weight * -proof.mu;
+    verifier.0.g += ip_weight * -mu;
     let res = IpStatement::new_without_P_transcript(y_inv_pow_n, x_ip)
-      .verify(verifier, ip_rows, transcript, ip_weight, proof.ip);
+      .verify(verifier, ip_rows, transcript, ip_weight, ip);
     res.is_ok()
   }
 }

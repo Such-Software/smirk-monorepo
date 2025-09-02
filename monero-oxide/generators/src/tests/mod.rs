@@ -1,4 +1,6 @@
-use crate::{decompress_point, biased_hash_to_point};
+use monero_io::CompressedPoint;
+
+use crate::{biased_hash_to_point};
 
 #[test]
 fn test_vectors() {
@@ -20,7 +22,7 @@ fn test_vectors() {
           _ => unreachable!("invalid result"),
         };
 
-        let actual = decompress_point(hex::decode(key).unwrap().try_into().unwrap());
+        let actual = CompressedPoint(hex::decode(key).unwrap().try_into().unwrap()).decompress();
         assert_eq!(actual.is_some(), expected);
       }
       "hash_to_ec" => {

@@ -59,8 +59,21 @@ impl RingSignature {
   }
 
   /// Verify the ring signature.
-  pub fn verify(&self, msg: &[u8; 32], ring: &[EdwardsPoint], key_image: &EdwardsPoint) -> bool {
+  pub fn verify(
+    &self,
+    msg: &[u8; 32],
+    ring: &[CompressedPoint],
+    key_image: &CompressedPoint,
+  ) -> bool {
     if ring.len() != self.sigs.len() {
+      return false;
+    }
+
+    let Some(key_image) = key_image.decompress() else {
+      return false;
+    };
+
+    if !key_image.is_torsion_free() {
       return false;
     }
 
@@ -87,12 +100,16 @@ impl RingSignature {
         modified to cause the intended sum, if and only if a corresponding `s` value is known.
       */
 
+      let Some(decomp_ring_member) = ring_member.decompress() else {
+        return false;
+      };
+
       #[allow(non_snake_case)]
-      let Li = EdwardsPoint::vartime_double_scalar_mul_basepoint(&sig.c, ring_member, &sig.s);
+      let Li =
+        EdwardsPoint::vartime_double_scalar_mul_basepoint(&sig.c, &decomp_ring_member, &sig.s);
       buf.extend_from_slice(Li.compress().as_bytes());
       #[allow(non_snake_case)]
-      let Ri =
-        (sig.s * biased_hash_to_point(ring_member.compress().to_bytes())) + (sig.c * key_image);
+      let Ri = (sig.s * biased_hash_to_point(ring_member.to_bytes())) + (sig.c * key_image);
       buf.extend_from_slice(Ri.compress().as_bytes());
 
       sum += sig.c;

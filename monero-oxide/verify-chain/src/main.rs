@@ -2,17 +2,17 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
-use curve25519_dalek::{scalar::Scalar, edwards::EdwardsPoint};
+use curve25519_dalek::scalar::Scalar;
 
 use serde::Deserialize;
 use serde_json::json;
 
 use monero_oxide::{
-  io::decompress_point,
   primitives::Commitment,
   ringct::{RctPrunable, bulletproofs::BatchVerifier},
   transaction::{Input, Transaction},
   block::Block,
+  io::CompressedPoint,
 };
 
 use monero_rpc::{RpcError, Rpc};
@@ -133,7 +133,7 @@ async fn check_block(rpc: impl Rpc, block_i: usize) {
                   rpc: &impl Rpc,
                   amount: u64,
                   indexes: &[u64],
-                ) -> Vec<[EdwardsPoint; 2]> {
+                ) -> Vec<[CompressedPoint; 2]> {
                   #[derive(Deserialize, Debug)]
                   struct Out {
                     key: String,
@@ -169,13 +169,12 @@ async fn check_block(rpc: impl Rpc, block_i: usize) {
                   };
 
                   let rpc_point = |point: &str| {
-                    decompress_point(
+                    CompressedPoint(
                       hex::decode(point)
                         .expect("invalid hex for ring member")
                         .try_into()
                         .expect("invalid point len for ring member"),
                     )
-                    .expect("invalid point for ring member")
                   };
 
                   outs
@@ -184,7 +183,12 @@ async fn check_block(rpc: impl Rpc, block_i: usize) {
                     .map(|out| {
                       let mask = rpc_point(&out.mask);
                       if amount != 0 {
-                        assert_eq!(mask, Commitment::new(Scalar::from(1u8), amount).calculate());
+                        assert_eq!(
+                          mask,
+                          CompressedPoint::from(
+                            Commitment::new(Scalar::from(1u8), amount).calculate().compress()
+                          )
+                        );
                       }
                       [rpc_point(&out.key), mask]
                     })
@@ -193,7 +197,7 @@ async fn check_block(rpc: impl Rpc, block_i: usize) {
 
                 clsag
                   .verify(
-                    &get_outs(&rpc, amount.unwrap_or(0), &actual_indexes).await,
+                    get_outs(&rpc, amount.unwrap_or(0), &actual_indexes).await,
                     image,
                     &pseudo_outs[i],
                     &sig_hash,

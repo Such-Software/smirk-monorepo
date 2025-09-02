@@ -89,7 +89,7 @@ impl ClsagContext {
 #[allow(clippy::large_enum_variant)]
 enum Mode {
   Sign { signer_index: u8, A: EdwardsPoint, AH: EdwardsPoint },
-  Verify { c1: Scalar, D_serialized: EdwardsPoint },
+  Verify { c1: Scalar, D_serialized: CompressedPoint },
 }
 
 // Core of the CLSAG algorithm, applicable to both sign and verify with minimal differences
@@ -144,7 +144,7 @@ fn core(
       to_hash.extend(D_inv_eight.compress().to_bytes());
     }
     Mode::Verify { D_serialized, .. } => {
-      to_hash.extend(D_serialized.compress().to_bytes());
+      to_hash.extend(D_serialized.to_bytes());
     }
   }
   to_hash.extend(pseudo_out.compress().to_bytes());
@@ -233,7 +233,7 @@ fn core(
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Clsag {
   /// The difference of the commitment randomnesses, scaling the key image generator.
-  pub D: EdwardsPoint,
+  pub D: CompressedPoint,
   /// The responses for each ring member.
   pub s: Vec<Scalar>,
   /// The first challenge in the ring.
@@ -281,7 +281,7 @@ impl Clsag {
     );
 
     ClsagSignCore {
-      incomplete_clsag: Clsag { D, s, c1 },
+      incomplete_clsag: Clsag { D: CompressedPoint::from(D.compress()), s, c1 },
       pseudo_out,
       key_challenge: c_p,
       challenged_mask: c_c * mask_delta,
@@ -366,7 +366,18 @@ impl Clsag {
       nonce.zeroize();
 
       debug_assert!(clsag
-        .verify(inputs[i].1.decoys.ring(), &key_images[i], &pseudo_out, &msg_hash)
+        .verify(
+          inputs[i]
+            .1
+            .decoys
+            .ring()
+            .iter()
+            .map(|r| [r[0].compress().into(), r[1].compress().into()])
+            .collect(),
+          &key_images[i].compress().into(),
+          &pseudo_out.compress().into(),
+          &msg_hash
+        )
         .is_ok());
 
       res.push((clsag, pseudo_out));
@@ -382,9 +393,9 @@ impl Clsag {
   /// not use this if you don't know what you're doing.
   pub fn verify(
     &self,
-    ring: &[[EdwardsPoint; 2]],
-    I: &EdwardsPoint,
-    pseudo_out: &EdwardsPoint,
+    ring: Vec<[CompressedPoint; 2]>,
+    I: &CompressedPoint,
+    pseudo_out: &CompressedPoint,
     msg_hash: &[u8; 32],
   ) -> Result<(), ClsagError> {
     // Preliminary checks
@@ -395,19 +406,33 @@ impl Clsag {
     if ring.len() != self.s.len() {
       Err(ClsagError::InvalidS)?;
     }
+
+    let I = I.decompress().ok_or(ClsagError::InvalidImage)?;
     if I.is_identity() || (!I.is_torsion_free()) {
       Err(ClsagError::InvalidImage)?;
     }
 
-    let D_torsion_free = self.D.mul_by_cofactor();
+    let Some(pseudo_out) = pseudo_out.decompress() else {
+      return Err(ClsagError::InvalidCommitment);
+    };
+    let Some(D) = self.D.decompress() else {
+      return Err(ClsagError::InvalidD);
+    };
+    let D_torsion_free = D.mul_by_cofactor();
     if D_torsion_free.is_identity() {
       Err(ClsagError::InvalidD)?;
     }
 
+    let ring = ring
+      .into_iter()
+      .map(|r| Some([r[0].decompress()?, r[1].decompress()?]))
+      .collect::<Option<Vec<_>>>()
+      .ok_or(ClsagError::InvalidRing)?;
+
     let (_, c1) = core(
-      ring,
-      I,
-      pseudo_out,
+      &ring,
+      &I,
+      &pseudo_out,
       msg_hash,
       &D_torsion_free,
       &self.s,
@@ -423,11 +448,15 @@ impl Clsag {
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
     write_raw_vec(write_scalar, &self.s, w)?;
     w.write_all(&self.c1.to_bytes())?;
-    write_point(&self.D, w)
+    self.D.write(w)
   }
 
   /// Read a CLSAG.
   pub fn read<R: Read>(decoys: usize, r: &mut R) -> io::Result<Clsag> {
-    Ok(Clsag { s: read_raw_vec(read_scalar, decoys, r)?, c1: read_scalar(r)?, D: read_point(r)? })
+    Ok(Clsag {
+      s: read_raw_vec(read_scalar, decoys, r)?,
+      c1: read_scalar(r)?,
+      D: CompressedPoint::read(r)?,
+    })
   }
 }

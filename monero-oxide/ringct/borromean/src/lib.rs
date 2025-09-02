@@ -5,7 +5,10 @@
 #![allow(non_snake_case)]
 
 use core::fmt::Debug;
-use std_shims::io::{self, Read, Write};
+use std_shims::{
+  io::{self, Read, Write},
+  vec::Vec,
+};
 
 use zeroize::Zeroize;
 
@@ -75,7 +78,7 @@ impl BorromeanSignatures {
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
 pub struct BorromeanRange {
   sigs: BorromeanSignatures,
-  bit_commitments: [EdwardsPoint; 64],
+  bit_commitments: [CompressedPoint; 64],
 }
 
 impl BorromeanRange {
@@ -83,20 +86,26 @@ impl BorromeanRange {
   pub fn read<R: Read>(r: &mut R) -> io::Result<BorromeanRange> {
     Ok(BorromeanRange {
       sigs: BorromeanSignatures::read(r)?,
-      bit_commitments: read_array(read_point, r)?,
+      bit_commitments: read_array(CompressedPoint::read, r)?,
     })
   }
 
   /// Write the BorromeanRange proof.
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
     self.sigs.write(w)?;
-    write_raw_vec(write_point, &self.bit_commitments, w)
+    write_raw_vec(CompressedPoint::write, &self.bit_commitments, w)
   }
 
   /// Verify the commitment contains a 64-bit value.
   #[must_use]
-  pub fn verify(&self, commitment: &EdwardsPoint) -> bool {
-    if &self.bit_commitments.iter().sum::<EdwardsPoint>() != commitment {
+  pub fn verify(&self, commitment: &CompressedPoint) -> bool {
+    let Some(bit_commitments) =
+      self.bit_commitments.iter().map(CompressedPoint::decompress).collect::<Option<Vec<_>>>()
+    else {
+      return false;
+    };
+
+    if &bit_commitments.iter().sum::<EdwardsPoint>().compress().0 != commitment.as_bytes() {
       return false;
     }
 
@@ -104,9 +113,9 @@ impl BorromeanRange {
     let H_pow_2 = H_pow_2();
     let mut commitments_sub_one = [EdwardsPoint::identity(); 64];
     for i in 0 .. 64 {
-      commitments_sub_one[i] = self.bit_commitments[i] - H_pow_2[i];
+      commitments_sub_one[i] = bit_commitments[i] - H_pow_2[i];
     }
 
-    self.sigs.verify(&self.bit_commitments, &commitments_sub_one)
+    self.sigs.verify(&bit_commitments, &commitments_sub_one)
   }
 }
