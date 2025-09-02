@@ -70,7 +70,7 @@ pub fn keccak256(data: impl AsRef<[u8]>) -> [u8; 32] {
 ///
 /// This function panics if it finds the Keccak-256 preimage for [0; 32].
 pub fn keccak256_to_scalar(data: impl AsRef<[u8]>) -> Scalar {
-  let scalar = Scalar::from_bytes_mod_order(keccak256(data.as_ref()));
+  let scalar = Scalar::from_bytes_mod_order(keccak256(&data));
   // Monero will explicitly error in this case
   // This library acknowledges its practical impossibility of it occurring, and doesn't bother to
   // code in logic to handle it. That said, if it ever occurs, something must happen in order to

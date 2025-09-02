@@ -558,7 +558,7 @@ pub trait Rpc: Sync + Clone {
       let res: BlockResponse =
         self.json_rpc_call("get_block", Some(json!({ "hash": hex::encode(hash) }))).await?;
 
-      let block = Block::read::<&[u8]>(&mut rpc_hex(&res.blob)?.as_ref())
+      let block = Block::read(&mut rpc_hex(&res.blob)?.as_slice())
         .map_err(|_| RpcError::InvalidNode("invalid block".to_string()))?;
       if block.hash() != hash {
         Err(RpcError::InvalidNode("different block than requested (hash)".to_string()))?;
@@ -584,7 +584,7 @@ pub trait Rpc: Sync + Clone {
       let res: BlockResponse =
         self.json_rpc_call("get_block", Some(json!({ "height": number }))).await?;
 
-      let block = Block::read::<&[u8]>(&mut rpc_hex(&res.blob)?.as_ref())
+      let block = Block::read(&mut rpc_hex(&res.blob)?.as_slice())
         .map_err(|_| RpcError::InvalidNode("invalid block".to_string()))?;
 
       // Make sure this is actually the block for this number
@@ -873,7 +873,7 @@ pub trait Rpc: Sync + Clone {
       request.extend(hash);
 
       let indexes_buf = self.bin_call("get_o_indexes.bin", request).await?;
-      let mut indexes: &[u8] = indexes_buf.as_ref();
+      let mut indexes = indexes_buf.as_slice();
 
       (|| {
         let mut res = None;

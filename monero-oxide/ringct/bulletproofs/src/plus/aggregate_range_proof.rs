@@ -65,10 +65,8 @@ impl<'a> AggregateRangeStatement<'a> {
   }
 
   fn transcript_A(transcript: &mut Scalar, A: EdwardsPoint) -> (Scalar, Scalar) {
-    let y = keccak256_to_scalar(
-      [transcript.to_bytes().as_ref(), A.compress().to_bytes().as_ref()].concat(),
-    );
-    let z = keccak256_to_scalar(y.to_bytes().as_ref());
+    let y = keccak256_to_scalar([transcript.to_bytes(), A.compress().to_bytes()].concat());
+    let z = keccak256_to_scalar(y.to_bytes());
     *transcript = z;
     (y, z)
   }
