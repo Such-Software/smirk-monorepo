@@ -6,7 +6,7 @@ resolving common pitfalls developers may face.
 
 `monero-wallet` also offers a FROST-inspired multisignature protocol orders of
 magnitude more performant than Monero's own, formalized as
-[FROSTLASS](../audits/FROSTLASS/FROSTLASS.pdf).
+[FROSTLASS](../../audits/FROSTLASS/FROSTLASS.pdf).
 
 This library is usable under no-std when the `std` feature (on by default) is
 disabled.
