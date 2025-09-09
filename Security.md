@@ -4,19 +4,18 @@
 
 Bugs in monero-oxide which cause a downstream project to be at risk of loss of
 funds (or a similarly critical issue) are to be reported via
-[Serai's Bug Bounty Program](https://immunefi.com/bug-bounty/serai/information/).
-Such bugs will be eligible for a good-faith bounty from Serai. The disclosure is
-to be immediately shared by the Serai maintainers with the monero-oxide
-administrators. A goal of monero-oxide is to deploy its own bug bounty program
-when doing so is financially feasible.
+[monero-oxide's Bug Bounty Program](
+  https://immunefi.com/bug-bounty/monero-oxide/information/
+). This bug bounty was generously sponsored by
+[Power Up Privacy](https://powerupprivacy.com/) who directly handles payouts.
 
 All affected projects should be _privately_ disclosed to via their stated
 disclosure method (or any private means of communication upon lack of stated
 disclosure method).
 
-All projects, including monero-oxide, should be informed of the amount of
-projects disclosed to, without permission to make a public disclosure until all
-projects resolve the issue.
+All projects, including monero-oxide, should be informed of if multiple
+projects were disclosed to, without permission to make a public disclosure
+until all projects resolve the issue.
 
 ## DoS Disclosures
 
