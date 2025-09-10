@@ -1233,6 +1233,10 @@ impl<R: Rpc> DecoyRpc for R {
           Err(RpcError::InvalidNode("bad response to get_outs".to_string()))?;
         }
 
+        if rpc_res.outs.len() != indexes.len() {
+          Err(RpcError::InvalidNode("get_outs response omitted requested outputs".to_string()))?;
+        }
+
         res.extend(
           rpc_res
             .outs
