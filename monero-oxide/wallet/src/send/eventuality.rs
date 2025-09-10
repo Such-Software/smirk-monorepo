@@ -14,7 +14,7 @@ use crate::{
 ///
 /// If a SignableTransaction is signed and published on-chain, it will create a Transaction
 /// identifiable to whoever else has the same SignableTransaction (with the same outgoing view
-/// key). This structure enables checking if a Transaction is in fact such an output, as it can.
+/// key). This structure enables checking if a Transaction is in fact such a result, as it can.
 ///
 /// Since Monero is a privacy coin without outgoing view keys, this only performs a fuzzy match.
 /// The fuzzy match executes over the outputs and associated data necessary to work with the
@@ -48,14 +48,21 @@ impl Eventuality {
     self.0.extra()
   }
 
-  /// Return if this TX matches the SignableTransaction this was created from.
+  /// Return if this transaction matches the `SignableTransaction` this was created from.
   ///
-  /// Matching the SignableTransaction means this transaction created the expected outputs, they're
-  /// scannable, they're not locked, and this transaction claims to use the intended inputs (though
-  /// this is not guaranteed). This 'claim' is evaluated by this transaction using the transaction
-  /// keys derived from the intended inputs. This ensures two SignableTransactions with the same
-  /// intended payments don't match for each other's `Eventuality`s (as they'll have distinct
-  /// inputs intended).
+  /// Matching the `SignableTransaction` means this transaction created the expected outputs,
+  /// they're scannable by the intended recipient, they're not locked, and this transaction claims
+  /// to use the intended inputs (though this is not guaranteed).
+  ///
+  /// Being scannable by the intended recipient does not equate to being spendable due to the
+  /// [burning bug](https://web.getmonero.org/2018/09/25/a-post-mortum-of-the-burning-bug.html).
+  /// Note that transactions with matching `SignableTransaction`s will not incur the burning bug
+  /// against each other without a hash collision.
+  ///
+  /// The 'claim' about using the intended inputs is evaluated by this transaction using
+  /// transaction keys derived from the intended inputs. This ensures two `SignableTransaction`s
+  /// with the same intended payments don't match for each other's `Eventuality`s (as they'll have
+  /// distinct inputs intended if they can legitimately co-exist).
   #[must_use]
   pub fn matches(&self, tx: &Transaction<Pruned>) -> bool {
     // Verify extra
