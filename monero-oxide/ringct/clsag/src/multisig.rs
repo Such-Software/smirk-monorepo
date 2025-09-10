@@ -12,10 +12,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use curve25519_dalek::{scalar::Scalar, edwards::EdwardsPoint};
 
-use group::{
-  ff::{Field, PrimeField},
-  Group, GroupEncoding,
-};
+use group::{ff::PrimeField, Group, GroupEncoding};
 
 use transcript::{Transcript, RecommendedTranscript};
 use dalek_ff_group as dfg;
@@ -296,7 +293,7 @@ impl Algorithm<Ed25519> for ClsagMultisig {
     });
 
     // r - p x, where p is the challenge for the keys
-    *nonces[0] - dfg::Scalar(sign_core.key_challenge) * view.secret_share().deref()
+    *nonces[0] - sign_core.key_challenge * view.secret_share().deref()
   }
 
   fn verify(
@@ -309,7 +306,7 @@ impl Algorithm<Ed25519> for ClsagMultisig {
     let mut clsag = interim.clsag.clone();
     // We produced shares as `r - p x`, yet the signature is actually `r - p x - c x`
     // Substract `c x` (saved as `c`) now
-    clsag.s[usize::from(self.context.decoys.signer_index())] = sum.0 - interim.c;
+    clsag.s[usize::from(self.context.decoys.signer_index())] = sum - interim.c;
     if clsag
       .verify(
         self
@@ -371,23 +368,23 @@ impl Algorithm<Ed25519> for ClsagMultisig {
     weight_transcript.append_message(b"xH", key_image_share.to_bytes());
     weight_transcript.append_message(b"rG", nonces[0][0].to_bytes());
     weight_transcript.append_message(b"rH", nonces[0][1].to_bytes());
-    weight_transcript.append_message(b"c", dfg::Scalar(interim.p).to_repr());
+    weight_transcript.append_message(b"c", interim.p.to_repr());
     weight_transcript.append_message(b"s", share.to_repr());
     let weight = weight_transcript.challenge(b"weight");
-    let weight = dfg::Scalar(Scalar::from_bytes_mod_order_wide(&weight.into()));
+    let weight = Scalar::from_bytes_mod_order_wide(&weight.into());
 
     let part_one = vec![
       (share, dfg::EdwardsPoint::generator()),
       // -(R.0 - pV) == -R.0 + pV
       (-dfg::Scalar::ONE, nonces[0][0]),
-      (dfg::Scalar(interim.p), verification_share),
+      (interim.p, verification_share),
     ];
 
     let mut part_two = vec![
       (weight * share, dfg::EdwardsPoint(self.key_image_generator)),
       // -(R.1 - pK) == -R.1 + pK
       (-weight, nonces[0][1]),
-      (weight * dfg::Scalar(interim.p), key_image_share),
+      (weight * interim.p, key_image_share),
     ];
 
     let mut all = part_one;

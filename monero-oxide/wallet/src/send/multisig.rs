@@ -7,7 +7,6 @@ use std_shims::{
 use rand_core::{RngCore, CryptoRng};
 
 use curve25519_dalek::{traits::Identity, Scalar, EdwardsPoint};
-use dalek_ff_group as dfg;
 
 use transcript::{Transcript, RecommendedTranscript};
 use frost::{
@@ -75,11 +74,8 @@ impl SignableTransaction {
       let key_scalar = Scalar::ONE;
       let key_offset = input.key_offset();
 
-      let offset = keys
-        .clone()
-        .scale(dfg::Scalar(key_scalar))
-        .expect("non-zero scalar (1) was zero")
-        .offset(dfg::Scalar(key_offset));
+      let offset =
+        keys.clone().scale(key_scalar).expect("non-zero scalar (1) was zero").offset(key_offset);
       if offset.group_key().0 != input.key() {
         Err(SendError::WrongPrivateKey)?;
       }
@@ -90,10 +86,8 @@ impl SignableTransaction {
         RecommendedTranscript::new(b"Monero Multisignature Transaction"),
         context,
       );
-      key_image_generators_and_lincombs.push((
-        clsag.key_image_generator(),
-        (offset.current_scalar().0, offset.current_offset().0),
-      ));
+      key_image_generators_and_lincombs
+        .push((clsag.key_image_generator(), (offset.current_scalar(), offset.current_offset())));
       clsags.push((clsag_mask_send, AlgorithmMachine::new(clsag, offset)));
     }
 
@@ -211,12 +205,9 @@ impl SignMachine<Transaction> for TransactionSignMachine {
             // While here, calculate the key image as needed to call sign
             // The CLSAG algorithm will independently calculate the key image/verify these shares
             key_images[c] += preprocess.addendum.key_image_share().0 *
-              view
-                .interpolation_factor(*l)
-                .ok_or(FrostError::InternalError(
-                  "view successfully formed with participant without an interpolation factor",
-                ))?
-                .0;
+              view.interpolation_factor(*l).ok_or(FrostError::InternalError(
+                "view successfully formed with participant without an interpolation factor",
+              ))?;
 
             Ok((*l, preprocess))
           })
