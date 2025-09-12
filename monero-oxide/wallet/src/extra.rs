@@ -229,7 +229,16 @@ impl Extra {
   pub fn payment_id(&self) -> Option<PaymentId> {
     for field in &self.0 {
       if let ExtraField::Nonce(data) = field {
-        return PaymentId::read(&mut data.as_slice()).ok();
+        let mut reader = data.as_slice();
+        let res = PaymentId::read(&mut reader).ok();
+        // https://github.com/monero-project/monero/blob/8d4c625713e3419573dfcc7119c8848f47cabbaa
+        //   /src/cryptonote_basic/cryptonote_format_utils.cpp#L801
+        //
+        //   /src/cryptonote_basic/cryptonote_format_utils.cpp#L811
+        if !reader.is_empty() {
+          None?;
+        }
+        return res;
       }
     }
     None
