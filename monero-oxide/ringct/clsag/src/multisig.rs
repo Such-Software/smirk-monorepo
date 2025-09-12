@@ -1,4 +1,4 @@
-use core::{ops::Deref, fmt::Debug};
+use core::ops::Deref;
 use std_shims::{
   sync::{Arc, Mutex},
   io::{self, Read, Write},
@@ -54,11 +54,9 @@ impl ClsagContext {
 /// A channel to send the mask to use for the pseudo-out (rerandomized commitment) with.
 ///
 /// A mask must be sent along this channel before any preprocess addendums are handled.
-#[derive(Debug)]
 pub struct ClsagMultisigMaskSender {
   buf: Arc<Mutex<Option<Scalar>>>,
 }
-#[derive(Debug)]
 struct ClsagMultisigMaskReceiver {
   buf: Arc<Mutex<Option<Scalar>>>,
 }
@@ -100,8 +98,7 @@ impl WriteAddendum for ClsagAddendum {
   }
 }
 
-#[allow(non_snake_case)]
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 struct Interim {
   p: Scalar,
   c: Scalar,
@@ -119,8 +116,6 @@ struct Interim {
 ///
 /// The message signed is expected to be a 32-byte value. Per Monero, it's the keccak256 hash of
 /// the transaction data which is signed. This will panic if the message is not a 32-byte value.
-#[allow(non_snake_case)]
-#[derive(Debug)]
 pub struct ClsagMultisig {
   transcript: RecommendedTranscript,
 
