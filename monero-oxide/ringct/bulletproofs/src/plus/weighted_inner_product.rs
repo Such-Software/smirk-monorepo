@@ -28,7 +28,7 @@ impl Zeroize for WipStatement {
   }
 }
 
-#[derive(Clone, Debug, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub(crate) struct WipWitness {
   a: ScalarVector,
   b: ScalarVector,

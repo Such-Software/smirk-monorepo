@@ -95,9 +95,8 @@ impl core::fmt::Debug for OutputData {
     fmt
       .debug_struct("OutputData")
       .field("key", &hex::encode(self.key.compress().0))
-      .field("key_offset", &hex::encode(self.key_offset.to_bytes()))
       .field("commitment", &self.commitment)
-      .finish()
+      .finish_non_exhaustive()
   }
 }
 

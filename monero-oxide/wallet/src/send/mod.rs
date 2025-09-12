@@ -215,7 +215,7 @@ pub enum SendError {
 }
 
 /// A signable transaction.
-#[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
+#[derive(Clone, PartialEq, Eq, Zeroize)]
 pub struct SignableTransaction {
   rct_type: RctType,
   outgoing_view_key: Zeroizing<[u8; 32]>,
@@ -223,6 +223,18 @@ pub struct SignableTransaction {
   payments: Vec<InternalPayment>,
   data: Vec<Vec<u8>>,
   fee_rate: FeeRate,
+}
+
+impl fmt::Debug for SignableTransaction {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    f.debug_struct("SignableTransaction")
+      .field("rct_type", &self.rct_type)
+      .field("inputs", &self.inputs)
+      .field("payments", &self.payments)
+      .field("data", &self.data)
+      .field("fee_rate", &self.fee_rate)
+      .finish_non_exhaustive()
+  }
 }
 
 struct SignableTransactionWithKeyImages {

@@ -27,7 +27,7 @@ pub(crate) struct AggregateRangeStatement<'a> {
   commitments: &'a [EdwardsPoint],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct AggregateRangeWitness {
   commitments: Vec<Commitment>,
 }
