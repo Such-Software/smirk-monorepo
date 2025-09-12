@@ -40,7 +40,7 @@ mod multisig;
 pub use multisig::{TransactionMachine, TransactionSignMachine, TransactionSignatureMachine};
 
 pub(crate) fn key_image_sort(x: &CompressedPoint, y: &CompressedPoint) -> core::cmp::Ordering {
-  x.as_bytes().cmp(y.as_bytes()).reverse()
+  x.cmp(y).reverse()
 }
 
 #[derive(Clone, PartialEq, Eq, Zeroize)]

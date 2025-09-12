@@ -14,7 +14,7 @@ use crate::read_bytes;
 /// [`CompressedEdwardsY::decompress`] function that does not check the point is canonically
 /// encoded. This struct exposes a [`CompressedPoint::decompress`] function that does check
 /// the point is canonically encoded, check that function for details.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Zeroize)]
 pub struct CompressedPoint(pub [u8; 32]);
 
 impl CompressedPoint {

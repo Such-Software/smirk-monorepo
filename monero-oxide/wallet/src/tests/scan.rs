@@ -1,16 +1,18 @@
-use monero_rpc::ScannableBlock;
-use crate::{
-  transaction::{Pruned, Transaction},
-  block::Block,
-  ViewPair, Scanner, WalletOutput,
-  output::{AbsoluteId, RelativeId, OutputData, Metadata},
-  Commitment,
-  PaymentId::Encrypted,
-  transaction::Timelock,
-  ringct::EncryptedAmount,
-};
 use zeroize::Zeroizing;
-use curve25519_dalek::{Scalar, constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY};
+
+use curve25519_dalek::{Scalar, constants::ED25519_BASEPOINT_TABLE};
+
+use crate::{
+  io::CompressedPoint,
+  Commitment,
+  ringct::EncryptedAmount,
+  transaction::{Timelock, Pruned, Transaction},
+  block::Block,
+  rpc::ScannableBlock,
+  PaymentId,
+  output::{AbsoluteId, RelativeId, OutputData, Metadata},
+  WalletOutput, ViewPair, Scanner,
+};
 
 const SPEND_KEY: &str = "ccf0ea10e1ea64354f42fa710c2b318e581969cf49046d809d1f0aadb3fc7a02";
 const VIEW_KEY: &str = "a28b4b2085592881df94ee95da332c16b5bb773eb8bb74730208cbb236c73806";
@@ -34,7 +36,7 @@ fn wallet_output0() -> WalletOutput {
     },
     relative_id: RelativeId { index_on_blockchain: OUTPUT_INDEX_FOR_FIRST_RINGCT_OUTPUT },
     data: OutputData {
-      key: CompressedEdwardsY(
+      key: CompressedPoint(
         hex::decode("ee8ca293511571c0005e1c144e49d09b8ff03046dbafb3e064a34cb9fc1994b6")
           .unwrap()
           .try_into()
@@ -63,7 +65,7 @@ fn wallet_output0() -> WalletOutput {
     metadata: Metadata {
       additional_timelock: Timelock::None,
       subaddress: None,
-      payment_id: Some(Encrypted([0, 0, 0, 0, 0, 0, 0, 0])),
+      payment_id: Some(PaymentId::Encrypted([0, 0, 0, 0, 0, 0, 0, 0])),
       arbitrary_data: [].to_vec(),
     },
   }
@@ -80,7 +82,7 @@ fn wallet_output1() -> WalletOutput {
     },
     relative_id: RelativeId { index_on_blockchain: OUTPUT_INDEX_FOR_FIRST_RINGCT_OUTPUT + 1 },
     data: OutputData {
-      key: CompressedEdwardsY(
+      key: CompressedPoint(
         hex::decode("9e2e5cd08c8681dbcf2ce66071467e835f7e86613fbfed3c4fb170127b94e107")
           .unwrap()
           .try_into()
@@ -109,7 +111,7 @@ fn wallet_output1() -> WalletOutput {
     metadata: Metadata {
       additional_timelock: Timelock::None,
       subaddress: None,
-      payment_id: Some(Encrypted([0, 0, 0, 0, 0, 0, 0, 0])),
+      payment_id: Some(PaymentId::Encrypted([0, 0, 0, 0, 0, 0, 0, 0])),
       arbitrary_data: [].to_vec(),
     },
   }

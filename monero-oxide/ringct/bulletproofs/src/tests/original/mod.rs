@@ -1,7 +1,7 @@
 use hex_literal::hex;
 use rand_core::OsRng;
 
-use curve25519_dalek::{scalar::Scalar, edwards::CompressedEdwardsY};
+use curve25519_dalek::scalar::Scalar;
 
 use monero_io::CompressedPoint;
 
@@ -52,13 +52,13 @@ fn bulletproofs_vector() {
     &mut OsRng,
     &[
       // For some reason, these vectors are * INV_EIGHT
-      CompressedEdwardsY(hex!("8e8f23f315edae4f6c2f948d9a861e0ae32d356b933cd11d2f0e031ac744c41f"))
+      CompressedPoint(hex!("8e8f23f315edae4f6c2f948d9a861e0ae32d356b933cd11d2f0e031ac744c41f"))
         .decompress()
         .unwrap()
         .mul_by_cofactor()
         .compress()
         .into(),
-      CompressedEdwardsY(hex!("2829cbd025aa54cd6e1b59a032564f22f0b2e5627f7f2c4297f90da438b5510f"))
+      CompressedPoint(hex!("2829cbd025aa54cd6e1b59a032564f22f0b2e5627f7f2c4297f90da438b5510f"))
         .decompress()
         .unwrap()
         .mul_by_cofactor()

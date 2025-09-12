@@ -1,7 +1,7 @@
-use curve25519_dalek::edwards::{EdwardsPoint, CompressedEdwardsY};
+use curve25519_dalek::edwards::EdwardsPoint;
 
 use crate::{
-  io::write_varint,
+  io::{CompressedPoint, write_varint},
   extra::{MAX_TX_EXTRA_PADDING_COUNT, ExtraField, Extra},
 };
 
@@ -60,7 +60,7 @@ const PUB_KEY_BYTES: [u8; 33] = [
 ];
 
 fn pub_key() -> EdwardsPoint {
-  CompressedEdwardsY(PUB_KEY_BYTES[1 .. PUB_KEY_BYTES.len()].try_into().expect("invalid pub key"))
+  CompressedPoint(PUB_KEY_BYTES[1 .. PUB_KEY_BYTES.len()].try_into().expect("invalid pub key"))
     .decompress()
     .unwrap()
 }

@@ -3,7 +3,7 @@ use std_shims::{vec, vec::Vec, collections::HashMap};
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY};
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 
 use monero_rpc::ScannableBlock;
 use monero_oxide::{
@@ -81,7 +81,7 @@ pub enum ScanError {
 struct InternalScanner {
   pair: ViewPair,
   guaranteed: bool,
-  subaddresses: HashMap<CompressedEdwardsY, Option<SubaddressIndex>>,
+  subaddresses: HashMap<CompressedPoint, Option<SubaddressIndex>>,
 }
 
 impl Zeroize for InternalScanner {
@@ -106,13 +106,13 @@ impl ZeroizeOnDrop for InternalScanner {}
 impl InternalScanner {
   fn new(pair: ViewPair, guaranteed: bool) -> Self {
     let mut subaddresses = HashMap::new();
-    subaddresses.insert(pair.spend().compress(), None);
+    subaddresses.insert(pair.spend().compress().into(), None);
     Self { pair, guaranteed, subaddresses }
   }
 
   fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
     let (spend, _) = self.pair.subaddress_keys(subaddress);
-    self.subaddresses.insert(spend.compress(), Some(subaddress));
+    self.subaddresses.insert(spend.compress().into(), Some(subaddress));
   }
 
   fn scan_transaction(
@@ -184,7 +184,7 @@ impl InternalScanner {
           // scanned accordingly (the one which has matching torsion of the spend key)
           let subaddress_spend_key =
             output_key - (&output_derivations.shared_key * ED25519_BASEPOINT_TABLE);
-          self.subaddresses.get(&subaddress_spend_key.compress())
+          self.subaddresses.get::<CompressedPoint>(&subaddress_spend_key.compress().into())
         }) else {
           continue;
         };
