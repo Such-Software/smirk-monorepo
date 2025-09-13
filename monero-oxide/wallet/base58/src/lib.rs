@@ -3,9 +3,7 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(test), no_std)]
 
-#[allow(unused)]
 use std_shims::prelude::*;
-use std_shims::{vec::Vec, string::String};
 
 use monero_primitives::keccak256;
 

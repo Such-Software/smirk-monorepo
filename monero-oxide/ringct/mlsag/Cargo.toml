@@ -16,7 +16,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-std-shims = { version = "0.1.4", default-features = false }
+std-shims = { version = "0.1.5", default-features = false }
 
 thiserror = { version = "2", default-features = false }
 

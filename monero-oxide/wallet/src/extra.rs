@@ -23,6 +23,11 @@ pub(crate) const ARBITRARY_DATA_MARKER: u8 = 127;
 // 1 byte is used for the marker
 pub const MAX_ARBITRARY_DATA_SIZE: usize = MAX_TX_EXTRA_NONCE_SIZE - 1;
 
+/// The maximum length for a transaction's extra under current relay rules.
+// https://github.com/monero-project/monero
+//  /blob/8d4c625713e3419573dfcc7119c8848f47cabbaa/src/cryptonote_config.h#L217
+pub const MAX_EXTRA_SIZE_BY_RELAY_RULE: usize = 1060;
+
 /// A Payment ID.
 ///
 /// This is a legacy method of identifying why Monero was sent to the receiver.
@@ -248,8 +253,14 @@ impl Extra {
   ///
   /// This uses a marker custom to monero-wallet.
   pub fn data(&self) -> Vec<Vec<u8>> {
+    // Only parse arbitrary data from the amount of extra data accepted under the relay rule
+    let serialized = self.serialize();
+    let bounded_extra =
+      Self::read(&mut &serialized[.. serialized.len().min(MAX_EXTRA_SIZE_BY_RELAY_RULE)])
+        .expect("`Extra::read` only fails if the IO fails and `&[u8]` won't");
+
     let mut res = vec![];
-    for field in &self.0 {
+    for field in &bounded_extra.0 {
       if let ExtraField::Nonce(data) = field {
         if data.first() == Some(&ARBITRARY_DATA_MARKER) {
           res.push(data[1 ..].to_vec());
@@ -271,6 +282,8 @@ impl Extra {
     res
   }
 
+  // TODO: This allows pushing a nonce of size greater than allowed. That's likely fine as it's
+  // internal, yet should be better?
   pub(crate) fn push_nonce(&mut self, nonce: Vec<u8>) {
     self.0.push(ExtraField::Nonce(nonce));
   }

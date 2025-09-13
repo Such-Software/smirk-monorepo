@@ -9,7 +9,11 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use curve25519_dalek::{Scalar, edwards::EdwardsPoint};
 
 use crate::{
-  io::*, primitives::Commitment, transaction::Timelock, address::SubaddressIndex, extra::PaymentId,
+  io::*,
+  primitives::Commitment,
+  transaction::Timelock,
+  address::SubaddressIndex,
+  extra::{MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE, PaymentId},
 };
 
 /// An absolute output ID, defined as its transaction hash and output index.
@@ -193,14 +197,12 @@ impl Metadata {
       w.write_all(&[0])?;
     }
 
-    w.write_all(
-      &u64::try_from(self.arbitrary_data.len())
-        .expect("amount of arbitrary data chunks exceeded u64::MAX")
-        .to_le_bytes(),
-    )?;
+    write_varint(&self.arbitrary_data.len(), w)?;
     for part in &self.arbitrary_data {
       // TODO: Define our own collection whose `len` function returns `u8` to ensure this bound
       // with types
+      const _ASSERT_MAX_ARB_DATA_SIZE_FITS_WITHIN_U8: [();
+        (u8::MAX as usize) - MAX_ARBITRARY_DATA_SIZE] = [(); _];
       w.write_all(&[
         u8::try_from(part.len()).expect("piece of arbitrary data exceeded max length of u8::MAX")
       ])?;
@@ -229,11 +231,21 @@ impl Metadata {
       additional_timelock,
       subaddress,
       payment_id: if read_byte(r)? == 1 { PaymentId::read(r).ok() } else { None },
+      /*
+        This may technically read more `arbitrary_data` than can fit in actual transaction as it
+        only checks the arbitrary data, raw, will fit in an extra, with no other structure/fields.
+      */
       arbitrary_data: {
         let mut data = vec![];
-        for _ in 0 .. read_u64(r)? {
+        let mut total_len = 0usize;
+        for _ in 0 .. read_varint::<_, usize>(r)? {
           let len = read_byte(r)?;
-          data.push(read_raw_vec(read_byte, usize::from(len), r)?);
+          let chunk = read_raw_vec(read_byte, usize::from(len), r)?;
+          total_len = total_len.wrapping_add(chunk.len());
+          if total_len > MAX_EXTRA_SIZE_BY_RELAY_RULE {
+            Err(io::Error::other("amount of arbitrary data exceeded amount allowed by policy"))?;
+          }
+          data.push(chunk);
         }
         data
       },

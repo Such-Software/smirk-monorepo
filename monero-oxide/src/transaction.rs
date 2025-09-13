@@ -1,11 +1,7 @@
 use core::cmp::Ordering;
 #[allow(unused_imports)]
 use std_shims::prelude::*;
-use std_shims::{
-  vec,
-  vec::Vec,
-  io::{self, Read, Write},
-};
+use std_shims::io::{self, Read, Write};
 
 use zeroize::Zeroize;
 
@@ -15,6 +11,33 @@ use crate::{
   ring_signatures::RingSignature,
   ringct::{bulletproofs::Bulletproof, PrunedRctProofs},
 };
+
+/// The maximum size for a non-miner transaction.
+// https://github.com/monero-project/monero
+//   /blob/8d4c625713e3419573dfcc7119c8848f47cabbaa/src/cryptonote_config.h#L41
+pub const MAX_NON_MINER_TRANSACTION_SIZE: usize = 1_000_000;
+
+const MAX_MINER_TRANSACTION_INPUTS: usize = 1;
+
+const NON_MINER_TRANSACTION_INPUT_SIZE_LOWER_BOUND: usize = 32;
+const MAX_NON_MINER_TRANSACTION_INPUTS: usize =
+  MAX_NON_MINER_TRANSACTION_SIZE / NON_MINER_TRANSACTION_INPUT_SIZE_LOWER_BOUND;
+
+const fn const_max(a: usize, b: usize) -> usize {
+  if a > b {
+    a
+  } else {
+    b
+  }
+}
+
+/// An upprt bound for the amount of inputs within a Monero transaction.
+pub const INPUTS_UPPER_BOUND: usize =
+  const_max(MAX_MINER_TRANSACTION_INPUTS, MAX_NON_MINER_TRANSACTION_INPUTS);
+
+const NON_MINER_TRANSACTION_OUTPUT_SIZE_LOWER_BOUND: usize = 32;
+const MAX_NON_MINER_TRANSACTION_OUTPUTS: usize =
+  MAX_NON_MINER_TRANSACTION_SIZE / NON_MINER_TRANSACTION_OUTPUT_SIZE_LOWER_BOUND;
 
 /// An input in the Monero protocol.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -71,7 +94,8 @@ impl Input {
         let amount = if amount == 0 { None } else { Some(amount) };
         Input::ToKey {
           amount,
-          key_offsets: read_vec(read_varint, None, r)?,
+          // Each offset takes at least one byte, and this won't be in a miner transaction
+          key_offsets: read_vec(read_varint, Some(MAX_NON_MINER_TRANSACTION_SIZE), r)?,
           key_image: CompressedPoint::read(r)?,
         }
       }
@@ -238,6 +262,10 @@ impl TransactionPrefix {
   ///
   /// This is distinct from Monero in that it won't read the version. The version must be passed
   /// in.
+  ///
+  /// This MAY error if miscellaneous Monero conseusus rules are broken, as useful when
+  /// deserializing. The result is not guaranteed to follow all Monero consensus rules or any
+  /// specific set of consensus rules.
   pub fn read<R: Read>(r: &mut R, version: u64) -> io::Result<TransactionPrefix> {
     let additional_timelock = Timelock::read(r)?;
 
@@ -247,13 +275,15 @@ impl TransactionPrefix {
     }
     let is_miner_tx = matches!(inputs[0], Input::Gen { .. });
 
+    let max_outputs = if is_miner_tx { None } else { Some(MAX_NON_MINER_TRANSACTION_OUTPUTS) };
     let mut prefix = TransactionPrefix {
       additional_timelock,
       inputs,
-      outputs: read_vec(|r| Output::read((!is_miner_tx) && (version == 2), r), None, r)?,
+      outputs: read_vec(|r| Output::read((!is_miner_tx) && (version == 2), r), max_outputs, r)?,
       extra: vec![],
     };
-    prefix.extra = read_vec(read_byte, None, r)?;
+    let max_extra = if is_miner_tx { None } else { Some(MAX_NON_MINER_TRANSACTION_SIZE) };
+    prefix.extra = read_vec(read_byte, max_extra, r)?;
     Ok(prefix)
   }
 
@@ -466,6 +496,10 @@ impl<P: PotentiallyPruned> Transaction<P> {
   }
 
   /// Read a Transaction.
+  ///
+  /// This MAY error if miscellaneous Monero conseusus rules are broken, as useful when
+  /// deserializing. The result is not guaranteed to follow all Monero consensus rules or any
+  /// specific set of consensus rules.
   pub fn read<R: Read>(r: &mut R) -> io::Result<Self> {
     let version = read_varint(r)?;
     let prefix = TransactionPrefix::read(r, version)?;

@@ -113,9 +113,9 @@ impl Mlsag {
   }
 
   /// Read a MLSAG.
-  pub fn read<R: Read>(mixins: usize, ss_2_elements: usize, r: &mut R) -> io::Result<Mlsag> {
+  pub fn read<R: Read>(decoys: usize, ss_2_elements: usize, r: &mut R) -> io::Result<Mlsag> {
     Ok(Mlsag {
-      ss: (0 .. mixins)
+      ss: (0 .. decoys)
         .map(|_| read_raw_vec(read_scalar, ss_2_elements, r))
         .collect::<Result<_, _>>()?,
       cc: read_scalar(r)?,
