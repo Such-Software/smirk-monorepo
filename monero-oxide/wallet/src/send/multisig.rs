@@ -13,8 +13,8 @@ use frost::{
   curve::Ed25519,
   Participant, FrostError, ThresholdKeys,
   sign::{
-    Preprocess, CachedPreprocess, SignatureShare, PreprocessMachine, SignMachine, SignatureMachine,
-    AlgorithmMachine, AlgorithmSignMachine, AlgorithmSignatureMachine,
+    Writable, Preprocess, CachedPreprocess, SignatureShare, PreprocessMachine, SignMachine,
+    SignatureMachine, AlgorithmMachine, AlgorithmSignMachine, AlgorithmSignatureMachine,
   },
 };
 
@@ -42,6 +42,10 @@ pub struct TransactionMachine {
 /// Second FROST machine to produce a signed transaction.
 ///
 /// Panics if a non-empty message is provided, or if `cache`, `from_cache` are called.
+///
+/// This MUST only be passed preprocesses obtained via calling `read_preprocess` with this very
+/// machine. Other machines representing distinct executions of the protocol will almost certainly
+/// be incompatible.
 pub struct TransactionSignMachine {
   signable: SignableTransaction,
 
@@ -54,6 +58,10 @@ pub struct TransactionSignMachine {
 }
 
 /// Final FROST machine to produce a signed transaction.
+///
+/// This MUST only be passed shares obtained via calling `read_share` with this very machine.
+/// Shares from other machines, representing distinct executions of the signing protocol, will be
+/// incompatible.
 pub struct TransactionSignatureMachine {
   tx: Transaction,
   clsags: Vec<AlgorithmSignatureMachine<Ed25519, ClsagMultisig>>,
@@ -95,8 +103,22 @@ impl SignableTransaction {
   }
 }
 
+/// The preprocess for a transaction.
+// Opaque wrapper around the CLSAG preprocesses, forcing users to use `read_preprocess` to obtain
+// this.
+#[derive(Clone, PartialEq)]
+pub struct TransactionPreprocess(Vec<Preprocess<Ed25519, ClsagAddendum>>);
+impl Writable for TransactionPreprocess {
+  fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+    for preprocess in &self.0 {
+      preprocess.write(writer)?;
+    }
+    Ok(())
+  }
+}
+
 impl PreprocessMachine for TransactionMachine {
-  type Preprocess = Vec<Preprocess<Ed25519, ClsagAddendum>>;
+  type Preprocess = TransactionPreprocess;
   type Signature = Transaction;
   type SignMachine = TransactionSignMachine;
 
@@ -128,16 +150,30 @@ impl PreprocessMachine for TransactionMachine {
 
         our_preprocess,
       },
-      preprocesses,
+      TransactionPreprocess(preprocesses),
     )
+  }
+}
+
+/// The signature share for a transaction.
+// Opaque wrapper around the CLSAG signature shares, forcing users to use `read_share` to
+// obtain this.
+#[derive(Clone, PartialEq)]
+pub struct TransactionSignatureShare(Vec<SignatureShare<Ed25519>>);
+impl Writable for TransactionSignatureShare {
+  fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+    for share in &self.0 {
+      share.write(writer)?;
+    }
+    Ok(())
   }
 }
 
 impl SignMachine<Transaction> for TransactionSignMachine {
   type Params = ();
   type Keys = ThresholdKeys<Ed25519>;
-  type Preprocess = Vec<Preprocess<Ed25519, ClsagAddendum>>;
-  type SignatureShare = Vec<SignatureShare<Ed25519>>;
+  type Preprocess = TransactionPreprocess;
+  type SignatureShare = TransactionSignatureShare;
   type SignatureMachine = TransactionSignatureMachine;
 
   fn cache(self) -> CachedPreprocess {
@@ -159,7 +195,9 @@ impl SignMachine<Transaction> for TransactionSignMachine {
   }
 
   fn read_preprocess<R: Read>(&self, reader: &mut R) -> io::Result<Self::Preprocess> {
-    self.clsags.iter().map(|clsag| clsag.1.read_preprocess(reader)).collect()
+    Ok(TransactionPreprocess(
+      self.clsags.iter().map(|clsag| clsag.1.read_preprocess(reader)).collect::<Result<_, _>>()?,
+    ))
   }
 
   fn sign(
@@ -169,6 +207,14 @@ impl SignMachine<Transaction> for TransactionSignMachine {
   ) -> Result<(TransactionSignatureMachine, Self::SignatureShare), FrostError> {
     if !msg.is_empty() {
       panic!("message was passed to the TransactionMachine when it generates its own");
+    }
+
+    for preprocess in commitments.values() {
+      if preprocess.0.len() != self.clsags.len() {
+        Err(FrostError::InternalError(
+          "preprocesses from another instance of the signing protocol were passed in",
+        ))?;
+      }
     }
 
     // We do not need to be included here, yet this set of signers has yet to be validated
@@ -199,7 +245,7 @@ impl SignMachine<Transaction> for TransactionSignMachine {
             let preprocess = if *l == self.keys.params().i() {
               self.our_preprocess[c].clone()
             } else {
-              commitments.get_mut(l).ok_or(FrostError::MissingParticipant(*l))?[c].clone()
+              commitments.get_mut(l).ok_or(FrostError::MissingParticipant(*l))?.0[c].clone()
             };
 
             // While here, calculate the key image as needed to call sign
@@ -275,21 +321,31 @@ impl SignMachine<Transaction> for TransactionSignMachine {
       })
       .collect::<Result<_, _>>()?;
 
-    Ok((TransactionSignatureMachine { tx, clsags }, shares))
+    Ok((TransactionSignatureMachine { tx, clsags }, TransactionSignatureShare(shares)))
   }
 }
 
 impl SignatureMachine<Transaction> for TransactionSignatureMachine {
-  type SignatureShare = Vec<SignatureShare<Ed25519>>;
+  type SignatureShare = TransactionSignatureShare;
 
   fn read_share<R: Read>(&self, reader: &mut R) -> io::Result<Self::SignatureShare> {
-    self.clsags.iter().map(|clsag| clsag.read_share(reader)).collect()
+    Ok(TransactionSignatureShare(
+      self.clsags.iter().map(|clsag| clsag.read_share(reader)).collect::<Result<_, _>>()?,
+    ))
   }
 
   fn complete(
     mut self,
     shares: HashMap<Participant, Self::SignatureShare>,
   ) -> Result<Transaction, FrostError> {
+    for share in shares.values() {
+      if share.0.len() != self.clsags.len() {
+        Err(FrostError::InternalError(
+          "signature shares from another instance of the signing protocol were passed in",
+        ))?;
+      }
+    }
+
     let mut tx = self.tx;
     match tx {
       Transaction::V2 {
@@ -302,7 +358,7 @@ impl SignatureMachine<Transaction> for TransactionSignatureMachine {
       } => {
         for (c, clsag) in self.clsags.drain(..).enumerate() {
           let (clsag, pseudo_out) = clsag.complete(
-            shares.iter().map(|(l, shares)| (*l, shares[c].clone())).collect::<HashMap<_, _>>(),
+            shares.iter().map(|(l, shares)| (*l, shares.0[c].clone())).collect::<HashMap<_, _>>(),
           )?;
           clsags.push(clsag);
           pseudo_outs.push(CompressedPoint::from(pseudo_out.compress()));
