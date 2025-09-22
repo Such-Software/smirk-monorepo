@@ -20,7 +20,7 @@ pub const MAX_NON_MINER_TRANSACTION_SIZE: usize = 1_000_000;
 const MAX_MINER_TRANSACTION_INPUTS: usize = 1;
 
 const NON_MINER_TRANSACTION_INPUT_SIZE_LOWER_BOUND: usize = 32;
-const MAX_NON_MINER_TRANSACTION_INPUTS: usize =
+const NON_MINER_TRANSACTION_INPUTS_UPPER_BOUND: usize =
   MAX_NON_MINER_TRANSACTION_SIZE / NON_MINER_TRANSACTION_INPUT_SIZE_LOWER_BOUND;
 
 const fn const_max(a: usize, b: usize) -> usize {
@@ -31,9 +31,13 @@ const fn const_max(a: usize, b: usize) -> usize {
   }
 }
 
-/// An upprt bound for the amount of inputs within a Monero transaction.
+/// An upper bound for the amount of inputs within a Monero transaction.
+///
+/// This is not guaranteed to be the maximum amount of inputs within a Monero transaction. It is a
+/// value greater than or equal to the maximum amount of inputs allowed within a Monero
+/// transaction.
 pub const INPUTS_UPPER_BOUND: usize =
-  const_max(MAX_MINER_TRANSACTION_INPUTS, MAX_NON_MINER_TRANSACTION_INPUTS);
+  const_max(MAX_MINER_TRANSACTION_INPUTS, NON_MINER_TRANSACTION_INPUTS_UPPER_BOUND);
 
 const NON_MINER_TRANSACTION_OUTPUT_SIZE_LOWER_BOUND: usize = 32;
 const MAX_NON_MINER_TRANSACTION_OUTPUTS: usize =
@@ -269,7 +273,7 @@ impl TransactionPrefix {
   pub fn read<R: Read>(r: &mut R, version: u64) -> io::Result<TransactionPrefix> {
     let additional_timelock = Timelock::read(r)?;
 
-    let inputs = read_vec(|r| Input::read(r), None, r)?;
+    let inputs = read_vec(|r| Input::read(r), Some(INPUTS_UPPER_BOUND), r)?;
     if inputs.is_empty() {
       Err(io::Error::other("transaction had no inputs"))?;
     }
