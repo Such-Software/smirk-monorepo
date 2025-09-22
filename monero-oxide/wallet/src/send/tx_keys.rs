@@ -13,14 +13,14 @@ use monero_oxide::io::CompressedPoint;
 use crate::{
   primitives::{keccak256, Commitment},
   ringct::EncryptedAmount,
-  SharedKeyDerivations, OutputWithDecoys,
+  SharedKeyDerivations,
   send::{ChangeEnum, InternalPayment, SignableTransaction, key_image_sort},
 };
 
 fn seeded_rng(
   dst: &'static [u8],
   outgoing_view_key: &[u8; 32],
-  input_keys: Vec<EdwardsPoint>,
+  input_keys_and_commitments: Vec<(EdwardsPoint, EdwardsPoint)>,
 ) -> ChaCha20Rng {
   // Apply the DST
   let mut transcript = Zeroizing::new(vec![
@@ -31,18 +31,24 @@ fn seeded_rng(
   // Bind to the outgoing view key to prevent foreign entities from rebuilding the transcript
   transcript.extend(outgoing_view_key);
 
-  let mut input_keys =
-    input_keys.into_iter().map(|p| CompressedPoint::from(p.compress())).collect::<Vec<_>>();
+  let mut input_keys_and_commitments = input_keys_and_commitments
+    .into_iter()
+    .map(|(key, commitment)| {
+      (CompressedPoint::from(key.compress()), CompressedPoint::from(commitment.compress()))
+    })
+    .collect::<Vec<_>>();
 
   // We sort the inputs here to ensure a consistent order
   // We use the key image sort as it's applicable and well-defined, not because these are key
   // images
-  input_keys.sort_by(key_image_sort);
+  input_keys_and_commitments
+    .sort_by(|(key_a, _commitment_a), (key_b, _commitment_b)| key_image_sort(key_a, key_b));
 
   // Ensure uniqueness across transactions by binding to a use-once object
   // The keys for the inputs is binding to their key images, making them use-once
-  for key in input_keys {
+  for (key, commitment) in input_keys_and_commitments {
     transcript.extend(key.to_bytes());
+    transcript.extend(commitment.to_bytes());
   }
 
   let res = ChaCha20Rng::from_seed(keccak256(&transcript));
@@ -59,8 +65,11 @@ impl TransactionKeys {
   /// Construct a new `TransactionKeys`.
   ///
   /// `input_keys` is the list of keys from the outputs spent within this transaction.
-  pub fn new(outgoing_view_key: &Zeroizing<[u8; 32]>, input_keys: Vec<EdwardsPoint>) -> Self {
-    Self(seeded_rng(b"transaction_keys", outgoing_view_key, input_keys))
+  pub fn new(
+    outgoing_view_key: &Zeroizing<[u8; 32]>,
+    input_keys_and_commitments: Vec<(EdwardsPoint, EdwardsPoint)>,
+  ) -> Self {
+    Self(seeded_rng(b"transaction_keys", outgoing_view_key, input_keys_and_commitments))
   }
 }
 impl Iterator for TransactionKeys {
@@ -71,12 +80,12 @@ impl Iterator for TransactionKeys {
 }
 
 impl SignableTransaction {
-  fn input_keys(&self) -> Vec<EdwardsPoint> {
-    self.inputs.iter().map(OutputWithDecoys::key).collect()
+  fn input_keys_and_commitments(&self) -> Vec<(EdwardsPoint, EdwardsPoint)> {
+    self.inputs.iter().map(|output| (output.key(), output.commitment().calculate())).collect()
   }
 
   pub(crate) fn seeded_rng(&self, dst: &'static [u8]) -> ChaCha20Rng {
-    seeded_rng(dst, &self.outgoing_view_key, self.input_keys())
+    seeded_rng(dst, &self.outgoing_view_key, self.input_keys_and_commitments())
   }
 
   fn has_payments_to_subaddresses(&self) -> bool {
@@ -121,7 +130,8 @@ impl SignableTransaction {
 
   // Calculate the transaction keys used as randomness.
   fn transaction_keys(&self) -> (Zeroizing<Scalar>, Vec<Zeroizing<Scalar>>) {
-    let mut tx_keys = TransactionKeys::new(&self.outgoing_view_key, self.input_keys());
+    let mut tx_keys =
+      TransactionKeys::new(&self.outgoing_view_key, self.input_keys_and_commitments());
 
     let tx_key = tx_keys.next().expect("TransactionKeys (never-ending) was exhausted");
 
