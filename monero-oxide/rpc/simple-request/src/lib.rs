@@ -120,7 +120,9 @@ impl SimpleRequestRpc {
         connection: Arc::new(Mutex::new((challenge, client))),
       }
     } else {
-      Authentication::Unauthenticated(Client::with_connection_pool())
+      Authentication::Unauthenticated(Client::with_connection_pool().map_err(|e| {
+        RpcError::InternalError(format!("couldn't create a connection pool: {e:?}"))
+      })?)
     };
 
     Ok(SimpleRequestRpc { authentication, url, request_timeout })

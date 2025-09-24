@@ -1424,9 +1424,9 @@ dependencies = [
 
 [[package]]
 name = "simple-request"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec88848b6c05daeedd338ba041d8f3a30dd57d4eeab028a7879b02be55141d6a"
+checksum = "5c2b7792ed2409a25b01606121e65579dcacbc574e90f275a8cb6a4d78006986"
 dependencies = [
  "futures-util",
  "http-body-util",
