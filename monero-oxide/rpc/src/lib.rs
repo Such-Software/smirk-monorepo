@@ -589,7 +589,7 @@ pub trait Rpc: Sync + Clone {
         .map_err(|_| RpcError::InvalidNode("invalid block".to_string()))?;
 
       // Make sure this is actually the block for this number
-      match block.miner_transaction.prefix().inputs.first() {
+      match block.miner_transaction().prefix().inputs.first() {
         Some(Input::Gen(actual)) => {
           if *actual == number {
             Ok(block)
@@ -652,8 +652,8 @@ pub trait Rpc: Sync + Clone {
 
       // Get the index for the first output
       let mut output_index_for_first_ringct_output = None;
-      let miner_tx_hash = block.miner_transaction.hash();
-      let miner_tx = Transaction::<Pruned>::from(block.miner_transaction.clone());
+      let miner_tx_hash = block.miner_transaction().hash();
+      let miner_tx = Transaction::<Pruned>::from(block.miner_transaction().clone());
       for (hash, tx) in core::iter::once((&miner_tx_hash, &miner_tx))
         .chain(block.transactions.iter().zip(&transactions))
       {

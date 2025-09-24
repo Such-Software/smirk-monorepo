@@ -33,7 +33,7 @@ async fn test_rpc() {
     let block = rpc.get_block_by_number(block_number).await.unwrap();
 
     // Also test the block RPC routes are consistent
-    assert_eq!(block.number().unwrap(), block_number);
+    assert_eq!(block.number(), block_number);
     assert_eq!(rpc.get_block(block.hash()).await.unwrap(), block);
     assert_eq!(rpc.get_block_hash(block_number).await.unwrap(), block.hash());
 

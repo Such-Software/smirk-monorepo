@@ -73,7 +73,7 @@ pub struct Block {
   /// The block's header.
   pub header: BlockHeader,
   /// The miner's transaction.
-  pub miner_transaction: Transaction,
+  miner_transaction: Transaction,
   /// The transactions within this block.
   pub transactions: Vec<[u8; 32]>,
 }
@@ -98,22 +98,48 @@ impl Block {
   */
   pub const MAX_TRANSACTIONS: usize = 0x10000000;
 
-  /// The zero-indexed position of this block within the blockchain.
+  /// Construct a new `Block`.
   ///
-  /// This information comes from the Block's miner transaction. If the miner transaction isn't
-  /// structed as expected, this will return None. This will return Some for any Block which would
-  /// pass the consensus rules.
-  // https://github.com/monero-project/monero/blob/a1dc85c5373a30f14aaf7dcfdd95f5a7375d3623
-  //   /src/cryptonote_core/blockchain.cpp#L1365-L1382
-  pub fn number(&self) -> Option<usize> {
+  /// This MAY apply miscellaneous consensus rules as useful for the sanity of working with this
+  /// type. The result is not guaranteed to follow all Monero consensus rules or any specific set
+  /// of consensus rules.
+  pub fn new(
+    header: BlockHeader,
+    miner_transaction: Transaction,
+    transactions: Vec<[u8; 32]>,
+  ) -> Option<Block> {
+    // Check this correctly defines the block's number
+    // https://github.com/monero-project/monero/blob/a1dc85c5373a30f14aaf7dcfdd95f5a7375d3623
+    //   /src/cryptonote_core/blockchain.cpp#L1365-L1382
+    {
+      let inputs = &miner_transaction.prefix().inputs;
+      if inputs.len() != 1 {
+        None?;
+      }
+      match inputs[0] {
+        Input::Gen(_number) => {}
+        _ => None?,
+      }
+    }
+
+    Some(Block { header, miner_transaction, transactions })
+  }
+
+  /// The zero-indexed position of this block within the blockchain.
+  pub fn number(&self) -> usize {
     match &self.miner_transaction {
       Transaction::V1 { prefix, .. } | Transaction::V2 { prefix, .. } => {
         match prefix.inputs.first() {
-          Some(Input::Gen(number)) => Some(*number),
-          _ => None,
+          Some(Input::Gen(number)) => *number,
+          _ => panic!("invalid miner transaction accepted into block"),
         }
       }
     }
+  }
+
+  /// The block's miner's transaction.
+  pub fn miner_transaction(&self) -> &Transaction {
+    &self.miner_transaction
   }
 
   /// Write the Block.
@@ -190,6 +216,7 @@ impl Block {
     }
     let transactions = (0 .. transactions).map(|_| read_bytes(r)).collect::<Result<_, _>>()?;
 
-    Ok(Block { header, miner_transaction, transactions })
+    Block::new(header, miner_transaction, transactions)
+      .ok_or_else(|| io::Error::other("block failed sanity checks"))
   }
 }
