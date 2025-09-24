@@ -245,7 +245,7 @@ impl InternalScanner {
             additional_timelock: tx.prefix().additional_timelock,
             subaddress,
             payment_id,
-            arbitrary_data: extra.data(),
+            arbitrary_data: extra.arbitrary_data(),
           },
         });
 

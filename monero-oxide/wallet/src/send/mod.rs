@@ -368,8 +368,7 @@ impl SignableTransaction {
   /// across incompatible transactions accordingly.
   ///
   /// `data` represents arbitrary data which will be embedded into the transaction's `extra` field.
-  /// The embedding occurs using an `ExtraField::Nonce` with a custom marker byte (as to not
-  /// conflict with a payment ID).
+  /// Please see `Extra::arbitrary_data` for the full impacts of this.
   pub fn new(
     rct_type: RctType,
     outgoing_view_key: Zeroizing<[u8; 32]>,

@@ -251,8 +251,27 @@ impl Extra {
 
   /// The arbitrary data within this extra.
   ///
-  /// This uses a marker custom to monero-wallet.
-  pub fn data(&self) -> Vec<Vec<u8>> {
+  /// This looks for all instances of `ExtraField::Nonce` with a marker byte of 0b0111_1111. This
+  /// is the largest possible value not interpretable as a VarInt, ensuring it's able to be
+  /// interpreted as a VarInt without issue, and that it's the most unlikely value to be used by
+  /// the Monero wallet protocol itself (which itself has assigned marker bytes incrementally). As
+  /// Monero itself does not support including arbitrary data with its wallet however, this was
+  /// first introduced by `monero-wallet` (under the monero-oxide project) and may be bespoke to
+  /// the ecosystem of monero-oxide and dependents of it.
+  ///
+  /// The data is stored without any padding or encryption applied. Applications MUST consider this
+  /// themselves. As Monero does not reserve any space for arbitrary data, the inclusion of _any_
+  /// arbitrary data will _always_ be a fingerprint even before considering what the data is.
+  /// Applications SHOULD include arbitrary data indistinguishable from random, of a popular length
+  /// (such as padded to the next power of two or the maximum length per chunk) IF arbitrary data
+  /// is included at all.
+  ///
+  /// For applications where indistinguishability from 'regular' Monero transactions is required,
+  /// steganography should be considered. Steganography is somewhat-frowned upon however due to it
+  /// bloating the Monero blockchain however and efficient methods are likely specific to
+  /// individual hard forks. They may also have their own privacy implications, which is why no
+  /// methods of stegnography are supported outright by `monero-wallet`.
+  pub fn arbitrary_data(&self) -> Vec<Vec<u8>> {
     // Only parse arbitrary data from the amount of extra data accepted under the relay rule
     let serialized = self.serialize();
     let bounded_extra =

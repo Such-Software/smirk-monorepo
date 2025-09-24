@@ -207,9 +207,9 @@ fn extra_mysterious_minergate_and_pub_key() {
 
 #[test]
 fn fetching_data_does_not_panic() {
-  assert!(Extra::read(&mut [0x02, 0x00].as_slice()).unwrap().data().is_empty());
+  assert!(Extra::read(&mut [0x02, 0x00].as_slice()).unwrap().arbitrary_data().is_empty());
   assert_eq!(
-    Extra::read(&mut [0x02, 0x01, 0x7F].as_slice()).unwrap().data(),
+    Extra::read(&mut [0x02, 0x01, 0x7F].as_slice()).unwrap().arbitrary_data(),
     vec![Vec::<u8>::new()]
   );
 }
@@ -237,5 +237,5 @@ fn fetching_long_data_does_not_panic() {
   // The extra should encode and decode
   assert_eq!(Extra::read(&mut extra.serialize().as_slice()).unwrap(), extra);
   // Yet we should only read arbitrary data from the set within policy
-  assert_eq!(extra.data().len(), 5);
+  assert_eq!(extra.arbitrary_data().len(), 5);
 }
