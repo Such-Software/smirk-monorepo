@@ -245,8 +245,6 @@ async fn select_decoys<R: RngCore + CryptoRng>(
     Decoys::new(
       offsets,
       // Binary searches for the real spend since we don't know where it sorted to
-      // TODO: Define our own collection whose `len` function returns `u8` to ensure this bound
-      // with types
       u8::try_from(ring.partition_point(|x| x.0 < input.relative_id.index_on_blockchain))
         .expect("ring of size <= u8::MAX had an index exceeding u8::MAX"),
       ring.into_iter().map(|output| output.1).collect(),

@@ -199,9 +199,7 @@ impl Metadata {
 
     write_varint(&self.arbitrary_data.len(), w)?;
     for part in &self.arbitrary_data {
-      // TODO: Define our own collection whose `len` function returns `u8` to ensure this bound
-      // with types
-      const _ASSERT_MAX_ARB_DATA_SIZE_FITS_WITHIN_U8: [();
+      const _ASSERT_MAX_ARBITRARY_DATA_SIZE_FITS_WITHIN_U8: [();
         (u8::MAX as usize) - MAX_ARBITRARY_DATA_SIZE] = [(); _];
       w.write_all(&[
         u8::try_from(part.len()).expect("piece of arbitrary data exceeded max length of u8::MAX")
