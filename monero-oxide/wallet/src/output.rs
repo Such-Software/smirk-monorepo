@@ -234,12 +234,20 @@ impl Metadata {
         only checks the arbitrary data, raw, will fit in an extra, with no other structure/fields.
       */
       arbitrary_data: {
+        let chunks = <usize as VarInt>::read(r)?;
+        // Each chunk will use at least one byte to be declared
+        if chunks > MAX_EXTRA_SIZE_BY_RELAY_RULE {
+          Err(io::Error::other(
+            "amount of arbitrary data chunks exceeded amount possible under policy",
+          ))?;
+        }
+
         let mut data = vec![];
         let mut total_len = 0usize;
-        for _ in 0 .. <usize as VarInt>::read(r)? {
+        for _ in 0 .. chunks {
           let len = read_byte(r)?;
           let chunk = read_raw_vec(read_byte, usize::from(len), r)?;
-          total_len = total_len.wrapping_add(chunk.len());
+          total_len = total_len.saturating_add(chunk.len());
           if total_len > MAX_EXTRA_SIZE_BY_RELAY_RULE {
             Err(io::Error::other("amount of arbitrary data exceeded amount allowed by policy"))?;
           }
