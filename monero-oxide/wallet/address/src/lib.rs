@@ -385,7 +385,7 @@ impl<const ADDRESS_BYTES: u128> fmt::Display for Address<ADDRESS_BYTES> {
     if let AddressType::Featured { subaddress, payment_id, guaranteed } = self.kind {
       let features_uint =
         (u8::from(guaranteed) << 2) + (u8::from(payment_id.is_some()) << 1) + u8::from(subaddress);
-      write_varint(&features_uint, &mut data)
+      VarInt::write(&features_uint, &mut data)
         .expect("write failed but <Vec as io::Write> doesn't fail");
     }
     if let Some(id) = self.kind.payment_id() {
@@ -414,7 +414,7 @@ impl<const ADDRESS_BYTES: u128> Address<ADDRESS_BYTES> {
     let view = read_point(&mut raw).map_err(|_| AddressError::InvalidKey)?;
 
     if matches!(kind, AddressType::Featured { .. }) {
-      let features = read_varint::<_, u64>(&mut raw).map_err(|_| AddressError::InvalidLength)?;
+      let features = <u64 as VarInt>::read(&mut raw).map_err(|_| AddressError::InvalidLength)?;
       if (features >> 3) != 0 {
         Err(AddressError::UnknownFeatures(features))?;
       }

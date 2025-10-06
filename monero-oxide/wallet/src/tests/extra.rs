@@ -1,7 +1,7 @@
 use curve25519_dalek::edwards::EdwardsPoint;
 
 use crate::{
-  io::{CompressedPoint, write_varint},
+  io::{VarInt, CompressedPoint},
   extra::{
     ARBITRARY_DATA_MARKER, MAX_TX_EXTRA_PADDING_COUNT, MAX_EXTRA_SIZE_BY_RELAY_RULE, ExtraField,
     Extra,
@@ -177,7 +177,7 @@ fn extra_mysterious_minergate_only() {
 #[test]
 fn extra_mysterious_minergate_only_large() {
   let mut buf: Vec<u8> = vec![222];
-  write_varint(&512u64, &mut buf).unwrap();
+  VarInt::write(&512u64, &mut buf).unwrap();
   buf.extend_from_slice(&vec![0; 512]);
   let extra = Extra::read(&mut buf.as_slice()).unwrap();
   assert_eq!(extra.0, vec![ExtraField::MysteriousMinergate(vec![0; 512])]);

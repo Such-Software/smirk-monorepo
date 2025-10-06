@@ -137,7 +137,7 @@ impl ExtraField {
       }
       ExtraField::MergeMining(height, merkle) => {
         w.write_all(&[3])?;
-        write_varint(height, w)?;
+        VarInt::write(height, w)?;
         w.write_all(merkle)?;
       }
       ExtraField::PublicKeys(keys) => {
@@ -187,7 +187,7 @@ impl ExtraField {
       }),
       1 => ExtraField::PublicKey(read_point(r)?),
       2 => ExtraField::Nonce(read_vec(read_byte, Some(MAX_TX_EXTRA_NONCE_SIZE), r)?),
-      3 => ExtraField::MergeMining(read_varint(r)?, read_bytes(r)?),
+      3 => ExtraField::MergeMining(VarInt::read(r)?, read_bytes(r)?),
       4 => ExtraField::PublicKeys(read_vec(read_point, None, r)?),
       0xDE => ExtraField::MysteriousMinergate(read_vec(read_byte, None, r)?),
       _ => Err(io::Error::other("unknown extra field"))?,

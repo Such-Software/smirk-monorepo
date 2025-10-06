@@ -9,7 +9,7 @@ use sha3::{Digest, Keccak256};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, edwards::EdwardsPoint};
 
-use monero_io::{write_varint, CompressedPoint};
+use monero_io::{VarInt, CompressedPoint};
 
 mod hash_to_point;
 pub use hash_to_point::biased_hash_to_point;
@@ -79,11 +79,11 @@ pub fn bulletproofs_generators(dst: &'static [u8]) -> Generators {
     let i = 2 * i;
 
     let mut even = preimage.clone();
-    write_varint(&i, &mut even).expect("write failed but <Vec as io::Write> doesn't fail");
+    VarInt::write(&i, &mut even).expect("write failed but <Vec as io::Write> doesn't fail");
     res.H.push(biased_hash_to_point(keccak256(&even)));
 
     let mut odd = preimage.clone();
-    write_varint(&(i + 1), &mut odd).expect("write failed but <Vec as io::Write> doesn't fail");
+    VarInt::write(&(i + 1), &mut odd).expect("write failed but <Vec as io::Write> doesn't fail");
     res.G.push(biased_hash_to_point(keccak256(&odd)));
   }
   res

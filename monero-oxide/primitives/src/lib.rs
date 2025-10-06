@@ -232,7 +232,7 @@ impl Decoys {
   /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
   /// defined serialization.
   pub fn write(&self, w: &mut impl io::Write) -> io::Result<()> {
-    write_vec(write_varint, &self.offsets, w)?;
+    write_vec(VarInt::write, &self.offsets, w)?;
     w.write_all(&[self.signer_index])?;
     write_raw_vec(
       |pair, w| {
@@ -260,7 +260,7 @@ impl Decoys {
   /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
   /// defined serialization.
   pub fn read(r: &mut impl io::Read) -> io::Result<Decoys> {
-    let offsets = read_vec(read_varint, Some(MAX_RING_SIZE), r)?;
+    let offsets = read_vec(VarInt::read, Some(MAX_RING_SIZE), r)?;
     let len = offsets.len();
     Decoys::new(
       offsets,

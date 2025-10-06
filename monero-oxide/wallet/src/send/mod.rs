@@ -489,7 +489,8 @@ impl SignableTransaction {
 
         https://gist.github.com/kayabaNerve/01c50bbc35441e0bbdcee63a9d823789
       */
-      const FEATURED_ADDRESS_DATA_SIZE_UPPER_BOUND: usize = 9 + 32 + 32 + 9 + 8;
+      const FEATURED_ADDRESS_DATA_SIZE_UPPER_BOUND: usize =
+        <u64 as VarInt>::UPPER_BOUND + 32 + 32 + <u64 as VarInt>::UPPER_BOUND + 8;
       // Checksum
       const FEATURED_ADDRESS_CHECKED_DATA_SIZE_UPPER_BOUND: usize =
         FEATURED_ADDRESS_DATA_SIZE_UPPER_BOUND + 4;

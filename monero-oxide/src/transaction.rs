@@ -65,13 +65,13 @@ impl Input {
     match self {
       Input::Gen(height) => {
         w.write_all(&[255])?;
-        write_varint(height, w)
+        VarInt::write(height, w)
       }
 
       Input::ToKey { amount, key_offsets, key_image } => {
         w.write_all(&[2])?;
-        write_varint(&amount.unwrap_or(0), w)?;
-        write_vec(write_varint, key_offsets, w)?;
+        VarInt::write(&amount.unwrap_or(0), w)?;
+        write_vec(VarInt::write, key_offsets, w)?;
         key_image.write(w)
       }
     }
@@ -87,9 +87,9 @@ impl Input {
   /// Read an Input.
   pub fn read<R: Read>(r: &mut R) -> io::Result<Input> {
     Ok(match read_byte(r)? {
-      255 => Input::Gen(read_varint(r)?),
+      255 => Input::Gen(VarInt::read(r)?),
       2 => {
-        let amount = read_varint(r)?;
+        let amount = VarInt::read(r)?;
         // https://github.com/monero-project/monero/
         //   blob/00fd416a99686f0956361d1cd0337fe56e58d4a7/
         //   src/cryptonote_basic/cryptonote_format_utils.cpp#L860-L863
@@ -99,7 +99,7 @@ impl Input {
         Input::ToKey {
           amount,
           // Each offset takes at least one byte, and this won't be in a miner transaction
-          key_offsets: read_vec(read_varint, Some(MAX_NON_MINER_TRANSACTION_SIZE), r)?,
+          key_offsets: read_vec(VarInt::read, Some(MAX_NON_MINER_TRANSACTION_SIZE), r)?,
           key_image: CompressedPoint::read(r)?,
         }
       }
@@ -122,7 +122,7 @@ pub struct Output {
 impl Output {
   /// Write the Output.
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-    write_varint(&self.amount.unwrap_or(0), w)?;
+    VarInt::write(&self.amount.unwrap_or(0), w)?;
     w.write_all(&[2 + u8::from(self.view_tag.is_some())])?;
     w.write_all(&self.key.to_bytes())?;
     if let Some(view_tag) = self.view_tag {
@@ -133,14 +133,14 @@ impl Output {
 
   /// Write the Output to a `Vec<u8>`.
   pub fn serialize(&self) -> Vec<u8> {
-    let mut res = Vec::with_capacity(8 + 1 + 32);
+    let mut res = Vec::with_capacity(<u64 as VarInt>::UPPER_BOUND + 1 + 32 + 1);
     self.write(&mut res).expect("write failed but <Vec as io::Write> doesn't fail");
     res
   }
 
   /// Read an Output.
   pub fn read<R: Read>(rct: bool, r: &mut R) -> io::Result<Output> {
-    let amount = read_varint(r)?;
+    let amount = VarInt::read(r)?;
     let amount = if rct {
       if amount != 0 {
         Err(io::Error::other("RCT TX output wasn't 0"))?;
@@ -182,9 +182,9 @@ impl Timelock {
   /// Write the Timelock.
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
     match self {
-      Timelock::None => write_varint(&0u8, w),
-      Timelock::Block(block) => write_varint(block, w),
-      Timelock::Time(time) => write_varint(time, w),
+      Timelock::None => VarInt::write(&0u8, w),
+      Timelock::Block(block) => VarInt::write(block, w),
+      Timelock::Time(time) => VarInt::write(time, w),
     }
   }
 
@@ -199,7 +199,7 @@ impl Timelock {
   pub fn read<R: Read>(r: &mut R) -> io::Result<Self> {
     const TIMELOCK_BLOCK_THRESHOLD: usize = 500_000_000;
 
-    let raw = read_varint::<_, u64>(r)?;
+    let raw = <u64 as VarInt>::read(r)?;
     Ok(if raw == 0 {
       Timelock::None
     } else if raw <
@@ -258,7 +258,7 @@ impl TransactionPrefix {
     self.additional_timelock.write(w)?;
     write_vec(Input::write, &self.inputs, w)?;
     write_vec(Output::write, &self.outputs, w)?;
-    write_varint(&self.extra.len(), w)?;
+    VarInt::write(&self.extra.len(), w)?;
     w.write_all(&self.extra)
   }
 
@@ -293,7 +293,7 @@ impl TransactionPrefix {
 
   fn hash(&self, version: u64) -> [u8; 32] {
     let mut buf = vec![];
-    write_varint(&version, &mut buf).expect("write failed but <Vec as io::Write> doesn't fail");
+    VarInt::write(&version, &mut buf).expect("write failed but <Vec as io::Write> doesn't fail");
     self.write(&mut buf).expect("write failed but <Vec as io::Write> doesn't fail");
     keccak256(buf)
   }
@@ -473,7 +473,7 @@ impl<P: PotentiallyPruned> Transaction<P> {
   /// Some writable transactions may not be readable if they're malformed, per Monero's consensus
   /// rules.
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-    write_varint(&self.version(), w)?;
+    VarInt::write(&self.version(), w)?;
     match self {
       Transaction::V1 { prefix, signatures } => {
         prefix.write(w)?;
@@ -505,7 +505,7 @@ impl<P: PotentiallyPruned> Transaction<P> {
   /// deserializing. The result is not guaranteed to follow all Monero consensus rules or any
   /// specific set of consensus rules.
   pub fn read<R: Read>(r: &mut R) -> io::Result<Self> {
-    let version = read_varint(r)?;
+    let version = VarInt::read(r)?;
     let prefix = TransactionPrefix::read(r, version)?;
 
     if version == 1 {
@@ -541,7 +541,7 @@ impl<P: PotentiallyPruned> Transaction<P> {
         let mut buf = Vec::with_capacity(512);
 
         // We don't use `self.write` as that may write the signatures (if this isn't pruned)
-        write_varint(&self.version(), &mut buf)
+        VarInt::write(&self.version(), &mut buf)
           .expect("write failed but <Vec as io::Write> doesn't fail");
         prefix.write(&mut buf).expect("write failed but <Vec as io::Write> doesn't fail");
 

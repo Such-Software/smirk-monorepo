@@ -197,7 +197,7 @@ impl Metadata {
       w.write_all(&[0])?;
     }
 
-    write_varint(&self.arbitrary_data.len(), w)?;
+    VarInt::write(&self.arbitrary_data.len(), w)?;
     for part in &self.arbitrary_data {
       const _ASSERT_MAX_ARBITRARY_DATA_SIZE_FITS_WITHIN_U8: [();
         (u8::MAX as usize) - MAX_ARBITRARY_DATA_SIZE] = [(); _];
@@ -236,7 +236,7 @@ impl Metadata {
       arbitrary_data: {
         let mut data = vec![];
         let mut total_len = 0usize;
-        for _ in 0 .. read_varint::<_, usize>(r)? {
+        for _ in 0 .. <usize as VarInt>::read(r)? {
           let len = read_byte(r)?;
           let chunk = read_raw_vec(read_byte, usize::from(len), r)?;
           total_len = total_len.wrapping_add(chunk.len());

@@ -10,7 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 use curve25519_dalek::{Scalar, EdwardsPoint};
 
 use monero_oxide::{
-  io::write_varint,
+  io::VarInt,
   primitives::{Commitment, keccak256, keccak256_to_scalar},
   ringct::EncryptedAmount,
   transaction::Input,
@@ -61,7 +61,7 @@ impl SharedKeyDerivations {
         // If Gen, this should be the only input, making this loop somewhat pointless
         // This works and even if there were somehow multiple inputs, it'd be a false negative
         Input::Gen(height) => {
-          write_varint(height, &mut u).expect("write failed but <Vec as io::Write> doesn't fail");
+          VarInt::write(height, &mut u).expect("write failed but <Vec as io::Write> doesn't fail");
         }
         Input::ToKey { key_image, .. } => u.extend(key_image.to_bytes()),
       }
@@ -83,7 +83,7 @@ impl SharedKeyDerivations {
     // || o
     {
       let output_derivation: &mut Vec<u8> = output_derivation.as_mut();
-      write_varint(&o, output_derivation)
+      VarInt::write(&o, output_derivation)
         .expect("write failed but <Vec as io::Write> doesn't fail");
     }
 
