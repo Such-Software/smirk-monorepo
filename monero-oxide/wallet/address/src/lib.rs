@@ -15,6 +15,7 @@ use zeroize::Zeroize;
 use curve25519_dalek::EdwardsPoint;
 
 use monero_io::*;
+use monero_primitives::UpperBound;
 
 use monero_base58::{encode_check, decode_check};
 
@@ -396,6 +397,17 @@ impl<const ADDRESS_BYTES: u128> fmt::Display for Address<ADDRESS_BYTES> {
 }
 
 impl<const ADDRESS_BYTES: u128> Address<ADDRESS_BYTES> {
+  /// The upper bound on an address's data, when represented as bytes without a checksum.
+  const BASE_256_UPPER_BOUND: UpperBound<usize> =
+    UpperBound(<u64 as VarInt>::UPPER_BOUND + 32 + 32 + <u64 as VarInt>::UPPER_BOUND + 8);
+  /// The upper bound on an address's data, when represented as bytes with a checksum.
+  const CHECKSUMMED_UPPER_BOUND: UpperBound<usize> = UpperBound(Self::BASE_256_UPPER_BOUND.0 + 4);
+  /// The maximum size of an encoded address.
+  // This alleges each 8-bit byte will be encoded into 5-bit chunks, when in reality Base 58 is
+  // ~5.85 bits.
+  pub const SIZE_UPPER_BOUND: UpperBound<usize> =
+    UpperBound((Self::CHECKSUMMED_UPPER_BOUND.0 * 8).div_ceil(5));
+
   /// Create a new address.
   pub fn new(network: Network, kind: AddressType, spend: EdwardsPoint, view: EdwardsPoint) -> Self {
     Address { network, kind, spend, view }

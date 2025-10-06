@@ -22,6 +22,9 @@ use curve25519_dalek::{
 use monero_io::*;
 use monero_generators::H;
 
+mod bounds;
+pub use bounds::*;
+
 mod unreduced_scalar;
 pub use unreduced_scalar::UnreducedScalar;
 

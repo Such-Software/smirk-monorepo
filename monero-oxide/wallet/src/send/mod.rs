@@ -21,7 +21,7 @@ use crate::{
     clsag::{ClsagError, ClsagContext, Clsag},
     RctType, RctPrunable, RctProofs,
   },
-  transaction::{INPUTS_UPPER_BOUND, Transaction},
+  transaction::{TransactionPrefix, Transaction},
   address::{Network, SubaddressIndex, MoneroAddress},
   extra::{MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE},
   rpc::FeeRate,
@@ -483,44 +483,7 @@ impl SignableTransaction {
   /// defined serialization.
   pub fn read<R: io::Read>(r: &mut R) -> io::Result<SignableTransaction> {
     fn read_address<R: io::Read>(r: &mut R) -> io::Result<MoneroAddress> {
-      /*
-        This uses featured addresses for a bound as they'll always be potentially larger than
-        traditional addresses.
-
-        https://gist.github.com/kayabaNerve/01c50bbc35441e0bbdcee63a9d823789
-      */
-      const FEATURED_ADDRESS_DATA_SIZE_UPPER_BOUND: usize =
-        <u64 as VarInt>::UPPER_BOUND + 32 + 32 + <u64 as VarInt>::UPPER_BOUND + 8;
-      // Checksum
-      const FEATURED_ADDRESS_CHECKED_DATA_SIZE_UPPER_BOUND: usize =
-        FEATURED_ADDRESS_DATA_SIZE_UPPER_BOUND + 4;
-      // Base58-encoding, using 5 for `log2(58)`
-      const FEATURED_ADDRESS_ENCODED_SIZE_UPPER_BOUND: usize =
-        (FEATURED_ADDRESS_CHECKED_DATA_SIZE_UPPER_BOUND * 8).div_ceil(5);
-
-      /*
-        https://gist.github.com/tevador
-          /50160d160d24cfc6c52ae02eb3d17024?permalink_comment_id=4744307#gistcomment-4744307
-        notes one JAMTIS proposal which used 247 bytes, while most are 244 bytes. JAMTIS-RCT is
-        244 (https://gist.github.com/tevador/d3656a217c0177c160b9b6219d9ebb96).
-      */
-      const JAMTIS_ADDRESS_ENCODED_SIZE: usize = 247;
-
-      const fn const_max(a: usize, b: usize) -> usize {
-        if a > b {
-          a
-        } else {
-          b
-        }
-      }
-      const ADDRESS_ENCODED_SIZE_UPPER_BOUND: usize =
-        const_max(FEATURED_ADDRESS_ENCODED_SIZE_UPPER_BOUND, JAMTIS_ADDRESS_ENCODED_SIZE);
-
-      const ADDRESS_ENCODED_SIZE_SAFETY_FACTOR: usize = 2;
-      const ADDRESS_ENCODED_SIZE_BOUND: usize =
-        ADDRESS_ENCODED_SIZE_SAFETY_FACTOR * ADDRESS_ENCODED_SIZE_UPPER_BOUND;
-
-      String::from_utf8(read_vec(read_byte, Some(ADDRESS_ENCODED_SIZE_BOUND), r)?)
+      String::from_utf8(read_vec(read_byte, Some(MoneroAddress::SIZE_UPPER_BOUND.0), r)?)
         .ok()
         .and_then(|str| MoneroAddress::from_str_with_unchecked_network(&str).ok())
         .ok_or_else(|| io::Error::other("invalid address"))
@@ -548,7 +511,7 @@ impl SignableTransaction {
       rct_type: RctType::try_from(read_byte(r)?)
         .map_err(|()| io::Error::other("unsupported/invalid RctType"))?,
       outgoing_view_key: Zeroizing::new(read_bytes(r)?),
-      inputs: read_vec(OutputWithDecoys::read, Some(INPUTS_UPPER_BOUND), r)?,
+      inputs: read_vec(OutputWithDecoys::read, Some(TransactionPrefix::INPUTS_UPPER_BOUND.0), r)?,
       payments: read_vec(read_payment, Some(MAX_BULLETPROOF_COMMITMENTS), r)?,
       /*
         This doesn't assert the _total_ length is `< MAX_EXTRA_SIZE_BY_RELAY_RULE`, yet the
