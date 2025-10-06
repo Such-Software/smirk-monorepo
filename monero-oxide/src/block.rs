@@ -11,9 +11,9 @@ use crate::{
   transaction::{Input, Transaction},
 };
 
-const CORRECT_BLOCK_HASH_202612: [u8; 32] =
+pub(crate) const CORRECT_BLOCK_HASH_202612: [u8; 32] =
   hex_literal::hex!("426d16cff04c71f8b16340b722dc4010a2dd3831c22041431f772547ba6e331a");
-const EXISTING_BLOCK_HASH_202612: [u8; 32] =
+pub(crate) const EXISTING_BLOCK_HASH_202612: [u8; 32] =
   hex_literal::hex!("bbd604d2ba11ba27935e006ed39c9bfdd99b76bf4a50654bc1e1e61217962698");
 
 /// A Monero block's header.
@@ -160,10 +160,13 @@ impl Block {
     serialized
   }
 
-  /// Serialize the block as required for the proof of work hash.
+  /// Serialize the block as generally required for the proof of work hash.
   ///
   /// This is distinct from the serialization required for the block hash. To get the block hash,
   /// use the [`Block::hash`] function.
+  ///
+  /// Please note that for block #202,612, regardless of the network, the proof of work hash will
+  /// be fixed to a specific value and this preimage will be irrelevant.
   pub fn serialize_pow_hash(&self) -> Vec<u8> {
     let mut blob = self.header.serialize();
 
@@ -194,6 +197,8 @@ impl Block {
     hashing_blob.append(&mut hashable);
 
     let hash = keccak256(hashing_blob);
+    // https://github.com/monero-project/monero/blob/8e9ab9677f90492bca3c7555a246f2a8677bd570
+    //   /src/cryptonote_basic/cryptonote_format_utils.cpp#L1468-L1477
     if hash == CORRECT_BLOCK_HASH_202612 {
       return EXISTING_BLOCK_HASH_202612;
     };
