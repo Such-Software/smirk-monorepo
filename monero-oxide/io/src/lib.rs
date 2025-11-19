@@ -8,29 +8,14 @@ use core::fmt::Debug;
 use std_shims::prelude::*;
 use std_shims::io::{self, Read, Write};
 
-use curve25519_dalek::{scalar::Scalar, edwards::EdwardsPoint};
-
 mod varint;
 pub use varint::*;
-
-mod compressed_point;
-pub use compressed_point::CompressedPoint;
 
 /// Write a byte.
 ///
 /// This is used as a building block within generic functions.
 pub fn write_byte<W: Write>(byte: &u8, w: &mut W) -> io::Result<()> {
   w.write_all(&[*byte])
-}
-
-/// Write a scalar.
-pub fn write_scalar<W: Write>(scalar: &Scalar, w: &mut W) -> io::Result<()> {
-  w.write_all(&scalar.to_bytes())
-}
-
-/// Write a point.
-pub fn write_point<W: Write>(point: &EdwardsPoint, w: &mut W) -> io::Result<()> {
-  CompressedPoint(point.compress().to_bytes()).write(w)
 }
 
 /// Write a list of elements, without length-prefixing.
@@ -80,23 +65,6 @@ pub fn read_u32<R: Read>(r: &mut R) -> io::Result<u32> {
 /// Read a u64, little-endian encoded.
 pub fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
   read_bytes(r).map(u64::from_le_bytes)
-}
-
-/// Read a canonically-encoded scalar.
-///
-/// Some scalars within the Monero protocol are not enforced to be canonically encoded. For such
-/// scalars, they should be represented as `[u8; 32]` and later converted to scalars as relevant.
-pub fn read_scalar<R: Read>(r: &mut R) -> io::Result<Scalar> {
-  Option::from(Scalar::from_canonical_bytes(read_bytes(r)?))
-    .ok_or_else(|| io::Error::other("unreduced scalar"))
-}
-
-/// Read a canonically-encoded Ed25519 point.
-///
-/// This internally calls [`CompressedPoint::decompress`] and has the same definition of canonicity.
-/// This function does not check the resulting point is within the prime-order subgroup.
-pub fn read_point<R: Read>(r: &mut R) -> io::Result<EdwardsPoint> {
-  CompressedPoint::read(r)?.decompress().ok_or_else(|| io::Error::other("invalid point"))
 }
 
 /// Read a variable-length list of elements, without length-prefixing.

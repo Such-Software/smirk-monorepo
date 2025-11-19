@@ -20,9 +20,8 @@ thiserror = { version = "2", default-features = false }
 
 zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
 
-curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
-
 monero-io = { path = "../../io", default-features = false }
+monero-ed25519 = { path = "../../ed25519", default-features = false }
 monero-primitives = { path = "../../primitives", default-features = false }
 monero-base58 = { path = "../base58", default-features = false }
 
@@ -42,6 +41,7 @@ std = [
   "zeroize/std",
 
   "monero-io/std",
+  "monero-ed25519/std",
   "monero-primitives/std",
   "monero-base58/std",
 ]

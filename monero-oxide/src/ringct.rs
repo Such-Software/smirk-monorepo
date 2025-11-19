@@ -11,6 +11,7 @@ pub use monero_bulletproofs as bulletproofs;
 
 use crate::{
   io::*,
+  ed25519::*,
   ringct::{mlsag::Mlsag, clsag::Clsag, borromean::BorromeanRange, bulletproofs::Bulletproof},
 };
 

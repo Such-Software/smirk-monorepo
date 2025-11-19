@@ -12,9 +12,8 @@ use alloc::{
 
 use zeroize::Zeroize;
 
-use curve25519_dalek::EdwardsPoint;
-
 use monero_io::*;
+use monero_ed25519::{Point, CompressedPoint};
 use monero_primitives::UpperBound;
 
 use monero_base58::{encode_check, decode_check};
@@ -348,8 +347,8 @@ pub const MONERO_BYTES: NetworkedAddressBytes = match NetworkedAddressBytes::new
 pub struct Address<const ADDRESS_BYTES: u128> {
   network: Network,
   kind: AddressType,
-  spend: EdwardsPoint,
-  view: EdwardsPoint,
+  spend: Point,
+  view: Point,
 }
 
 impl<const ADDRESS_BYTES: u128> fmt::Debug for Address<ADDRESS_BYTES> {
@@ -409,7 +408,7 @@ impl<const ADDRESS_BYTES: u128> Address<ADDRESS_BYTES> {
     UpperBound((Self::CHECKSUMMED_UPPER_BOUND.0 * 8).div_ceil(5));
 
   /// Create a new address.
-  pub fn new(network: Network, kind: AddressType, spend: EdwardsPoint, view: EdwardsPoint) -> Self {
+  pub fn new(network: Network, kind: AddressType, spend: Point, view: Point) -> Self {
     Address { network, kind, spend, view }
   }
 
@@ -422,8 +421,16 @@ impl<const ADDRESS_BYTES: u128> Address<ADDRESS_BYTES> {
       NetworkedAddressBytes::from_const_generic(ADDRESS_BYTES);
     let (network, mut kind) = address_bytes
       .metadata_from_byte(read_byte(&mut raw).map_err(|_| AddressError::InvalidLength)?)?;
-    let spend = read_point(&mut raw).map_err(|_| AddressError::InvalidKey)?;
-    let view = read_point(&mut raw).map_err(|_| AddressError::InvalidKey)?;
+    let spend = CompressedPoint::read(&mut raw)
+      .ok()
+      .as_ref()
+      .and_then(CompressedPoint::decompress)
+      .ok_or(AddressError::InvalidKey)?;
+    let view = CompressedPoint::read(&mut raw)
+      .ok()
+      .as_ref()
+      .and_then(CompressedPoint::decompress)
+      .ok_or(AddressError::InvalidKey)?;
 
     if matches!(kind, AddressType::Featured { .. }) {
       let features = <u64 as VarInt>::read(&mut raw).map_err(|_| AddressError::InvalidLength)?;
@@ -499,12 +506,12 @@ impl<const ADDRESS_BYTES: u128> Address<ADDRESS_BYTES> {
   }
 
   /// The public spend key for this address.
-  pub fn spend(&self) -> EdwardsPoint {
+  pub fn spend(&self) -> Point {
     self.spend
   }
 
   /// The public view key for this address.
-  pub fn view(&self) -> EdwardsPoint {
+  pub fn view(&self) -> Point {
     self.view
   }
 }

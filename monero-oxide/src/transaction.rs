@@ -7,6 +7,7 @@ use zeroize::Zeroize;
 
 use crate::{
   io::*,
+  ed25519::*,
   primitives::{UpperBound, LowerBound, keccak256},
   ring_signatures::RingSignature,
   ringct::{bulletproofs::Bulletproof, PrunedRctProofs},

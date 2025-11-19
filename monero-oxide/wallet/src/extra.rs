@@ -7,9 +7,10 @@ use std_shims::{
 
 use zeroize::Zeroize;
 
-use curve25519_dalek::edwards::EdwardsPoint;
-
-use monero_oxide::io::*;
+use monero_oxide::{
+  io::*,
+  ed25519::{CompressedPoint, Point},
+};
 
 pub(crate) const MAX_TX_EXTRA_PADDING_COUNT: usize = 255;
 const MAX_TX_EXTRA_NONCE_SIZE: usize = 255;
@@ -96,7 +97,7 @@ pub enum ExtraField {
   /// The transaction key.
   ///
   /// This is a commitment to the randomness used for deriving outputs.
-  PublicKey(EdwardsPoint),
+  PublicKey(CompressedPoint),
   /// The nonce field.
   ///
   /// This is used for data, such as payment IDs.
@@ -113,7 +114,7 @@ pub enum ExtraField {
   /// The additional transaction keys.
   ///
   /// These are the per-output commitments to the randomness used for deriving outputs.
-  PublicKeys(Vec<EdwardsPoint>),
+  PublicKeys(Vec<CompressedPoint>),
   /// The 'mysterious' Minergate tag.
   ///
   /// This was used by a closed source entity without documentation. Support for parsing it was
@@ -133,7 +134,7 @@ impl ExtraField {
       }
       ExtraField::PublicKey(key) => {
         w.write_all(&[1])?;
-        w.write_all(&key.compress().to_bytes())?;
+        key.write(w)?;
       }
       ExtraField::Nonce(data) => {
         w.write_all(&[2])?;
@@ -146,7 +147,7 @@ impl ExtraField {
       }
       ExtraField::PublicKeys(keys) => {
         w.write_all(&[4])?;
-        write_vec(write_point, keys, w)?;
+        write_vec(CompressedPoint::write, keys, w)?;
       }
       ExtraField::MysteriousMinergate(data) => {
         w.write_all(&[0xDE])?;
@@ -189,10 +190,10 @@ impl ExtraField {
         }
         size
       }),
-      1 => ExtraField::PublicKey(read_point(r)?),
+      1 => ExtraField::PublicKey(CompressedPoint::read(r)?),
       2 => ExtraField::Nonce(read_vec(read_byte, Some(MAX_TX_EXTRA_NONCE_SIZE), r)?),
       3 => ExtraField::MergeMining(VarInt::read(r)?, read_bytes(r)?),
-      4 => ExtraField::PublicKeys(read_vec(read_point, None, r)?),
+      4 => ExtraField::PublicKeys(read_vec(CompressedPoint::read, None, r)?),
       0xDE => ExtraField::MysteriousMinergate(read_vec(read_byte, None, r)?),
       _ => Err(io::Error::other("unknown extra field"))?,
     })
@@ -206,24 +207,37 @@ impl Extra {
   /// The keys within this extra.
   ///
   /// This returns all keys specified with `PublicKey` and the first set of keys specified with
-  /// `PublicKeys`, so long as they're well-formed.
+  /// `PublicKeys`. If any are improperly encoded, identity will be yielded in place, intending to
+  /// cause an ECDH of the identity point, as Monero uses upon improperly-encoded points.
   // https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c45
-  //   /src/wallet/wallet2.cpp#L2290-L2300
+  //   /src/wallet/wallet2.cpp#L2290-L2300 (use all transaction keys)
   // https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c454
-  // /src/wallet/wallet2.cpp#L2337-L2340
-  pub fn keys(&self) -> Option<(Vec<EdwardsPoint>, Option<Vec<EdwardsPoint>>)> {
+  //   /src/wallet/wallet2.cpp#L2337-L2340 (use only the first set of additional keys)
+  // https://github.com/monero-project/monero/blob/6bb36309d69e7157b459e957a9a2d64c67e5892e
+  //   /src/wallet/wallet2.cpp#L2368-L2373 (public key was improperly encoded)
+  // https://github.com/monero-project/monero/blob/6bb36309d69e7157b459e957a9a2d64c67e5892e
+  //   /src/wallet/wallet2.cpp#L2383-L2387 (additional key was improperly encoded)
+  pub fn keys(&self) -> Option<(Vec<Point>, Option<Vec<Point>>)> {
+    let identity = {
+      use curve25519_dalek::{traits::Identity, EdwardsPoint};
+      Point::from(EdwardsPoint::identity())
+    };
+
     let mut keys = vec![];
     let mut additional = None;
     for field in &self.0 {
       match field.clone() {
-        ExtraField::PublicKey(this_key) => keys.push(this_key),
-        ExtraField::PublicKeys(these_additional) => {
-          additional = additional.or(Some(these_additional))
+        ExtraField::PublicKey(key) => keys.push(key.decompress().unwrap_or(identity)),
+        ExtraField::PublicKeys(keys) => {
+          additional = additional
+            .or(Some(keys.into_iter().map(|key| key.decompress().unwrap_or(identity)).collect()));
         }
         _ => (),
       }
     }
     // Don't return any keys if this was non-standard and didn't include the primary key
+    // https://github.com/monero-project/monero/blob/6bb36309d69e7157b459e957a9a2d64c67e5892e
+    //   /src/wallet/wallet2.cpp#L2338-L2346
     if keys.is_empty() {
       None
     } else {
@@ -293,7 +307,7 @@ impl Extra {
     res
   }
 
-  pub(crate) fn new(key: EdwardsPoint, additional: Vec<EdwardsPoint>) -> Extra {
+  pub(crate) fn new(key: CompressedPoint, additional: Vec<CompressedPoint>) -> Extra {
     let mut res = Extra(Vec::with_capacity(3));
     // https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c454
     //   /src/cryptonote_basic/cryptonote_format_utils.cpp#L627-L633

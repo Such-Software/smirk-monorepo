@@ -4,7 +4,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use monero_io as io;
-pub use monero_generators as generators;
+pub use monero_ed25519 as ed25519;
 pub use monero_primitives as primitives;
 
 /// Merkle tree functionality.

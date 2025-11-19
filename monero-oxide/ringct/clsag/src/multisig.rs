@@ -22,8 +22,7 @@ use frost::{
   algorithm::{WriteAddendum, Algorithm},
 };
 
-use monero_generators::biased_hash_to_point;
-use monero_io::CompressedPoint;
+use monero_ed25519::{Point, CompressedPoint};
 
 use crate::{ClsagContext, Clsag};
 
@@ -162,9 +161,10 @@ impl ClsagMultisig {
       ClsagMultisig {
         transcript,
 
-        key_image_generator: biased_hash_to_point(
-          context.decoys.signer_ring_members()[0].compress().0,
-        ),
+        key_image_generator: Point::biased_hash(
+          context.decoys.signer_ring_members()[0].compress().to_bytes(),
+        )
+        .into(),
         key_image_shares: HashMap::new(),
         image: dfg::EdwardsPoint::identity(),
 
@@ -320,7 +320,8 @@ impl Algorithm<Ed25519> for ClsagMultisig {
     let mut clsag = interim.clsag.clone();
     // We produced shares as `r - p x`, yet the signature is actually `r - p x - c x`
     // Substract `c x` (saved as `c`) now
-    clsag.s[usize::from(self.context.decoys.signer_index())] = sum - interim.c;
+    clsag.s[usize::from(self.context.decoys.signer_index())] =
+      monero_ed25519::Scalar::from(sum - interim.c);
     if clsag
       .verify(
         self
@@ -328,10 +329,10 @@ impl Algorithm<Ed25519> for ClsagMultisig {
           .decoys
           .ring()
           .iter()
-          .map(|m| [CompressedPoint::from(m[0].compress()), CompressedPoint::from(m[1].compress())])
+          .map(|m| [m[0].compress(), m[1].compress()])
           .collect::<Vec<_>>(),
-        &CompressedPoint::from(self.image.0.compress()),
-        &CompressedPoint::from(interim.pseudo_out.compress()),
+        &CompressedPoint::from(self.image.0.compress().to_bytes()),
+        &CompressedPoint::from(interim.pseudo_out.compress().to_bytes()),
         self.msg_hash.as_ref().expect("verify called before sign_share"),
       )
       .is_ok()

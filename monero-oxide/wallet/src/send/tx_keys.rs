@@ -6,12 +6,14 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar, EdwardsPoint};
-
-use monero_oxide::io::CompressedPoint;
+#[cfg(feature = "compile-time-generators")]
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+#[cfg(not(feature = "compile-time-generators"))]
+use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as ED25519_BASEPOINT_TABLE;
 
 use crate::{
-  primitives::{keccak256, Commitment},
+  ed25519::*,
+  primitives::keccak256,
   ringct::EncryptedAmount,
   SharedKeyDerivations,
   send::{ChangeEnum, InternalPayment, SignableTransaction, key_image_sort},
@@ -20,7 +22,7 @@ use crate::{
 fn seeded_rng(
   dst: &'static [u8],
   outgoing_view_key: &[u8; 32],
-  input_keys_and_commitments: Vec<(EdwardsPoint, EdwardsPoint)>,
+  input_keys_and_commitments: Vec<(Point, Point)>,
 ) -> ChaCha20Rng {
   // Apply the DST
   let mut transcript = Zeroizing::new(vec![
@@ -33,9 +35,7 @@ fn seeded_rng(
 
   let mut input_keys_and_commitments = input_keys_and_commitments
     .into_iter()
-    .map(|(key, commitment)| {
-      (CompressedPoint::from(key.compress()), CompressedPoint::from(commitment.compress()))
-    })
+    .map(|(key, commitment)| (key.compress(), commitment.compress()))
     .collect::<Vec<_>>();
 
   // We sort the inputs here to ensure a consistent order
@@ -82,7 +82,7 @@ impl TransactionKeys {
   /// `input_keys` is the list of keys from the outputs spent within this transaction.
   pub fn new(
     outgoing_view_key: &Zeroizing<[u8; 32]>,
-    input_keys_and_commitments: Vec<(EdwardsPoint, EdwardsPoint)>,
+    input_keys_and_commitments: Vec<(Point, Point)>,
   ) -> Self {
     Self(seeded_rng(b"transaction_keys", outgoing_view_key, input_keys_and_commitments))
   }
@@ -95,8 +95,8 @@ impl Iterator for TransactionKeys {
 }
 
 impl SignableTransaction {
-  fn input_keys_and_commitments(&self) -> Vec<(EdwardsPoint, EdwardsPoint)> {
-    self.inputs.iter().map(|output| (output.key(), output.commitment().calculate())).collect()
+  fn input_keys_and_commitments(&self) -> Vec<(Point, Point)> {
+    self.inputs.iter().map(|output| (output.key(), output.commitment().commit())).collect()
   }
 
   pub(crate) fn seeded_rng(&self, dst: &'static [u8]) -> ChaCha20Rng {
@@ -159,7 +159,7 @@ impl SignableTransaction {
     (tx_key, additional_keys)
   }
 
-  fn ecdhs(&self) -> Vec<Zeroizing<EdwardsPoint>> {
+  fn ecdhs(&self) -> Vec<Zeroizing<Point>> {
     let (tx_key, additional_keys) = self.transaction_keys();
     debug_assert!(additional_keys.is_empty() || (additional_keys.len() == self.payments.len()));
     let (tx_key_pub, additional_keys_pub) = self.transaction_keys_pub();
@@ -170,23 +170,24 @@ impl SignableTransaction {
       let addr = payment.address();
       let key_to_use =
         if addr.is_subaddress() { additional_keys.get(i).unwrap_or(&tx_key) } else { &tx_key };
+      let key_to_use = Zeroizing::new((**key_to_use).into());
 
       let ecdh = match payment {
         // If we don't have the view key, use the key dedicated for this address (r A)
         InternalPayment::Payment(_, _) |
         InternalPayment::Change(ChangeEnum::AddressOnly { .. }) => {
-          Zeroizing::new(key_to_use.deref() * addr.view())
+          Zeroizing::new(key_to_use.deref() * addr.view().into())
         }
         // If we do have the view key, use the commitment to the key (a R)
         InternalPayment::Change(ChangeEnum::Standard { view_pair, .. }) => {
-          Zeroizing::new(view_pair.view.deref() * tx_key_pub)
+          Zeroizing::new(Zeroizing::new((*view_pair.view).into()).deref() * tx_key_pub.into())
         }
         InternalPayment::Change(ChangeEnum::Guaranteed { view_pair, .. }) => {
-          Zeroizing::new(view_pair.0.view.deref() * tx_key_pub)
+          Zeroizing::new(Zeroizing::new((*view_pair.0.view).into()).deref() * tx_key_pub.into())
         }
       };
 
-      res.push(ecdh);
+      res.push(Zeroizing::new(Point::from(*ecdh)));
     }
     res
   }
@@ -225,8 +226,9 @@ impl SignableTransaction {
   //
   // These depend on the payments. Commitments for payments to subaddresses use the spend key for
   // the generator.
-  pub(crate) fn transaction_keys_pub(&self) -> (EdwardsPoint, Vec<EdwardsPoint>) {
+  pub(crate) fn transaction_keys_pub(&self) -> (Point, Vec<CompressedPoint>) {
     let (tx_key, additional_keys) = self.transaction_keys();
+    let tx_key = Zeroizing::new((*tx_key).into());
     debug_assert!(additional_keys.is_empty() || (additional_keys.len() == self.payments.len()));
 
     // The single transaction key uses the subaddress's spend key as its generator
@@ -244,27 +246,30 @@ impl SignableTransaction {
         panic!("filtered payment wasn't a payment")
       };
 
-      return (tx_key.deref() * addr.spend(), vec![]);
+      return (Point::from(tx_key.deref() * addr.spend().into()), vec![]);
     }
 
     if should_use_additional_keys {
       let mut additional_keys_pub = vec![];
       for (additional_key, payment) in additional_keys.into_iter().zip(&self.payments) {
+        let additional_key = Zeroizing::new((*additional_key).into());
         let addr = payment.address();
         // https://github.com/monero-project/monero/blob/cc73fe71162d564ffda8e549b79a350bca53c454
         //   /src/device/device_default.cpp#L308-L312
         if addr.is_subaddress() {
-          additional_keys_pub.push(additional_key.deref() * addr.spend());
+          additional_keys_pub
+            .push(Point::from(additional_key.deref() * addr.spend().into()).compress());
         } else {
-          additional_keys_pub.push(additional_key.deref() * ED25519_BASEPOINT_TABLE)
+          additional_keys_pub
+            .push(Point::from(additional_key.deref() * ED25519_BASEPOINT_TABLE).compress());
         }
       }
-      return (tx_key.deref() * ED25519_BASEPOINT_TABLE, additional_keys_pub);
+      return (Point::from(tx_key.deref() * ED25519_BASEPOINT_TABLE), additional_keys_pub);
     }
 
     debug_assert!(!has_payments_to_subaddresses);
     debug_assert!(!should_use_additional_keys);
-    (tx_key.deref() * ED25519_BASEPOINT_TABLE, vec![])
+    (Point::from(tx_key.deref() * ED25519_BASEPOINT_TABLE), vec![])
   }
 
   pub(crate) fn commitments_and_encrypted_amounts(
@@ -302,10 +307,12 @@ impl SignableTransaction {
   }
 
   pub(crate) fn sum_output_masks(&self, key_images: &[CompressedPoint]) -> Scalar {
-    self
-      .commitments_and_encrypted_amounts(key_images)
-      .into_iter()
-      .map(|(commitment, _)| commitment.mask)
-      .sum()
+    Scalar::from(
+      self
+        .commitments_and_encrypted_amounts(key_images)
+        .into_iter()
+        .map(|(commitment, _)| commitment.mask.into())
+        .sum::<curve25519_dalek::Scalar>(),
+    )
   }
 }
