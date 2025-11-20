@@ -604,6 +604,16 @@ impl SignableTransaction {
     SignableTransactionWithKeyImages { intent: self, key_images }
   }
 
+  /// Fetch what the transaction will be, without its signatures (and associated fields).
+  ///
+  /// This returns `None` if an improper amount of key images is provided.
+  pub fn unsigned_transaction(self, key_images: Vec<CompressedPoint>) -> Option<Transaction> {
+    if self.inputs.len() != key_images.len() {
+      None?
+    };
+    Some(self.with_key_images(key_images).transaction_without_signatures())
+  }
+
   /// Sign this transaction.
   pub fn sign(
     self,
