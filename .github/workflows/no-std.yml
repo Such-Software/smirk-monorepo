@@ -24,8 +24,18 @@ jobs:
       - name: Install Build Dependencies
         uses: ./.github/actions/build-dependencies
 
+      - name: Get nightly version to use
+        id: nightly
+        shell: bash
+        run: echo "version=$(cat .github/nightly-version)" >> $GITHUB_OUTPUT
+
       - name: Install RISC-V Toolchain
-        run: sudo apt update && sudo apt install -y gcc-riscv64-unknown-elf gcc-multilib && rustup target add riscv32imac-unknown-none-elf
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-riscv64-unknown-elf gcc-multilib
+          rustup toolchain install ${{ steps.nightly.outputs.version }} --profile minimal --component rust-src --target riscv32imac-unknown-none-elf
 
       - name: Verify no-std builds
-        run: CFLAGS=-I/usr/include cargo build --target riscv32imac-unknown-none-elf -p monero-oxide-no-std-tests
+        run: |
+          CFLAGS=-I/usr/include cargo +${{ steps.nightly.outputs.version }} build --target riscv32imac-unknown-none-elf -Z build-std=core -p monero-oxide-no-std-tests
+          CFLAGS=-I/usr/include cargo +${{ steps.nightly.outputs.version }} build --target riscv32imac-unknown-none-elf -Z build-std=core,alloc -p monero-oxide-no-std-tests --features "alloc"

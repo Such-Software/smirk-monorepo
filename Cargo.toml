@@ -11,6 +11,8 @@ members = [
   "monero-oxide/ringct/bulletproofs",
   "monero-oxide",
 
+  "monero-oxide/epee",
+
   "monero-oxide/rpc",
   "monero-oxide/rpc/simple-request",
 

@@ -8,7 +8,7 @@ authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 keywords = ["nostd", "no_std", "alloc"]
 edition = "2021"
 publish = false
-rust-version = "1.89"
+rust-version = "1.79"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -18,4 +18,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-monero-wallet = { path = "../../monero-oxide/wallet", default-features = false, features = ["compile-time-generators"] }
+monero-epee = { path = "../../monero-oxide/epee" }
+monero-wallet = { path = "../../monero-oxide/wallet", default-features = false, features = ["compile-time-generators"], optional = true }
+
+[features]
+alloc = ["monero-wallet"]
