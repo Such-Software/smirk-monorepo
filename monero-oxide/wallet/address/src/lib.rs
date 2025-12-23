@@ -224,9 +224,9 @@ pub enum AddressError {
     /// The Network embedded within the Address.
     actual: Network,
   },
-  /// The address's type does not support integrated payment IDs
+  /// The address's type does not support payment IDs.
   #[error("address's type does not support integrated payment ID")]
-  UnsupportedPaymentID,
+  PaymentIDsUnsupported,
 }
 
 /// Bytes used as prefixes when encoding addresses, variable to the network instance.
@@ -479,23 +479,25 @@ impl<const ADDRESS_BYTES: u128> Address<ADDRESS_BYTES> {
     })
   }
 
-  /// Create an integrated address from this address and a `payment_id`, or edit an existing
-  /// integrated address with a new `payment_id`
+  /// Produce this address with the specified `payment_id` embedded.
   ///
-  /// If the address does not support payment IDs within its format (e.g. subaddresses), then this
-  /// function will return an error.
+  /// This will convert a standard address to an integrated address. For integrated/guaranteed
+  /// addresses, this will _replace_ any existing `payment_id`.
+  ///
+  /// If the address type cannot have a `payment_id` embedded (e.g. `AddressType::Subaddress`), an
+  /// error will be returned..
   pub fn with_payment_id(&self, payment_id: [u8; 8]) -> Result<Self, AddressError> {
     match self.kind {
-      AddressType::Subaddress => Err(AddressError::UnsupportedPaymentID),
-      AddressType::Featured { subaddress, guaranteed, .. } => Ok(Self::new(
+      AddressType::Legacy | AddressType::LegacyIntegrated(_) => Ok(Self::new(
         self.network,
-        AddressType::Featured { subaddress, payment_id: Some(payment_id), guaranteed },
+        AddressType::LegacyIntegrated(payment_id),
         self.spend,
         self.view,
       )),
-      _ => Ok(Self::new(
+      AddressType::Subaddress => Err(AddressError::PaymentIDsUnsupported),
+      AddressType::Featured { subaddress, payment_id: _, guaranteed } => Ok(Self::new(
         self.network,
-        AddressType::LegacyIntegrated(payment_id),
+        AddressType::Featured { subaddress, payment_id: Some(payment_id), guaranteed },
         self.spend,
         self.view,
       )),

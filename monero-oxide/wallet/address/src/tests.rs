@@ -52,7 +52,7 @@ fn integrated_address() {
 }
 
 #[test]
-fn convert_to_integrated_address() {
+fn with_payment_id() {
   let addr = MoneroAddress::from_str(Network::Mainnet, STANDARD).unwrap();
   assert_eq!(addr.network(), Network::Mainnet);
   assert_eq!(addr.kind(), &AddressType::Legacy);
