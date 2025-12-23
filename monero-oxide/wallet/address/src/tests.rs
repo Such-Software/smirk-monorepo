@@ -52,6 +52,23 @@ fn integrated_address() {
 }
 
 #[test]
+fn convert_to_integrated_address() {
+  let addr = MoneroAddress::from_str(Network::Mainnet, STANDARD).unwrap();
+  assert_eq!(addr.network(), Network::Mainnet);
+  assert_eq!(addr.kind(), &AddressType::Legacy);
+  assert!(!addr.is_subaddress());
+  assert_eq!(addr.payment_id(), None);
+  assert!(!addr.is_guaranteed());
+  assert_eq!(addr.spend.compress().to_bytes(), SPEND);
+  assert_eq!(addr.view.compress().to_bytes(), VIEW);
+  assert_eq!(addr.to_string(), STANDARD);
+
+  let integrated_addr = addr.with_payment_id(PAYMENT_ID).unwrap();
+  assert_eq!(integrated_addr.to_string(), INTEGRATED);
+  assert_eq!(integrated_addr.payment_id(), Some(PAYMENT_ID));
+}
+
+#[test]
 fn subaddress() {
   let addr = MoneroAddress::from_str(Network::Mainnet, SUBADDRESS).unwrap();
   assert_eq!(addr.network(), Network::Mainnet);
