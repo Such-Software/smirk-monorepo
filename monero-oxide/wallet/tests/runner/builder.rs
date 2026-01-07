@@ -2,7 +2,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use monero_wallet::{
   ringct::RctType,
-  rpc::FeeRate,
+  interface::FeeRate,
   address::MoneroAddress,
   OutputWithDecoys,
   send::{Change, SendError, SignableTransaction},

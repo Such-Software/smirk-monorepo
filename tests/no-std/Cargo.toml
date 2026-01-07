@@ -20,6 +20,7 @@ workspace = true
 [dependencies]
 monero-epee = { path = "../../monero-oxide/epee" }
 monero-wallet = { path = "../../monero-oxide/wallet", default-features = false, features = ["compile-time-generators"], optional = true }
+monero-daemon-rpc = { path = "../../monero-oxide/interface/daemon", default-features = false, optional = true }
 
 [features]
-alloc = ["monero-wallet"]
+alloc = ["monero-wallet", "monero-daemon-rpc"]

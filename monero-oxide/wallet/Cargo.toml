@@ -43,7 +43,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 
 monero-clsag = { path = "../ringct/clsag", default-features = false }
 monero-oxide = { path = "..", default-features = false }
-monero-rpc = { path = "../rpc", default-features = false }
+monero-interface = { path = "../interface", default-features = false }
 monero-address = { path = "./address", default-features = false }
 
 [dev-dependencies]
@@ -54,7 +54,7 @@ frost = { package = "modular-frost", version = "0.11", default-features = false,
 
 tokio = { version = "1", features = ["sync", "macros"] }
 
-monero-simple-request-rpc = { path = "../rpc/simple-request", default-features = false }
+monero-simple-request-rpc = { path = "../interface/daemon/simple-request", default-features = false }
 
 [features]
 std = [
@@ -71,7 +71,7 @@ std = [
 
   "monero-clsag/std",
   "monero-oxide/std",
-  "monero-rpc/std",
+  "monero-interface/std",
   "monero-address/std",
 ]
 compile-time-generators = ["curve25519-dalek/precomputed-tables", "monero-oxide/compile-time-generators"]

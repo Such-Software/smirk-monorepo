@@ -14,7 +14,8 @@ use simple_request::{
   Response, Client,
 };
 
-use monero_rpc::{RpcError, Rpc};
+pub use monero_daemon_rpc::prelude;
+use monero_daemon_rpc::{prelude::InterfaceError, HttpTransport, MoneroDaemon};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -33,26 +34,26 @@ enum Authentication {
   },
 }
 
-/// An HTTP(S) transport for the RPC.
-///
-/// Requires tokio.
+/// An HTTP(S) transport to connect to a Monero daemon.
 #[derive(Clone, Debug)]
-pub struct SimpleRequestRpc {
+pub struct SimpleRequestTransport {
+  read_response_before_next_request: Arc<Mutex<()>>,
   authentication: Authentication,
-  url: String,
   request_timeout: Duration,
 }
 
-impl SimpleRequestRpc {
+impl SimpleRequestTransport {
   fn digest_auth_challenge(
     response: &Response,
-  ) -> Result<Option<(WwwAuthenticateHeader, u64)>, RpcError> {
+  ) -> Result<Option<(WwwAuthenticateHeader, u64)>, InterfaceError> {
     Ok(if let Some(header) = response.headers().get("www-authenticate") {
       Some((
         digest_auth::parse(header.to_str().map_err(|_| {
-          RpcError::InvalidNode("www-authenticate header wasn't a string".to_string())
+          InterfaceError::InvalidInterface("www-authenticate header wasn't a string".to_string())
         })?)
-        .map_err(|_| RpcError::InvalidNode("invalid digest-auth response".to_string()))?,
+        .map_err(|_| {
+          InterfaceError::InvalidInterface("invalid digest-auth response".to_string())
+        })?,
         0,
       ))
     } else {
@@ -62,89 +63,116 @@ impl SimpleRequestRpc {
 
   /// Create a new HTTP(S) RPC connection.
   ///
-  /// A daemon requiring authentication can be used via including the username and password in the
-  /// URL.
-  pub async fn new(url: String) -> Result<SimpleRequestRpc, RpcError> {
+  /// The URL is parsed with a bespoke parser. It does not attempt to follow any specific
+  /// specification, and should be used carefully accordingly. It does attempt to reasonably work
+  /// with all URLs a caller would provide, and does so without a minimal amount of code (avoiding
+  /// external dependencies). If your usage exhibits unexpected behavior, please open an issue to
+  /// to let us know.
+  ///
+  /// A daemon requiring authentication may be used via including the username and password in the
+  /// URL (`scheme://username:password@domain.tld`). Authentication is NOT guaranteed to be handled
+  /// in constant time.
+  pub async fn new(url: String) -> Result<MoneroDaemon<SimpleRequestTransport>, InterfaceError> {
     Self::with_custom_timeout(url, DEFAULT_TIMEOUT).await
   }
 
   /// Create a new HTTP(S) RPC connection with a custom timeout.
   ///
-  /// A daemon requiring authentication can be used via including the username and password in the
-  /// URL.
+  /// Please refer to [`SimpleRequestTransport::new`] for more information.
   pub async fn with_custom_timeout(
     mut url: String,
     request_timeout: Duration,
-  ) -> Result<SimpleRequestRpc, RpcError> {
+  ) -> Result<MoneroDaemon<SimpleRequestTransport>, InterfaceError> {
     let authentication = if url.contains('@') {
       // Parse out the username and password
       let url_clone = Zeroizing::new(url);
       let split_url = url_clone.split('@').collect::<Vec<_>>();
-      if split_url.len() != 2 {
-        Err(RpcError::ConnectionError("invalid amount of login specifications".to_string()))?;
-      }
       let mut userpass = split_url[0];
-      url = split_url[1].to_string();
+      url = split_url[1 ..].join("@");
 
       // If there was additionally a protocol string, restore that to the daemon URL
       if userpass.contains("://") {
         let split_userpass = userpass.split("://").collect::<Vec<_>>();
         if split_userpass.len() != 2 {
-          Err(RpcError::ConnectionError("invalid amount of protocol specifications".to_string()))?;
+          Err(InterfaceError::InterfaceError(
+            "invalid amount of protocol specifications".to_string(),
+          ))?;
         }
         url = split_userpass[0].to_string() + "://" + &url;
         userpass = split_userpass[1];
       }
 
       let split_userpass = userpass.split(':').collect::<Vec<_>>();
-      if split_userpass.len() > 2 {
-        Err(RpcError::ConnectionError("invalid amount of passwords".to_string()))?;
-      }
 
       let client = Client::without_connection_pool(&url)
-        .map_err(|_| RpcError::ConnectionError("invalid URL".to_string()))?;
+        .map_err(|_| InterfaceError::InterfaceError("invalid URL".to_string()))?;
       // Obtain the initial challenge, which also somewhat validates this connection
+      // TODO: We don't enforce any response size limit here yet should
       let challenge = Self::digest_auth_challenge(
-        &client
-          .request(
-            Request::post(url.clone())
-              .body(vec![].into())
-              .map_err(|e| RpcError::ConnectionError(format!("couldn't make request: {e:?}")))?,
-          )
-          .await
-          .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?,
+        &tokio::time::timeout(
+          request_timeout,
+          client.request(Request::post(url.clone()).body(vec![].into()).map_err(|e| {
+            InterfaceError::InterfaceError(format!("couldn't make request: {e:?}"))
+          })?),
+        )
+        .await
+        .map_err(|e| InterfaceError::InterfaceError(format!("timeout reached: {e:?}")))?
+        .map_err(|e| InterfaceError::InterfaceError(format!("{e:?}")))?,
       )?;
       Authentication::Authenticated {
         username: Zeroizing::new(split_userpass[0].to_string()),
-        password: Zeroizing::new((*split_userpass.get(1).unwrap_or(&"")).to_string()),
+        password: Zeroizing::new(split_userpass[1 ..].join(":")),
         connection: Arc::new(Mutex::new((challenge, client))),
       }
     } else {
-      Authentication::Unauthenticated(Client::with_connection_pool().map_err(|e| {
-        RpcError::InternalError(format!("couldn't create a connection pool: {e:?}"))
+      Authentication::Unauthenticated(Client::without_connection_pool(&url).map_err(|e| {
+        InterfaceError::InternalError(format!("couldn't create client with connection pool: {e:?}"))
       })?)
     };
 
-    Ok(SimpleRequestRpc { authentication, url, request_timeout })
+    MoneroDaemon::new(SimpleRequestTransport {
+      read_response_before_next_request: Arc::new(Mutex::new(())),
+      authentication,
+      request_timeout,
+    })
+    .await
   }
 }
 
-impl SimpleRequestRpc {
-  async fn inner_post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+impl SimpleRequestTransport {
+  async fn inner_post(
+    &self,
+    route: &str,
+    body: Vec<u8>,
+    response_size_limit: Option<usize>,
+  ) -> Result<Vec<u8>, InterfaceError> {
+    /*
+      The documentation for `monero-daemon-rpc` requires we receive the response _before_ we allow
+      further requests to be made. Accordingly, we obtain a lock on a `Mutex` here to stop
+      simultaneous requests from co-occurring.
+    */
+    let _read_response_before_next_request = self.read_response_before_next_request.lock().await;
+
     let request_fn = |uri| {
       Request::post(uri)
         .body(body.clone().into())
-        .map_err(|e| RpcError::ConnectionError(format!("couldn't make request: {e:?}")))
+        .map_err(|e| InterfaceError::InterfaceError(format!("couldn't make request: {e:?}")))
     };
 
-    async fn body_from_response(response: Response<'_>) -> Result<Vec<u8>, RpcError> {
+    let apply_response_size_limit = |request: Request<_>| -> simple_request::Request {
+      let mut request = simple_request::Request::from(request);
+      request.set_response_size_limit(response_size_limit);
+      request
+    };
+
+    async fn body_from_response(response: Response<'_>) -> Result<Vec<u8>, InterfaceError> {
       let mut res = Vec::with_capacity(128);
       response
         .body()
         .await
-        .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?
+        .map_err(|e| InterfaceError::InterfaceError(format!("{e:?}")))?
         .read_to_end(&mut res)
-        .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?;
+        .map_err(|e| InterfaceError::InterfaceError(format!("{e:?}")))?;
       Ok(res)
     }
 
@@ -153,9 +181,9 @@ impl SimpleRequestRpc {
         Authentication::Unauthenticated(client) => {
           body_from_response(
             client
-              .request(request_fn(self.url.clone() + "/" + route)?)
+              .request(apply_response_size_limit(request_fn("/".to_string() + route)?))
               .await
-              .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?,
+              .map_err(|e| InterfaceError::InterfaceError(format!("{e:?}")))?,
           )
           .await?
         }
@@ -169,9 +197,9 @@ impl SimpleRequestRpc {
             connection_lock.0 = Self::digest_auth_challenge(
               &connection_lock
                 .1
-                .request(request)
+                .request(apply_response_size_limit(request))
                 .await
-                .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?,
+                .map_err(|e| InterfaceError::InterfaceError(format!("{e:?}")))?,
             )?;
             request = request_fn("/".to_string() + route)?;
           }
@@ -196,12 +224,14 @@ impl SimpleRequestRpc {
                 &challenge
                   .respond(&context)
                   .map_err(|_| {
-                    RpcError::InvalidNode("couldn't respond to digest-auth challenge".to_string())
+                    InterfaceError::InvalidInterface(
+                      "couldn't respond to digest-auth challenge".to_string(),
+                    )
                   })?
                   .to_header_string(),
               )
               .map_err(|_| {
-                RpcError::InternalError(
+                InterfaceError::InternalError(
                   "digest-auth challenge response wasn't a valid string for an HTTP header"
                     .to_string(),
                 )
@@ -211,9 +241,9 @@ impl SimpleRequestRpc {
 
           let response = connection_lock
             .1
-            .request(request)
+            .request(apply_response_size_limit(request))
             .await
-            .map_err(|e| RpcError::ConnectionError(format!("{e:?}")));
+            .map_err(|e| InterfaceError::InterfaceError(format!("{e:?}")));
 
           let (error, is_stale) = match &response {
             Err(e) => (Some(e.clone()), false),
@@ -224,7 +254,9 @@ impl SimpleRequestRpc {
                   header
                     .to_str()
                     .map_err(|_| {
-                      RpcError::InvalidNode("www-authenticate header wasn't a string".to_string())
+                      InterfaceError::InvalidInterface(
+                        "www-authenticate header wasn't a string".to_string(),
+                      )
                     })?
                     .contains("stale")
                 } else {
@@ -250,7 +282,7 @@ impl SimpleRequestRpc {
               Err(e)?
             } else {
               debug_assert!(is_stale);
-              Err(RpcError::InvalidNode(
+              Err(InterfaceError::InvalidInterface(
                 "node claimed fresh connection had stale authentication".to_string(),
               ))?
             }
@@ -265,16 +297,17 @@ impl SimpleRequestRpc {
   }
 }
 
-impl Rpc for SimpleRequestRpc {
+impl HttpTransport for SimpleRequestTransport {
   fn post(
     &self,
     route: &str,
     body: Vec<u8>,
-  ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+    response_size_limit: Option<usize>,
+  ) -> impl Send + Future<Output = Result<Vec<u8>, InterfaceError>> {
     async move {
-      tokio::time::timeout(self.request_timeout, self.inner_post(route, body))
+      tokio::time::timeout(self.request_timeout, self.inner_post(route, body, response_size_limit))
         .await
-        .map_err(|e| RpcError::ConnectionError(format!("{e:?}")))?
+        .map_err(|e| InterfaceError::InterfaceError(format!("timeout reached: {e:?}")))?
     }
   }
 }

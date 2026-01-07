@@ -11,7 +11,7 @@ use crate::{
   DEFAULT_LOCK_WINDOW, COINBASE_LOCK_WINDOW, BLOCK_TIME,
   ed25519::{Scalar, Point, Commitment},
   ringct::clsag::Decoys,
-  rpc::{RpcError, DecoyRpc},
+  interface::{InterfaceError, TransactionsError, EvaluateUnlocked, ProvidesDecoys},
   output::OutputData,
   WalletOutput,
 };
@@ -23,25 +23,25 @@ const TIP_APPLICATION: f64 = (DEFAULT_LOCK_WINDOW * BLOCK_TIME) as f64;
 
 async fn select_n(
   rng: &mut (impl RngCore + CryptoRng),
-  rpc: &impl DecoyRpc,
-  height: usize,
+  rpc: &impl ProvidesDecoys,
+  block_number: usize,
   output_being_spent: &WalletOutput,
   ring_len: u8,
   fingerprintable_deterministic: bool,
-) -> Result<Vec<(u64, [Point; 2])>, RpcError> {
-  if height < DEFAULT_LOCK_WINDOW {
-    Err(RpcError::InternalError("not enough blocks to select decoys".to_string()))?;
+) -> Result<Vec<(u64, [Point; 2])>, TransactionsError> {
+  if block_number <= DEFAULT_LOCK_WINDOW {
+    Err(InterfaceError::InternalError("not enough blocks to select decoys".to_string()))?;
   }
-  if height > rpc.get_output_distribution_end_height().await? {
-    Err(RpcError::InternalError(
+  if block_number > rpc.latest_block_number().await? {
+    Err(InterfaceError::InternalError(
       "decoys being requested from blocks this node doesn't have".to_string(),
     ))?;
   }
 
   // Get the distribution
-  let distribution = rpc.get_output_distribution(.. height).await?;
+  let distribution = rpc.ringct_output_distribution(..= block_number).await?;
   if distribution.len() < DEFAULT_LOCK_WINDOW {
-    Err(RpcError::InternalError("not enough blocks to select decoys".to_string()))?;
+    Err(InterfaceError::InternalError("not enough blocks to select decoys".to_string()))?;
   }
   let highest_output_exclusive_bound = distribution[distribution.len() - DEFAULT_LOCK_WINDOW];
   // This assumes that each miner TX had one output (as sane) and checks we have sufficient
@@ -51,7 +51,7 @@ async fn select_n(
     u64::try_from(COINBASE_LOCK_WINDOW).expect("coinbase lock window exceeds 2^{64}"),
   ) < u64::from(ring_len)
   {
-    Err(RpcError::InternalError("not enough decoy candidates".to_string()))?;
+    Err(InterfaceError::InternalError("not enough decoy candidates".to_string()))?;
   }
 
   // Determine the outputs per second
@@ -96,7 +96,7 @@ async fn select_n(
             .expect("amount of ignored decoys exceeds 2^{64}")) <
           u64::from(ring_len))
       {
-        Err(RpcError::InternalError("hit decoy selection round limit".to_string()))?;
+        Err(InterfaceError::InternalError("hit decoy selection round limit".to_string()))?;
       }
     }
 
@@ -127,7 +127,7 @@ async fn select_n(
         let i = distribution.partition_point(|s| *s < (highest_output_exclusive_bound - 1 - o));
         let prev = i.saturating_sub(1);
         let n = distribution[i].checked_sub(distribution[prev]).ok_or_else(|| {
-          RpcError::InternalError("RPC returned non-monotonic distribution".to_string())
+          InterfaceError::InternalError("RPC returned non-monotonic distribution".to_string())
         })?;
         if n != 0 {
           // Select an output from within this block
@@ -161,7 +161,14 @@ async fn select_n(
     };
 
     for (i, output) in rpc
-      .get_unlocked_outputs(&candidates, height, fingerprintable_deterministic)
+      .unlocked_ringct_outputs(
+        &candidates,
+        if fingerprintable_deterministic {
+          EvaluateUnlocked::FingerprintableDeterministic { block_number }
+        } else {
+          EvaluateUnlocked::Normal
+        },
+      )
       .await?
       .iter_mut()
       .enumerate()
@@ -172,7 +179,7 @@ async fn select_n(
           (Some(output_being_spent.commitment().commit()) !=
             output.map(|[_key, commitment]| commitment))
         {
-          Err(RpcError::InvalidNode(
+          Err(InterfaceError::InvalidInterface(
             "node presented different view of output we're trying to spend".to_string(),
           ))?;
         }
@@ -201,20 +208,21 @@ async fn select_n(
 
 async fn select_decoys<R: RngCore + CryptoRng>(
   rng: &mut R,
-  rpc: &impl DecoyRpc,
+  rpc: &impl ProvidesDecoys,
   ring_len: u8,
-  height: usize,
+  block_number: usize,
   input: &WalletOutput,
   fingerprintable_deterministic: bool,
-) -> Result<Decoys, RpcError> {
+) -> Result<Decoys, TransactionsError> {
   if ring_len == 0 {
-    Err(RpcError::InternalError("requesting a ring of length 0".to_string()))?;
+    Err(InterfaceError::InternalError("requesting a ring of length 0".to_string()))?;
   }
 
   // Select all decoys for this transaction, assuming we generate a sane transaction
   // We should almost never naturally generate an insane transaction, hence why this doesn't
   // bother with an overage
-  let decoys = select_n(rng, rpc, height, input, ring_len, fingerprintable_deterministic).await?;
+  let decoys =
+    select_n(rng, rpc, block_number, input, ring_len, fingerprintable_deterministic).await?;
 
   // Form the complete ring
   let mut ring = decoys;
@@ -225,8 +233,8 @@ async fn select_decoys<R: RngCore + CryptoRng>(
     Monero does have sanity checks which it applies to the selected ring.
 
     They're statistically unlikely to be hit and only occur when the transaction is published over
-    the RPC (so they are not a relay rule). The RPC allows disabling them, which monero-rpc does to
-    ensure they don't pose a problem.
+    the RPC (so they are not a relay rule). The RPC allows disabling them, which our RPC
+    implementations do to ensure they don't pose a problem.
 
     They aren't worth the complexity to implement here, especially since they're non-deterministic.
   */
@@ -278,12 +286,12 @@ impl OutputWithDecoys {
   /// only connect to trusted RPCs.
   pub async fn new(
     rng: &mut (impl Send + Sync + RngCore + CryptoRng),
-    rpc: &impl DecoyRpc,
+    rpc: &impl ProvidesDecoys,
     ring_len: u8,
-    height: usize,
+    block_number: usize,
     output: WalletOutput,
-  ) -> Result<OutputWithDecoys, RpcError> {
-    let decoys = select_decoys(rng, rpc, ring_len, height, &output, false).await?;
+  ) -> Result<OutputWithDecoys, TransactionsError> {
+    let decoys = select_decoys(rng, rpc, ring_len, block_number, &output, false).await?;
     Ok(OutputWithDecoys { output: output.data.clone(), decoys })
   }
 
@@ -303,12 +311,12 @@ impl OutputWithDecoys {
   /// only connect to trusted RPCs.
   pub async fn fingerprintable_deterministic_new(
     rng: &mut (impl Send + Sync + RngCore + CryptoRng),
-    rpc: &impl DecoyRpc,
+    rpc: &impl ProvidesDecoys,
     ring_len: u8,
-    height: usize,
+    block_number: usize,
     output: WalletOutput,
-  ) -> Result<OutputWithDecoys, RpcError> {
-    let decoys = select_decoys(rng, rpc, ring_len, height, &output, true).await?;
+  ) -> Result<OutputWithDecoys, TransactionsError> {
+    let decoys = select_decoys(rng, rpc, ring_len, block_number, &output, true).await?;
     Ok(OutputWithDecoys { output: output.data.clone(), decoys })
   }
 

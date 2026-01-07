@@ -1,12 +1,9 @@
-use monero_simple_request_rpc::SimpleRequestRpc;
-use monero_wallet::{
-  DEFAULT_LOCK_WINDOW,
-  transaction::Transaction,
-  rpc::{Rpc, DecoyRpc},
-  WalletOutput,
-};
+use monero_simple_request_rpc::{prelude::MoneroDaemon, SimpleRequestTransport};
+use monero_wallet::{DEFAULT_LOCK_WINDOW, transaction::Transaction, WalletOutput};
 
 mod runner;
+
+type Rpc = MoneroDaemon<SimpleRequestTransport>;
 
 test!(
   select_latest_output_as_decoy_canonical,
@@ -16,7 +13,7 @@ test!(
       builder.add_payment(addr, 2000000000000);
       (builder.build().unwrap(), ())
     },
-    |_rpc: SimpleRequestRpc, block, tx: Transaction, mut scanner: Scanner, ()| async move {
+    |_rpc: Rpc, block, tx: Transaction, mut scanner: Scanner, ()| async move {
       let output = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 2000000000000);
@@ -25,14 +22,14 @@ test!(
   ),
   (
     // Then make a second tx1
-    |rct_type: RctType, rpc: SimpleRequestRpc, mut builder: Builder, addr, state: _| async move {
+    |rct_type: RctType, rpc: Rpc, mut builder: Builder, addr, state: _| async move {
       let output_tx0: WalletOutput = state;
 
       let input = OutputWithDecoys::fingerprintable_deterministic_new(
         &mut OsRng,
         &rpc,
         ring_len(rct_type),
-        rpc.get_height().await.unwrap(),
+        rpc.latest_block_number().await.unwrap(),
         output_tx0.clone(),
       )
       .await
@@ -43,18 +40,17 @@ test!(
       (builder.build().unwrap(), (rct_type, output_tx0))
     },
     // Then make sure DSA selects freshly unlocked output from tx1 as a decoy
-    |rpc, _, tx: Transaction, _: Scanner, state: (_, _)| async move {
+    |rpc: Rpc, _, tx: Transaction, _: Scanner, state: (_, _)| async move {
       use rand_core::OsRng;
 
-      let rpc: SimpleRequestRpc = rpc;
+      let block_number = rpc.latest_block_number().await.unwrap();
+      let height = block_number + 1;
 
-      let height = rpc.get_height().await.unwrap();
-
-      let most_recent_o_index = rpc.get_o_indexes(tx.hash()).await.unwrap().pop().unwrap();
+      let most_recent_o_index = rpc.output_indexes(tx.hash()).await.unwrap().pop().unwrap();
 
       // Make sure output from tx1 is in the block in which it unlocks
-      let out_tx1 = rpc.get_outs(&[most_recent_o_index]).await.unwrap().swap_remove(0);
-      assert_eq!(out_tx1.height, height - DEFAULT_LOCK_WINDOW);
+      let out_tx1 = rpc.ringct_outputs(&[most_recent_o_index]).await.unwrap().swap_remove(0);
+      assert_eq!(out_tx1.block_number, height - DEFAULT_LOCK_WINDOW);
       assert!(out_tx1.unlocked);
 
       // Select decoys using spendable output from tx0 as the real, and make sure DSA selects
@@ -67,7 +63,7 @@ test!(
           &mut OsRng, // TODO: use a seeded RNG to consistently select the latest output
           &rpc,
           ring_len(rct_type),
-          height,
+          block_number,
           output_tx0.clone(),
         )
         .await
@@ -80,7 +76,7 @@ test!(
       }
 
       assert!(selected_fresh_decoy);
-      assert_eq!(height, rpc.get_height().await.unwrap());
+      assert_eq!(height, rpc.latest_block_number().await.unwrap() + 1);
     },
   ),
 );
@@ -93,7 +89,7 @@ test!(
       builder.add_payment(addr, 2000000000000);
       (builder.build().unwrap(), ())
     },
-    |_rpc: SimpleRequestRpc, block, tx: Transaction, mut scanner: Scanner, ()| async move {
+    |_rpc: Rpc, block, tx: Transaction, mut scanner: Scanner, ()| async move {
       let output = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 2000000000000);
@@ -102,14 +98,14 @@ test!(
   ),
   (
     // Then make a second tx1
-    |rct_type: RctType, rpc, mut builder: Builder, addr, output_tx0: WalletOutput| async move {
-      let rpc: SimpleRequestRpc = rpc;
+    |rct_type: RctType, rpc: Rpc, mut builder: Builder, addr, output_tx0: WalletOutput| async move {
+      let rpc: Rpc = rpc;
 
       let input = OutputWithDecoys::new(
         &mut OsRng,
         &rpc,
         ring_len(rct_type),
-        rpc.get_height().await.unwrap(),
+        rpc.latest_block_number().await.unwrap(),
         output_tx0.clone(),
       )
       .await
@@ -120,18 +116,17 @@ test!(
       (builder.build().unwrap(), (rct_type, output_tx0))
     },
     // Then make sure DSA selects freshly unlocked output from tx1 as a decoy
-    |rpc, _, tx: Transaction, _: Scanner, state: (_, _)| async move {
+    |rpc: Rpc, _, tx: Transaction, _: Scanner, state: (_, _)| async move {
       use rand_core::OsRng;
 
-      let rpc: SimpleRequestRpc = rpc;
+      let block_number = rpc.latest_block_number().await.unwrap();
+      let height = block_number + 1;
 
-      let height = rpc.get_height().await.unwrap();
-
-      let most_recent_o_index = rpc.get_o_indexes(tx.hash()).await.unwrap().pop().unwrap();
+      let most_recent_o_index = rpc.output_indexes(tx.hash()).await.unwrap().pop().unwrap();
 
       // Make sure output from tx1 is in the block in which it unlocks
-      let out_tx1 = rpc.get_outs(&[most_recent_o_index]).await.unwrap().swap_remove(0);
-      assert_eq!(out_tx1.height, height - DEFAULT_LOCK_WINDOW);
+      let out_tx1 = rpc.ringct_outputs(&[most_recent_o_index]).await.unwrap().swap_remove(0);
+      assert_eq!(out_tx1.block_number, height - DEFAULT_LOCK_WINDOW);
       assert!(out_tx1.unlocked);
 
       // Select decoys using spendable output from tx0 as the real, and make sure DSA selects
@@ -144,7 +139,7 @@ test!(
           &mut OsRng, // TODO: use a seeded RNG to consistently select the latest output
           &rpc,
           ring_len(rct_type),
-          height,
+          block_number,
           output_tx0.clone(),
         )
         .await
@@ -157,7 +152,7 @@ test!(
       }
 
       assert!(selected_fresh_decoy);
-      assert_eq!(height, rpc.get_height().await.unwrap());
+      assert_eq!(height, rpc.latest_block_number().await.unwrap() + 1);
     },
   ),
 );

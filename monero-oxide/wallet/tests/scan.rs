@@ -1,12 +1,11 @@
-use monero_simple_request_rpc::SimpleRequestRpc;
+use monero_simple_request_rpc::{prelude::MoneroDaemon, SimpleRequestTransport};
 use monero_wallet::{
-  transaction::Transaction, rpc::Rpc, address::SubaddressIndex, extra::PaymentId, GuaranteedScanner,
+  transaction::Transaction, address::SubaddressIndex, extra::PaymentId, GuaranteedScanner,
 };
 
 mod runner;
 
-#[allow(clippy::upper_case_acronyms)]
-type SRR = SimpleRequestRpc;
+type Rpc = MoneroDaemon<SimpleRequestTransport>;
 type Tx = Transaction;
 
 test!(
@@ -18,7 +17,7 @@ test!(
       builder.add_payment(view.legacy_address(Network::Mainnet), 5);
       (builder.build().unwrap(), scanner)
     },
-    |_rpc: SRR, block, tx: Transaction, _, mut state: Scanner| async move {
+    |_rpc: Rpc, block, tx: Transaction, _, mut state: Scanner| async move {
       let output = state.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);
@@ -41,7 +40,7 @@ test!(
       builder.add_payment(view.subaddress(Network::Mainnet, subaddress), 5);
       (builder.build().unwrap(), (scanner, subaddress))
     },
-    |_rpc: SRR, block, tx: Transaction, _, mut state: (Scanner, SubaddressIndex)| async move {
+    |_rpc: Rpc, block, tx: Transaction, _, mut state: (Scanner, SubaddressIndex)| async move {
       let output = state.0.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);
@@ -63,7 +62,7 @@ test!(
       builder.add_payment(view.legacy_integrated_address(Network::Mainnet, payment_id), 5);
       (builder.build().unwrap(), (scanner, payment_id))
     },
-    |_rpc: SRR, block, tx: Transaction, _, mut state: (Scanner, [u8; 8])| async move {
+    |_rpc: Rpc, block, tx: Transaction, _, mut state: (Scanner, [u8; 8])| async move {
       let output = state.0.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);
@@ -81,7 +80,7 @@ test!(
       builder.add_payment(view.address(Network::Mainnet, None, None), 5);
       (builder.build().unwrap(), scanner)
     },
-    |_rpc: SRR, block, tx: Transaction, _, mut scanner: GuaranteedScanner| async move {
+    |_rpc: Rpc, block, tx: Transaction, _, mut scanner: GuaranteedScanner| async move {
       let output = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);
@@ -103,7 +102,7 @@ test!(
       builder.add_payment(view.address(Network::Mainnet, Some(subaddress), None), 5);
       (builder.build().unwrap(), (scanner, subaddress))
     },
-    |_rpc: SRR, block, tx: Tx, _, mut state: (GuaranteedScanner, SubaddressIndex)| async move {
+    |_rpc: Rpc, block, tx: Tx, _, mut state: (GuaranteedScanner, SubaddressIndex)| async move {
       let output = state.0.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);
@@ -124,7 +123,7 @@ test!(
       builder.add_payment(view.address(Network::Mainnet, None, Some(payment_id)), 5);
       (builder.build().unwrap(), (scanner, payment_id))
     },
-    |_rpc: SRR, block, tx: Transaction, _, mut state: (GuaranteedScanner, [u8; 8])| async move {
+    |_rpc: Rpc, block, tx: Transaction, _, mut state: (GuaranteedScanner, [u8; 8])| async move {
       let output = state.0.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);

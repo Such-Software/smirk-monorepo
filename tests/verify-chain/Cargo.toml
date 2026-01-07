@@ -7,7 +7,7 @@ repository = "https://github.com/monero-oxide/monero-oxide/tree/main/tests/verif
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 publish = false
-rust-version = "1.85"
+rust-version = "1.89"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -24,7 +24,6 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde_json = { version = "1", default-features = false, features = ["alloc", "std"] }
 
 monero-oxide = { path = "../../monero-oxide", default-features = false, features = ["std", "compile-time-generators"] }
-monero-rpc = { path = "../../monero-oxide/rpc", default-features = false, features = ["std"] }
-monero-simple-request-rpc = { path = "../../monero-oxide/rpc/simple-request", default-features = false }
+monero-simple-request-rpc = { path = "../../monero-oxide/interface/daemon/simple-request", default-features = false }
 
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }

@@ -6,7 +6,7 @@ use std_shims::{
 
 use crate::{
   io::*,
-  primitives::keccak256,
+  primitives::{UpperBound, keccak256},
   merkle::merkle_root,
   transaction::{Input, Transaction},
 };
@@ -39,6 +39,15 @@ pub struct BlockHeader {
 }
 
 impl BlockHeader {
+  /// The upper bound for a block header's size.
+  pub const SIZE_UPPER_BOUND: UpperBound<usize> = UpperBound(
+    <u8 as VarInt>::UPPER_BOUND +
+      <u8 as VarInt>::UPPER_BOUND +
+      <u64 as VarInt>::UPPER_BOUND +
+      32 +
+      4,
+  );
+
   /// Write the BlockHeader.
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
     VarInt::write(&self.hardfork_version, w)?;

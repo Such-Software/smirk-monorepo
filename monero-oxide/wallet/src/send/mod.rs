@@ -31,7 +31,7 @@ use crate::{
   transaction::{TransactionPrefix, Transaction},
   address::{Network, SubaddressIndex, MoneroAddress},
   extra::{MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE},
-  rpc::FeeRate,
+  interface::FeeRate,
   ViewPair, GuaranteedViewPair, OutputWithDecoys,
 };
 

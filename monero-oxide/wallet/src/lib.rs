@@ -14,7 +14,7 @@ use monero_oxide::{
 
 pub use monero_oxide::*;
 
-pub use monero_rpc as rpc;
+pub use monero_interface as interface;
 
 pub use monero_address as address;
 

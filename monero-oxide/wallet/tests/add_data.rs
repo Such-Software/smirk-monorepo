@@ -1,11 +1,10 @@
 use monero_oxide::transaction::Transaction;
-use monero_simple_request_rpc::SimpleRequestRpc;
-use monero_wallet::{rpc::Rpc, extra::MAX_ARBITRARY_DATA_SIZE, send::SendError};
+use monero_simple_request_rpc::{prelude::MoneroDaemon, SimpleRequestTransport};
+use monero_wallet::{extra::MAX_ARBITRARY_DATA_SIZE, send::SendError};
 
 mod runner;
 
-#[allow(clippy::upper_case_acronyms)]
-type SRR = SimpleRequestRpc;
+type Rpc = MoneroDaemon<SimpleRequestTransport>;
 
 test!(
   add_single_data_less_than_max,
@@ -19,7 +18,7 @@ test!(
       builder.add_payment(addr, 5);
       (builder.build().unwrap(), (arbitrary_data,))
     },
-    |_rpc: SRR, block, tx: Transaction, mut scanner: Scanner, data: (Vec<u8>,)| async move {
+    |_rpc: Rpc, block, tx: Transaction, mut scanner: Scanner, data: (Vec<u8>,)| async move {
       let output = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);
@@ -45,7 +44,7 @@ test!(
       builder.add_payment(addr, 5);
       (builder.build().unwrap(), data)
     },
-    |_rpc: SRR, block, tx: Transaction, mut scanner: Scanner, data: Vec<Vec<u8>>| async move {
+    |_rpc: Rpc, block, tx: Transaction, mut scanner: Scanner, data: Vec<Vec<u8>>| async move {
       let output = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);
@@ -72,7 +71,7 @@ test!(
       builder.add_payment(addr, 5);
       (builder.build().unwrap(), data)
     },
-    |_rpc: SRR, block, tx: Transaction, mut scanner: Scanner, data: Vec<u8>| async move {
+    |_rpc: Rpc, block, tx: Transaction, mut scanner: Scanner, data: Vec<u8>| async move {
       let output = scanner.scan(block).unwrap().not_additionally_locked().swap_remove(0);
       assert_eq!(output.transaction(), tx.hash());
       assert_eq!(output.commitment().amount, 5);

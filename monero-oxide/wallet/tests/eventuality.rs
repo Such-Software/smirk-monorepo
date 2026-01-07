@@ -1,10 +1,7 @@
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 
 use monero_oxide::transaction::Transaction;
-use monero_wallet::{
-  rpc::Rpc,
-  address::{AddressType, MoneroAddress},
-};
+use monero_wallet::address::{AddressType, MoneroAddress};
 
 mod runner;
 

@@ -451,11 +451,6 @@ enum PrunableHash<'a> {
 
 #[allow(private_bounds)]
 impl<P: PotentiallyPruned> Transaction<P> {
-  /// The maximum size for a non-miner transaction.
-  // https://github.com/monero-project/monero
-  //   /blob/8d4c625713e3419573dfcc7119c8848f47cabbaa/src/cryptonote_config.h#L41
-  pub const NON_MINER_SIZE_UPPER_BOUND: UpperBound<usize> = UpperBound(1_000_000);
-
   /// Get the version of this transaction.
   pub fn version(&self) -> u8 {
     match self {
@@ -545,7 +540,7 @@ impl<P: PotentiallyPruned> Transaction<P> {
 
   // The hash of the transaction.
   #[allow(clippy::needless_pass_by_value)]
-  fn hash_with_prunable_hash(&self, prunable: PrunableHash<'_>) -> [u8; 32] {
+  fn hash_with_prunable_hash_internal(&self, prunable: PrunableHash<'_>) -> [u8; 32] {
     match self {
       Transaction::V1 { prefix, .. } => {
         let mut buf = Vec::with_capacity(512);
@@ -593,24 +588,39 @@ impl<P: PotentiallyPruned> Transaction<P> {
 }
 
 impl Transaction<NotPruned> {
+  /// The maximum size for a non-miner transaction.
+  // https://github.com/monero-project/monero
+  //   /blob/8d4c625713e3419573dfcc7119c8848f47cabbaa/src/cryptonote_config.h#L41
+  pub const NON_MINER_SIZE_UPPER_BOUND: UpperBound<usize> = UpperBound(1_000_000);
+
+  /// The prunable hash of the transaction.
+  ///
+  /// This will return `None` for V1 transactions which do not have a well-defined prunable hash.
+  pub fn prunable_hash(&self) -> Option<[u8; 32]> {
+    match self {
+      Transaction::V1 { .. } => None,
+      Transaction::V2 { proofs, .. } => Some(if let Some(proofs) = proofs {
+        let mut buf = Vec::with_capacity(1024);
+        proofs
+          .prunable
+          .write(&mut buf, proofs.rct_type())
+          .expect("write failed but <Vec as io::Write> doesn't fail");
+        keccak256(buf)
+      } else {
+        [0; 32]
+      }),
+    }
+  }
+
   /// The hash of the transaction.
   pub fn hash(&self) -> [u8; 32] {
     match self {
       Transaction::V1 { signatures, .. } => {
-        self.hash_with_prunable_hash(PrunableHash::V1(signatures))
+        self.hash_with_prunable_hash_internal(PrunableHash::V1(signatures))
       }
-      Transaction::V2 { proofs, .. } => {
-        self.hash_with_prunable_hash(PrunableHash::V2(if let Some(proofs) = proofs {
-          let mut buf = Vec::with_capacity(1024);
-          proofs
-            .prunable
-            .write(&mut buf, proofs.rct_type())
-            .expect("write failed but <Vec as io::Write> doesn't fail");
-          keccak256(buf)
-        } else {
-          [0; 32]
-        }))
-      }
+      Transaction::V2 { .. } => self.hash_with_prunable_hash_internal(PrunableHash::V2(
+        self.prunable_hash().expect("V2 transaction didn't have a prunable hash"),
+      )),
     }
   }
 
@@ -623,9 +633,9 @@ impl Transaction<NotPruned> {
         if (prefix.inputs.len() == 1) && matches!(prefix.inputs[0], Input::Gen(_)) {
           None?;
         }
-        self.hash_with_prunable_hash(PrunableHash::V1(&[]))
+        self.hash_with_prunable_hash_internal(PrunableHash::V1(&[]))
       }
-      Transaction::V2 { proofs, .. } => self.hash_with_prunable_hash({
+      Transaction::V2 { proofs, .. } => self.hash_with_prunable_hash_internal({
         let Some(proofs) = proofs else { None? };
         let mut buf = Vec::with_capacity(1024);
         proofs
@@ -705,6 +715,22 @@ impl Transaction<NotPruned> {
           },
         )
         .0
+    }
+  }
+}
+
+impl Transaction<Pruned> {
+  /// Return the hash of the pruned transaction.
+  ///
+  /// This requires the transaction be version 2 and the hash of the pruned data be provided. If
+  /// the proofs are `RctType::Null`, `prunable_hash` MUST equal `[0; 32]` for the result to be
+  /// correct.
+  pub fn hash_with_prunable_hash(&self, prunable_hash: [u8; 32]) -> Option<[u8; 32]> {
+    match self {
+      Transaction::V1 { .. } => None?,
+      Transaction::V2 { .. } => {
+        Some(self.hash_with_prunable_hash_internal(PrunableHash::V2(prunable_hash)))
+      }
     }
   }
 }

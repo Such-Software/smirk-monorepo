@@ -8,11 +8,11 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 #[cfg(not(feature = "compile-time-generators"))]
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as ED25519_BASEPOINT_TABLE;
 
-use monero_rpc::ScannableBlock;
 use monero_oxide::{
   ed25519::{Scalar, CompressedPoint, Point, Commitment},
   transaction::{Timelock, Pruned, Transaction},
 };
+use monero_interface::ScannableBlock;
 use crate::{
   address::SubaddressIndex, ViewPair, GuaranteedViewPair, output::*, PaymentId, Extra,
   SharedKeyDerivations,
@@ -345,11 +345,17 @@ impl Scanner {
   /// Register a subaddress to scan for.
   ///
   /// Subaddresses must be explicitly registered ahead of time in order to be successfully scanned.
+  ///
+  /// This function runs in variable time, notably with regards to the distribution of subaddress
+  /// derivations (which should be reasonably uniform) and the amount of subaddresses registered.
   pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
     self.0.register_subaddress(subaddress)
   }
 
   /// Scan a block.
+  ///
+  /// This function runs in variable time, notably with regards to how the private view key relates
+  /// to outputs present within the block (such as if it can successfully scan outputs present).
   pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
     self.0.scan(block)
   }
@@ -374,11 +380,17 @@ impl GuaranteedScanner {
   /// Register a subaddress to scan for.
   ///
   /// Subaddresses must be explicitly registered ahead of time in order to be successfully scanned.
+  ///
+  /// This function runs in variable time, notably with regards to the distribution of subaddress
+  /// derivations (which should be reasonably uniform) and the amount of subaddresses registered.
   pub fn register_subaddress(&mut self, subaddress: SubaddressIndex) {
     self.0.register_subaddress(subaddress)
   }
 
   /// Scan a block.
+  ///
+  /// This function runs in variable time, notably with regards to how the private view key relates
+  /// to outputs present within the block (such as if it can successfully scan outputs present).
   pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
     self.0.scan(block)
   }
