@@ -12,7 +12,7 @@ This crate provides client-side cryptographic operations for Monero and Wownero 
 - **Key image derivation** - Compute key images to detect spent outputs
 - **Transaction parsing** - Decode and inspect transactions
 - **Fee estimation** - Estimate transaction fees
-- **Transaction signing** (WIP) - Construct and sign transactions locally
+- **Transaction signing** - Construct and sign transactions locally
 
 ## Architecture
 
@@ -66,7 +66,7 @@ wasm-bindgen --target web --out-dir pkg \
 After building:
 - `pkg/smirk_wasm.js` - JavaScript module
 - `pkg/smirk_wasm.d.ts` - TypeScript definitions
-- `pkg/smirk_wasm_bg.wasm` - WebAssembly binary (~165KB)
+- `pkg/smirk_wasm_bg.wasm` - WebAssembly binary (~380KB)
 
 ## Testing
 
@@ -93,7 +93,8 @@ import init, {
   test,
   version,
   validate_address,
-  estimate_fee
+  estimate_fee,
+  sign_transaction
 } from './pkg/smirk_wasm.js';
 
 async function main() {
@@ -114,6 +115,23 @@ async function main() {
   // Estimate fee (2 inputs, 2 outputs)
   const fee = JSON.parse(estimate_fee(2, 2, 20n, 10000n));
   console.log(fee.data); // fee in atomic units
+
+  // Sign transaction
+  const txResult = JSON.parse(sign_transaction(JSON.stringify({
+    inputs: [/* from get_unspent_outs + get_random_outs */],
+    destinations: [{ address: '...', amount: 1000000 }],
+    change_address: '...',
+    fee_per_byte: 20,
+    fee_mask: 10000,
+    view_key: '...', // hex
+    spend_key: '...', // hex
+    network: 'mainnet'
+  })));
+  if (txResult.success) {
+    console.log(txResult.data.tx_hex);  // signed tx ready for broadcast
+    console.log(txResult.data.tx_hash); // transaction hash
+    console.log(txResult.data.fee);     // actual fee
+  }
 }
 ```
 
@@ -187,9 +205,49 @@ Estimates transaction fee.
 
 Returns estimated fee in atomic units.
 
-#### `sign_transaction(params_json: string) -> string` (WIP)
+#### `sign_transaction(params_json: string) -> string`
 
-Builds and signs a transaction. Not yet implemented.
+Builds and signs a transaction.
+
+**Input format:**
+```typescript
+{
+  inputs: [{
+    output: {
+      amount: number,      // atomic units
+      public_key: string,  // hex
+      tx_pub_key: string,  // hex
+      index: number,       // output index in tx
+      global_index: number // global output index
+    },
+    decoys: [{             // 15 decoys required (ring size 16)
+      global_index: number,
+      public_key: string,  // hex
+      rct: string          // hex commitment
+    }]
+  }],
+  destinations: [{ address: string, amount: number }],
+  change_address: string,
+  fee_per_byte: number,
+  fee_mask: number,
+  view_key: string,        // hex, 64 chars
+  spend_key: string,       // hex, 64 chars
+  network: "mainnet" | "testnet" | "stagenet"
+}
+```
+
+**Returns:**
+```typescript
+{
+  tx_hex: string,   // signed transaction ready for broadcast
+  tx_hash: string,  // transaction hash
+  fee: number       // actual fee in atomic units
+}
+```
+
+#### `derive_output_key_image(view_key, spend_key, tx_pub_key, output_index, output_key) -> string`
+
+Derives the key image for a specific output. Useful for checking if an output has been spent.
 
 ## Project Structure
 
@@ -204,8 +262,9 @@ smirk-wasm/
     ├── result.rs       # WasmResult type
     ├── address.rs      # Address validation
     ├── keys.rs         # Key image derivation
+    ├── output.rs       # Output derivation (key_offset, commitment_mask)
     ├── transaction.rs  # Transaction parsing
-    ├── signing.rs      # Transaction signing (WIP)
+    ├── signing.rs      # Transaction signing
     └── tests.rs        # Unit tests
 ```
 

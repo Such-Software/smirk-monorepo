@@ -16,6 +16,12 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 # Use local monero-oxide for transaction construction
 monero-oxide = { path = "../monero-oxide/monero-oxide", default-features = false }
 monero-wallet = { path = "../monero-oxide/monero-oxide/wallet", default-features = false }
+subtle = { version = "2.6.1", default-features = false }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }
+# Use same rand_core version as monero-oxide
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+# Enable js feature for getrandom on wasm targets
+getrandom = { version = "0.2", features = ["js"] }
 
 [profile.release]
 opt-level = "s"

@@ -72,11 +72,50 @@ mod tests {
 
     #[test]
     fn test_sign_transaction_no_inputs() {
-        let params = r#"{"inputs":[],"destinations":[{"address":"test","amount":1000}],"change_address":"test","fee_per_byte":20,"fee_mask":10000,"view_key":"00","spend_key":"00"}"#;
-        let result = crate::signing::sign_transaction(params);
+        let params = serde_json::json!({
+            "inputs": [],
+            "destinations": [{"address": "test", "amount": 1000}],
+            "change_address": "test",
+            "fee_per_byte": 20,
+            "fee_mask": 10000,
+            "view_key": "0".repeat(64),
+            "spend_key": "0".repeat(64),
+            "network": "mainnet"
+        });
+        let result = crate::signing::sign_transaction(&params.to_string());
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         assert_eq!(parsed["success"], false);
         assert!(parsed["error"].as_str().unwrap().contains("No inputs"));
+    }
+
+    #[test]
+    fn test_sign_transaction_wrong_ring_size() {
+        let params = serde_json::json!({
+            "inputs": [{
+                "output": {
+                    "amount": 1000000,
+                    "public_key": "0".repeat(64),
+                    "tx_pub_key": "0".repeat(64),
+                    "index": 0,
+                    "global_index": 12345,
+                    "height": 1000,
+                    "rct": "0".repeat(64)
+                },
+                "decoys": []  // Should be 15 decoys
+            }],
+            "destinations": [{"address": "test", "amount": 500000}],
+            "change_address": "test",
+            "fee_per_byte": 20,
+            "fee_mask": 10000,
+            "view_key": "0".repeat(64),
+            "spend_key": "0".repeat(64),
+            "network": "mainnet"
+        });
+        let result = crate::signing::sign_transaction(&params.to_string());
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(parsed["success"], false);
+        assert!(parsed["error"].as_str().unwrap().contains("decoys"));
     }
 }

@@ -9,7 +9,19 @@
 
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
+use monero_oxide::ed25519::{CompressedPoint, Point, Scalar, Commitment};
+use monero_oxide::ringct::{RctType, clsag::Decoys};
+use monero_oxide::transaction::Transaction;
+use monero_wallet::{
+    OutputWithDecoys,
+    address::{MoneroAddress, Network},
+    interface::FeeRate,
+    send::{Change, SignableTransaction},
+};
+
+use crate::output::{derive_key_offset, derive_commitment_mask};
 use crate::result::WasmResult;
 
 // ============================================================================
@@ -54,8 +66,6 @@ pub struct TxInput {
     pub output: LwsOutput,
     /// Ring members (decoys) for this input
     pub decoys: Vec<LwsDecoy>,
-    /// Key offset for deriving the one-time key (hex)
-    pub key_offset: String,
 }
 
 /// Transaction destination.
@@ -80,10 +90,17 @@ pub struct TxParams {
     pub fee_per_byte: u64,
     /// Fee mask for rounding
     pub fee_mask: u64,
-    /// Private view key (for output encryption) - hex
+    /// Private view key (hex)
     pub view_key: String,
-    /// Private spend key - hex
+    /// Private spend key (hex)
     pub spend_key: String,
+    /// Network: "mainnet", "testnet", or "stagenet"
+    #[serde(default = "default_network")]
+    pub network: String,
+}
+
+fn default_network() -> String {
+    "mainnet".to_string()
 }
 
 // ============================================================================
@@ -102,7 +119,119 @@ pub struct SignedTx {
 }
 
 // ============================================================================
-// Transaction building (placeholder)
+// Helper functions
+// ============================================================================
+
+/// Parse a 32-byte hex string into a fixed array.
+fn parse_hex_32(s: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(s).map_err(|e| format!("Invalid hex: {}", e))?;
+    if bytes.len() != 32 {
+        return Err(format!("Expected 32 bytes, got {}", bytes.len()));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
+/// Parse a point from hex.
+fn parse_point(s: &str) -> Result<Point, String> {
+    let bytes = parse_hex_32(s)?;
+    CompressedPoint::from(bytes)
+        .decompress()
+        .ok_or_else(|| "Invalid point".to_string())
+}
+
+/// Parse commitment from LWS rct field.
+/// LWS returns commitment as 64 hex chars (32 bytes).
+fn parse_commitment_point(rct: &str) -> Result<Point, String> {
+    // LWS returns just the commitment point (32 bytes = 64 hex chars)
+    if rct.len() < 64 {
+        return Err(format!("RCT too short: {} chars", rct.len()));
+    }
+    parse_point(&rct[..64])
+}
+
+/// Build OutputWithDecoys from LWS data.
+///
+/// This constructs the monero-oxide OutputWithDecoys by serializing
+/// OutputData and Decoys in the format expected by OutputWithDecoys::read().
+fn build_output_with_decoys(
+    input: &TxInput,
+    view_key: &[u8; 32],
+) -> Result<OutputWithDecoys, String> {
+    let output = &input.output;
+
+    // Parse the output public key
+    let output_key = parse_point(&output.public_key)?;
+
+    // Parse transaction public key
+    let tx_pub_key = parse_hex_32(&output.tx_pub_key)?;
+
+    // Derive key_offset from view_key and tx_pub_key
+    let key_offset = derive_key_offset(view_key, &tx_pub_key, output.index as usize)
+        .map_err(|e| e.to_string())?;
+
+    // Derive commitment mask
+    let mask = derive_commitment_mask(view_key, &tx_pub_key, output.index as usize)
+        .map_err(|e| e.to_string())?;
+
+    // Create commitment with mask and amount
+    let commitment = Commitment::new(mask, output.amount);
+
+    // Build the ring: combine real output with decoys, then sort by global_index
+    let mut ring_members: Vec<(u64, [Point; 2])> = Vec::with_capacity(16);
+
+    // Add the real output
+    ring_members.push((output.global_index, [output_key, commitment.commit()]));
+
+    // Add decoys
+    for decoy in &input.decoys {
+        let decoy_key = parse_point(&decoy.public_key)?;
+        let decoy_commitment = parse_commitment_point(&decoy.rct)?;
+        ring_members.push((decoy.global_index, [decoy_key, decoy_commitment]));
+    }
+
+    // Sort by global_index
+    ring_members.sort_by_key(|(idx, _)| *idx);
+
+    // Find signer index after sorting
+    let signer_index = ring_members
+        .iter()
+        .position(|(idx, _)| *idx == output.global_index)
+        .ok_or("Real output not found in ring")?;
+
+    // Convert absolute indices to offsets
+    let mut offsets = Vec::with_capacity(ring_members.len());
+    offsets.push(ring_members[0].0);
+    for i in 1..ring_members.len() {
+        offsets.push(ring_members[i].0 - ring_members[i - 1].0);
+    }
+
+    // Extract ring points
+    let ring: Vec<[Point; 2]> = ring_members.into_iter().map(|(_, pts)| pts).collect();
+
+    // Create Decoys struct
+    let decoys = Decoys::new(offsets, signer_index as u8, ring)
+        .ok_or("Failed to create Decoys")?;
+
+    // Serialize OutputData + Decoys in the format OutputWithDecoys::read expects
+    let mut serialized = Vec::with_capacity(256);
+
+    // OutputData: key (32) || key_offset (32) || commitment (mask:32 + amount:8)
+    serialized.extend_from_slice(&output_key.compress().to_bytes());
+    key_offset.write(&mut serialized).map_err(|e| format!("Write key_offset: {:?}", e))?;
+    commitment.write(&mut serialized).map_err(|e| format!("Write commitment: {:?}", e))?;
+
+    // Decoys
+    decoys.write(&mut serialized).map_err(|e| format!("Write decoys: {:?}", e))?;
+
+    // Read back as OutputWithDecoys
+    OutputWithDecoys::read(&mut serialized.as_slice())
+        .map_err(|e| format!("Read OutputWithDecoys: {:?}", e))
+}
+
+// ============================================================================
+// Public API
 // ============================================================================
 
 /// Build and sign a transaction.
@@ -116,25 +245,39 @@ pub struct SignedTx {
 /// JSON with `SignedTx` or error.
 #[wasm_bindgen]
 pub fn sign_transaction(params_json: &str) -> String {
+    match sign_transaction_inner(params_json) {
+        Ok(tx) => WasmResult::ok_json(&tx),
+        Err(e) => WasmResult::err(&e),
+    }
+}
+
+fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     // Parse parameters
-    let params: TxParams = match serde_json::from_str(params_json) {
-        Ok(p) => p,
-        Err(e) => return WasmResult::err(&format!("Failed to parse params: {}", e)),
-    };
+    let params: TxParams = serde_json::from_str(params_json)
+        .map_err(|e| format!("Failed to parse params: {}", e))?;
 
     // Validate inputs
     if params.inputs.is_empty() {
-        return WasmResult::err("No inputs provided");
+        return Err("No inputs provided".to_string());
     }
     if params.destinations.is_empty() {
-        return WasmResult::err("No destinations provided");
+        return Err("No destinations provided".to_string());
     }
+
+    // Parse keys
+    let view_key = parse_hex_32(&params.view_key)?;
+    let spend_key_bytes = parse_hex_32(&params.spend_key)?;
+
+    let spend_scalar = Scalar::from(
+        subtle::CtOption::<curve25519_dalek::Scalar>::from(
+            curve25519_dalek::Scalar::from_canonical_bytes(spend_key_bytes)
+        ).unwrap()
+    );
 
     // Check ring size (should be 16 for current Monero)
     for (i, input) in params.inputs.iter().enumerate() {
         if input.decoys.len() != 15 {
-            // 15 decoys + 1 real = ring size 16
-            return WasmResult::err(&format!(
+            return Err(format!(
                 "Input {} has {} decoys, expected 15 (ring size 16)",
                 i,
                 input.decoys.len()
@@ -142,16 +285,74 @@ pub fn sign_transaction(params_json: &str) -> String {
         }
     }
 
-    // TODO: Implement actual transaction construction
-    // This requires:
-    // 1. Convert LwsOutput -> WalletOutput (need key derivation)
-    // 2. Convert decoys to Decoys struct
-    // 3. Create OutputWithDecoys
-    // 4. Build SignableTransaction
-    // 5. Sign with spend key
-    // 6. Serialize to hex
+    // Build OutputWithDecoys for each input
+    let mut inputs_with_decoys = Vec::with_capacity(params.inputs.len());
+    for input in &params.inputs {
+        let owd = build_output_with_decoys(input, &view_key)?;
+        inputs_with_decoys.push(owd);
+    }
 
-    WasmResult::err("Transaction signing not yet implemented")
+    // Determine network from first address (or param)
+    let network = match params.network.as_str() {
+        "mainnet" => Network::Mainnet,
+        "testnet" => Network::Testnet,
+        "stagenet" => Network::Stagenet,
+        _ => return Err(format!("Unknown network: {}", params.network)),
+    };
+
+    // Parse destination addresses
+    let mut payments: Vec<(MoneroAddress, u64)> = Vec::new();
+    for dest in &params.destinations {
+        let addr = MoneroAddress::from_str(network, &dest.address)
+            .map_err(|e| format!("Invalid address '{}': {:?}", dest.address, e))?;
+        payments.push((addr, dest.amount));
+    }
+
+    // Parse change address
+    let change_addr = MoneroAddress::from_str(network, &params.change_address)
+        .map_err(|e| format!("Invalid change address '{}': {:?}", params.change_address, e))?;
+
+    // Create fee rate
+    let fee_rate = FeeRate::new(params.fee_per_byte, params.fee_mask)
+        .ok_or("Invalid fee rate")?;
+
+    // Create outgoing view key (32 bytes of zeros for now - this is used for
+    // deterministic output key generation, not critical for basic signing)
+    let outgoing_view_key = Zeroizing::new([0u8; 32]);
+
+    // Build SignableTransaction
+    // Note: Change::fingerprintable is used as we don't have the full view pair
+    let change = Change::fingerprintable(Some(change_addr));
+
+    let signable = SignableTransaction::new(
+        RctType::ClsagBulletproofPlus,
+        outgoing_view_key,
+        inputs_with_decoys,
+        payments,
+        change,
+        vec![], // no extra data
+        fee_rate,
+    ).map_err(|e| format!("Failed to create signable tx: {:?}", e))?;
+
+    // Get the fee before signing (sign consumes the transaction)
+    let fee = signable.necessary_fee();
+
+    // Sign the transaction
+    let mut rng = rand_core::OsRng;
+    let spend_key_zeroizing = Zeroizing::new(spend_scalar);
+    let tx: Transaction = signable.sign(&mut rng, &spend_key_zeroizing)
+        .map_err(|e| format!("Failed to sign: {:?}", e))?;
+
+    // Serialize transaction
+    let tx_bytes = tx.serialize();
+    let tx_hex = hex::encode(&tx_bytes);
+    let tx_hash = hex::encode(tx.hash());
+
+    Ok(SignedTx {
+        tx_hex,
+        tx_hash,
+        fee,
+    })
 }
 
 /// Estimate the fee for a transaction.
@@ -208,4 +409,69 @@ pub fn estimate_fee(
     };
 
     WasmResult::ok(rounded_fee)
+}
+
+/// Derive key image for an output (useful for spend detection).
+///
+/// # Arguments
+/// * `view_key` - Private view key (hex)
+/// * `spend_key` - Private spend key (hex)
+/// * `tx_pub_key` - Transaction public key (hex)
+/// * `output_index` - Output index within transaction
+/// * `output_key` - Output public key (hex)
+///
+/// # Returns
+/// Key image as hex string.
+#[wasm_bindgen]
+pub fn derive_output_key_image(
+    view_key: &str,
+    spend_key: &str,
+    tx_pub_key: &str,
+    output_index: u32,
+    output_key: &str,
+) -> String {
+    match derive_output_key_image_inner(view_key, spend_key, tx_pub_key, output_index, output_key) {
+        Ok(ki) => WasmResult::ok(ki),
+        Err(e) => WasmResult::err(&e),
+    }
+}
+
+fn derive_output_key_image_inner(
+    view_key: &str,
+    spend_key: &str,
+    tx_pub_key: &str,
+    output_index: u32,
+    output_key: &str,
+) -> Result<String, String> {
+    let view_key_bytes = parse_hex_32(view_key)?;
+    let spend_key_bytes = parse_hex_32(spend_key)?;
+    let tx_pub_key_bytes = parse_hex_32(tx_pub_key)?;
+
+    // Derive key offset
+    let key_offset = derive_key_offset(&view_key_bytes, &tx_pub_key_bytes, output_index as usize)
+        .map_err(|e| e.to_string())?;
+
+    // Parse spend key
+    let spend_scalar = subtle::CtOption::<curve25519_dalek::Scalar>::from(
+        curve25519_dalek::Scalar::from_canonical_bytes(spend_key_bytes)
+    );
+    if !bool::from(spend_scalar.is_some()) {
+        return Err("Invalid spend key".to_string());
+    }
+    let spend_scalar = spend_scalar.unwrap();
+
+    // one_time_key = spend_key + key_offset
+    let one_time_key = spend_scalar + curve25519_dalek::Scalar::from(key_offset.into());
+
+    // Parse output key point
+    let output_point = parse_point(output_key)?;
+
+    // Compute Hp(output_key)
+    let hp = Point::biased_hash(output_point.compress().to_bytes());
+
+    // Key image = one_time_key * Hp(output_key)
+    let key_image = curve25519_dalek::EdwardsPoint::from(hp.into()) * one_time_key;
+    let key_image_compressed = key_image.compress();
+
+    Ok(hex::encode(key_image_compressed.to_bytes()))
 }

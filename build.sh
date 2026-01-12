@@ -7,7 +7,7 @@ echo "Building smirk-wasm..."
 cargo build --target wasm32-unknown-unknown --release
 
 # Generate JS bindings
-wasm-bindgen --target web --out-dir pkg \
+~/.cargo/bin/wasm-bindgen --target web --out-dir pkg \
   target/wasm32-unknown-unknown/release/smirk_wasm.wasm
 
 # Show output

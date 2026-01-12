@@ -23,12 +23,14 @@
 //! - [`derive_key_image`] - Compute key images for spend detection
 //! - [`parse_tx`] - Parse transaction from hex
 //! - [`estimate_fee`] - Estimate transaction fees
-//! - [`sign_transaction`] - Build and sign transactions (WIP)
+//! - [`sign_transaction`] - Build and sign transactions
+//! - [`derive_output_key_image`] - Derive key image for a specific output
 
 use wasm_bindgen::prelude::*;
 
 mod address;
 mod keys;
+mod output;
 mod result;
 mod signing;
 #[cfg(test)]
@@ -38,7 +40,7 @@ mod transaction;
 // Re-export public functions
 pub use address::validate_address;
 pub use keys::derive_key_image;
-pub use signing::{estimate_fee, sign_transaction};
+pub use signing::{estimate_fee, sign_transaction, derive_output_key_image};
 pub use transaction::parse_tx;
 
 /// Simple test function to verify WASM is loaded.

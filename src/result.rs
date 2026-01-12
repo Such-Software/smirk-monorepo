@@ -21,6 +21,16 @@ impl<T: Serialize> WasmResult<T> {
         })
         .unwrap_or_else(|e| format!(r#"{{"success":false,"error":"Serialization error: {}"}}"#, e))
     }
+
+    /// For nested JSON objects - serialize the data then wrap in result
+    pub fn ok_json(data: &T) -> String {
+        serde_json::to_string(&WasmResult {
+            success: true,
+            data: Some(data),
+            error: None,
+        })
+        .unwrap_or_else(|e| format!(r#"{{"success":false,"error":"Serialization error: {}"}}"#, e))
+    }
 }
 
 impl WasmResult<()> {
