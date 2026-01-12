@@ -1,0 +1,22 @@
+[package]
+name = "smirk-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+
+# Use local monero-oxide for transaction construction
+monero-oxide = { path = "../monero-oxide/monero-oxide", default-features = false }
+monero-wallet = { path = "../monero-oxide/monero-oxide/wallet", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = true

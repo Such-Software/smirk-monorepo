@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>smirk-wasm test</title>
+    <style>
+        body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 20px; }
+        pre { background: #2a2a2a; padding: 15px; border-radius: 5px; overflow-x: auto; }
+        h1 { color: #ff6b35; }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+    </style>
+</head>
+<body>
+    <h1>smirk-wasm test</h1>
+    <pre id="output"></pre>
+    <script type="module">
+        import init, {
+            test,
+            version,
+            validate_address,
+            estimate_fee,
+            sign_transaction
+        } from './pkg/smirk_wasm.js';
+
+        async function run() {
+            await init();
+
+            const output = document.getElementById('output');
+            const log = (msg, isError = false) => {
+                const span = document.createElement('span');
+                span.className = isError ? 'error' : '';
+                span.textContent = msg + '\n';
+                output.appendChild(span);
+            };
+
+            log('=== smirk-wasm test ===\n');
+            log('test(): ' + test());
+            log('version(): ' + version());
+
+            // Address validation
+            log('\n=== Address Validation ===');
+            const addrs = [
+                '888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H',
+                'invalid',
+            ];
+            for (const addr of addrs) {
+                const r = JSON.parse(validate_address(addr));
+                log(`${addr.slice(0, 25)}... => ${r.success ? r.data.network : r.error}`, !r.success);
+            }
+
+            // Fee estimation
+            log('\n=== Fee Estimation ===');
+            const fee = JSON.parse(estimate_fee(2, 2, 20n, 10000n));
+            log(`2 inputs, 2 outputs: ${fee.success ? fee.data + ' atomic' : fee.error}`, !fee.success);
+
+            // Sign transaction (not implemented)
+            log('\n=== Sign Transaction ===');
+            const sig = JSON.parse(sign_transaction('{}'));
+            log(`Result: ${sig.error}`, true);
+
+            log('\n=== Done ===');
+        }
+
+        run().catch(e => { document.getElementById('output').textContent = 'Error: ' + e; });
+    </script>
+</body>
+</html>
