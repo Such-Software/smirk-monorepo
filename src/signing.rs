@@ -475,3 +475,63 @@ fn derive_output_key_image_inner(
 
     Ok(hex::encode(key_image_compressed.to_bytes()))
 }
+
+/// Compute key image without needing the output public key.
+///
+/// This version derives the output key from the view/spend keys and tx_pub_key,
+/// useful for verifying spent outputs from LWS which doesn't provide output_key.
+///
+/// Returns JSON: { "success": true, "data": "<key_image_hex>" }
+/// or: { "success": false, "error": "<message>" }
+#[wasm_bindgen]
+pub fn compute_key_image(
+    view_key: &str,
+    spend_key: &str,
+    tx_pub_key: &str,
+    output_index: u32,
+) -> String {
+    match compute_key_image_inner(view_key, spend_key, tx_pub_key, output_index) {
+        Ok(ki) => WasmResult::ok(ki),
+        Err(e) => WasmResult::err(&e),
+    }
+}
+
+fn compute_key_image_inner(
+    view_key: &str,
+    spend_key: &str,
+    tx_pub_key: &str,
+    output_index: u32,
+) -> Result<String, String> {
+    let view_key_bytes = parse_hex_32(view_key)?;
+    let spend_key_bytes = parse_hex_32(spend_key)?;
+    let tx_pub_key_bytes = parse_hex_32(tx_pub_key)?;
+
+    // Derive key offset: Hs(a*R || output_index)
+    let key_offset = derive_key_offset(&view_key_bytes, &tx_pub_key_bytes, output_index as usize)
+        .map_err(|e| e.to_string())?;
+
+    // Parse spend key
+    let spend_scalar = subtle::CtOption::<curve25519_dalek::Scalar>::from(
+        curve25519_dalek::Scalar::from_canonical_bytes(spend_key_bytes)
+    );
+    if !bool::from(spend_scalar.is_some()) {
+        return Err("Invalid spend key".to_string());
+    }
+    let spend_scalar = spend_scalar.unwrap();
+
+    // one_time_private_key = spend_key + key_offset
+    let one_time_private_key = spend_scalar + curve25519_dalek::Scalar::from(key_offset.into());
+
+    // Derive the output public key: P = one_time_private_key * G
+    let output_point = curve25519_dalek::constants::ED25519_BASEPOINT_POINT * one_time_private_key;
+    let output_point_bytes = output_point.compress().to_bytes();
+
+    // Compute Hp(P) using monero-oxide's biased_hash (proper hash_to_point)
+    let hp = Point::biased_hash(output_point_bytes);
+
+    // Key image = one_time_private_key * Hp(P)
+    let key_image = curve25519_dalek::EdwardsPoint::from(hp.into()) * one_time_private_key;
+    let key_image_compressed = key_image.compress();
+
+    Ok(hex::encode(key_image_compressed.to_bytes()))
+}

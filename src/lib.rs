@@ -24,7 +24,8 @@
 //! - [`parse_tx`] - Parse transaction from hex
 //! - [`estimate_fee`] - Estimate transaction fees
 //! - [`sign_transaction`] - Build and sign transactions
-//! - [`derive_output_key_image`] - Derive key image for a specific output
+//! - [`derive_output_key_image`] - Derive key image for a specific output (requires output_key)
+//! - [`compute_key_image`] - Compute key image from wallet keys and tx_pub_key (no output_key needed)
 
 use wasm_bindgen::prelude::*;
 
@@ -40,7 +41,7 @@ mod transaction;
 // Re-export public functions
 pub use address::validate_address;
 pub use keys::derive_key_image;
-pub use signing::{estimate_fee, sign_transaction, derive_output_key_image};
+pub use signing::{estimate_fee, sign_transaction, derive_output_key_image, compute_key_image};
 pub use transaction::parse_tx;
 
 /// Simple test function to verify WASM is loaded.

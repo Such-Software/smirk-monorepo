@@ -9,7 +9,7 @@ This crate provides client-side cryptographic operations for Monero and Wownero 
 ## Features
 
 - **Address validation** - Parse and validate Monero/Wownero addresses
-- **Key image derivation** - Compute key images to detect spent outputs
+- **Key image computation** - Compute key images to verify spent outputs (client-side balance verification)
 - **Transaction parsing** - Decode and inspect transactions
 - **Fee estimation** - Estimate transaction fees
 - **Transaction signing** - Construct and sign transactions locally
@@ -94,7 +94,8 @@ import init, {
   version,
   validate_address,
   estimate_fee,
-  sign_transaction
+  sign_transaction,
+  compute_key_image
 } from './pkg/smirk_wasm.js';
 
 async function main() {
@@ -247,7 +248,18 @@ Builds and signs a transaction.
 
 #### `derive_output_key_image(view_key, spend_key, tx_pub_key, output_index, output_key) -> string`
 
-Derives the key image for a specific output. Useful for checking if an output has been spent.
+Derives the key image for a specific output when you have the output's public key.
+
+#### `compute_key_image(view_key, spend_key, tx_pub_key, output_index) -> string`
+
+Computes the key image for an output without requiring the output public key. This is useful for verifying LWS `spent_outputs` where only `tx_pub_key` and `out_index` are provided.
+
+The function:
+1. Derives the one-time private key: `x = Hs(a*R || outputIndex) + b`
+2. Computes the output public key: `P = x * G`
+3. Returns the key image: `KI = x * Hp(P)`
+
+This uses `monero-oxide`'s `Point::biased_hash` for the `Hp()` operation, which is Monero's `hash_to_ec` (ge_fromfe_frombytes_vartime).
 
 ## Project Structure
 
