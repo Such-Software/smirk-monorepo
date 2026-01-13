@@ -47,7 +47,7 @@ impl SignableTransaction {
         amount: None,
         view_tag: (match self.rct_type {
           RctType::ClsagBulletproof => false,
-          RctType::ClsagBulletproofPlus => true,
+          RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => true,
           _ => panic!("unsupported RctType"),
         })
         .then_some(shared_key_derivations.view_tag),
@@ -136,9 +136,11 @@ impl SignableTransaction {
           D: CompressedPoint::G,
           s: vec![
             Scalar::ZERO;
+            // Ring size (decoys + 1 real)
             match self.rct_type {
-              RctType::ClsagBulletproof => 11,
-              RctType::ClsagBulletproofPlus => 16,
+              RctType::ClsagBulletproof => 12,  // ring size 12
+              RctType::ClsagBulletproofPlus => 16,  // ring size 16 (Monero)
+              RctType::WowneroClsagBulletproofPlus => 22,  // ring size 22 (Wownero)
               _ => unreachable!("unsupported RCT type"),
             }
           ],
@@ -195,7 +197,7 @@ impl SignableTransaction {
           }
           Bulletproof::read(&mut bp.as_slice()).expect("made an invalid dummy BP")
         }
-        RctType::ClsagBulletproofPlus => {
+        RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => {
           let mut bp = Vec::with_capacity(((6 + (2 * lr_len)) * 32) + 2);
           let push_point = |bp: &mut Vec<u8>| {
             bp.push(1);
@@ -230,7 +232,7 @@ impl SignableTransaction {
         },
         proofs: Some(RctProofs {
           base: RctBase { fee: 0, encrypted_amounts, pseudo_outs: vec![], commitments },
-          prunable: RctPrunable::Clsag { bulletproof, clsags, pseudo_outs },
+          prunable: RctPrunable::Clsag { rct_type: self.rct_type, bulletproof, clsags, pseudo_outs },
         }),
       }
       .weight() -
@@ -281,7 +283,20 @@ impl SignableTransactionWithKeyImages {
     let mut bp_commitments = Vec::with_capacity(self.intent.payments.len());
     let mut encrypted_amounts = Vec::with_capacity(self.intent.payments.len());
     for (commitment, encrypted_amount) in commitments_and_encrypted_amounts {
-      commitments.push(commitment.commit().compress());
+      // For Wownero type 8, outPk commitments must be stored as C/8 (multiplied by INV_EIGHT).
+      // The verifier does scalarmult8(outPk) to recover the full commitment.
+      // For Monero types, commitments are stored in full form.
+      let commitment_point = commitment.commit();
+      let compressed = if self.intent.rct_type == RctType::WowneroClsagBulletproofPlus {
+        // Scale by INV_EIGHT for Wownero type 8
+        // The ed25519 module provides Scalar::INV_EIGHT with an into() method
+        let inv8: curve25519_dalek::Scalar = Scalar::INV_EIGHT.into();
+        let scaled = curve25519_dalek::EdwardsPoint::from(commitment_point.into()) * inv8;
+        CompressedPoint::from(scaled.compress().to_bytes())
+      } else {
+        commitment_point.compress()
+      };
+      commitments.push(compressed);
       bp_commitments.push(commitment);
       encrypted_amounts.push(encrypted_amount);
     }
@@ -289,7 +304,7 @@ impl SignableTransactionWithKeyImages {
       let mut bp_rng = self.intent.seeded_rng(b"bulletproof");
       (match self.intent.rct_type {
         RctType::ClsagBulletproof => Bulletproof::prove(&mut bp_rng, bp_commitments),
-        RctType::ClsagBulletproofPlus => Bulletproof::prove_plus(&mut bp_rng, bp_commitments),
+        RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => Bulletproof::prove_plus(&mut bp_rng, bp_commitments),
         _ => panic!("unsupported RctType"),
       })
       .expect("couldn't prove BP(+)s for this many payments despite checking in constructor?")
@@ -332,7 +347,7 @@ impl SignableTransactionWithKeyImages {
           pseudo_outs: vec![],
           commitments,
         },
-        prunable: RctPrunable::Clsag { bulletproof, clsags: vec![], pseudo_outs: vec![] },
+        prunable: RctPrunable::Clsag { rct_type: self.intent.rct_type, bulletproof, clsags: vec![], pseudo_outs: vec![] },
       }),
     }
   }

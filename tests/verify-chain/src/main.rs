@@ -110,7 +110,7 @@ async fn check_block<T: HttpTransport>(rpc: MoneroDaemon<T>, block_i: usize) {
                 &proofs.base.commitments
               ));
             }
-            RctPrunable::Clsag { bulletproof, clsags, pseudo_outs } => {
+            RctPrunable::Clsag { bulletproof, clsags, pseudo_outs, .. } => {
               assert!(bulletproof.batch_verify(
                 &mut rand_core::OsRng,
                 &mut batch,

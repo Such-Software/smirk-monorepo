@@ -81,6 +81,11 @@ pub enum RctType {
   ///
   /// This aligns with RCTTypeBulletproofPlus.
   ClsagBulletproofPlus,
+  /// Wownero variant: CLSAG with Bulletproof+ and ring size 22.
+  ///
+  /// This aligns with Wownero's RCTTypeBulletproofPlus (type 8).
+  /// Same as ClsagBulletproofPlus but with 21 decoys instead of 15.
+  WowneroClsagBulletproofPlus,
 }
 
 impl From<RctType> for u8 {
@@ -92,6 +97,9 @@ impl From<RctType> for u8 {
       RctType::MlsagBulletproofsCompactAmount => 4,
       RctType::ClsagBulletproof => 5,
       RctType::ClsagBulletproofPlus => 6,
+      // Wownero uses type 8 (RCTTypeBulletproofPlus) on the wire.
+      // This is part of the signed message so it MUST be 8, not 6.
+      RctType::WowneroClsagBulletproofPlus => 8,
     }
   }
 }
@@ -106,6 +114,7 @@ impl TryFrom<u8> for RctType {
       4 => RctType::MlsagBulletproofsCompactAmount,
       5 => RctType::ClsagBulletproof,
       6 => RctType::ClsagBulletproofPlus,
+      8 => RctType::WowneroClsagBulletproofPlus,
       _ => Err(())?,
     })
   }
@@ -120,7 +129,8 @@ impl RctType {
       }
       RctType::MlsagBulletproofsCompactAmount |
       RctType::ClsagBulletproof |
-      RctType::ClsagBulletproofPlus => true,
+      RctType::ClsagBulletproofPlus |
+      RctType::WowneroClsagBulletproofPlus => true,
     }
   }
 
@@ -132,14 +142,16 @@ impl RctType {
       RctType::ClsagBulletproof => true,
       RctType::AggregateMlsagBorromean |
       RctType::MlsagBorromean |
-      RctType::ClsagBulletproofPlus => false,
+      RctType::ClsagBulletproofPlus |
+      RctType::WowneroClsagBulletproofPlus => false,
     }
   }
 
   /// True if this RctType uses a Bulletproof+, false otherwise.
   pub(crate) fn bulletproof_plus(&self) -> bool {
     match self {
-      RctType::ClsagBulletproofPlus => true,
+      RctType::ClsagBulletproofPlus |
+      RctType::WowneroClsagBulletproofPlus => true,
       RctType::AggregateMlsagBorromean |
       RctType::MlsagBorromean |
       RctType::MlsagBulletproofs |
@@ -203,7 +215,8 @@ impl RctBase {
       RctType::MlsagBulletproofs |
       RctType::MlsagBulletproofsCompactAmount |
       RctType::ClsagBulletproof |
-      RctType::ClsagBulletproofPlus => {
+      RctType::ClsagBulletproofPlus |
+      RctType::WowneroClsagBulletproofPlus => {
         if outputs == 0 {
           // Because the Bulletproofs(+) layout must be canonical, there must be 1 Bulletproof if
           // Bulletproofs are in use
@@ -277,6 +290,9 @@ pub enum RctPrunable {
   },
   /// CLSAGs with Bulletproofs(+).
   Clsag {
+    /// The explicit RCT type to use for serialization.
+    /// This allows distinguishing between Monero's type 5/6 and Wownero's type 8.
+    rct_type: RctType,
     /// The CLSAGs for each input.
     clsags: Vec<Clsag>,
     /// The re-blinded commitments for the outputs being spent.
@@ -310,7 +326,7 @@ impl RctPrunable {
         write_raw_vec(Mlsag::write, mlsags, w)?;
         write_raw_vec(CompressedPoint::write, pseudo_outs, w)
       }
-      RctPrunable::Clsag { bulletproof, clsags, pseudo_outs } => {
+      RctPrunable::Clsag { bulletproof, clsags, pseudo_outs, .. } => {
         w.write_all(&[1])?;
         bulletproof.write(w)?;
 
@@ -374,7 +390,8 @@ impl RctPrunable {
           RctPrunable::MlsagBulletproofsCompactAmount { bulletproof, mlsags, pseudo_outs }
         }
       }
-      RctType::ClsagBulletproof | RctType::ClsagBulletproofPlus => RctPrunable::Clsag {
+      RctType::ClsagBulletproof | RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => RctPrunable::Clsag {
+        rct_type,
         bulletproof: {
           if read_byte(r)? != 1 {
             Err(io::Error::other("n bulletproofs instead of one"))?;
@@ -426,13 +443,8 @@ impl RctProofs {
       RctPrunable::MlsagBorromean { .. } => RctType::MlsagBorromean,
       RctPrunable::MlsagBulletproofs { .. } => RctType::MlsagBulletproofs,
       RctPrunable::MlsagBulletproofsCompactAmount { .. } => RctType::MlsagBulletproofsCompactAmount,
-      RctPrunable::Clsag { bulletproof, .. } => {
-        if matches!(bulletproof, Bulletproof::Original { .. }) {
-          RctType::ClsagBulletproof
-        } else {
-          RctType::ClsagBulletproofPlus
-        }
-      }
+      // Use the explicit rct_type stored in the Clsag variant
+      RctPrunable::Clsag { rct_type, .. } => *rct_type,
     }
   }
 

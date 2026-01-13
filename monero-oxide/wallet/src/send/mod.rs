@@ -292,7 +292,7 @@ struct SignableTransactionWithKeyImages {
 impl SignableTransaction {
   fn validate(&self) -> Result<(), SendError> {
     match self.rct_type {
-      RctType::ClsagBulletproof | RctType::ClsagBulletproofPlus => {}
+      RctType::ClsagBulletproof | RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => {}
       _ => Err(SendError::UnsupportedRctType)?,
     }
 
@@ -305,10 +305,12 @@ impl SignableTransaction {
       Err(SendError::InvalidInputs)?;
     }
     for input in &self.inputs {
+      // decoys().len() returns the full ring length (decoys + 1 real output)
       if input.decoys().len() !=
         match self.rct_type {
-          RctType::ClsagBulletproof => 11,
-          RctType::ClsagBulletproofPlus => 16,
+          RctType::ClsagBulletproof => 12,  // ring size 12
+          RctType::ClsagBulletproofPlus => 16,  // ring size 16 (Monero)
+          RctType::WowneroClsagBulletproofPlus => 22,  // ring size 22 (Wownero)
           _ => panic!("unsupported RctType"),
         }
       {

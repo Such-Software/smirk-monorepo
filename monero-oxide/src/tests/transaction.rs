@@ -129,7 +129,7 @@ fn parse() {
 
         // check ringct prunable
         match &proofs.prunable {
-          RctPrunable::Clsag { bulletproof: _, clsags, pseudo_outs } => {
+          RctPrunable::Clsag { bulletproof: _, clsags, pseudo_outs, .. } => {
             // check bulletproofs
             /* TODO
             for (i, bp) in bulletproofs.iter().enumerate() {
