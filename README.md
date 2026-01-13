@@ -12,7 +12,20 @@ This crate provides client-side cryptographic operations for Monero and Wownero 
 - **Key image computation** - Compute key images to verify spent outputs (client-side balance verification)
 - **Transaction parsing** - Decode and inspect transactions
 - **Fee estimation** - Estimate transaction fees
-- **Transaction signing** - Construct and sign transactions locally
+- **Transaction signing** - Construct and sign transactions locally (XMR and WOW)
+
+## Wownero Support
+
+Wownero transactions are fully supported with the following differences from Monero:
+
+| Property | Monero (XMR) | Wownero (WOW) |
+|----------|--------------|---------------|
+| RCT Type | 6 (ClsagBulletproofPlus) | 8 (BulletproofPlus) |
+| Ring Size | 16 (15 decoys + 1 real) | 22 (21 decoys + 1 real) |
+| Commitment Format | Full commitment | C/8 (scaled by INV_EIGHT) |
+| Network Prefix | `4` (mainnet) | `Wo` (mainnet) |
+
+The signing implementation handles these differences automatically based on the `network` parameter.
 
 ## Architecture
 
@@ -221,7 +234,7 @@ Builds and signs a transaction.
       index: number,       // output index in tx
       global_index: number // global output index
     },
-    decoys: [{             // 15 decoys required (ring size 16)
+    decoys: [{             // XMR: 15 decoys (ring 16), WOW: 21 decoys (ring 22)
       global_index: number,
       public_key: string,  // hex
       rct: string          // hex commitment
@@ -233,7 +246,7 @@ Builds and signs a transaction.
   fee_mask: number,
   view_key: string,        // hex, 64 chars
   spend_key: string,       // hex, 64 chars
-  network: "mainnet" | "testnet" | "stagenet"
+  network: "mainnet" | "testnet" | "stagenet" | "wownero"
 }
 ```
 

@@ -16,7 +16,7 @@ use monero_oxide::ringct::{RctType, clsag::Decoys};
 use monero_oxide::transaction::Transaction;
 use monero_wallet::{
     OutputWithDecoys,
-    address::{MoneroAddress, Network},
+    address::{MoneroAddress, AddressType, Network},
     interface::FeeRate,
     send::{Change, SignableTransaction},
 };
@@ -97,10 +97,17 @@ pub struct TxParams {
     /// Network: "mainnet", "testnet", or "stagenet"
     #[serde(default = "default_network")]
     pub network: String,
+    /// Coin type: "xmr" or "wow" - affects RCT type encoding
+    #[serde(default = "default_coin")]
+    pub coin: String,
 }
 
 fn default_network() -> String {
     "mainnet".to_string()
+}
+
+fn default_coin() -> String {
+    "xmr".to_string()
 }
 
 // ============================================================================
@@ -231,6 +238,114 @@ fn build_output_with_decoys(
 }
 
 // ============================================================================
+// Address parsing helpers
+// ============================================================================
+
+/// Parse a Monero or Wownero address.
+///
+/// Monero addresses use single-byte prefixes (18, 19, 42, etc.) which monero-oxide handles.
+/// Wownero addresses use multi-byte varint prefixes (4146, 6810, 12208) which we parse manually.
+fn parse_address(address: &str, network: Network) -> Result<MoneroAddress, String> {
+    // Try Monero first
+    if let Ok(addr) = MoneroAddress::from_str(network, address) {
+        return Ok(addr);
+    }
+
+    // Try Wownero (multi-byte varint prefixes)
+    parse_wownero_address(address, network)
+}
+
+/// Parse a Wownero address manually.
+///
+/// Wownero prefixes from cryptonote_config.h:
+/// - Standard: 4146 (varint: [0xB2, 0x20])
+/// - Integrated: 6810 (varint: [0x9A, 0x35])
+/// - Subaddress: 12208 (varint: [0xB0, 0x5F])
+fn parse_wownero_address(address: &str, network: Network) -> Result<MoneroAddress, String> {
+    use monero_base58::decode_check;
+
+    let raw = decode_check(address).ok_or("Invalid base58 encoding")?;
+    if raw.len() < 65 {
+        return Err("Address too short".to_string());
+    }
+
+    // Read varint prefix
+    let (prefix, prefix_len) = read_varint(&raw)?;
+
+    // Determine address type from prefix
+    let (is_subaddress, has_payment_id) = match prefix {
+        4146 => (false, false),   // Standard
+        6810 => (false, true),    // Integrated
+        12208 => (true, false),   // Subaddress
+        _ => return Err(format!("Unknown Wownero prefix: {}", prefix)),
+    };
+
+    // Expected lengths
+    let expected_len = if has_payment_id {
+        prefix_len + 32 + 32 + 8
+    } else {
+        prefix_len + 32 + 32
+    };
+
+    if raw.len() != expected_len {
+        return Err(format!("Invalid address length: expected {}, got {}", expected_len, raw.len()));
+    }
+
+    // Extract keys
+    let spend_bytes: [u8; 32] = raw[prefix_len..prefix_len + 32]
+        .try_into()
+        .map_err(|_| "Invalid spend key length")?;
+    let view_bytes: [u8; 32] = raw[prefix_len + 32..prefix_len + 64]
+        .try_into()
+        .map_err(|_| "Invalid view key length")?;
+
+    // Decompress to Points
+    let spend = CompressedPoint::from(spend_bytes)
+        .decompress()
+        .ok_or("Invalid spend key - not on curve")?;
+    let view = CompressedPoint::from(view_bytes)
+        .decompress()
+        .ok_or("Invalid view key - not on curve")?;
+
+    // Determine address type
+    let kind = if is_subaddress {
+        AddressType::Subaddress
+    } else if has_payment_id {
+        // Extract payment ID for integrated addresses
+        let payment_id: [u8; 8] = raw[prefix_len + 64..prefix_len + 72]
+            .try_into()
+            .map_err(|_| "Invalid payment ID")?;
+        AddressType::LegacyIntegrated(payment_id)
+    } else {
+        AddressType::Legacy
+    };
+
+    Ok(MoneroAddress::new(network, kind, spend, view))
+}
+
+/// Read a varint from bytes, returning (value, bytes_consumed).
+fn read_varint(data: &[u8]) -> Result<(u64, usize), String> {
+    let mut result: u64 = 0;
+    let mut shift = 0;
+
+    for (i, &byte) in data.iter().enumerate() {
+        if i >= 10 {
+            return Err("Varint too long".to_string());
+        }
+
+        result |= ((byte & 0x7F) as u64) << shift;
+
+        if byte & 0x80 == 0 {
+            return Ok((result, i + 1));
+        }
+
+        shift += 7;
+    }
+
+    Err("Incomplete varint".to_string())
+}
+
+// ============================================================================
 // Public API
 // ============================================================================
 
@@ -264,6 +379,9 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         return Err("No destinations provided".to_string());
     }
 
+    // Normalize coin type
+    let coin_lower = params.coin.to_lowercase();
+
     // Parse keys
     let view_key = parse_hex_32(&params.view_key)?;
     let spend_key_bytes = parse_hex_32(&params.spend_key)?;
@@ -274,13 +392,19 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         ).unwrap()
     );
 
-    // Check ring size (should be 16 for current Monero)
+    // Check ring size:
+    // - XMR: 16 (15 decoys + 1 real)
+    // - WOW: 22 (21 decoys + 1 real) - required since HF v9
+    let expected_decoys = if coin_lower == "wow" { 21 } else { 15 };
     for (i, input) in params.inputs.iter().enumerate() {
-        if input.decoys.len() != 15 {
+        if input.decoys.len() != expected_decoys {
             return Err(format!(
-                "Input {} has {} decoys, expected 15 (ring size 16)",
+                "Input {} has {} decoys, expected {} for coin '{}' (ring size {})",
                 i,
-                input.decoys.len()
+                input.decoys.len(),
+                expected_decoys,
+                params.coin,
+                expected_decoys + 1
             ));
         }
     }
@@ -300,17 +424,17 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         _ => return Err(format!("Unknown network: {}", params.network)),
     };
 
-    // Parse destination addresses
+    // Parse destination addresses (supports both Monero and Wownero)
     let mut payments: Vec<(MoneroAddress, u64)> = Vec::new();
     for dest in &params.destinations {
-        let addr = MoneroAddress::from_str(network, &dest.address)
-            .map_err(|e| format!("Invalid address '{}': {:?}", dest.address, e))?;
+        let addr = parse_address(&dest.address, network)
+            .map_err(|e| format!("Invalid address '{}': {}", dest.address, e))?;
         payments.push((addr, dest.amount));
     }
 
-    // Parse change address
-    let change_addr = MoneroAddress::from_str(network, &params.change_address)
-        .map_err(|e| format!("Invalid change address '{}': {:?}", params.change_address, e))?;
+    // Parse change address (supports both Monero and Wownero)
+    let change_addr = parse_address(&params.change_address, network)
+        .map_err(|e| format!("Invalid change address '{}': {}", params.change_address, e))?;
 
     // Create fee rate
     let fee_rate = FeeRate::new(params.fee_per_byte, params.fee_mask)
@@ -324,8 +448,15 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     // Note: Change::fingerprintable is used as we don't have the full view pair
     let change = Change::fingerprintable(Some(change_addr));
 
+    // Use Wownero-specific RCT type for WOW (ring size 22 = 21 decoys)
+    let rct_type = if params.coin.to_lowercase() == "wow" {
+        RctType::WowneroClsagBulletproofPlus
+    } else {
+        RctType::ClsagBulletproofPlus
+    };
+
     let signable = SignableTransaction::new(
-        RctType::ClsagBulletproofPlus,
+        rct_type,
         outgoing_view_key,
         inputs_with_decoys,
         payments,
@@ -344,7 +475,12 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         .map_err(|e| format!("Failed to sign: {:?}", e))?;
 
     // Serialize transaction
+    // For Wownero (WowneroClsagBulletproofPlus), monero-oxide now handles:
+    // - Serializing RCT type as 8 (not 6)
+    // - Scaling outPk commitments by INV_EIGHT
+    // So no post-processing is needed here.
     let tx_bytes = tx.serialize();
+
     let tx_hex = hex::encode(&tx_bytes);
     let tx_hash = hex::encode(tx.hash());
 

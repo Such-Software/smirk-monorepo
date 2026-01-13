@@ -53,5 +53,7 @@ pub fn test() -> String {
 /// Get the library version.
 #[wasm_bindgen]
 pub fn version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    // Include build tag to verify new version is loaded
+    // wow25: RctPrunable stores explicit rct_type for proper type 8 serialization
+    format!("{}-wow25", env!("CARGO_PKG_VERSION"))
 }
