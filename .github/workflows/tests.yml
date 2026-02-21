@@ -80,12 +80,12 @@ jobs:
 
       - name: Run Integration Tests
         run: |
-          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-oxide --test '*'
-          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-simple-request-rpc --test '*'
-          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-wallet --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package wownero-oxide --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package wownero-simple-request-rpc --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package wownero-wallet --test '*'
 
       - name: Run Integration Tests With All Features
         run: |
-          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-oxide --all-features --test '*'
-          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-simple-request-rpc --all-features --test '*'
-          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-wallet --all-features --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package wownero-oxide --all-features --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package wownero-simple-request-rpc --all-features --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package wownero-wallet --all-features --test '*'

@@ -37,5 +37,5 @@ jobs:
 
       - name: Verify no-std builds
         run: |
-          CFLAGS=-I/usr/include cargo +${{ steps.nightly.outputs.version }} build --target riscv32imac-unknown-none-elf -Z build-std=core -p monero-oxide-no-std-tests
-          CFLAGS=-I/usr/include cargo +${{ steps.nightly.outputs.version }} build --target riscv32imac-unknown-none-elf -Z build-std=core,alloc -p monero-oxide-no-std-tests --features "alloc"
+          CFLAGS=-I/usr/include cargo +${{ steps.nightly.outputs.version }} build --target riscv32imac-unknown-none-elf -Z build-std=core -p wownero-oxide-no-std-tests
+          CFLAGS=-I/usr/include cargo +${{ steps.nightly.outputs.version }} build --target riscv32imac-unknown-none-elf -Z build-std=core,alloc -p wownero-oxide-no-std-tests --features "alloc"
