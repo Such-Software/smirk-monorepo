@@ -1,12 +1,15 @@
 [package]
-name = "monero-daemon-rpc"
+name = "wownero-daemon-rpc"
 version = "0.1.0"
 description = "An interface to a Monero daemon"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/interface/daemon"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide/interface/daemon"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.89"
+
+[lib]
+name = "monero_daemon_rpc"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -22,11 +25,11 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
-monero-oxide = { path = "../..", default-features = false }
-monero-address = { path = "../../wallet/address", default-features = false }
-monero-interface = { path = "..", default-features = false }
+monero-oxide = { path = "../..", default-features = false, version = "0.1", package = "wownero-oxide" }
+monero-address = { path = "../../wallet/address", default-features = false, version = "0.1", package = "wownero-address" }
+monero-interface = { path = "..", default-features = false, version = "0.1", package = "wownero-interface" }
 
-monero-epee = { path = "../../epee", default-features = false }
+monero-epee = { path = "../../epee", default-features = false, version = "0.2", package = "wownero-epee" }
 
 [features]
 std = [

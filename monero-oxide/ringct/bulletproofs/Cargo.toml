@@ -1,12 +1,15 @@
 [package]
-name = "monero-bulletproofs"
+name = "wownero-bulletproofs"
 version = "0.1.0"
 description = "Bulletproofs(+) range proofs, as defined by the Monero protocol"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/ringct/bulletproofs"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide/ringct/bulletproofs"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.68"
+
+[lib]
+name = "monero_bulletproofs"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -25,15 +28,15 @@ zeroize = { version = "^1.5", default-features = false, features = ["zeroize_der
 
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
-monero-io = { path = "../../io", version = "0.1", default-features = false }
-monero-ed25519 = { path = "../../ed25519", version = "0.1", default-features = false }
-monero-primitives = { path = "../../primitives", version = "0.1", default-features = false }
+monero-io = { path = "../../io", version = "0.1", default-features = false, package = "wownero-io" }
+monero-ed25519 = { path = "../../ed25519", version = "0.1", default-features = false, package = "wownero-ed25519" }
+monero-primitives = { path = "../../primitives", version = "0.1", default-features = false, package = "wownero-primitives" }
 
-monero-bulletproofs-generators = { path = "./generators", version = "0.1", default-features = false }
+monero-bulletproofs-generators = { path = "./generators", version = "0.1", default-features = false, package = "wownero-bulletproofs-generators" }
 
 [build-dependencies]
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
-monero-bulletproofs-generators = { path = "./generators", version = "0.1", default-features = false }
+monero-bulletproofs-generators = { path = "./generators", version = "0.1", default-features = false, package = "wownero-bulletproofs-generators" }
 
 [dev-dependencies]
 hex-literal = { version = ">= 0.4, <= 1", default-features = false }

@@ -1,12 +1,15 @@
 [package]
-name = "monero-io"
+name = "wownero-io"
 version = "0.1.0"
 description = "Serialization functions, as within the Monero protocol"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/io"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide/io"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.65"
+
+[lib]
+name = "monero_io"
 
 [package.metadata.docs.rs]
 all-features = true

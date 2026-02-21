@@ -1,12 +1,15 @@
 [package]
-name = "monero-address"
+name = "wownero-address"
 version = "0.1.0"
 description = "Rust implementation of Monero addresses"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/wallet/address"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide/wallet/address"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.73"
+
+[lib]
+name = "monero_address"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -20,10 +23,10 @@ thiserror = { version = "2", default-features = false }
 
 zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
 
-monero-io = { path = "../../io", default-features = false }
-monero-ed25519 = { path = "../../ed25519", default-features = false }
-monero-primitives = { path = "../../primitives", default-features = false }
-monero-base58 = { path = "../base58", default-features = false }
+monero-io = { path = "../../io", default-features = false, version = "0.1", package = "wownero-io" }
+monero-ed25519 = { path = "../../ed25519", default-features = false, version = "0.1", package = "wownero-ed25519" }
+monero-primitives = { path = "../../primitives", default-features = false, version = "0.1", package = "wownero-primitives" }
+monero-base58 = { path = "../base58", default-features = false, version = "0.1", package = "wownero-base58" }
 
 [dev-dependencies]
 rand_core = { version = "0.6", default-features = false, features = ["std"] }

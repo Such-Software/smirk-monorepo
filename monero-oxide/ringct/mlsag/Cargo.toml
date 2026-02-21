@@ -1,12 +1,15 @@
 [package]
-name = "monero-mlsag"
+name = "wownero-mlsag"
 version = "0.1.0"
 description = "The MLSAG linkable ring signature, as defined by the Monero protocol"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/ringct/mlsag"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide/ringct/mlsag"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.68"
+
+[lib]
+name = "monero_mlsag"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -26,8 +29,8 @@ zeroize = { version = "^1.5", default-features = false, features = ["zeroize_der
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 # Other Monero dependencies
-monero-io = { path = "../../io", version = "0.1", default-features = false }
-monero-ed25519 = { path = "../../ed25519", version = "0.1", default-features = false }
+monero-io = { path = "../../io", version = "0.1", default-features = false, package = "wownero-io" }
+monero-ed25519 = { path = "../../ed25519", version = "0.1", default-features = false, package = "wownero-ed25519" }
 
 [features]
 std = [

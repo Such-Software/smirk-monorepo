@@ -1,12 +1,15 @@
 [package]
-name = "monero-simple-request-rpc"
+name = "wownero-simple-request-rpc"
 version = "0.1.0"
 description = "RPC connection to a Monero daemon via simple-request, built around monero-oxide"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/interface/simple-request"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide/interface/simple-request"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.89"
+
+[lib]
+name = "monero_simple_request_rpc"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -22,11 +25,11 @@ digest_auth = { version = "0.3", default-features = false }
 simple-request = { version = "0.2", default-features = false, features = ["tls"] }
 tokio = { version = "1", default-features = false }
 
-monero-daemon-rpc = { path = "..", default-features = false, features = ["std"] }
+monero-daemon-rpc = { path = "..", default-features = false, features = ["std"], version = "0.1", package = "wownero-daemon-rpc" }
 
 [dev-dependencies]
-monero-oxide = { path = "../../..", default-features = false, features = ["std"] }
-monero-address = { path = "../../../wallet/address", default-features = false, features = ["std"] }
+monero-oxide = { path = "../../..", default-features = false, features = ["std"], version = "0.1", package = "wownero-oxide" }
+monero-address = { path = "../../../wallet/address", default-features = false, features = ["std"], version = "0.1", package = "wownero-address" }
 
 tokio = { version = "1", default-features = false, features = ["macros"] }
 

@@ -1,12 +1,15 @@
 [package]
-name = "monero-primitives"
+name = "wownero-primitives"
 version = "0.1.0"
 description = "Primitives for the Monero protocol"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/primitives"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide/primitives"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.60"
+
+[lib]
+name = "monero_primitives"
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,9 +1,9 @@
 [package]
-name = "monero-oxide-verify-chain"
+name = "wownero-oxide-verify-chain"
 version = "0.1.0"
 description = "A binary to deserialize and verify the Monero blockchain"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/tests/verify-chain"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/tests/verify-chain"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 publish = false
@@ -23,7 +23,7 @@ hex = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc", "std"] }
 serde_json = { version = "1", default-features = false, features = ["alloc", "std"] }
 
-monero-oxide = { path = "../../monero-oxide", default-features = false, features = ["std", "compile-time-generators"] }
-monero-simple-request-rpc = { path = "../../monero-oxide/interface/daemon/simple-request", default-features = false }
+monero-oxide = { path = "../../monero-oxide", default-features = false, features = ["std", "compile-time-generators"], version = "0.1", package = "wownero-oxide" }
+monero-simple-request-rpc = { path = "../../monero-oxide/interface/daemon/simple-request", default-features = false, version = "0.1", package = "wownero-simple-request-rpc" }
 
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros"] }

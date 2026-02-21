@@ -39,15 +39,15 @@ dalek-ff-group = { opt-level = 3 }
 
 multiexp = { opt-level = 3 }
 
-monero-io = { opt-level = 3 }
-monero-primitives = { opt-level = 3 }
-monero-ed25519 = { opt-level = 3 }
-monero-mlsag = { opt-level = 3 }
-monero-clsag = { opt-level = 3 }
-monero-borromean = { opt-level = 3 }
-monero-bulletproofs-generators = { opt-level = 3 }
-monero-bulletproofs = {opt-level = 3 }
-monero-oxide = { opt-level = 3 }
+wownero-io = { opt-level = 3 }
+wownero-primitives = { opt-level = 3 }
+wownero-ed25519 = { opt-level = 3 }
+wownero-mlsag = { opt-level = 3 }
+wownero-clsag = { opt-level = 3 }
+wownero-borromean = { opt-level = 3 }
+wownero-bulletproofs-generators = { opt-level = 3 }
+wownero-bulletproofs = {opt-level = 3 }
+wownero-oxide = { opt-level = 3 }
 
 [profile.release]
 panic = "unwind"

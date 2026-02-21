@@ -739,242 +739,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "monero-address"
-version = "0.1.0"
-dependencies = [
- "hex",
- "hex-literal",
- "monero-base58",
- "monero-ed25519",
- "monero-io",
- "monero-primitives",
- "rand_core",
- "serde",
- "serde_json",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "monero-base58"
-version = "0.1.0"
-dependencies = [
- "monero-primitives",
- "rand_core",
- "std-shims",
-]
-
-[[package]]
-name = "monero-borromean"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "monero-ed25519",
- "monero-io",
- "std-shims",
- "zeroize",
-]
-
-[[package]]
-name = "monero-bulletproofs"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "hex-literal",
- "monero-bulletproofs-generators",
- "monero-ed25519",
- "monero-io",
- "monero-primitives",
- "rand_core",
- "std-shims",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "monero-bulletproofs-generators"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "hex",
- "monero-ed25519",
- "monero-io",
- "monero-primitives",
- "std-shims",
-]
-
-[[package]]
-name = "monero-clsag"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "dalek-ff-group 0.5.0",
- "flexible-transcript",
- "group",
- "modular-frost",
- "monero-ed25519",
- "monero-io",
- "rand_chacha",
- "rand_core",
- "std-shims",
- "subtle",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "monero-daemon-rpc"
-version = "0.1.0"
-dependencies = [
- "hex",
- "monero-address",
- "monero-epee",
- "monero-interface",
- "monero-oxide",
- "serde",
- "serde_json",
- "std-shims",
-]
-
-[[package]]
-name = "monero-ed25519"
-version = "0.1.0"
-dependencies = [
- "crypto-bigint",
- "curve25519-dalek",
- "monero-io",
- "rand_core",
- "sha3",
- "std-shims",
- "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "monero-epee"
-version = "0.2.0"
-
-[[package]]
-name = "monero-interface"
-version = "0.1.0"
-dependencies = [
- "hex",
- "monero-oxide",
- "std-shims",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "monero-io"
-version = "0.1.0"
-dependencies = [
- "std-shims",
-]
-
-[[package]]
-name = "monero-mlsag"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "monero-ed25519",
- "monero-io",
- "std-shims",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "monero-oxide"
-version = "0.1.4-alpha"
-dependencies = [
- "curve25519-dalek",
- "hex",
- "hex-literal",
- "monero-borromean",
- "monero-bulletproofs",
- "monero-clsag",
- "monero-ed25519",
- "monero-io",
- "monero-mlsag",
- "monero-primitives",
- "rand_core",
- "serde",
- "serde_json",
- "std-shims",
- "zeroize",
-]
-
-[[package]]
-name = "monero-oxide-no-std-tests"
-version = "0.1.0"
-dependencies = [
- "monero-daemon-rpc",
- "monero-epee",
- "monero-wallet",
-]
-
-[[package]]
-name = "monero-oxide-verify-chain"
-version = "0.1.0"
-dependencies = [
- "hex",
- "monero-oxide",
- "monero-simple-request-rpc",
- "rand_core",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "monero-primitives"
-version = "0.1.0"
-dependencies = [
- "sha3",
-]
-
-[[package]]
-name = "monero-simple-request-rpc"
-version = "0.1.0"
-dependencies = [
- "digest_auth",
- "hex",
- "monero-address",
- "monero-daemon-rpc",
- "monero-oxide",
- "simple-request",
- "tokio",
- "zeroize",
-]
-
-[[package]]
-name = "monero-wallet"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "flexible-transcript",
- "hex",
- "modular-frost",
- "monero-address",
- "monero-clsag",
- "monero-interface",
- "monero-oxide",
- "monero-simple-request-rpc",
- "rand",
- "rand_chacha",
- "rand_core",
- "rand_distr",
- "serde",
- "serde_json",
- "std-shims",
- "subtle",
- "thiserror",
- "tokio",
- "zeroize",
-]
-
-[[package]]
 name = "multiexp"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1702,6 +1466,242 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21a0236b59786fed61e2a80582dd500fe61f18b5dca67a4a067d0bc9039339cf"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "wownero-address"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hex-literal",
+ "rand_core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "wownero-base58",
+ "wownero-ed25519",
+ "wownero-io",
+ "wownero-primitives",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-base58"
+version = "0.1.0"
+dependencies = [
+ "rand_core",
+ "std-shims",
+ "wownero-primitives",
+]
+
+[[package]]
+name = "wownero-borromean"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "std-shims",
+ "wownero-ed25519",
+ "wownero-io",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-bulletproofs"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "hex-literal",
+ "rand_core",
+ "std-shims",
+ "thiserror",
+ "wownero-bulletproofs-generators",
+ "wownero-ed25519",
+ "wownero-io",
+ "wownero-primitives",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-bulletproofs-generators"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "hex",
+ "std-shims",
+ "wownero-ed25519",
+ "wownero-io",
+ "wownero-primitives",
+]
+
+[[package]]
+name = "wownero-clsag"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "dalek-ff-group 0.5.0",
+ "flexible-transcript",
+ "group",
+ "modular-frost",
+ "rand_chacha",
+ "rand_core",
+ "std-shims",
+ "subtle",
+ "thiserror",
+ "wownero-ed25519",
+ "wownero-io",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-daemon-rpc"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "std-shims",
+ "wownero-address",
+ "wownero-epee",
+ "wownero-interface",
+ "wownero-oxide",
+]
+
+[[package]]
+name = "wownero-ed25519"
+version = "0.1.0"
+dependencies = [
+ "crypto-bigint",
+ "curve25519-dalek",
+ "rand_core",
+ "sha3",
+ "std-shims",
+ "subtle",
+ "wownero-io",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-epee"
+version = "0.2.0"
+
+[[package]]
+name = "wownero-interface"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "std-shims",
+ "thiserror",
+ "wownero-oxide",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-io"
+version = "0.1.0"
+dependencies = [
+ "std-shims",
+]
+
+[[package]]
+name = "wownero-mlsag"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "std-shims",
+ "thiserror",
+ "wownero-ed25519",
+ "wownero-io",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-oxide"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "hex",
+ "hex-literal",
+ "rand_core",
+ "serde",
+ "serde_json",
+ "std-shims",
+ "wownero-borromean",
+ "wownero-bulletproofs",
+ "wownero-clsag",
+ "wownero-ed25519",
+ "wownero-io",
+ "wownero-mlsag",
+ "wownero-primitives",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-oxide-no-std-tests"
+version = "0.1.0"
+dependencies = [
+ "wownero-daemon-rpc",
+ "wownero-epee",
+ "wownero-wallet",
+]
+
+[[package]]
+name = "wownero-oxide-verify-chain"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "rand_core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wownero-oxide",
+ "wownero-simple-request-rpc",
+]
+
+[[package]]
+name = "wownero-primitives"
+version = "0.1.0"
+dependencies = [
+ "sha3",
+]
+
+[[package]]
+name = "wownero-simple-request-rpc"
+version = "0.1.0"
+dependencies = [
+ "digest_auth",
+ "hex",
+ "simple-request",
+ "tokio",
+ "wownero-address",
+ "wownero-daemon-rpc",
+ "wownero-oxide",
+ "zeroize",
+]
+
+[[package]]
+name = "wownero-wallet"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "flexible-transcript",
+ "hex",
+ "modular-frost",
+ "rand",
+ "rand_chacha",
+ "rand_core",
+ "rand_distr",
+ "serde",
+ "serde_json",
+ "std-shims",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "wownero-address",
+ "wownero-clsag",
+ "wownero-interface",
+ "wownero-oxide",
+ "wownero-simple-request-rpc",
+ "zeroize",
 ]
 
 [[package]]

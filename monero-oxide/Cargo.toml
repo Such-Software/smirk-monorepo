@@ -1,12 +1,15 @@
 [package]
-name = "monero-oxide"
-version = "0.1.4-alpha"
+name = "wownero-oxide"
+version = "0.1.0"
 description = "A modern Monero transaction library"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/monero-oxide"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
 rust-version = "1.85"
+
+[lib]
+name = "monero_oxide"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -22,13 +25,13 @@ zeroize = { version = "^1.5", default-features = false, features = ["zeroize_der
 
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
-monero-io = { path = "io", version = "0.1", default-features = false }
-monero-ed25519 = { path = "ed25519", version = "0.1", default-features = false }
-monero-primitives = { path = "primitives", version = "0.1", default-features = false }
-monero-mlsag = { path = "ringct/mlsag", version = "0.1", default-features = false }
-monero-clsag = { path = "ringct/clsag", version = "0.1", default-features = false }
-monero-borromean = { path = "ringct/borromean", version = "0.1", default-features = false }
-monero-bulletproofs = { path = "ringct/bulletproofs", version = "0.1", default-features = false }
+monero-io = { path = "io", version = "0.1", default-features = false, package = "wownero-io" }
+monero-ed25519 = { path = "ed25519", version = "0.1", default-features = false, package = "wownero-ed25519" }
+monero-primitives = { path = "primitives", version = "0.1", default-features = false, package = "wownero-primitives" }
+monero-mlsag = { path = "ringct/mlsag", version = "0.1", default-features = false, package = "wownero-mlsag" }
+monero-clsag = { path = "ringct/clsag", version = "0.1", default-features = false, package = "wownero-clsag" }
+monero-borromean = { path = "ringct/borromean", version = "0.1", default-features = false, package = "wownero-borromean" }
+monero-bulletproofs = { path = "ringct/bulletproofs", version = "0.1", default-features = false, package = "wownero-bulletproofs" }
 
 hex-literal = { version = ">= 0.4, <= 1", default-features = false }
 

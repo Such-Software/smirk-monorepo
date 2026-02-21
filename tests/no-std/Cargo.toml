@@ -1,9 +1,9 @@
 [package]
-name = "monero-oxide-no-std-tests"
+name = "wownero-oxide-no-std-tests"
 version = "0.1.0"
 description = "A crate to test no-std builds of monero-oxide crates work"
 license = "MIT"
-repository = "https://github.com/monero-oxide/monero-oxide/tree/main/tests/no-std"
+repository = "https://github.com/Such-Software/monero-oxide/tree/main/tests/no-std"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 keywords = ["nostd", "no_std", "alloc"]
 edition = "2021"
@@ -18,9 +18,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-monero-epee = { path = "../../monero-oxide/epee" }
-monero-wallet = { path = "../../monero-oxide/wallet", default-features = false, features = ["compile-time-generators"], optional = true }
-monero-daemon-rpc = { path = "../../monero-oxide/interface/daemon", default-features = false, optional = true }
+monero-epee = { path = "../../monero-oxide/epee", version = "0.2", package = "wownero-epee" }
+monero-wallet = { path = "../../monero-oxide/wallet", default-features = false, features = ["compile-time-generators"], optional = true, version = "0.1", package = "wownero-wallet" }
+monero-daemon-rpc = { path = "../../monero-oxide/interface/daemon", default-features = false, optional = true, version = "0.1", package = "wownero-daemon-rpc" }
 
 [features]
 alloc = ["monero-wallet", "monero-daemon-rpc"]

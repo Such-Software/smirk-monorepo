@@ -1,3 +1,7 @@
 target
 
 .vscode
+
+# repo-to-text
+.repo-to-text-settings.yaml
+repo-to-text_*.txt
