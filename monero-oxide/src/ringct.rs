@@ -150,8 +150,7 @@ impl RctType {
   /// True if this RctType uses a Bulletproof+, false otherwise.
   pub(crate) fn bulletproof_plus(&self) -> bool {
     match self {
-      RctType::ClsagBulletproofPlus |
-      RctType::WowneroClsagBulletproofPlus => true,
+      RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => true,
       RctType::AggregateMlsagBorromean |
       RctType::MlsagBorromean |
       RctType::MlsagBulletproofs |
@@ -390,7 +389,9 @@ impl RctPrunable {
           RctPrunable::MlsagBulletproofsCompactAmount { bulletproof, mlsags, pseudo_outs }
         }
       }
-      RctType::ClsagBulletproof | RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => RctPrunable::Clsag {
+      RctType::ClsagBulletproof |
+      RctType::ClsagBulletproofPlus |
+      RctType::WowneroClsagBulletproofPlus => RctPrunable::Clsag {
         rct_type,
         bulletproof: {
           if read_byte(r)? != 1 {

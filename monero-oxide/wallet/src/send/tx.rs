@@ -232,7 +232,12 @@ impl SignableTransaction {
         },
         proofs: Some(RctProofs {
           base: RctBase { fee: 0, encrypted_amounts, pseudo_outs: vec![], commitments },
-          prunable: RctPrunable::Clsag { rct_type: self.rct_type, bulletproof, clsags, pseudo_outs },
+          prunable: RctPrunable::Clsag {
+            rct_type: self.rct_type,
+            bulletproof,
+            clsags,
+            pseudo_outs,
+          },
         }),
       }
       .weight() -
@@ -291,7 +296,8 @@ impl SignableTransactionWithKeyImages {
         // Scale by INV_EIGHT for Wownero type 8
         // The ed25519 module provides Scalar::INV_EIGHT with an into() method
         let inv8: curve25519_dalek::Scalar = Scalar::INV_EIGHT.into();
-        let scaled = curve25519_dalek::EdwardsPoint::from(commitment_point.into()) * inv8;
+        let scaled: curve25519_dalek::EdwardsPoint = commitment_point.into();
+        let scaled = scaled * inv8;
         CompressedPoint::from(scaled.compress().to_bytes())
       } else {
         commitment_point.compress()
@@ -304,7 +310,9 @@ impl SignableTransactionWithKeyImages {
       let mut bp_rng = self.intent.seeded_rng(b"bulletproof");
       (match self.intent.rct_type {
         RctType::ClsagBulletproof => Bulletproof::prove(&mut bp_rng, bp_commitments),
-        RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => Bulletproof::prove_plus(&mut bp_rng, bp_commitments),
+        RctType::ClsagBulletproofPlus | RctType::WowneroClsagBulletproofPlus => {
+          Bulletproof::prove_plus(&mut bp_rng, bp_commitments)
+        }
         _ => panic!("unsupported RctType"),
       })
       .expect("couldn't prove BP(+)s for this many payments despite checking in constructor?")
@@ -347,7 +355,12 @@ impl SignableTransactionWithKeyImages {
           pseudo_outs: vec![],
           commitments,
         },
-        prunable: RctPrunable::Clsag { rct_type: self.intent.rct_type, bulletproof, clsags: vec![], pseudo_outs: vec![] },
+        prunable: RctPrunable::Clsag {
+          rct_type: self.intent.rct_type,
+          bulletproof,
+          clsags: vec![],
+          pseudo_outs: vec![],
+        },
       }),
     }
   }
