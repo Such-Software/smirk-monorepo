@@ -26,7 +26,9 @@ pub mod slatepack_encryption;
 
 pub use kernel::{KernelFeatures, NRD_MAX_RELATIVE_HEIGHT};
 pub use slate_builder::{
-    sender_init_s1, sender_init_s1_with_id, SenderContext, SenderInitOutput, SenderInitParams,
+    receiver_round_s2, sender_finalize_s3, sender_init_s1, sender_init_s1_with_id,
+    ReceiverContext, ReceiverRoundOutput, ReceiverRoundParams, SenderContext, SenderFinalizeOutput,
+    SenderFinalizeParams, SenderInitOutput, SenderInitParams,
 };
 
 pub use bulletproof::{

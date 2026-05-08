@@ -61,6 +61,42 @@ impl KernelFeatures {
         }
     }
 
+    /// Reconstruct kernel features from the fields a SlateV4 carries:
+    /// `feat` byte, `fee` value, and the optional `feat_args` (which holds
+    /// `lock_hgt` — interpreted as either an absolute lock height for
+    /// `HeightLocked` kernels, or a relative height for NRD kernels).
+    ///
+    /// Used by `receiver_round_s2` and `sender_finalize_s3` to compute the
+    /// kernel signing message from the slate fields.
+    pub fn from_slate_fields(feat: u8, fee: u64, lock_hgt: Option<u64>) -> Result<Self, String> {
+        match feat {
+            0 => Ok(KernelFeatures::Plain { fee }),
+            1 => Ok(KernelFeatures::Coinbase),
+            2 => {
+                let lh = lock_hgt
+                    .ok_or_else(|| "HeightLocked kernel requires feat_args.lock_hgt".to_string())?;
+                Ok(KernelFeatures::HeightLocked {
+                    fee,
+                    lock_height: lh,
+                })
+            }
+            3 => {
+                let lh = lock_hgt
+                    .ok_or_else(|| "NRD kernel requires feat_args.lock_hgt".to_string())?;
+                if lh == 0 || lh > NRD_MAX_RELATIVE_HEIGHT as u64 {
+                    return Err(format!(
+                        "NRD relative_height {lh} out of range [1, {NRD_MAX_RELATIVE_HEIGHT}]"
+                    ));
+                }
+                Ok(KernelFeatures::Nrd {
+                    fee,
+                    relative_height: lh as u16,
+                })
+            }
+            other => Err(format!("unknown kernel feature byte: {other}")),
+        }
+    }
+
     /// Compute the 32-byte BLAKE2b-256 message that gets Schnorr-signed
     /// for this kernel. Pass to [`crate::schnorr::sign_with_nonce`] (or
     /// the multi-party flow) to produce the kernel signature.
