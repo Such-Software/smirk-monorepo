@@ -11,11 +11,14 @@
 //! vectors. See `tests/` for the test suite and `docs/GRIN_TEST_VECTORS.md`
 //! (in smirk-backend) for the methodology.
 
+pub mod bip32;
 pub mod secp256k1;
 pub mod seed;
+pub mod slatepack_address;
 
 pub use secp256k1::public_key_from_secret_key;
 pub use seed::{mnemonic_to_extended_private_key, ExtendedPrivateKey};
+pub use slatepack_address::{slatepack_address, Network};
 
 /// Crate version, exposed for runtime debugging.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

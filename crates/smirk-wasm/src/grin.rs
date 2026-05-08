@@ -43,7 +43,10 @@ pub fn grin_secp256k1_public_key(secret_key_hex: &str) -> Result<String, JsValue
 }
 
 /// Derive the full Grin keyset from a mnemonic in one call. Convenience
-/// wrapper that bundles `grin_derive_extended_key` + `grin_secp256k1_public_key`.
+/// wrapper that bundles the extended key, root secp256k1 pubkey, and the
+/// default (index-0) slatepack address.
+///
+/// `network` must be `"mainnet"` or `"testnet"`.
 ///
 /// Returns JSON:
 /// ```text
@@ -51,24 +54,54 @@ pub fn grin_secp256k1_public_key(secret_key_hex: &str) -> Result<String, JsValue
 ///   "extended_private_key_hex": "...",  // 128 hex chars (64 bytes)
 ///   "secret_key_hex": "...",            //  64 hex chars (32 bytes)
 ///   "chain_code_hex": "...",            //  64 hex chars (32 bytes)
-///   "public_key_hex": "..."             //  66 hex chars (33 bytes, compressed)
+///   "public_key_hex": "...",            //  66 hex chars (33 bytes, compressed)
+///   "slatepack_address": "grin1..."     // bech32, default address index 0
 /// }
 /// ```
 #[wasm_bindgen]
-pub fn grin_derive_keys(mnemonic: &str) -> Result<String, JsValue> {
+pub fn grin_derive_keys(mnemonic: &str, network: &str) -> Result<String, JsValue> {
     let xkey = grin_ext::mnemonic_to_extended_private_key(mnemonic)
         .map_err(|e| JsValue::from_str(&e))?;
     let sk = xkey.secret_key();
     let pk = grin_ext::public_key_from_secret_key(&sk).map_err(|e| JsValue::from_str(&e))?;
+    let net = parse_network(network)?;
+    let addr = grin_ext::slatepack_address(mnemonic, 0, net).map_err(|e| JsValue::from_str(&e))?;
 
     let json = format!(
-        r#"{{"extended_private_key_hex":"{}","secret_key_hex":"{}","chain_code_hex":"{}","public_key_hex":"{}"}}"#,
+        r#"{{"extended_private_key_hex":"{}","secret_key_hex":"{}","chain_code_hex":"{}","public_key_hex":"{}","slatepack_address":"{}"}}"#,
         xkey.to_hex(),
         hex::encode(sk),
         hex::encode(xkey.chain_code()),
         hex::encode(pk),
+        addr,
     );
     Ok(json)
+}
+
+/// Derive a slatepack address (Grim/grin-wallet compatible) from a mnemonic.
+///
+/// `network` must be `"mainnet"` or `"testnet"`.
+/// `index` is the address index — 0 is the wallet's default address.
+///
+/// Returns the bech32-encoded address string (e.g. `"grin1abc..."`).
+#[wasm_bindgen]
+pub fn grin_slatepack_address(
+    mnemonic: &str,
+    index: u32,
+    network: &str,
+) -> Result<String, JsValue> {
+    let net = parse_network(network)?;
+    grin_ext::slatepack_address(mnemonic, index, net).map_err(|e| JsValue::from_str(&e))
+}
+
+fn parse_network(s: &str) -> Result<grin_ext::Network, JsValue> {
+    match s {
+        "mainnet" => Ok(grin_ext::Network::Mainnet),
+        "testnet" => Ok(grin_ext::Network::Testnet),
+        other => Err(JsValue::from_str(&format!(
+            "invalid network {other:?}; expected \"mainnet\" or \"testnet\""
+        ))),
+    }
 }
 
 /// grin-ext crate version. Useful for runtime version sanity checks.

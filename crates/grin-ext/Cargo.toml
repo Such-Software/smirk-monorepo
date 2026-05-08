@@ -23,6 +23,19 @@ sha2 = { version = "0.10", default-features = false }
 # Pure Rust (no FFI) so it compiles cleanly to wasm32 with no extra setup.
 k256 = { version = "0.13", default-features = false, features = ["alloc", "arithmetic", "ecdsa"] }
 
+# BLAKE2b — used in slatepack address derivation (hashes the secp256k1
+# child key bytes before they become an ed25519 secret key) and in
+# Grin's Schnorr-signature message hashing.
+blake2 = { version = "0.10", default-features = false }
+
+# ed25519 via curve25519-dalek — same library monero-oxide pulls in.
+# Slatepack addresses are bech32-encoded ed25519 public keys.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+
+# Bech32 encoding for human-readable slatepack addresses (grin1...).
+bech32 = { version = "0.9", default-features = false }
+
 # Hex encoding for ergonomic test fixtures
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 
