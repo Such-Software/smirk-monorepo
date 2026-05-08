@@ -219,6 +219,159 @@ fn scalar_from_bytes(bytes: &[u8; 32]) -> Option<Scalar> {
     Some(Scalar::from_uint_unchecked(U256::from_be_slice(bytes)))
 }
 
+// =============================================================================
+// Multi-party Schnorr aggregation (Grin-style aggsig)
+// =============================================================================
+//
+// Grin slate signing is a multi-party Schnorr aggregation: each participant
+// has their own (secret_key, nonce) pair, and the final signature is the sum
+// of partial signatures. The challenge hash is shared, computed once over
+// the SUMS of public nonces and public keys:
+//
+//   R_total = R_1 + R_2 + ... + R_n         (sum of public nonces, point add)
+//   P_total = P_1 + P_2 + ... + P_n         (sum of public keys, point add)
+//   e       = blake2b32(R_total || P_total || msg)
+//   s_i     = k_i + e * x_i                  (each participant computes own partial)
+//   s_total = s_1 + s_2 + ... + s_n          (sum of partials, scalar add mod n)
+//
+// Final aggregate signature is `(R_total, s_total)` — the same shape and
+// verification equation as a single-signer Schnorr against public key
+// P_total. So verifying the final aggregate uses the same `verify` we
+// already have, with `public_key_compressed = P_total`.
+//
+// This is plain (non-MuSig) Schnorr aggregation. Grin doesn't use MuSig's
+// key-coefficient tweaks — participant authentication happens at a layer
+// above (via the slate exchange protocol).
+
+/// Add two compressed secp256k1 public keys via curve point addition.
+///
+/// Used to compute `R_total = R_1 + R_2` (sum of public nonces) and
+/// `P_total = P_1 + P_2` (sum of public keys / blinding factor pubkeys).
+pub fn point_add(a_compressed: &[u8; 33], b_compressed: &[u8; 33]) -> Result<[u8; 33], String> {
+    let a = PublicKey::from_sec1_bytes(a_compressed)
+        .map_err(|e| format!("invalid first pubkey: {e}"))?;
+    let b = PublicKey::from_sec1_bytes(b_compressed)
+        .map_err(|e| format!("invalid second pubkey: {e}"))?;
+    let sum: ProjectivePoint = a.to_projective() + b.to_projective();
+    let sum_pk = PublicKey::try_from(sum.to_affine())
+        .map_err(|e| format!("sum is identity / invalid: {e}"))?;
+    let bytes = sum_pk.to_sec1_bytes();
+    if bytes.len() != 33 {
+        return Err(format!("unexpected encoded length: {}", bytes.len()));
+    }
+    let mut out = [0u8; 33];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+/// Sum N compressed pubkeys. Convenience over [`point_add`].
+pub fn point_sum(points: &[[u8; 33]]) -> Result<[u8; 33], String> {
+    if points.is_empty() {
+        return Err("cannot sum zero points".to_string());
+    }
+    let mut acc = points[0];
+    for p in &points[1..] {
+        acc = point_add(&acc, p)?;
+    }
+    Ok(acc)
+}
+
+/// Produce a partial Schnorr signature for one participant in a multi-party
+/// signing ceremony.
+///
+/// `secret_key` and `secret_nonce` are this participant's secrets.
+/// `public_nonce_total` and `public_key_total` are the SUMS of all
+/// participants' public nonces and public keys (both 33-byte compressed).
+///
+/// Returns the partial scalar `s_i = k_i + e · x_i` (32 bytes) where
+/// `e = blake2b32(R_total || P_total || msg)`.
+pub fn partial_sign(
+    secret_key: &[u8; 32],
+    secret_nonce: &[u8; 32],
+    public_nonce_total: &[u8; 33],
+    public_key_total: &[u8; 33],
+    msg: &[u8; MSG_LEN],
+) -> Result<[u8; 32], String> {
+    let sk = NonZeroScalar::try_from(secret_key.as_slice())
+        .map_err(|e| format!("invalid secret key: {e}"))?;
+    let nonce = NonZeroScalar::try_from(secret_nonce.as_slice())
+        .map_err(|e| format!("invalid nonce: {e}"))?;
+
+    // Shared challenge using the sums.
+    let e = challenge_hash(public_nonce_total, public_key_total, msg)?;
+
+    // s_i = k_i + e · x_i
+    let s = nonce.as_ref() + e * sk.as_ref();
+
+    Ok(s.to_bytes().into())
+}
+
+/// Verify one participant's partial signature.
+///
+/// Checks `s_i · G == R_i + e · P_i` where `e` is computed using the
+/// shared `R_total` and `P_total`. Returns `Ok(true)` if valid.
+pub fn partial_verify(
+    partial_s: &[u8; 32],
+    public_nonce_i: &[u8; 33],
+    public_key_i: &[u8; 33],
+    public_nonce_total: &[u8; 33],
+    public_key_total: &[u8; 33],
+    msg: &[u8; MSG_LEN],
+) -> Result<bool, String> {
+    let s = scalar_from_bytes(partial_s).ok_or("invalid partial s scalar")?;
+    let r_i = PublicKey::from_sec1_bytes(public_nonce_i)
+        .map_err(|e| format!("invalid R_i: {e}"))?;
+    let p_i = PublicKey::from_sec1_bytes(public_key_i)
+        .map_err(|e| format!("invalid P_i: {e}"))?;
+
+    let e = challenge_hash(public_nonce_total, public_key_total, msg)?;
+
+    let lhs = ProjectivePoint::GENERATOR * s;
+    let rhs = r_i.to_projective() + p_i.to_projective() * e;
+
+    Ok(lhs.to_bytes() == rhs.to_bytes())
+}
+
+/// Aggregate N partial scalars into a single `s_total = s_1 + s_2 + ... + s_n`
+/// (mod curve order).
+pub fn aggregate_partials(partials: &[[u8; 32]]) -> Result<[u8; 32], String> {
+    if partials.is_empty() {
+        return Err("cannot aggregate zero partials".to_string());
+    }
+    let mut acc = scalar_from_bytes(&partials[0]).ok_or("invalid first partial")?;
+    for (i, p) in partials[1..].iter().enumerate() {
+        let s = scalar_from_bytes(p)
+            .ok_or_else(|| format!("invalid partial #{}", i + 1))?;
+        acc += s;
+    }
+    Ok(acc.to_bytes().into())
+}
+
+/// Build a final 64-byte aggregate signature from the shared public nonce
+/// `R_total` and the aggregated scalar `s_total`.
+///
+/// The result verifies as a single-signer Schnorr signature against the
+/// aggregate public key `P_total` — pass it to [`verify`] with `P_total` as
+/// `public_key_compressed`.
+pub fn final_signature(public_nonce_total: &[u8; 33], aggregate_s: &[u8; 32]) -> Signature {
+    let mut sig = [0u8; SIG_LEN];
+    sig[..32].copy_from_slice(&public_nonce_total[1..33]); // drop parity prefix, keep X
+    sig[32..].copy_from_slice(aggregate_s);
+    Signature(sig)
+}
+
+/// Public-key from secret-key helper used in aggregation tests / WASM.
+fn pubkey_from_secret(secret_key: &[u8; 32]) -> Result<[u8; 33], String> {
+    let scalar = NonZeroScalar::try_from(secret_key.as_slice())
+        .map_err(|e| format!("invalid secret key: {e}"))?;
+    let secret = SecretKey::from(scalar);
+    let public = PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
+    let bytes = public.to_sec1_bytes();
+    let mut out = [0u8; 33];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +440,127 @@ mod tests {
         let pk = pubkey_compressed_for(&SK);
         let result = verify(&sig, &MSG, &pk).unwrap_or(false);
         assert!(!result);
+    }
+
+    // =========================================================================
+    // Multi-party aggregation tests
+    // =========================================================================
+
+    /// Generate a fresh non-zero secret deterministically from a seed byte.
+    fn det_scalar(seed: u8) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[0] = seed;
+        out[31] = seed.wrapping_add(1); // ensure non-zero
+        out
+    }
+
+    fn pubkey_for(sk: &[u8; 32]) -> [u8; 33] {
+        super::pubkey_from_secret(sk).unwrap()
+    }
+
+    #[test]
+    fn point_add_is_commutative() {
+        let p1 = pubkey_for(&det_scalar(1));
+        let p2 = pubkey_for(&det_scalar(2));
+        let a = point_add(&p1, &p2).unwrap();
+        let b = point_add(&p2, &p1).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn point_sum_matches_repeated_point_add() {
+        let p1 = pubkey_for(&det_scalar(3));
+        let p2 = pubkey_for(&det_scalar(4));
+        let p3 = pubkey_for(&det_scalar(5));
+        let a = point_add(&point_add(&p1, &p2).unwrap(), &p3).unwrap();
+        let b = point_sum(&[p1, p2, p3]).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn two_party_round_trip() {
+        // Two participants each sign with their own (sk, nonce), then
+        // aggregate. Final signature must verify against P_total = P_a + P_b.
+        let sk_a = det_scalar(11);
+        let sk_b = det_scalar(22);
+        let nonce_a = det_scalar(101);
+        let nonce_b = det_scalar(202);
+        let msg = [99u8; 32];
+
+        let p_a = pubkey_for(&sk_a);
+        let p_b = pubkey_for(&sk_b);
+        let r_a = pubkey_for(&nonce_a);
+        let r_b = pubkey_for(&nonce_b);
+
+        let p_total = point_add(&p_a, &p_b).unwrap();
+        let r_total = point_add(&r_a, &r_b).unwrap();
+
+        // Each participant produces their partial.
+        let s_a = partial_sign(&sk_a, &nonce_a, &r_total, &p_total, &msg).unwrap();
+        let s_b = partial_sign(&sk_b, &nonce_b, &r_total, &p_total, &msg).unwrap();
+
+        // Each participant's partial must verify standalone.
+        assert!(partial_verify(&s_a, &r_a, &p_a, &r_total, &p_total, &msg).unwrap());
+        assert!(partial_verify(&s_b, &r_b, &p_b, &r_total, &p_total, &msg).unwrap());
+
+        // Aggregate and the final must verify as a normal signature against P_total.
+        let s_total = aggregate_partials(&[s_a, s_b]).unwrap();
+        let final_sig = final_signature(&r_total, &s_total);
+        assert!(verify(&final_sig, &msg, &p_total).unwrap());
+    }
+
+    #[test]
+    fn three_party_round_trip() {
+        let sks: Vec<[u8; 32]> = (1..=3).map(|i| det_scalar(i * 7)).collect();
+        let nonces: Vec<[u8; 32]> = (1..=3).map(|i| det_scalar(i * 13 + 50)).collect();
+        let msg = [0xab; 32];
+
+        let pks: Vec<[u8; 33]> = sks.iter().map(pubkey_for).collect();
+        let rs: Vec<[u8; 33]> = nonces.iter().map(pubkey_for).collect();
+        let p_total = point_sum(&pks).unwrap();
+        let r_total = point_sum(&rs).unwrap();
+
+        let partials: Vec<[u8; 32]> = (0..3)
+            .map(|i| partial_sign(&sks[i], &nonces[i], &r_total, &p_total, &msg).unwrap())
+            .collect();
+        for i in 0..3 {
+            assert!(partial_verify(&partials[i], &rs[i], &pks[i], &r_total, &p_total, &msg).unwrap());
+        }
+
+        let s_total = aggregate_partials(&partials).unwrap();
+        let final_sig = final_signature(&r_total, &s_total);
+        assert!(verify(&final_sig, &msg, &p_total).unwrap());
+    }
+
+    #[test]
+    fn partial_verify_rejects_wrong_message() {
+        let sk = det_scalar(1);
+        let nonce = det_scalar(2);
+        let r = pubkey_for(&nonce);
+        let p = pubkey_for(&sk);
+        let msg = [3u8; 32];
+        let s = partial_sign(&sk, &nonce, &r, &p, &msg).unwrap();
+        // Same R/P but different message.
+        let other_msg = [4u8; 32];
+        assert!(!partial_verify(&s, &r, &p, &r, &p, &other_msg).unwrap());
+    }
+
+    #[test]
+    fn partial_verify_rejects_wrong_partial() {
+        let sk = det_scalar(1);
+        let nonce = det_scalar(2);
+        let r = pubkey_for(&nonce);
+        let p = pubkey_for(&sk);
+        let msg = [3u8; 32];
+        let mut s = partial_sign(&sk, &nonce, &r, &p, &msg).unwrap();
+        s[0] ^= 1;
+        assert!(!partial_verify(&s, &r, &p, &r, &p, &msg).unwrap());
+    }
+
+    #[test]
+    fn aggregate_of_one_equals_input() {
+        let s = det_scalar(42);
+        let agg = aggregate_partials(&[s]).unwrap();
+        assert_eq!(agg, s);
     }
 }

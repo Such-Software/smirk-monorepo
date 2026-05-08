@@ -25,7 +25,10 @@ pub use bulletproof::{
     bullet_proof_create, bullet_proof_rewind, bullet_proof_verify, pedersen_commit,
 };
 
-pub use schnorr::{sign as schnorr_sign, sign_with_nonce, verify as schnorr_verify, Signature};
+pub use schnorr::{
+    aggregate_partials, final_signature, partial_sign, partial_verify, point_add, point_sum,
+    sign as schnorr_sign, sign_with_nonce, verify as schnorr_verify, Signature,
+};
 pub use secp256k1::public_key_from_secret_key;
 pub use seed::{mnemonic_to_extended_private_key, ExtendedPrivateKey};
 pub use slate::{parse_slate_v4, serialize_slate_v4, SlateStateV4, SlateV4};
