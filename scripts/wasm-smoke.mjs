@@ -212,6 +212,45 @@ check('grin_slatepack_encrypt + decrypt', () => {
 });
 
 // ----------------------------------------------------------------------------
+// Grin: blind arithmetic + sender slate init
+// ----------------------------------------------------------------------------
+check('grin_blind_add', () => {
+  const a = '01'.padEnd(64, '0');
+  const b = '02'.padEnd(64, '0');
+  const sum = mod.grin_blind_add(a, b);
+  if (sum.length !== 64) throw new Error(`bad sum length: ${sum.length}`);
+});
+check('grin_blind_sum (3 scalars)', () => {
+  const concat = ['01', '02', '03'].map((b) => b.padEnd(64, '0')).join('');
+  const result = mod.grin_blind_sum(concat);
+  if (result.length !== 64) throw new Error(`bad result length: ${result.length}`);
+});
+check('grin_sender_init_s1', () => {
+  const slateId = '0436430c-2b02-624c-2032-570501212b00';
+  const excess = '0a'.padEnd(64, '0');
+  const offset = '0b'.padEnd(64, '0');
+  const nonce = '0c'.padEnd(64, '0');
+  const result = mod.grin_sender_init_s1(
+    slateId,
+    BigInt(60_000_000_000),
+    BigInt(7_000_000),
+    'plain',
+    null,
+    null,
+    excess,
+    offset,
+    nonce,
+  );
+  const j = JSON.parse(result);
+  if (typeof j.slate_json !== 'string' || !j.slate_json.includes('"sta":"S1"')) {
+    throw new Error(`bad slate: ${j.slate_json}`);
+  }
+  if (j.context.slate_id !== slateId) {
+    throw new Error(`slate_id mismatch: ${j.context.slate_id}`);
+  }
+});
+
+// ----------------------------------------------------------------------------
 // Monero / Wownero
 // ----------------------------------------------------------------------------
 check('validate_address rejects garbage input', () => {

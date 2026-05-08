@@ -42,16 +42,17 @@ mod transaction;
 // Re-export public functions
 pub use address::validate_address;
 pub use grin::{
-    grin_bullet_proof_create, grin_bullet_proof_rewind, grin_bullet_proof_verify,
-    grin_derive_extended_key, grin_derive_keys, grin_ext_version, grin_kernel_features_bytes,
-    grin_kernel_sig_msg, grin_pedersen_commit, grin_point_add, grin_point_sum,
-    grin_schnorr_aggregate_partials, grin_schnorr_final_signature, grin_schnorr_partial_sign,
-    grin_schnorr_partial_verify, grin_schnorr_sign, grin_schnorr_verify,
-    grin_secp256k1_public_key, grin_slate_round_trip, grin_slate_summary,
-    grin_slatepack_address, grin_slatepack_armor, grin_slatepack_bin_decode,
-    grin_slatepack_bin_encode_plain, grin_slatepack_dearmor, grin_slatepack_decrypt,
-    grin_slatepack_encrypt, grin_slatepack_pack_encrypted, grin_slatepack_pack_plain,
-    grin_slatepack_unpack, grin_slatepack_unpack_with_secret,
+    grin_blind_add, grin_blind_sub, grin_blind_sum, grin_bullet_proof_create,
+    grin_bullet_proof_rewind, grin_bullet_proof_verify, grin_derive_extended_key,
+    grin_derive_keys, grin_ext_version, grin_kernel_features_bytes, grin_kernel_sig_msg,
+    grin_pedersen_commit, grin_point_add, grin_point_sum, grin_schnorr_aggregate_partials,
+    grin_schnorr_final_signature, grin_schnorr_partial_sign, grin_schnorr_partial_verify,
+    grin_schnorr_sign, grin_schnorr_verify, grin_secp256k1_public_key, grin_sender_blind_excess,
+    grin_sender_init_s1, grin_slate_round_trip, grin_slate_summary, grin_slatepack_address,
+    grin_slatepack_armor, grin_slatepack_bin_decode, grin_slatepack_bin_encode_plain,
+    grin_slatepack_dearmor, grin_slatepack_decrypt, grin_slatepack_encrypt,
+    grin_slatepack_pack_encrypted, grin_slatepack_pack_plain, grin_slatepack_unpack,
+    grin_slatepack_unpack_with_secret,
 };
 pub use keys::derive_key_image;
 pub use signing::{compute_key_image, derive_output_key_image, estimate_fee, sign_transaction};

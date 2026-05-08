@@ -12,17 +12,22 @@
 //! (in smirk-backend) for the methodology.
 
 pub mod bip32;
+pub mod blind;
 pub mod bulletproof;
 pub mod kernel;
 pub mod schnorr;
 pub mod secp256k1;
 pub mod seed;
 pub mod slate;
+pub mod slate_builder;
 pub mod slatepack;
 pub mod slatepack_address;
 pub mod slatepack_encryption;
 
 pub use kernel::{KernelFeatures, NRD_MAX_RELATIVE_HEIGHT};
+pub use slate_builder::{
+    sender_init_s1, sender_init_s1_with_id, SenderContext, SenderInitOutput, SenderInitParams,
+};
 
 pub use bulletproof::{
     bullet_proof_create, bullet_proof_rewind, bullet_proof_verify, pedersen_commit,

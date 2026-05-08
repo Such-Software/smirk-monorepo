@@ -47,6 +47,9 @@ age = { version = "0.10", default-features = false, features = ["armor"] }
 # X25519 keys (standard Edwards → Montgomery conversion).
 x25519-dalek = { version = "2", default-features = false, features = ["alloc", "static_secrets"] }
 
+# UUID for slate IDs (RFC-4122 v4, used by grin-wallet to dedupe slates).
+uuid = { version = "1", default-features = false, features = ["v4"] }
+
 # Grin Bulletproofs / Pedersen commitments via the vendored
 # `crates/secp256k1zkp/` (grin_secp256k1zkp v0.7.15, patched for wasm32).
 # Provides BP create/verify/rewind, Pedersen commit, and aggsig.
@@ -65,10 +68,11 @@ zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
 # RNG for Schnorr nonce sampling.
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
 
-# Enable getrandom's `js` feature on WASM targets so OsRng works in browsers.
+# Enable js-feature deps on WASM targets so randomness works in browsers.
 # (Same workaround smirk-wasm uses.)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+uuid = { version = "1", default-features = false, features = ["v4", "js"] }
 
 [lints]
 workspace = true

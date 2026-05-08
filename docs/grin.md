@@ -36,7 +36,8 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Schnorr sign/verify (secp256k1, single-signer) | ✅ Done — round-trip self-consistent; byte-equivalence with grin-wallet sigs not yet validated against fixtures |
 | Slate v4 types + JSON round-trip | ✅ Done — parses + re-serializes a real `grin-wallet` fixture without data loss |
 | Pedersen commitments + Bulletproofs (BP) | ✅ Done — vendored `grin_secp256k1zkp` v0.7.15, patched for wasm32; create + verify + rewind round-trip in tests |
-| Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
+| Slate construction — sender init (S1) + blind-arithmetic helpers | ✅ Done — produces valid S1 slate matching upstream `init_send_tx` shape; `blind` module covers scalar sum/add/sub/sender_blind_excess |
+| Slate construction — receiver round (S2) + sender finalize (S3) | ⬜ Not yet started — completes the 3-state interactive ceremony |
 | Slatepack codec — ASCII armor (`BEGINSLATEPACK...ENDSLATEPACK` envelope, base58check, word-wrap) | ✅ Done — verified against a real `grin-wallet` fixture |
 | Slatepack codec — binary `SlatepackBin` payload format (version, mode, sender, payload) | ✅ Done — real `grin-wallet` fixture parses + lossless round-trip |
 | Slatepack codec — age encryption to recipient slatepack address (mode 1) | ✅ Done — encrypt/decrypt round-trip via age::Encryptor; ed25519↔X25519 conversion matches grin-wallet (SHA-512 → first 32 bytes for the secret, Edwards→Montgomery for the pubkey). Empty encrypted_meta block; populating with sender/recipients is a follow-up. |
@@ -88,6 +89,9 @@ Available now in `crates/smirk-wasm/`:
 | `grin_schnorr_final_signature(R_total, aggregate_s)` | `hex` — 64-byte aggregate signature; verify with `grin_schnorr_verify` against `P_total` |
 | `grin_kernel_sig_msg(kind, fee?, lock_height?, relative_height?)` | `hex` — 32-byte BLAKE2b message to Schnorr-sign for a kernel of the given type |
 | `grin_kernel_features_bytes(kind, fee?, lock_height?, relative_height?)` | `hex` — kernel features in v2 wire format (for slate v4 kernel serialization) |
+| `grin_blind_add(a_hex, b_hex)` / `grin_blind_sub` / `grin_blind_sum` | `hex` — secp256k1 scalar arithmetic mod curve order |
+| `grin_sender_blind_excess(input_blinds, sender_output_blinds, kernel_offset)` | `hex` — Σinputs − Σoutputs − offset |
+| `grin_sender_init_s1(slate_id, amount, fee, kernel_kind, lock_height?, relative_height?, sender_blind_excess, kernel_offset, kernel_nonce)` | `JSON: { slate_json, context }` — produces an S1 slate for the receiver and the private context the sender retains for finalize |
 | `grin_slate_round_trip(slate_json)` | `string` — canonicalized JSON if input is a valid v4 slate, throws otherwise |
 | `grin_slate_summary(slate_json)` | `JSON: { id, state, amount, fee, num_participants, num_signed }` for UI display |
 | `grin_pedersen_commit(value, blinding_factor_hex)` | `hex` — 33-byte Pedersen commitment |
