@@ -1,0 +1,50 @@
+# Rust
+target/
+Cargo.lock.*
+*.rs.bk
+
+# WASM build artifacts
+crates/smirk-wasm/pkg/
+**/pkg/
+
+# Node
+node_modules/
+.npm/
+.pnpm-store/
+dist/
+build/
+.parcel-cache/
+.next/
+.turbo/
+
+# TypeScript
+*.tsbuildinfo
+
+# Capacitor
+android/app/build/
+ios/App/build/
+ios/App/Pods/
+ios/DerivedData/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
