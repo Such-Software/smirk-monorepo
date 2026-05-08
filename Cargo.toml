@@ -31,6 +31,11 @@ members = [
   "crates/smirk-wasm",
   "crates/swap-core",
   "crates/grin-ext",
+
+  # Vendored grin_secp256k1zkp v0.7.15 — Grin's fork of rust-secp256k1-zkp
+  # with Bulletproofs / Pedersen / aggsig bindings. Patched for
+  # wasm32-unknown-unknown (see crates/secp256k1zkp/wasm-sysroot/).
+  "crates/secp256k1zkp",
 ]
 
 # Always compile Monero (and a variety of dependencies) with optimizations
