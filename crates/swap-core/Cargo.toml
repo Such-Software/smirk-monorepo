@@ -1,0 +1,21 @@
+[package]
+name = "swap-core"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Adaptor signatures and atomic swap state machine for Smirk wallet (v0.4+)"
+repository = "https://github.com/Such-Software/smirk-monorepo"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# Stub — full deps land when v0.4 work begins.
+# Planned:
+#   - secp256k1 / k256 for Grin/BTC/LTC adaptor sigs
+#   - monero-ed25519 (path) for XMR/WOW ringct adaptor sigs (v0.6)
+#   - serde / serde_json for swap state persistence
+
+[lints]
+workspace = true
