@@ -338,6 +338,86 @@ pub fn grin_slatepack_dearmor(armored: &str) -> Result<String, JsValue> {
     Ok(hex::encode(payload))
 }
 
+// =============================================================================
+// SlatepackBin — binary format inside the armor
+// =============================================================================
+
+/// Wrap an inner payload in a plaintext-mode SlatepackBin (binary structure
+/// inside the armor) and return the binary serialization.
+///
+/// `inner_payload_hex` is the slate or other inner bytes (typically a
+/// binary-serialized SlateV4). `sender` is an optional bech32 slatepack
+/// address (e.g. `grin1abc...`). Pass `null` / empty string for none.
+///
+/// Returns the SlatepackBin binary as hex.
+#[wasm_bindgen]
+pub fn grin_slatepack_bin_encode_plain(
+    inner_payload_hex: &str,
+    sender: Option<String>,
+) -> Result<String, JsValue> {
+    let payload = hex::decode(inner_payload_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid inner_payload_hex: {e}")))?;
+    let sender = sender.filter(|s| !s.is_empty());
+    let sp = grin_ext::SlatepackBin::plain(payload, sender);
+    Ok(hex::encode(sp.to_bytes()))
+}
+
+/// Parse a SlatepackBin binary (the structure that lives inside slatepack
+/// armor) and return its components as JSON.
+///
+/// Returns JSON: `{ "version": "1.0", "mode": "plain" | "encrypted",
+/// "sender": "grin1..." | null, "payload_hex": "..." }`.
+#[wasm_bindgen]
+pub fn grin_slatepack_bin_decode(bin_hex: &str) -> Result<String, JsValue> {
+    let bytes =
+        hex::decode(bin_hex).map_err(|e| JsValue::from_str(&format!("invalid bin_hex: {e}")))?;
+    let sp = grin_ext::SlatepackBin::from_bytes(&bytes).map_err(|e| JsValue::from_str(&e))?;
+
+    let mode_str = match sp.mode {
+        grin_ext::SlatepackMode::Plain => "plain",
+        grin_ext::SlatepackMode::Encrypted => "encrypted",
+    };
+    let sender_field = match &sp.sender {
+        Some(s) => format!(r#""{}""#, s),
+        None => "null".to_string(),
+    };
+
+    let json = format!(
+        r#"{{"version":"{}.{}","mode":"{}","sender":{},"payload_hex":"{}"}}"#,
+        sp.version.major,
+        sp.version.minor,
+        mode_str,
+        sender_field,
+        hex::encode(&sp.payload),
+    );
+    Ok(json)
+}
+
+/// One-call helper: take an inner payload (e.g. a binary slate), wrap it in
+/// a plaintext SlatepackBin, and ASCII-armor the result.
+///
+/// Returns the human-shareable `BEGINSLATEPACK...ENDSLATEPACK` string.
+#[wasm_bindgen]
+pub fn grin_slatepack_pack_plain(
+    inner_payload_hex: &str,
+    sender: Option<String>,
+) -> Result<String, JsValue> {
+    let payload = hex::decode(inner_payload_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid inner_payload_hex: {e}")))?;
+    let sender = sender.filter(|s| !s.is_empty());
+    let sp = grin_ext::SlatepackBin::plain(payload, sender);
+    Ok(grin_ext::slatepack_armor(&sp.to_bytes()))
+}
+
+/// One-call helper: take an armored slatepack string and return JSON with
+/// the parsed inner SlatepackBin fields. Same shape as
+/// `grin_slatepack_bin_decode`.
+#[wasm_bindgen]
+pub fn grin_slatepack_unpack(armored: &str) -> Result<String, JsValue> {
+    let bin_bytes = grin_ext::slatepack_dearmor(armored).map_err(|e| JsValue::from_str(&e))?;
+    grin_slatepack_bin_decode(&hex::encode(bin_bytes))
+}
+
 /// grin-ext crate version. Useful for runtime version sanity checks.
 #[wasm_bindgen]
 pub fn grin_ext_version() -> String {
