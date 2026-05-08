@@ -1,0 +1,28 @@
+[package]
+name = "grin-ext"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Smirk's Grin / Mimblewimble protocol implementation — slate construction, slatepack codec, NRD kernels, atomic-swap adaptor sigs."
+repository = "https://github.com/Such-Software/smirk-monorepo"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# BIP39 mnemonic ↔ raw entropy (no network, no I/O)
+bip39 = { version = "2.1", default-features = false, features = ["zeroize"] }
+
+# HMAC-SHA512 for the "IamVoldemort" key derivation (matches grin-wallet/Grim)
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+# Hex encoding for ergonomic test fixtures
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+
+# Zeroize secrets
+zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
+
+[lints]
+workspace = true

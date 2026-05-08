@@ -30,6 +30,7 @@ members = [
   # Smirk client crates
   "crates/smirk-wasm",
   "crates/swap-core",
+  "crates/grin-ext",
 ]
 
 # Always compile Monero (and a variety of dependencies) with optimizations
