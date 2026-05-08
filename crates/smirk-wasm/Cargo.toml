@@ -13,12 +13,14 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 
-# Use local monero-oxide for transaction construction
-monero-oxide = { path = "../monero-oxide/monero-oxide", default-features = false }
-monero-wallet = { path = "../monero-oxide/monero-oxide/wallet", default-features = false }
-monero-base58 = { path = "../monero-oxide/monero-oxide/wallet/base58", default-features = false }
-monero-ed25519 = { path = "../monero-oxide/monero-oxide/ed25519", default-features = false }
-monero-io = { path = "../monero-oxide/monero-oxide/io", default-features = false }
+# Vendored monero-oxide fork (Monero + Wownero transaction library).
+# Package names on crates.io are wownero-*, library names stay monero_*.
+# Rust code below uses `use monero_oxide::...` because [lib] name is preserved.
+wownero-oxide = { path = "../monero-oxide/monero-oxide", default-features = false }
+wownero-wallet = { path = "../monero-oxide/monero-oxide/wallet", default-features = false }
+wownero-base58 = { path = "../monero-oxide/monero-oxide/wallet/base58", default-features = false }
+wownero-ed25519 = { path = "../monero-oxide/monero-oxide/ed25519", default-features = false }
+wownero-io = { path = "../monero-oxide/monero-oxide/io", default-features = false }
 subtle = { version = "2.6.1", default-features = false }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }
 # Use same rand_core version as monero-oxide
@@ -26,6 +28,5 @@ rand_core = { version = "0.6", default-features = false, features = ["getrandom"
 # Enable js feature for getrandom on wasm targets
 getrandom = { version = "0.2", features = ["js"] }
 
-[profile.release]
-opt-level = "s"
-lto = true
+# Profile config moved to workspace root (Cargo warns about non-root profiles).
+# WASM-specific opt settings inherited via [profile.release] in root Cargo.toml.
