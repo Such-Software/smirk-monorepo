@@ -26,7 +26,17 @@ fn main() {
     base_config.include("depend/secp256k1-zkp/")
                .include("depend/secp256k1-zkp/include")
                .include("depend/secp256k1-zkp/src")
-               .flag("-g")
+               .flag("-g");
+
+    // wasm32-unknown-unknown has no libc; our minimal wasm-sysroot/ provides
+    // forward declarations of the libc symbols the C code uses. Memcpy /
+    // memset / abort / etc. resolve to LLVM compiler-rt builtins at link
+    // time. See crates/secp256k1zkp/wasm-sysroot/README.md.
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        base_config.include("wasm-sysroot");
+    }
+
+    base_config
                // TODO these three should be changed to use libgmp, at least until secp PR 290 is merged
                .define("USE_NUM_NONE", Some("1"))
                .define("USE_FIELD_INV_BUILTIN", Some("1"))

@@ -13,7 +13,10 @@
 
 //! # Aggregated Signature (a.k.a. Schnorr) Functionality
 
-use libc::size_t;
+// Smirk patch: alias size_t locally so the crate builds on
+// wasm32-unknown-unknown where libc::size_t isn't exported.
+#[allow(non_camel_case_types)]
+type size_t = usize;
 use crate::ffi;
 use crate::key::{PublicKey, SecretKey};
 use rand::{thread_rng, Rng};

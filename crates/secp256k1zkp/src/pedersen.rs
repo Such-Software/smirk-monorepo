@@ -16,7 +16,10 @@
 
 //! # Pedersen commitments and related range proofs
 
-use libc::size_t;
+// Smirk patch: alias size_t locally so the crate builds on
+// wasm32-unknown-unknown where libc::size_t isn't exported.
+#[allow(non_camel_case_types)]
+type size_t = usize;
 use std::cmp::min;
 use std::fmt;
 use std::mem;

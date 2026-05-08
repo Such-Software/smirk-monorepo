@@ -48,7 +48,10 @@ pub extern crate rand;
 
 extern crate zeroize;
 
-use libc::size_t;
+// Smirk patch: alias size_t locally so the crate builds on
+// wasm32-unknown-unknown where libc::size_t isn't exported.
+#[allow(non_camel_case_types)]
+type size_t = usize;
 use std::{fmt, ops, ptr};
 use rand::Rng;
 
@@ -117,7 +120,7 @@ impl Signature {
 
         unsafe {
             if ffi::secp256k1_ecdsa_signature_parse_der(secp.ctx, &mut ret,
-                                                        data.as_ptr(), data.len() as libc::size_t) == 1 {
+                                                        data.as_ptr(), data.len() as usize) == 1 {
                 Ok(Signature(ret))
             } else {
                 Err(Error::InvalidSignature)
@@ -155,7 +158,7 @@ impl Signature {
         unsafe {
             let mut ret = ffi::Signature::blank();
             if ffi::ecdsa_signature_parse_der_lax(secp.ctx, &mut ret,
-                                                  data.as_ptr(), data.len() as libc::size_t) == 1 {
+                                                  data.as_ptr(), data.len() as usize) == 1 {
                 Ok(Signature(ret))
             } else {
                 Err(Error::InvalidSignature)

@@ -18,7 +18,13 @@
 //! not be needed for most users.
 use std::mem;
 
-use libc::{c_int, c_uchar, c_uint, c_void, size_t};
+// Smirk patch (wasm32 compatibility): pull C type aliases from core::ffi
+// instead of libc — the libc crate doesn't export these on
+// wasm32-unknown-unknown. core::ffi has been stable since Rust 1.64.
+// `size_t` is `usize` on all targets Rust supports, so we alias it locally.
+use core::ffi::{c_int, c_uchar, c_uint, c_void};
+#[allow(non_camel_case_types)]
+type size_t = usize;
 
 /// Flag for context to enable no precomputation
 pub const SECP256K1_START_NONE: c_uint = (1 << 0) | 0;
