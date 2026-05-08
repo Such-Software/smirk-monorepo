@@ -32,7 +32,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | `mnemonic_to_extended_private_key()` (HMAC-SHA512(`"IamVoldemort"`, raw_entropy)) | ✅ Done — matches `grin-wallet` / Grim derivation |
 | `public_key_from_secret_key()` (compressed secp256k1, via `k256` crate) | ✅ Done — independently verified against Node's `crypto` |
 | BIP32 CKDpriv child key derivation (hardened + non-hardened) | ✅ Done |
-| Slatepack address derivation (`m/0/1/0` → BLAKE2b → ed25519 → bech32) | ✅ Done — needs cross-check against grin-wallet GUI for one mnemonic before considered verified |
+| Slatepack address derivation (`m/0/1/0` → BLAKE2b → ed25519 → bech32) | ✅ Done — verified against Grim GUI for the standard zero-entropy BIP39 test mnemonic |
 | Schnorr sign/verify (secp256k1) | ⬜ Not yet started |
 | Slate v4 types + JSON round-trip | ⬜ Not yet started |
 | Pedersen commitments + BP+ | ⬜ Not yet started |
