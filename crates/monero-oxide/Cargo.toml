@@ -1,0 +1,105 @@
+[workspace]
+resolver = "2"
+members = [
+  "monero-oxide/io",
+  "monero-oxide/ed25519",
+  "monero-oxide/primitives",
+  "monero-oxide/ringct/mlsag",
+  "monero-oxide/ringct/clsag",
+  "monero-oxide/ringct/borromean",
+  "monero-oxide/ringct/bulletproofs/generators",
+  "monero-oxide/ringct/bulletproofs",
+  "monero-oxide",
+
+  "monero-oxide/wallet/base58",
+  "monero-oxide/wallet/address",
+
+  "monero-oxide/epee",
+
+  "monero-oxide/interface",
+  "monero-oxide/interface/daemon",
+  "monero-oxide/interface/daemon/simple-request",
+
+  "monero-oxide/wallet",
+
+  "tests/no-std",
+  "tests/verify-chain",
+]
+
+# Always compile Monero (and a variety of dependencies) with optimizations
+[profile.dev.package]
+subtle = { opt-level = 3 }
+curve25519-dalek = { opt-level = 3 }
+
+ff = { opt-level = 3 }
+group = { opt-level = 3 }
+
+crypto-bigint = { opt-level = 3 }
+dalek-ff-group = { opt-level = 3 }
+
+multiexp = { opt-level = 3 }
+
+wownero-io = { opt-level = 3 }
+wownero-primitives = { opt-level = 3 }
+wownero-ed25519 = { opt-level = 3 }
+wownero-mlsag = { opt-level = 3 }
+wownero-clsag = { opt-level = 3 }
+wownero-borromean = { opt-level = 3 }
+wownero-bulletproofs-generators = { opt-level = 3 }
+wownero-bulletproofs = {opt-level = 3 }
+wownero-oxide = { opt-level = 3 }
+
+[profile.release]
+panic = "unwind"
+overflow-checks = true
+
+[workspace.lints.clippy]
+incompatible_msrv = "allow" # Manually checked with a GitHub workflow
+unwrap_or_default = "allow"
+borrow_as_ptr = "deny"
+cast_lossless = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+cast_ptr_alignment = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+cloned_instead_of_copied = "deny"
+enum_glob_use = "deny"
+expl_impl_clone_on_copy = "deny"
+explicit_into_iter_loop = "deny"
+explicit_iter_loop = "deny"
+flat_map_option = "deny"
+float_cmp = "deny"
+fn_params_excessive_bools = "deny"
+ignored_unit_patterns = "deny"
+implicit_clone = "deny"
+inefficient_to_string = "deny"
+invalid_upcast_comparisons = "deny"
+large_stack_arrays = "deny"
+linkedlist = "deny"
+macro_use_imports = "deny"
+manual_instant_elapsed = "deny"
+manual_let_else = "deny"
+manual_ok_or = "deny"
+manual_string_new = "deny"
+map_unwrap_or = "deny"
+match_bool = "deny"
+match_same_arms = "deny"
+missing_fields_in_debug = "deny"
+needless_pass_by_value = "deny"
+ptr_cast_constness = "deny"
+range_minus_one = "deny"
+range_plus_one = "deny"
+redundant_closure_for_method_calls = "deny"
+redundant_else = "deny"
+string_add_assign = "deny"
+unchecked_duration_subtraction = "deny"
+uninlined_format_args = "deny"
+unnecessary_box_returns = "deny"
+unnecessary_join = "deny"
+unnecessary_wraps = "deny"
+unnested_or_patterns = "deny"
+unused_async = "deny"
+unused_self = "deny"
+zero_sized_map_values = "deny"
