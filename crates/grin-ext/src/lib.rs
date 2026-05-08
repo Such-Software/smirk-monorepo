@@ -15,6 +15,7 @@ pub mod bip32;
 pub mod blind;
 pub mod bulletproof;
 pub mod kernel;
+pub mod payment_proof;
 pub mod schnorr;
 pub mod secp256k1;
 pub mod seed;
@@ -58,7 +59,10 @@ pub use slatepack_encryption::{
     decrypt_with_secret, ed25519_pub_to_age_recipient, ed25519_secret_to_age_identity,
     encrypt_to_recipient, pack_encrypted, unpack_encrypted,
 };
-pub use slatepack_address::{slatepack_address, Network};
+pub use payment_proof::{
+    payment_proof_message, sign_payment_proof, verify_payment_proof, PROOF_MSG_LEN, PROOF_SIG_LEN,
+};
+pub use slatepack_address::{slatepack_address, slatepack_address_ed25519_secret, Network};
 
 /// Crate version, exposed for runtime debugging.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

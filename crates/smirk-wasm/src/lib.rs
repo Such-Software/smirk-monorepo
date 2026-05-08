@@ -52,12 +52,12 @@ pub use grin::{
     grin_pubkey_to_commitment, grin_receiver_finalize_i3, grin_receiver_init_i1,
     grin_receiver_round_s2, grin_schnorr_sign, grin_schnorr_verify, grin_secp256k1_public_key,
     grin_sender_blind_excess, grin_sender_finalize_s3, grin_sender_init_s1, grin_sender_round_i2,
-    grin_slate_round_trip, grin_slate_summary, grin_slate_to_transaction_bytes,
-    grin_slatepack_address,
+    grin_sign_payment_proof, grin_slate_round_trip, grin_slate_summary,
+    grin_slate_to_transaction_bytes, grin_slatepack_address, grin_slatepack_address_secret,
     grin_slatepack_armor, grin_slatepack_bin_decode, grin_slatepack_bin_encode_plain,
     grin_slatepack_dearmor, grin_slatepack_decrypt, grin_slatepack_encrypt,
     grin_slatepack_pack_encrypted, grin_slatepack_pack_plain, grin_slatepack_unpack,
-    grin_slatepack_unpack_with_secret,
+    grin_slatepack_unpack_with_secret, grin_verify_payment_proof,
 };
 pub use keys::derive_key_image;
 pub use signing::{compute_key_image, derive_output_key_image, estimate_fee, sign_transaction};

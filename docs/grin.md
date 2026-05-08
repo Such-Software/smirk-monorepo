@@ -40,6 +40,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slate construction — receiver round (S2): output Pedersen commit + Bulletproof + receiver partial sig | ✅ Done — partial self-verifies before slate goes back to sender |
 | Slate construction — sender finalize (S3): aggregate partials + verify final kernel signature | ✅ Done — full S1→S2→S3 ceremony tested end-to-end including NRD kernels |
 | Slate construction — invoice flow (I1/I2/I3): receiver-initiated transactions for "pay this invoice" UX | ✅ Done — receiver_init_i1 / sender_round_i2 / receiver_finalize_i3, full ceremony tested end-to-end |
+| Payment proofs — receiver's ed25519-signed receipt over `(amount, kernel_commitment, sender_address)` | ✅ Done — sign + verify, message format matches `grin-wallet/libwallet/src/internal/tx.rs::payment_proof_message`. Useful for dispute resolution, audit trails, escrow, merchant flows |
 | Transaction wire-format assembly | ✅ Done — `slate_to_transaction_bytes()` converts a finalized S3 slate + sender's local UTXOs/change + aggregated kernel sig into the binary TX bytes Grin daemons accept on `push_transaction`. Single-kernel transactions (every standard send + invoice flow). |
 | Slatepack codec — ASCII armor (`BEGINSLATEPACK...ENDSLATEPACK` envelope, base58check, word-wrap) | ✅ Done — verified against a real `grin-wallet` fixture |
 | Slatepack codec — binary `SlatepackBin` payload format (version, mode, sender, payload) | ✅ Done — real `grin-wallet` fixture parses + lossless round-trip |
@@ -106,6 +107,9 @@ Available now in `crates/smirk-wasm/`:
 | `grin_receiver_init_i1(slate_id, amount, fee, kernel_kind, ...)` | `JSON: { slate_json, context }` — invoice-flow receiver init (I1) |
 | `grin_sender_round_i2(i1_slate_json, sender_blind_excess, sender_kernel_nonce)` | `JSON: { slate_json, context }` — sender's response to an invoice (I2) |
 | `grin_receiver_finalize_i3(i2_slate_json, ...receiver_context_fields)` | `JSON: { slate_json, final_signature_hex }` — receiver's finalize (I3) |
+| `grin_slatepack_address_secret(mnemonic, index)` | `hex` — 32-byte ed25519 secret seed for the slatepack address; pairs with `grin_slatepack_address`. Sign payment proofs with this. |
+| `grin_sign_payment_proof(amount, kernel_commitment, sender_address, receiver_secret)` | `hex` — 64-byte ed25519 signature attesting receipt of `amount` to `kernel_commitment` from `sender_address` |
+| `grin_verify_payment_proof(amount, kernel_commitment, sender_address, receiver_address, signature)` | `bool` — verifies the receiver's ed25519 attestation |
 | `grin_slate_round_trip(slate_json)` | `string` — canonicalized JSON if input is a valid v4 slate, throws otherwise |
 | `grin_slate_summary(slate_json)` | `JSON: { id, state, amount, fee, num_participants, num_signed }` for UI display |
 | `grin_pedersen_commit(value, blinding_factor_hex)` | `hex` — 33-byte Pedersen commitment |

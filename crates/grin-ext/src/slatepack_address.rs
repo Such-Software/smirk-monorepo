@@ -52,6 +52,32 @@ impl Network {
     }
 }
 
+/// Derive the receiver's slatepack-address ed25519 secret seed for the
+/// given mnemonic and index. This is the value that pairs with the
+/// public address `slatepack_address` returns, and the key used to sign
+/// payment proofs.
+///
+/// Production wallets should be careful with this output — it's a
+/// long-lived secret. Treat it like the user's seed.
+pub fn slatepack_address_ed25519_secret(
+    mnemonic: &str,
+    index: u32,
+) -> Result<[u8; 32], String> {
+    // Same chain as `slatepack_address`, just stops at the ed25519 secret
+    // instead of going on to bech32-encode the public key.
+    let xkey = crate::seed::mnemonic_to_extended_private_key(mnemonic)?;
+    let path = [0u32, 1u32, index];
+    let secret_key = crate::bip32::derive_path(&xkey.0, &path)?;
+
+    let mut hasher = Blake2bVar::new(32).map_err(|e| format!("blake2b init: {e}"))?;
+    hasher.update(&secret_key);
+    let mut hashed = [0u8; 32];
+    hasher
+        .finalize_variable(&mut hashed)
+        .map_err(|e| format!("blake2b finalize: {e}"))?;
+    Ok(hashed)
+}
+
 /// Derive the slatepack address for the given mnemonic and index, on the
 /// given network.
 ///

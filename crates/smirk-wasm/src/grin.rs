@@ -461,6 +461,76 @@ pub fn grin_sender_init_s1(
 }
 
 // =============================================================================
+// Payment proofs (slate `proof` field)
+// =============================================================================
+
+/// Derive the receiver's slatepack-address ed25519 secret seed from a
+/// mnemonic. Used for signing payment proofs (and any other protocol
+/// where the receiver's address-key signs).
+///
+/// The derived 32-byte secret is the long-lived ed25519 seed that pairs
+/// with `grin_slatepack_address(mnemonic, index, ...)`.
+#[wasm_bindgen]
+pub fn grin_slatepack_address_secret(mnemonic: &str, index: u32) -> Result<String, JsValue> {
+    let secret = grin_ext::slatepack_address_ed25519_secret(mnemonic, index)
+        .map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(secret))
+}
+
+/// Sign a Grin payment proof. Returns the 64-byte ed25519 signature.
+///
+/// `kernel_commitment_hex` is the 33-byte kernel excess commitment from
+/// the finalized transaction. `sender_address_hex` is the sender's
+/// slatepack-address 32-byte ed25519 pubkey (decoded from bech32).
+/// `receiver_secret_hex` is the receiver's ed25519 secret seed.
+#[wasm_bindgen]
+pub fn grin_sign_payment_proof(
+    amount: u64,
+    kernel_commitment_hex: &str,
+    sender_address_hex: &str,
+    receiver_secret_hex: &str,
+) -> Result<String, JsValue> {
+    let mut commit = [0u8; 33];
+    hex::decode_to_slice(kernel_commitment_hex, &mut commit)
+        .map_err(|e| JsValue::from_str(&format!("invalid kernel_commitment_hex: {e}")))?;
+    let mut sender = [0u8; 32];
+    hex::decode_to_slice(sender_address_hex, &mut sender)
+        .map_err(|e| JsValue::from_str(&format!("invalid sender_address_hex: {e}")))?;
+    let mut secret = [0u8; 32];
+    hex::decode_to_slice(receiver_secret_hex, &mut secret)
+        .map_err(|e| JsValue::from_str(&format!("invalid receiver_secret_hex: {e}")))?;
+    let sig = grin_ext::sign_payment_proof(amount, &commit, &sender, &secret);
+    Ok(hex::encode(sig))
+}
+
+/// Verify a Grin payment proof. Returns true if the receiver's ed25519
+/// signature attests to the given (amount, kernel commitment, sender
+/// address) tuple.
+#[wasm_bindgen]
+pub fn grin_verify_payment_proof(
+    amount: u64,
+    kernel_commitment_hex: &str,
+    sender_address_hex: &str,
+    receiver_address_hex: &str,
+    signature_hex: &str,
+) -> Result<bool, JsValue> {
+    let mut commit = [0u8; 33];
+    hex::decode_to_slice(kernel_commitment_hex, &mut commit)
+        .map_err(|e| JsValue::from_str(&format!("invalid kernel_commitment_hex: {e}")))?;
+    let mut sender = [0u8; 32];
+    hex::decode_to_slice(sender_address_hex, &mut sender)
+        .map_err(|e| JsValue::from_str(&format!("invalid sender_address_hex: {e}")))?;
+    let mut receiver = [0u8; 32];
+    hex::decode_to_slice(receiver_address_hex, &mut receiver)
+        .map_err(|e| JsValue::from_str(&format!("invalid receiver_address_hex: {e}")))?;
+    let mut sig = [0u8; 64];
+    hex::decode_to_slice(signature_hex, &mut sig)
+        .map_err(|e| JsValue::from_str(&format!("invalid signature_hex: {e}")))?;
+    grin_ext::verify_payment_proof(amount, &commit, &sender, &receiver, &sig)
+        .map_err(|e| JsValue::from_str(&e))
+}
+
+// =============================================================================
 // Slate construction — invoice flow (I1 → I2 → I3)
 // =============================================================================
 
