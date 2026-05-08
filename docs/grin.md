@@ -30,8 +30,9 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Surface | Status |
 |---|---|
 | `mnemonic_to_extended_private_key()` (HMAC-SHA512(`"IamVoldemort"`, raw_entropy)) | ✅ Done — matches `grin-wallet` / Grim derivation |
+| `public_key_from_secret_key()` (compressed secp256k1, via `k256` crate) | ✅ Done — independently verified against Node's `crypto` |
 | Slatepack address derivation (ed25519 + bech32) | 🚧 In flight |
-| secp256k1 helpers (pubkey, Schnorr sign/verify) | 🚧 In flight |
+| Schnorr sign/verify (secp256k1) | 🚧 In flight |
 | Slate v4 types + JSON round-trip | ⬜ Not yet started |
 | Pedersen commitments + BP+ | ⬜ Not yet started |
 | Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
@@ -70,6 +71,8 @@ Available now in `crates/smirk-wasm/`:
 | Function | Returns |
 |---|---|
 | `grin_derive_extended_key(mnemonic)` | `JSON: { extended_private_key_hex, secret_key_hex, chain_code_hex }` |
+| `grin_secp256k1_public_key(secret_key_hex)` | `hex` — 33-byte compressed pubkey |
+| `grin_derive_keys(mnemonic)` | `JSON: { extended_private_key_hex, secret_key_hex, chain_code_hex, public_key_hex }` (convenience) |
 | `grin_ext_version()` | grin-ext crate version string, for runtime version checks |
 
 More exports land as the underlying `crates/grin-ext/` surface grows.

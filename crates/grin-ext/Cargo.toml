@@ -18,6 +18,11 @@ bip39 = { version = "2.1", default-features = false, features = ["zeroize"] }
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 
+# secp256k1 — pure-Rust implementation. Used for Schnorr signing on inputs/
+# outputs/kernels and for deriving public keys from secret keys.
+# Pure Rust (no FFI) so it compiles cleanly to wasm32 with no extra setup.
+k256 = { version = "0.13", default-features = false, features = ["alloc", "arithmetic", "ecdsa"] }
+
 # Hex encoding for ergonomic test fixtures
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 

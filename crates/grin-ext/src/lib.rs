@@ -11,8 +11,10 @@
 //! vectors. See `tests/` for the test suite and `docs/GRIN_TEST_VECTORS.md`
 //! (in smirk-backend) for the methodology.
 
+pub mod secp256k1;
 pub mod seed;
 
+pub use secp256k1::public_key_from_secret_key;
 pub use seed::{mnemonic_to_extended_private_key, ExtendedPrivateKey};
 
 /// Crate version, exposed for runtime debugging.
