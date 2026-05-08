@@ -35,7 +35,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slatepack address derivation (`m/0/1/0` → BLAKE2b → ed25519 → bech32) | ✅ Done — verified against Grim GUI for the standard zero-entropy BIP39 test mnemonic |
 | Schnorr sign/verify (secp256k1, single-signer) | ✅ Done — round-trip self-consistent; byte-equivalence with grin-wallet sigs not yet validated against fixtures |
 | Slate v4 types + JSON round-trip | ✅ Done — parses + re-serializes a real `grin-wallet` fixture without data loss |
-| Pedersen commitments + Bulletproofs (BP) | 🔬 Path chosen (`secp256k1-zkp` Rust crate via FFI to libsecp256k1-zkp), implementation pending |
+| Pedersen commitments + Bulletproofs (BP) | ✅ Done — vendored `grin_secp256k1zkp` v0.7.15, patched for wasm32; create + verify + rewind round-trip in tests |
 | Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
 | Slatepack codec (age encryption + ASCII armor) | ⬜ Not yet started |
 | NRD kernel construction | ⬜ Not yet started |
@@ -80,39 +80,55 @@ Available now in `crates/smirk-wasm/`:
 | `grin_schnorr_verify(signature_hex, message_hex, public_key_hex)` | `bool` — true if signature is valid |
 | `grin_slate_round_trip(slate_json)` | `string` — canonicalized JSON if input is a valid v4 slate, throws otherwise |
 | `grin_slate_summary(slate_json)` | `JSON: { id, state, amount, fee, num_participants, num_signed }` for UI display |
+| `grin_pedersen_commit(value, blinding_factor_hex)` | `hex` — 33-byte Pedersen commitment |
+| `grin_bullet_proof_create(value, blinding_factor_hex, rewind_nonce_hex, private_nonce_hex)` | `hex` — variable-length BP range proof |
+| `grin_bullet_proof_verify(commit_hex, proof_hex)` | `bool` — true if BP is valid for the commitment |
+| `grin_bullet_proof_rewind(commit_hex, rewind_nonce_hex, proof_hex)` | `JSON: { value, blinding_factor_hex }` or `null` if rewind nonce doesn't match |
 | `grin_ext_version()` | grin-ext crate version string, for runtime version checks |
 
 More exports land as the underlying `crates/grin-ext/` surface grows.
 
-## Bulletproofs (BP) implementation path
+## Bulletproofs (BP) — implemented via vendored secp256k1zkp
 
 **Grin uses the original Bulletproofs (BP), not BP+.** Confirmed in
 `grin/core/src/libtx/proof.rs`, which calls `secp.bullet_proof(...)` /
 `secp.verify_bullet_proof(...)` — wrappers over `secp256k1_bulletproof_*`
 in the C library. BP+ was discussed for Grin but never adopted.
 
-The chosen path is the `secp256k1-zkp` Rust crate (v0.11+), which wraps
-the canonical libsecp256k1-zkp C library:
+The implementation lives at `crates/secp256k1zkp/` — a vendored copy
+of `grin_secp256k1zkp` v0.7.15 (Grin's fork of `rust-secp256k1-zkp`).
+Upstream `secp256k1-zkp` 0.11 only binds the legacy Borromean range
+proof API; Grin's fork adds bindings for `bullet_proof` /
+`verify_bullet_proof` / `rewind_bullet_proof`, which is what we need.
 
-- The crate's `RangeProof::new` / `verify` / `rewind` are exactly the
-  BP functions Grin uses (the `rewind` API to recover amount + message
-  is a BP-only feature; its presence confirms the binding is BP, not BP+).
-- Cross-compiles cleanly to `wasm32-unknown-unknown` (verified via spike —
-  `cc-rs` cross-compiles the underlying C to wasm32 with no extra setup).
-- Byte-equivalent to `grin-wallet` by construction (same C library).
-- Side benefit: gives us `aggsig` for Schnorr signatures too — a future
-  optimization is swapping our pure-Rust Schnorr for the exact Grin
-  byte format if that interop matters.
+### What we patched for wasm32
 
-Implementation effort: ~1 day to add the dep, write a thin Rust wrapper
-exposing `RangeProof::new(commit, value, blind, ...)` and `verify`,
-add WASM exports, write round-trip tests against fixture proofs from
-real grin-wallet outputs.
+The vendored crate didn't compile to `wasm32-unknown-unknown` out of
+the box (it predates browser-WASM as a target). Three changes:
 
-**Earlier doc revisions in this repo incorrectly described Grin as
-using BP+** — that was wrong. Slate types still treat the rangeproof as
-opaque hex bytes, which remains correct and unblocks all surfaces that
-don't depend on producing or verifying valid range proofs.
+1. **`wasm-sysroot/`** — minimal libc forward-declaration headers
+   (`string.h`, `stdlib.h`, `stdio.h`) so clang's wasm32 frontend can
+   compile the C source. Memcpy/memset/memcmp resolve to LLVM
+   compiler-rt builtins at link time. Pattern borrowed from upstream
+   `secp256k1-zkp-sys`. See `crates/secp256k1zkp/wasm-sysroot/README.md`.
+2. **`build.rs`** — added `base_config.include("wasm-sysroot")` when
+   `CARGO_CFG_TARGET_ARCH == "wasm32"`.
+3. **Rust source** — replaced `libc::size_t` (not exported on
+   wasm32-unknown-unknown by the `libc` crate) with a local
+   `type size_t = usize;` alias in the four files that used it
+   (`ffi.rs`, `lib.rs`, `aggsig.rs`, `pedersen.rs`). `libc::c_int`,
+   `libc::c_uchar`, `libc::c_uint`, `libc::c_void` swapped to
+   `core::ffi::*` (stable since Rust 1.64).
+
+All patches are localized and labeled with `// Smirk patch:` comments
+so future `git subtree pull` from upstream can re-apply cleanly.
+
+### Side benefit
+
+The vendored crate also exposes `aggsig` (Grin's Schnorr) and `ecdh`
+beyond what we currently use. If we ever want byte-equivalent Schnorr
+sigs with `grin-wallet` (instead of our pure-Rust k256 implementation),
+the binding is right there.
 
 ## Reference
 
