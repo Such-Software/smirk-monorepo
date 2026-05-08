@@ -461,6 +461,166 @@ pub fn grin_sender_init_s1(
 }
 
 // =============================================================================
+// Slate construction — invoice flow (I1 → I2 → I3)
+// =============================================================================
+
+/// Receiver-init for an invoice flow: receiver creates the slate first.
+#[wasm_bindgen]
+pub fn grin_receiver_init_i1(
+    slate_id: &str,
+    amount: u64,
+    fee: u64,
+    kernel_kind: &str,
+    lock_height: Option<u64>,
+    relative_height: Option<u32>,
+    receiver_output_blind_hex: &str,
+    receiver_kernel_nonce_hex: &str,
+    bp_rewind_nonce_hex: &str,
+    bp_private_nonce_hex: &str,
+    kernel_offset_hex: &str,
+) -> Result<String, JsValue> {
+    let kernel_features =
+        build_kernel_features(kernel_kind, Some(fee), lock_height, relative_height)?;
+
+    let mut output_blind = [0u8; 32];
+    hex::decode_to_slice(receiver_output_blind_hex, &mut output_blind)
+        .map_err(|e| JsValue::from_str(&format!("invalid receiver_output_blind_hex: {e}")))?;
+    let mut kernel_nonce = [0u8; 32];
+    hex::decode_to_slice(receiver_kernel_nonce_hex, &mut kernel_nonce)
+        .map_err(|e| JsValue::from_str(&format!("invalid receiver_kernel_nonce_hex: {e}")))?;
+    let mut rewind = [0u8; 32];
+    hex::decode_to_slice(bp_rewind_nonce_hex, &mut rewind)
+        .map_err(|e| JsValue::from_str(&format!("invalid bp_rewind_nonce_hex: {e}")))?;
+    let mut priv_nonce = [0u8; 32];
+    hex::decode_to_slice(bp_private_nonce_hex, &mut priv_nonce)
+        .map_err(|e| JsValue::from_str(&format!("invalid bp_private_nonce_hex: {e}")))?;
+    let mut offset = [0u8; 32];
+    hex::decode_to_slice(kernel_offset_hex, &mut offset)
+        .map_err(|e| JsValue::from_str(&format!("invalid kernel_offset_hex: {e}")))?;
+
+    let out = grin_ext::receiver_init_i1_with_id(
+        &grin_ext::ReceiverInitI1Params {
+            amount,
+            fee,
+            kernel_features,
+            receiver_output_blind: output_blind,
+            receiver_kernel_nonce: kernel_nonce,
+            bp_rewind_nonce: rewind,
+            bp_private_nonce: priv_nonce,
+            kernel_offset: offset,
+        },
+        slate_id.to_string(),
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+
+    let slate_json =
+        grin_ext::slate::serialize_slate_v4(&out.slate).map_err(|e| JsValue::from_str(&e))?;
+    let slate_json_escaped = slate_json.replace('\\', r"\\").replace('"', r#"\""#);
+
+    Ok(format!(
+        r#"{{"slate_json":"{}","context":{{"slate_id":"{}","amount":"{}","output_blind_hex":"{}","kernel_nonce_hex":"{}","commitment_hex":"{}","rewind_nonce_hex":"{}"}}}}"#,
+        slate_json_escaped,
+        out.context.slate_id,
+        out.context.amount,
+        hex::encode(out.context.output_blind),
+        hex::encode(out.context.kernel_nonce),
+        hex::encode(out.context.commitment),
+        hex::encode(out.context.rewind_nonce),
+    ))
+}
+
+/// Sender's response to an invoice (I2): adds inputs/change context + their
+/// partial signature.
+#[wasm_bindgen]
+pub fn grin_sender_round_i2(
+    i1_slate_json: &str,
+    sender_blind_excess_hex: &str,
+    sender_kernel_nonce_hex: &str,
+) -> Result<String, JsValue> {
+    let i1 = grin_ext::slate::parse_slate_v4(i1_slate_json).map_err(|e| JsValue::from_str(&e))?;
+    let mut excess = [0u8; 32];
+    hex::decode_to_slice(sender_blind_excess_hex, &mut excess)
+        .map_err(|e| JsValue::from_str(&format!("invalid sender_blind_excess_hex: {e}")))?;
+    let mut nonce = [0u8; 32];
+    hex::decode_to_slice(sender_kernel_nonce_hex, &mut nonce)
+        .map_err(|e| JsValue::from_str(&format!("invalid sender_kernel_nonce_hex: {e}")))?;
+
+    let out = grin_ext::sender_round_i2(&grin_ext::SenderRoundI2Params {
+        i1_slate: i1,
+        sender_blind_excess: excess,
+        sender_kernel_nonce: nonce,
+    })
+    .map_err(|e| JsValue::from_str(&e))?;
+
+    let slate_json =
+        grin_ext::slate::serialize_slate_v4(&out.slate).map_err(|e| JsValue::from_str(&e))?;
+    let slate_json_escaped = slate_json.replace('\\', r"\\").replace('"', r#"\""#);
+
+    Ok(format!(
+        r#"{{"slate_json":"{}","context":{{"slate_id":"{}","amount":"{}","fee":"{}","sender_blind_excess_hex":"{}","kernel_offset_hex":"{}","kernel_nonce_hex":"{}"}}}}"#,
+        slate_json_escaped,
+        out.context.slate_id,
+        out.context.amount,
+        out.context.fee,
+        hex::encode(out.context.sender_blind_excess),
+        hex::encode(out.context.kernel_offset),
+        hex::encode(out.context.kernel_nonce),
+    ))
+}
+
+/// Receiver finalize for invoice flow (I3): aggregate partials + verify
+/// the final kernel signature.
+#[wasm_bindgen]
+pub fn grin_receiver_finalize_i3(
+    i2_slate_json: &str,
+    context_slate_id: &str,
+    context_amount: u64,
+    context_output_blind_hex: &str,
+    context_kernel_nonce_hex: &str,
+    context_commitment_hex: &str,
+    context_rewind_nonce_hex: &str,
+) -> Result<String, JsValue> {
+    let i2 = grin_ext::slate::parse_slate_v4(i2_slate_json).map_err(|e| JsValue::from_str(&e))?;
+    let mut output_blind = [0u8; 32];
+    hex::decode_to_slice(context_output_blind_hex, &mut output_blind)
+        .map_err(|e| JsValue::from_str(&format!("invalid output_blind_hex: {e}")))?;
+    let mut kernel_nonce = [0u8; 32];
+    hex::decode_to_slice(context_kernel_nonce_hex, &mut kernel_nonce)
+        .map_err(|e| JsValue::from_str(&format!("invalid kernel_nonce_hex: {e}")))?;
+    let mut commit = [0u8; 33];
+    hex::decode_to_slice(context_commitment_hex, &mut commit)
+        .map_err(|e| JsValue::from_str(&format!("invalid commitment_hex: {e}")))?;
+    let mut rewind = [0u8; 32];
+    hex::decode_to_slice(context_rewind_nonce_hex, &mut rewind)
+        .map_err(|e| JsValue::from_str(&format!("invalid rewind_nonce_hex: {e}")))?;
+
+    let context = grin_ext::ReceiverContext {
+        slate_id: context_slate_id.to_string(),
+        amount: context_amount,
+        output_blind,
+        kernel_nonce,
+        commitment: commit,
+        rewind_nonce: rewind,
+    };
+
+    let out = grin_ext::receiver_finalize_i3(&grin_ext::ReceiverFinalizeI3Params {
+        i2_slate: i2,
+        receiver_context: context,
+    })
+    .map_err(|e| JsValue::from_str(&e))?;
+
+    let slate_json =
+        grin_ext::slate::serialize_slate_v4(&out.slate).map_err(|e| JsValue::from_str(&e))?;
+    let slate_json_escaped = slate_json.replace('\\', r"\\").replace('"', r#"\""#);
+
+    Ok(format!(
+        r#"{{"slate_json":"{}","final_signature_hex":"{}"}}"#,
+        slate_json_escaped,
+        hex::encode(out.final_signature),
+    ))
+}
+
+// =============================================================================
 // Transaction wire-format assembly (S3 slate → broadcastable TX)
 // =============================================================================
 

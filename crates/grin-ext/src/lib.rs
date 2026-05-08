@@ -27,9 +27,12 @@ pub mod transaction;
 
 pub use kernel::{KernelFeatures, NRD_MAX_RELATIVE_HEIGHT};
 pub use slate_builder::{
-    receiver_round_s2, sender_finalize_s3, sender_init_s1, sender_init_s1_with_id,
-    ReceiverContext, ReceiverRoundOutput, ReceiverRoundParams, SenderContext, SenderFinalizeOutput,
-    SenderFinalizeParams, SenderInitOutput, SenderInitParams,
+    receiver_finalize_i3, receiver_init_i1, receiver_init_i1_with_id, receiver_round_s2,
+    sender_finalize_s3, sender_init_s1, sender_init_s1_with_id, sender_round_i2,
+    ReceiverContext, ReceiverFinalizeI3Output, ReceiverFinalizeI3Params, ReceiverInitI1Output,
+    ReceiverInitI1Params, ReceiverRoundOutput, ReceiverRoundParams, SenderContext,
+    SenderFinalizeOutput, SenderFinalizeParams, SenderInitOutput, SenderInitParams,
+    SenderRoundI2Output, SenderRoundI2Params,
 };
 pub use transaction::{
     pubkey_to_commitment, slate_to_transaction_bytes, BuildTransactionParams, TxInput, TxOutput,
