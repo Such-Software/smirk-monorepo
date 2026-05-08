@@ -36,6 +36,9 @@ ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] 
 # Bech32 encoding for human-readable slatepack addresses (grin1...).
 bech32 = { version = "0.9", default-features = false }
 
+# Base58 encoding for slatepack ASCII armor.
+bs58 = { version = "0.5", default-features = false, features = ["alloc"] }
+
 # Grin Bulletproofs / Pedersen commitments via the vendored
 # `crates/secp256k1zkp/` (grin_secp256k1zkp v0.7.15, patched for wasm32).
 # Provides BP create/verify/rewind, Pedersen commit, and aggsig.

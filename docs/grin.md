@@ -37,7 +37,9 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slate v4 types + JSON round-trip | ✅ Done — parses + re-serializes a real `grin-wallet` fixture without data loss |
 | Pedersen commitments + Bulletproofs (BP) | ✅ Done — vendored `grin_secp256k1zkp` v0.7.15, patched for wasm32; create + verify + rewind round-trip in tests |
 | Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
-| Slatepack codec (age encryption + ASCII armor) | ⬜ Not yet started |
+| Slatepack codec — ASCII armor (`BEGINSLATEPACK...ENDSLATEPACK` envelope, base58check, word-wrap) | ✅ Done — verified against a real `grin-wallet` fixture |
+| Slatepack codec — binary `SlatepackBin` payload format | ⬜ Not yet started |
+| Slatepack codec — age encryption to recipient slatepack address | ⬜ Not yet started |
 | NRD kernel construction | ⬜ Not yet started |
 | Multi-party Schnorr aggregation (MuSig-style for slate signing) | ⬜ Not yet started |
 | Adaptor-signature variants of slate signing | ⬜ Not yet started |
@@ -84,6 +86,8 @@ Available now in `crates/smirk-wasm/`:
 | `grin_bullet_proof_create(value, blinding_factor_hex, rewind_nonce_hex, private_nonce_hex)` | `hex` — variable-length BP range proof |
 | `grin_bullet_proof_verify(commit_hex, proof_hex)` | `bool` — true if BP is valid for the commitment |
 | `grin_bullet_proof_rewind(commit_hex, rewind_nonce_hex, proof_hex)` | `JSON: { value, blinding_factor_hex }` or `null` if rewind nonce doesn't match |
+| `grin_slatepack_armor(payload_hex)` | `string` — `BEGINSLATEPACK. … . ENDSLATEPACK.` armored block |
+| `grin_slatepack_dearmor(armored)` | `hex` — inner payload bytes, after checksum verification |
 | `grin_ext_version()` | grin-ext crate version string, for runtime version checks |
 
 More exports land as the underlying `crates/grin-ext/` surface grows.

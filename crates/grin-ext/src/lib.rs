@@ -17,6 +17,7 @@ pub mod schnorr;
 pub mod secp256k1;
 pub mod seed;
 pub mod slate;
+pub mod slatepack;
 pub mod slatepack_address;
 
 pub use bulletproof::{
@@ -27,6 +28,7 @@ pub use schnorr::{sign as schnorr_sign, sign_with_nonce, verify as schnorr_verif
 pub use secp256k1::public_key_from_secret_key;
 pub use seed::{mnemonic_to_extended_private_key, ExtendedPrivateKey};
 pub use slate::{parse_slate_v4, serialize_slate_v4, SlateStateV4, SlateV4};
+pub use slatepack::{armor as slatepack_armor, dearmor as slatepack_dearmor};
 pub use slatepack_address::{slatepack_address, Network};
 
 /// Crate version, exposed for runtime debugging.

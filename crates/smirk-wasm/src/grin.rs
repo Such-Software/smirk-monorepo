@@ -308,6 +308,36 @@ pub fn grin_bullet_proof_rewind(
     }
 }
 
+// =============================================================================
+// Slatepack ASCII armor
+// =============================================================================
+
+/// Wrap opaque bytes in slatepack ASCII armor.
+///
+/// `payload_hex` is the hex-encoded inner payload (typically the binary
+/// SlatepackBin serialization, but treated as opaque here). Returns the
+/// human-shareable string `BEGINSLATEPACK. <base58> . ENDSLATEPACK.\n`.
+#[wasm_bindgen]
+pub fn grin_slatepack_armor(payload_hex: &str) -> Result<String, JsValue> {
+    let payload = hex::decode(payload_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid payload_hex: {e}")))?;
+    Ok(grin_ext::slatepack_armor(&payload))
+}
+
+/// Unwrap slatepack ASCII armor.
+///
+/// Tolerates surrounding whitespace, messenger quote prefixes (`>`), and
+/// arbitrary line breaks. Verifies the embedded SHA256-double-hash
+/// checksum. Returns the inner payload as hex.
+///
+/// Throws on malformed input (missing header/footer, base58 decode failure,
+/// or checksum mismatch).
+#[wasm_bindgen]
+pub fn grin_slatepack_dearmor(armored: &str) -> Result<String, JsValue> {
+    let payload = grin_ext::slatepack_dearmor(armored).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(payload))
+}
+
 /// grin-ext crate version. Useful for runtime version sanity checks.
 #[wasm_bindgen]
 pub fn grin_ext_version() -> String {
