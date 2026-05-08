@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>smirk-wasm test</title>
+    <style>
+        body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 20px; }
+        pre { background: #2a2a2a; padding: 15px; border-radius: 5px; overflow-x: auto; }
+        h1 { color: #ff6b35; }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+    </style>
+</head>
+<body>
+    <h1>smirk-wasm test</h1>
+    <pre id="output"></pre>
+    <script type="module">
+        import init, {
+            test,
+            version,
+            validate_address,
+            estimate_fee,
+            sign_transaction,
+            derive_output_key_image
+        } from './pkg/smirk_wasm.js';
+
+        async function run() {
+            await init();
+
+            const output = document.getElementById('output');
+            const log = (msg, isError = false) => {
+                const span = document.createElement('span');
+                span.className = isError ? 'error' : '';
+                span.textContent = msg + '\n';
+                output.appendChild(span);
+            };
+
+            log('=== smirk-wasm test ===\n');
+            log('test(): ' + test());
+            log('version(): ' + version());
+
+            // Address validation
+            log('\n=== Address Validation ===');
+            const addrs = [
+                '888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H',
+                'invalid',
+            ];
+            for (const addr of addrs) {
+                const r = JSON.parse(validate_address(addr));
+                log(`${addr.slice(0, 25)}... => ${r.success ? r.data.network : r.error}`, !r.success);
+            }
+
+            // Fee estimation
+            log('\n=== Fee Estimation ===');
+            const fee = JSON.parse(estimate_fee(2, 2, 20n, 10000n));
+            log(`2 inputs, 2 outputs: ${fee.success ? fee.data + ' atomic' : fee.error}`, !fee.success);
+
+            // Sign transaction validation tests
+            log('\n=== Sign Transaction (Validation) ===');
+
+            // Test 1: Empty params
+            let sig = JSON.parse(sign_transaction('{}'));
+            log(`Empty params: ${sig.error}`, !sig.success);
+
+            // Test 2: Missing inputs
+            sig = JSON.parse(sign_transaction(JSON.stringify({
+                inputs: [],
+                destinations: [{ address: 'test', amount: 1000 }],
+                change_address: 'test',
+                fee_per_byte: 20,
+                fee_mask: 10000,
+                view_key: '00'.repeat(32),
+                spend_key: '00'.repeat(32),
+                network: 'mainnet'
+            })));
+            log(`No inputs: ${sig.error}`, !sig.success);
+
+            // Test 3: Wrong ring size
+            sig = JSON.parse(sign_transaction(JSON.stringify({
+                inputs: [{
+                    output: {
+                        amount: 1000000,
+                        public_key: '00'.repeat(32),
+                        tx_pub_key: '00'.repeat(32),
+                        index: 0,
+                        global_index: 12345,
+                        height: 1000,
+                        rct: '00'.repeat(32)
+                    },
+                    decoys: [] // Should be 15 decoys
+                }],
+                destinations: [{ address: 'test', amount: 500000 }],
+                change_address: 'test',
+                fee_per_byte: 20,
+                fee_mask: 10000,
+                view_key: '00'.repeat(32),
+                spend_key: '00'.repeat(32),
+                network: 'mainnet'
+            })));
+            log(`Wrong ring size: ${sig.error}`, !sig.success);
+
+            log('\n=== Done ===');
+        }
+
+        run().catch(e => { document.getElementById('output').textContent = 'Error: ' + e; });
+    </script>
+</body>
+</html>
