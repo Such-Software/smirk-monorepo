@@ -12,11 +12,16 @@
 //! (in smirk-backend) for the methodology.
 
 pub mod bip32;
+pub mod bulletproof;
 pub mod schnorr;
 pub mod secp256k1;
 pub mod seed;
 pub mod slate;
 pub mod slatepack_address;
+
+pub use bulletproof::{
+    bullet_proof_create, bullet_proof_rewind, bullet_proof_verify, pedersen_commit,
+};
 
 pub use schnorr::{sign as schnorr_sign, sign_with_nonce, verify as schnorr_verify, Signature};
 pub use secp256k1::public_key_from_secret_key;

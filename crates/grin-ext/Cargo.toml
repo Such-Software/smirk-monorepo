@@ -36,6 +36,11 @@ ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] 
 # Bech32 encoding for human-readable slatepack addresses (grin1...).
 bech32 = { version = "0.9", default-features = false }
 
+# Grin Bulletproofs / Pedersen commitments via the vendored
+# `crates/secp256k1zkp/` (grin_secp256k1zkp v0.7.15, patched for wasm32).
+# Provides BP create/verify/rewind, Pedersen commit, and aggsig.
+grin_secp256k1zkp = { path = "../secp256k1zkp" }
+
 # Hex encoding for ergonomic test fixtures
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 
