@@ -45,9 +45,10 @@ pub use grin::{
     grin_bullet_proof_create, grin_bullet_proof_rewind, grin_bullet_proof_verify,
     grin_derive_extended_key, grin_derive_keys, grin_ext_version, grin_pedersen_commit,
     grin_schnorr_sign, grin_schnorr_verify, grin_secp256k1_public_key, grin_slate_round_trip,
-    grin_slate_summary, grin_slatepack_address, grin_slatepack_armor,
-    grin_slatepack_bin_decode, grin_slatepack_bin_encode_plain, grin_slatepack_dearmor,
-    grin_slatepack_pack_plain, grin_slatepack_unpack,
+    grin_slate_summary, grin_slatepack_address, grin_slatepack_armor, grin_slatepack_bin_decode,
+    grin_slatepack_bin_encode_plain, grin_slatepack_dearmor, grin_slatepack_decrypt,
+    grin_slatepack_encrypt, grin_slatepack_pack_encrypted, grin_slatepack_pack_plain,
+    grin_slatepack_unpack, grin_slatepack_unpack_with_secret,
 };
 pub use keys::derive_key_image;
 pub use signing::{compute_key_image, derive_output_key_image, estimate_fee, sign_transaction};

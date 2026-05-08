@@ -418,6 +418,117 @@ pub fn grin_slatepack_unpack(armored: &str) -> Result<String, JsValue> {
     grin_slatepack_bin_decode(&hex::encode(bin_bytes))
 }
 
+// =============================================================================
+// Slatepack age encryption (mode = 1)
+// =============================================================================
+
+/// Encrypt a payload to a recipient slatepack address.
+///
+/// `recipient_pubkey_hex` is the 32-byte ed25519 public key from inside the
+/// recipient's bech32 slatepack address (use [`grin_slatepack_address`] in
+/// reverse — TODO: bech32-decode helper) or the raw 32-byte hex. Returns
+/// the encrypted bytes that go into `SlatepackBin.payload` when mode = 1.
+#[wasm_bindgen]
+pub fn grin_slatepack_encrypt(
+    payload_hex: &str,
+    recipient_pubkey_hex: &str,
+) -> Result<String, JsValue> {
+    let payload = hex::decode(payload_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid payload_hex: {e}")))?;
+    let mut pk = [0u8; 32];
+    hex::decode_to_slice(recipient_pubkey_hex, &mut pk)
+        .map_err(|e| JsValue::from_str(&format!("invalid recipient_pubkey_hex: {e}")))?;
+    let encrypted =
+        grin_ext::encrypt_to_recipient(&payload, &pk).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(encrypted))
+}
+
+/// Decrypt an age-encrypted slatepack payload using the recipient's
+/// ed25519 secret key (32-byte hex).
+///
+/// Returns the inner cleartext payload as hex.
+#[wasm_bindgen]
+pub fn grin_slatepack_decrypt(
+    encrypted_payload_hex: &str,
+    secret_key_hex: &str,
+) -> Result<String, JsValue> {
+    let encrypted = hex::decode(encrypted_payload_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid encrypted_payload_hex: {e}")))?;
+    let mut sk = [0u8; 32];
+    hex::decode_to_slice(secret_key_hex, &mut sk)
+        .map_err(|e| JsValue::from_str(&format!("invalid secret_key_hex: {e}")))?;
+    let plaintext =
+        grin_ext::decrypt_with_secret(&encrypted, &sk).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(plaintext))
+}
+
+/// One-call helper: encrypt a payload to a recipient, wrap in a
+/// SlatepackBin (mode=1), and ASCII-armor the result.
+///
+/// Returns the human-shareable `BEGINSLATEPACK...ENDSLATEPACK` string.
+#[wasm_bindgen]
+pub fn grin_slatepack_pack_encrypted(
+    inner_payload_hex: &str,
+    sender: Option<String>,
+    recipient_pubkey_hex: &str,
+) -> Result<String, JsValue> {
+    let payload = hex::decode(inner_payload_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid inner_payload_hex: {e}")))?;
+    let mut pk = [0u8; 32];
+    hex::decode_to_slice(recipient_pubkey_hex, &mut pk)
+        .map_err(|e| JsValue::from_str(&format!("invalid recipient_pubkey_hex: {e}")))?;
+    let sender = sender.filter(|s| !s.is_empty());
+
+    let bin =
+        grin_ext::pack_encrypted(&payload, sender, &pk).map_err(|e| JsValue::from_str(&e))?;
+    Ok(grin_ext::slatepack_armor(&bin.to_bytes()))
+}
+
+/// One-call helper: dearmor + parse a SlatepackBin + decrypt the payload
+/// using the receiver's ed25519 secret. Works for both plaintext and
+/// encrypted slatepacks (returns the inner payload hex either way).
+///
+/// Returns JSON: `{ "version": "1.0", "mode": "plain" | "encrypted",
+/// "sender": "grin1..." | null, "payload_hex": "..." }`.
+#[wasm_bindgen]
+pub fn grin_slatepack_unpack_with_secret(
+    armored: &str,
+    secret_key_hex: &str,
+) -> Result<String, JsValue> {
+    let mut sk = [0u8; 32];
+    hex::decode_to_slice(secret_key_hex, &mut sk)
+        .map_err(|e| JsValue::from_str(&format!("invalid secret_key_hex: {e}")))?;
+
+    let bin_bytes = grin_ext::slatepack_dearmor(armored).map_err(|e| JsValue::from_str(&e))?;
+    let bin = grin_ext::SlatepackBin::from_bytes(&bin_bytes).map_err(|e| JsValue::from_str(&e))?;
+
+    let mode_str = match bin.mode {
+        grin_ext::SlatepackMode::Plain => "plain",
+        grin_ext::SlatepackMode::Encrypted => "encrypted",
+    };
+    let sender_field = match &bin.sender {
+        Some(s) => format!(r#""{}""#, s),
+        None => "null".to_string(),
+    };
+
+    let inner = match bin.mode {
+        grin_ext::SlatepackMode::Plain => bin.payload.clone(),
+        grin_ext::SlatepackMode::Encrypted => {
+            grin_ext::unpack_encrypted(&bin, &sk).map_err(|e| JsValue::from_str(&e))?
+        }
+    };
+
+    let json = format!(
+        r#"{{"version":"{}.{}","mode":"{}","sender":{},"payload_hex":"{}"}}"#,
+        bin.version.major,
+        bin.version.minor,
+        mode_str,
+        sender_field,
+        hex::encode(inner),
+    );
+    Ok(json)
+}
+
 /// grin-ext crate version. Useful for runtime version sanity checks.
 #[wasm_bindgen]
 pub fn grin_ext_version() -> String {

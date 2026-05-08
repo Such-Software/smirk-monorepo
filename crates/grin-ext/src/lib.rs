@@ -19,6 +19,7 @@ pub mod seed;
 pub mod slate;
 pub mod slatepack;
 pub mod slatepack_address;
+pub mod slatepack_encryption;
 
 pub use bulletproof::{
     bullet_proof_create, bullet_proof_rewind, bullet_proof_verify, pedersen_commit,
@@ -31,6 +32,10 @@ pub use slate::{parse_slate_v4, serialize_slate_v4, SlateStateV4, SlateV4};
 pub use slatepack::{
     armor as slatepack_armor, dearmor as slatepack_dearmor, SlatepackBin, SlatepackMode,
     SlatepackVersion,
+};
+pub use slatepack_encryption::{
+    decrypt_with_secret, ed25519_pub_to_age_recipient, ed25519_secret_to_age_identity,
+    encrypt_to_recipient, pack_encrypted, unpack_encrypted,
 };
 pub use slatepack_address::{slatepack_address, Network};
 

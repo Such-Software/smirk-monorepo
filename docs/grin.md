@@ -39,7 +39,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
 | Slatepack codec — ASCII armor (`BEGINSLATEPACK...ENDSLATEPACK` envelope, base58check, word-wrap) | ✅ Done — verified against a real `grin-wallet` fixture |
 | Slatepack codec — binary `SlatepackBin` payload format (version, mode, sender, payload) | ✅ Done — real `grin-wallet` fixture parses + lossless round-trip |
-| Slatepack codec — age encryption to recipient slatepack address (mode 1) | ⬜ Not yet started |
+| Slatepack codec — age encryption to recipient slatepack address (mode 1) | ✅ Done — encrypt/decrypt round-trip via age::Encryptor; ed25519↔X25519 conversion matches grin-wallet (SHA-512 → first 32 bytes for the secret, Edwards→Montgomery for the pubkey). Empty encrypted_meta block; populating with sender/recipients is a follow-up. |
 | NRD kernel construction | ⬜ Not yet started |
 | Multi-party Schnorr aggregation (MuSig-style for slate signing) | ⬜ Not yet started |
 | Adaptor-signature variants of slate signing | ⬜ Not yet started |
@@ -92,6 +92,10 @@ Available now in `crates/smirk-wasm/`:
 | `grin_slatepack_bin_decode(bin_hex)` | `JSON: { version, mode, sender, payload_hex }` |
 | `grin_slatepack_pack_plain(inner_payload_hex, sender?)` | `string` — convenience: SlatepackBin + armor in one call |
 | `grin_slatepack_unpack(armored)` | `JSON: { version, mode, sender, payload_hex }` — convenience: dearmor + decode in one call |
+| `grin_slatepack_encrypt(payload_hex, recipient_pubkey_hex)` | `hex` — age-encrypt payload bytes for a recipient (32-byte ed25519 pubkey) |
+| `grin_slatepack_decrypt(encrypted_payload_hex, secret_key_hex)` | `hex` — decrypt with the recipient's ed25519 secret seed |
+| `grin_slatepack_pack_encrypted(inner_payload_hex, sender?, recipient_pubkey_hex)` | `string` — convenience: encrypt + bin (mode=1) + armor in one call |
+| `grin_slatepack_unpack_with_secret(armored, secret_key_hex)` | `JSON` — works for both plain and encrypted slatepacks; decrypts when needed |
 | `grin_ext_version()` | grin-ext crate version string, for runtime version checks |
 
 More exports land as the underlying `crates/grin-ext/` surface grows.
