@@ -39,6 +39,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slate construction — sender init (S1) + blind-arithmetic helpers | ✅ Done — produces valid S1 slate matching upstream `init_send_tx` shape; `blind` module covers scalar sum/add/sub/sender_blind_excess |
 | Slate construction — receiver round (S2): output Pedersen commit + Bulletproof + receiver partial sig | ✅ Done — partial self-verifies before slate goes back to sender |
 | Slate construction — sender finalize (S3): aggregate partials + verify final kernel signature | ✅ Done — full S1→S2→S3 ceremony tested end-to-end including NRD kernels |
+| Transaction wire-format assembly | ✅ Done — `slate_to_transaction_bytes()` converts a finalized S3 slate + sender's local UTXOs/change + aggregated kernel sig into the binary TX bytes Grin daemons accept on `push_transaction`. Single-kernel transactions (every standard send + invoice flow). |
 | Slatepack codec — ASCII armor (`BEGINSLATEPACK...ENDSLATEPACK` envelope, base58check, word-wrap) | ✅ Done — verified against a real `grin-wallet` fixture |
 | Slatepack codec — binary `SlatepackBin` payload format (version, mode, sender, payload) | ✅ Done — real `grin-wallet` fixture parses + lossless round-trip |
 | Slatepack codec — age encryption to recipient slatepack address (mode 1) | ✅ Done — encrypt/decrypt round-trip via age::Encryptor; ed25519↔X25519 conversion matches grin-wallet (SHA-512 → first 32 bytes for the secret, Edwards→Montgomery for the pubkey). Empty encrypted_meta block; populating with sender/recipients is a follow-up. |
@@ -99,6 +100,8 @@ Available now in `crates/smirk-wasm/`:
 | `grin_adaptor_partial_verify(s', R_i, P_i, R_total_no_t, P_total, T, msg)` | `bool` — true if the adaptor partial WILL complete to a valid normal partial when combined with `t` |
 | `grin_adaptor_complete(s', t)` | `hex` — completed partial scalar; aggregates with other partials into a normal final signature |
 | `grin_adaptor_extract_secret(s_completed, s')` | `hex` — recover the adaptor secret `t` from a completed partial; used by atomic-swap watchers once the counterparty publishes |
+| `grin_slate_to_transaction_bytes(s3_slate_json, sender_inputs_concat_hex, sender_change_outputs_json, aggregated_signature)` | `hex` — broadcastable Grin TX wire bytes |
+| `grin_pubkey_to_commitment(pubkey_hex)` | `hex` — convert a 33-byte secp256k1 pubkey to a Grin Pedersen commitment (prefix swap from 0x02/0x03 to 0x08/0x09) |
 | `grin_slate_round_trip(slate_json)` | `string` — canonicalized JSON if input is a valid v4 slate, throws otherwise |
 | `grin_slate_summary(slate_json)` | `JSON: { id, state, amount, fee, num_participants, num_signed }` for UI display |
 | `grin_pedersen_commit(value, blinding_factor_hex)` | `hex` — 33-byte Pedersen commitment |

@@ -23,12 +23,16 @@ pub mod slate_builder;
 pub mod slatepack;
 pub mod slatepack_address;
 pub mod slatepack_encryption;
+pub mod transaction;
 
 pub use kernel::{KernelFeatures, NRD_MAX_RELATIVE_HEIGHT};
 pub use slate_builder::{
     receiver_round_s2, sender_finalize_s3, sender_init_s1, sender_init_s1_with_id,
     ReceiverContext, ReceiverRoundOutput, ReceiverRoundParams, SenderContext, SenderFinalizeOutput,
     SenderFinalizeParams, SenderInitOutput, SenderInitParams,
+};
+pub use transaction::{
+    pubkey_to_commitment, slate_to_transaction_bytes, BuildTransactionParams, TxInput, TxOutput,
 };
 
 pub use bulletproof::{
