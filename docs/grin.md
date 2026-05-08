@@ -44,7 +44,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slatepack codec — age encryption to recipient slatepack address (mode 1) | ✅ Done — encrypt/decrypt round-trip via age::Encryptor; ed25519↔X25519 conversion matches grin-wallet (SHA-512 → first 32 bytes for the secret, Edwards→Montgomery for the pubkey). Empty encrypted_meta block; populating with sender/recipients is a follow-up. |
 | NRD kernel construction (sig message + v2 wire format for plain / coinbase / height-locked / NRD) | ✅ Done — sig msg composes with Schnorr round-trip; range-checked (NRD relative_height ∈ [1, 10080]) |
 | Multi-party Schnorr aggregation (Grin-style aggsig: partial sign + verify + aggregate, no key-coefficient tweaks) | ✅ Done — 2-party + 3-party round-trip tests pass |
-| Adaptor-signature variants of slate signing | ⬜ Not yet started |
+| Adaptor-signature variants of slate signing | ✅ Done — Schnorr adaptor sign/verify/complete/extract over secp256k1; full 2-party atomic-swap round-trip tested end-to-end (Bob's adaptor partial → Alice verifies → completion with `t` → aggregation → final Schnorr verifies → watcher extracts `t`) |
 
 ## Key derivation chain
 
@@ -95,6 +95,10 @@ Available now in `crates/smirk-wasm/`:
 | `grin_sender_init_s1(slate_id, amount, fee, kernel_kind, lock_height?, relative_height?, sender_blind_excess, kernel_offset, kernel_nonce)` | `JSON: { slate_json, context }` — produces an S1 slate for the receiver and the private context the sender retains for finalize |
 | `grin_receiver_round_s2(s1_slate_json, output_blind, kernel_nonce, bp_rewind_nonce, bp_private_nonce)` | `JSON: { slate_json, context }` — produces an S2 slate (with receiver's output commitment + range proof + partial sig) and the private context the receiver retains |
 | `grin_sender_finalize_s3(s2_slate_json, slate_id, amount, fee, kernel_kind, lock_height?, relative_height?, sender_blind_excess, kernel_offset, kernel_nonce)` | `JSON: { slate_json, final_signature_hex }` — produces the S3 slate + the verified 64-byte aggregate kernel signature |
+| `grin_adaptor_partial_sign(sk, nonce, R_total_no_t, P_total, T, msg)` | `hex` — adaptor partial signature (incomplete; completable with the secret `t` where T = t·G) |
+| `grin_adaptor_partial_verify(s', R_i, P_i, R_total_no_t, P_total, T, msg)` | `bool` — true if the adaptor partial WILL complete to a valid normal partial when combined with `t` |
+| `grin_adaptor_complete(s', t)` | `hex` — completed partial scalar; aggregates with other partials into a normal final signature |
+| `grin_adaptor_extract_secret(s_completed, s')` | `hex` — recover the adaptor secret `t` from a completed partial; used by atomic-swap watchers once the counterparty publishes |
 | `grin_slate_round_trip(slate_json)` | `string` — canonicalized JSON if input is a valid v4 slate, throws otherwise |
 | `grin_slate_summary(slate_json)` | `JSON: { id, state, amount, fee, num_participants, num_signed }` for UI display |
 | `grin_pedersen_commit(value, blinding_factor_hex)` | `hex` — 33-byte Pedersen commitment |

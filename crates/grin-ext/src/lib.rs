@@ -36,7 +36,8 @@ pub use bulletproof::{
 };
 
 pub use schnorr::{
-    aggregate_partials, final_signature, partial_sign, partial_verify, point_add, point_sum,
+    adaptor_partial_sign, adaptor_partial_verify, aggregate_partials, complete_adaptor,
+    extract_adaptor_secret, final_signature, partial_sign, partial_verify, point_add, point_sum,
     sign as schnorr_sign, sign_with_nonce, verify as schnorr_verify, Signature,
 };
 pub use secp256k1::public_key_from_secret_key;

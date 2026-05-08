@@ -42,8 +42,10 @@ mod transaction;
 // Re-export public functions
 pub use address::validate_address;
 pub use grin::{
-    grin_blind_add, grin_blind_sub, grin_blind_sum, grin_bullet_proof_create,
-    grin_bullet_proof_rewind, grin_bullet_proof_verify, grin_derive_extended_key,
+    grin_adaptor_complete, grin_adaptor_extract_secret, grin_adaptor_partial_sign,
+    grin_adaptor_partial_verify, grin_blind_add, grin_blind_sub, grin_blind_sum,
+    grin_bullet_proof_create, grin_bullet_proof_rewind, grin_bullet_proof_verify,
+    grin_derive_extended_key,
     grin_derive_keys, grin_ext_version, grin_kernel_features_bytes, grin_kernel_sig_msg,
     grin_pedersen_commit, grin_point_add, grin_point_sum, grin_schnorr_aggregate_partials,
     grin_schnorr_final_signature, grin_schnorr_partial_sign, grin_schnorr_partial_verify,

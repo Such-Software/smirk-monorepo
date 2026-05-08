@@ -212,6 +212,50 @@ check('grin_slatepack_encrypt + decrypt', () => {
 });
 
 // ----------------------------------------------------------------------------
+// Grin: adaptor signatures (atomic-swap building block)
+// ----------------------------------------------------------------------------
+check('grin adaptor sig 2-party round-trip', () => {
+  const skA = '01'.padEnd(64, '0');
+  const skB = '02'.padEnd(64, '0');
+  const nA = '03'.padEnd(64, '0');
+  const nB = '04'.padEnd(64, '0');
+  const t = '05'.padEnd(64, '0');
+  const pA = mod.grin_secp256k1_public_key(skA);
+  const pB = mod.grin_secp256k1_public_key(skB);
+  const rA = mod.grin_secp256k1_public_key(nA);
+  const rB = mod.grin_secp256k1_public_key(nB);
+  const T = mod.grin_secp256k1_public_key(t);
+  const pTotal = mod.grin_point_add(pA, pB);
+  const rTotalNoT = mod.grin_point_add(rA, rB);
+
+  // Bob's adaptor partial.
+  const sBprime = mod.grin_adaptor_partial_sign(skB, nB, rTotalNoT, pTotal, T, TEST_MSG);
+  // Alice verifies it.
+  if (!mod.grin_adaptor_partial_verify(sBprime, rB, pB, rTotalNoT, pTotal, T, TEST_MSG)) {
+    throw new Error("Alice rejected Bob's adaptor partial");
+  }
+  // Alice's normal partial (using same effective challenge).
+  const sA = mod.grin_adaptor_partial_sign(skA, nA, rTotalNoT, pTotal, T, TEST_MSG);
+
+  // Bob "spends the other chain" — t becomes known.
+  const sBcomp = mod.grin_adaptor_complete(sBprime, t);
+  // Aggregate.
+  const sAgg = mod.grin_schnorr_aggregate_partials(sA + sBcomp);
+  // Final sig with R = R_total_no_t + T.
+  const rTotalEff = mod.grin_point_add(rTotalNoT, T);
+  const sig = mod.grin_schnorr_final_signature(rTotalEff, sAgg);
+  if (!mod.grin_schnorr_verify(sig, TEST_MSG, pTotal)) {
+    throw new Error('aggregated adaptor signature failed final Schnorr verify');
+  }
+
+  // Watcher (anyone holding sB' who sees sBcomp on chain) extracts t.
+  const recoveredT = mod.grin_adaptor_extract_secret(sBcomp, sBprime);
+  if (recoveredT !== t) {
+    throw new Error(`extract_adaptor_secret didn't recover t: got ${recoveredT}, want ${t}`);
+  }
+});
+
+// ----------------------------------------------------------------------------
 // Grin: blind arithmetic + sender slate init
 // ----------------------------------------------------------------------------
 check('grin_blind_add', () => {

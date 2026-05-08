@@ -372,6 +372,126 @@ fn pubkey_from_secret(secret_key: &[u8; 32]) -> Result<[u8; 33], String> {
     Ok(out)
 }
 
+// =============================================================================
+// Schnorr adaptor signatures (the v0.4 atomic swap unlock)
+// =============================================================================
+//
+// An adaptor signature is an "incomplete" Schnorr partial that anyone with
+// a particular secret scalar `t` (where the public point T = t·G is known
+// to all parties) can complete into a normal, broadcastable partial.
+// Conversely, anyone seeing the completed partial alongside the original
+// adaptor partial can extract `t`. This is the cryptographic glue for
+// trustless atomic swaps:
+//
+//   1. Bob picks `t`, publishes T = t·G
+//   2. Bob signs the chain-A transaction with an adaptor partial keyed
+//      to T (incomplete; can't broadcast yet)
+//   3. Alice locks chain-B funds in a way that lets Bob spend them by
+//      revealing `t` somehow (or sets up the converse)
+//   4. Bob spends the chain-B output, revealing `t`
+//   5. Alice (or any watcher) extracts `t` from the chain-B sig and
+//      uses it to complete Bob's chain-A adaptor → broadcasts chain-A
+//
+// Math (multi-party Schnorr with one adaptor signer):
+//
+//   R_total_eff = (Σ R_i) + T
+//   e           = blake2b32(R_total_eff || P_total || msg)
+//   s_i'        = k_i + e · x_i              // adaptor partial (no `t`)
+//
+//   Completion: s_i = s_i' + t                 // valid normal partial
+//   Aggregate : s   = Σ s_j (j ≠ i) + s_i      // valid aggregate
+//   Final sig : (R_total_eff, s)              // verifies against P_total
+//   Extraction: t   = s_i_completed - s_i'
+//
+// Reference: Andrew Poelstra's "Scriptless Scripts" (2018), the BIP-340
+// adaptor-sig literature, and Comit Network's xmr-btc-swap production
+// implementation. Same scheme as the upstream `secp256k1-zkp` aggsig
+// adaptor variants; we work in pure Rust over `k256`.
+//
+// The "verify" side of an adaptor partial is exactly the same shape as a
+// normal partial-verify — just with `R_total_eff` (which already contains T)
+// in the challenge. So we expose the adaptor variants as thin wrappers that
+// build R_total_eff from R_total + T and delegate to `partial_sign` /
+// `partial_verify`. The new operations are `complete_adaptor` and
+// `extract_adaptor_secret`.
+
+/// Produce an adaptor partial signature. The result is INCOMPLETE: it
+/// behaves like a normal partial under verification (with the offset
+/// challenge), but combined with the adaptor secret `t` via
+/// [`complete_adaptor`] it becomes a valid broadcastable partial.
+///
+/// `public_nonce_total_no_t` is the sum of all participants' individual
+/// nonces — withOUT T mixed in. The function adds T internally to compute
+/// the offset challenge; this matches the canonical adaptor-sig math
+/// where the published signature's nonce is `(R_total_no_t + T)`.
+pub fn adaptor_partial_sign(
+    secret_key: &[u8; 32],
+    secret_nonce: &[u8; 32],
+    public_nonce_total_no_t: &[u8; 33],
+    public_key_total: &[u8; 33],
+    adaptor_point_t: &[u8; 33],
+    msg: &[u8; MSG_LEN],
+) -> Result<[u8; 32], String> {
+    let r_total_eff = point_add(public_nonce_total_no_t, adaptor_point_t)?;
+    partial_sign(secret_key, secret_nonce, &r_total_eff, public_key_total, msg)
+}
+
+/// Verify an adaptor partial signature. Verifies exactly the same way as
+/// a regular partial — `s_prime · G == R_i + e · P_i` with the
+/// challenge `e = blake2b32((R_total_no_t + T) || P_total || msg)`.
+///
+/// A valid result means: this partial WILL complete to a valid normal
+/// partial when combined with the adaptor secret `t`. The verifier doesn't
+/// learn `t` and doesn't need to.
+pub fn adaptor_partial_verify(
+    adaptor_partial_s: &[u8; 32],
+    public_nonce_i: &[u8; 33],
+    public_key_i: &[u8; 33],
+    public_nonce_total_no_t: &[u8; 33],
+    public_key_total: &[u8; 33],
+    adaptor_point_t: &[u8; 33],
+    msg: &[u8; MSG_LEN],
+) -> Result<bool, String> {
+    let r_total_eff = point_add(public_nonce_total_no_t, adaptor_point_t)?;
+    partial_verify(
+        adaptor_partial_s,
+        public_nonce_i,
+        public_key_i,
+        &r_total_eff,
+        public_key_total,
+        msg,
+    )
+}
+
+/// Complete an adaptor partial into a regular partial signature by adding
+/// the adaptor secret `t`. The output is a 32-byte scalar that combines
+/// (via [`aggregate_partials`]) into a valid aggregate signature.
+pub fn complete_adaptor(
+    adaptor_partial_s: &[u8; 32],
+    adaptor_secret_t: &[u8; 32],
+) -> Result<[u8; 32], String> {
+    let s_prime = scalar_from_bytes(adaptor_partial_s).ok_or("invalid adaptor partial s")?;
+    let t = scalar_from_bytes(adaptor_secret_t).ok_or("invalid adaptor secret t")?;
+    let s = s_prime + t;
+    Ok(s.to_bytes().into())
+}
+
+/// Extract the adaptor secret `t` from a completed partial signature given
+/// the original adaptor partial. Returns `t` as 32 bytes.
+///
+/// This is what enables the "watch the other chain to learn the secret"
+/// half of an atomic swap. The watcher sees `s = s' + t` published on
+/// chain (or in a slate) and recovers `t` by subtraction.
+pub fn extract_adaptor_secret(
+    completed_partial_s: &[u8; 32],
+    adaptor_partial_s: &[u8; 32],
+) -> Result<[u8; 32], String> {
+    let s = scalar_from_bytes(completed_partial_s).ok_or("invalid completed s")?;
+    let s_prime = scalar_from_bytes(adaptor_partial_s).ok_or("invalid adaptor partial s")?;
+    let t = s - s_prime;
+    Ok(t.to_bytes().into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,5 +682,158 @@ mod tests {
         let s = det_scalar(42);
         let agg = aggregate_partials(&[s]).unwrap();
         assert_eq!(agg, s);
+    }
+
+    // =========================================================================
+    // Adaptor signature tests (the v0.4 atomic-swap building block)
+    // =========================================================================
+
+    /// End-to-end: two-party Schnorr sign with one party producing an
+    /// ADAPTOR partial. The other party signs normally. After the adaptor
+    /// secret `t` is revealed, the adaptor partial completes, partials
+    /// aggregate, and the final signature verifies as a standard Schnorr
+    /// against P_total with R = R_total_no_t + T.
+    ///
+    /// This is the cryptographic core of the v0.4 atomic-swap protocol.
+    #[test]
+    fn two_party_adaptor_atomic_swap_round_trip() {
+        // Setup: Alice (sender) + Bob (adaptor signer). Bob picks t.
+        let sk_a = det_scalar(11);
+        let nonce_a = det_scalar(101);
+        let sk_b = det_scalar(22);
+        let nonce_b = det_scalar(102);
+        let t = det_scalar(99); // Bob's adaptor secret
+        let msg = [0xab; 32];
+
+        let p_a = pubkey_for(&sk_a);
+        let p_b = pubkey_for(&sk_b);
+        let r_a = pubkey_for(&nonce_a);
+        let r_b = pubkey_for(&nonce_b);
+        let big_t = pubkey_for(&t);
+
+        let p_total = point_add(&p_a, &p_b).unwrap();
+        let r_total_no_t = point_add(&r_a, &r_b).unwrap();
+
+        // Bob produces his ADAPTOR partial (incomplete; can't broadcast).
+        let s_b_prime = adaptor_partial_sign(
+            &sk_b, &nonce_b, &r_total_no_t, &p_total, &big_t, &msg,
+        )
+        .unwrap();
+
+        // Alice verifies Bob's adaptor partial — confirms it WILL complete
+        // to a valid partial, without learning t.
+        let ok = adaptor_partial_verify(
+            &s_b_prime, &r_b, &p_b, &r_total_no_t, &p_total, &big_t, &msg,
+        )
+        .unwrap();
+        assert!(ok, "Alice must accept Bob's adaptor partial");
+
+        // Alice produces her own NORMAL partial. Both sides use the same
+        // effective R_total = R_total_no_t + T in the challenge — Alice
+        // does this via the same adaptor_partial_sign helper (with her
+        // own keys, no t needed for signing).
+        let s_a = adaptor_partial_sign(
+            &sk_a, &nonce_a, &r_total_no_t, &p_total, &big_t, &msg,
+        )
+        .unwrap();
+
+        // Time passes — Bob spends the OTHER chain's UTXO, revealing t.
+        // Alice (or any watcher) now completes Bob's adaptor partial.
+        let s_b_completed = complete_adaptor(&s_b_prime, &t).unwrap();
+
+        // Alice aggregates both completed partials and broadcasts.
+        let s_total = aggregate_partials(&[s_a, s_b_completed]).unwrap();
+
+        // The published signature has R = R_total_no_t + T. This is a
+        // standard Schnorr signature against P_total.
+        let r_total_eff = point_add(&r_total_no_t, &big_t).unwrap();
+        let final_sig = final_signature(&r_total_eff, &s_total);
+        assert!(verify(&final_sig, &msg, &p_total).unwrap(),
+            "aggregated adaptor signature must verify as standard Schnorr against P_total");
+    }
+
+    #[test]
+    fn extract_adaptor_secret_recovers_t() {
+        // After the swap completes, anyone who held the original adaptor
+        // partial can recover `t` by subtracting it from the completed
+        // partial. This is how the OTHER side of the swap learns t.
+        let s_prime = det_scalar(50);
+        let t = det_scalar(7);
+        let s_completed = complete_adaptor(&s_prime, &t).unwrap();
+        let recovered_t = extract_adaptor_secret(&s_completed, &s_prime).unwrap();
+        assert_eq!(recovered_t, t);
+    }
+
+    #[test]
+    fn adaptor_partial_does_not_verify_as_regular_partial() {
+        // An adaptor partial signed with the adaptor (offset) challenge
+        // MUST NOT verify under the regular partial_verify path that uses
+        // R_total_no_t. This protects against accidentally treating an
+        // adaptor partial as a complete one.
+        let sk = det_scalar(3);
+        let nonce = det_scalar(4);
+        let t = det_scalar(5);
+        let p = pubkey_for(&sk);
+        let r = pubkey_for(&nonce);
+        let big_t = pubkey_for(&t);
+        let msg = [42u8; 32];
+
+        // Single-signer adaptor — R_total_no_t is just R, P_total is just P.
+        let s_prime =
+            adaptor_partial_sign(&sk, &nonce, &r, &p, &big_t, &msg).unwrap();
+
+        // Adaptor verify (with T) accepts.
+        assert!(adaptor_partial_verify(&s_prime, &r, &p, &r, &p, &big_t, &msg).unwrap());
+
+        // Regular partial verify (without T) rejects.
+        let regular_ok = partial_verify(&s_prime, &r, &p, &r, &p, &msg).unwrap_or(false);
+        assert!(!regular_ok,
+            "regular verify must reject an adaptor partial — different challenge hashes");
+    }
+
+    #[test]
+    fn completed_partial_with_wrong_t_fails_aggregation_verify() {
+        // If someone tries to "complete" an adaptor partial with the
+        // wrong t, aggregation produces an invalid signature.
+        let sk = det_scalar(1);
+        let nonce = det_scalar(2);
+        let t = det_scalar(7);
+        let wrong_t = det_scalar(8);
+        let p = pubkey_for(&sk);
+        let r = pubkey_for(&nonce);
+        let big_t = pubkey_for(&t);
+        let msg = [9u8; 32];
+
+        let s_prime = adaptor_partial_sign(&sk, &nonce, &r, &p, &big_t, &msg).unwrap();
+        let s_wrong = complete_adaptor(&s_prime, &wrong_t).unwrap();
+        let r_total_eff = point_add(&r, &big_t).unwrap();
+        let bad_sig = final_signature(&r_total_eff, &s_wrong);
+        assert!(!verify(&bad_sig, &msg, &p).unwrap_or(false),
+            "wrong t must produce an invalid signature");
+    }
+
+    #[test]
+    fn adaptor_verify_rejects_wrong_adaptor_point() {
+        // If the verifier is told a different T than what the signer used,
+        // the challenge hashes don't match and verify must fail.
+        let sk = det_scalar(1);
+        let nonce = det_scalar(2);
+        let t_signer = det_scalar(3);
+        let t_verifier_wrong = det_scalar(4);
+        let p = pubkey_for(&sk);
+        let r = pubkey_for(&nonce);
+        let big_t_signer = pubkey_for(&t_signer);
+        let big_t_wrong = pubkey_for(&t_verifier_wrong);
+        let msg = [11u8; 32];
+
+        let s_prime = adaptor_partial_sign(
+            &sk, &nonce, &r, &p, &big_t_signer, &msg,
+        )
+        .unwrap();
+        let ok = adaptor_partial_verify(
+            &s_prime, &r, &p, &r, &p, &big_t_wrong, &msg,
+        )
+        .unwrap();
+        assert!(!ok, "verify must reject when adaptor point doesn't match signer's");
     }
 }
