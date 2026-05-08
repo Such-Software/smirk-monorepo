@@ -2,8 +2,8 @@
 #
 # Cross-language build commands. See MONOREPO.md for layout details.
 
-.PHONY: help build test check clean wasm rust-build rust-test rust-check \
-        ts-build ts-test wasm-clean rust-clean ts-clean
+.PHONY: help build test check clean wasm wasm-node wasm-smoke rust-build \
+        rust-test rust-check ts-build ts-test wasm-clean rust-clean ts-clean
 
 # Default target — show help
 help:
@@ -44,7 +44,7 @@ rust-check:
 rust-clean:
 	cargo clean
 
-# WASM bundle (smirk-wasm crate → pkg/)
+# WASM bundle for browsers (smirk-wasm crate → pkg/, --target web)
 wasm:
 	cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
 	wasm-bindgen --target web \
@@ -54,8 +54,23 @@ wasm:
 	@echo "WASM bundle built:"
 	@ls -lh crates/smirk-wasm/pkg/
 
+# Node-loadable WASM bundle for the smoke harness (--target nodejs).
+# Produces CommonJS-compatible output that Node can load directly.
+# Lives in pkg-node/ alongside pkg/ — both are gitignored.
+wasm-node:
+	cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
+	wasm-bindgen --target nodejs \
+	  --out-dir crates/smirk-wasm/pkg-node \
+	  target/wasm32-unknown-unknown/release/smirk_wasm.wasm
+
+# Runtime smoke test against the Node WASM build. Catches wasm-bindgen
+# typing mismatches, missing exports, and runtime bugs that native unit
+# tests miss. See docs/TESTING.md.
+wasm-smoke: wasm-node
+	node scripts/wasm-smoke.mjs
+
 wasm-clean:
-	rm -rf crates/smirk-wasm/pkg
+	rm -rf crates/smirk-wasm/pkg crates/smirk-wasm/pkg-node
 
 # TypeScript targets — populated when packages/ is wired up in session 2
 ts-build:

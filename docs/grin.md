@@ -40,7 +40,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slatepack codec — ASCII armor (`BEGINSLATEPACK...ENDSLATEPACK` envelope, base58check, word-wrap) | ✅ Done — verified against a real `grin-wallet` fixture |
 | Slatepack codec — binary `SlatepackBin` payload format (version, mode, sender, payload) | ✅ Done — real `grin-wallet` fixture parses + lossless round-trip |
 | Slatepack codec — age encryption to recipient slatepack address (mode 1) | ✅ Done — encrypt/decrypt round-trip via age::Encryptor; ed25519↔X25519 conversion matches grin-wallet (SHA-512 → first 32 bytes for the secret, Edwards→Montgomery for the pubkey). Empty encrypted_meta block; populating with sender/recipients is a follow-up. |
-| NRD kernel construction | ⬜ Not yet started |
+| NRD kernel construction (sig message + v2 wire format for plain / coinbase / height-locked / NRD) | ✅ Done — sig msg composes with Schnorr round-trip; range-checked (NRD relative_height ∈ [1, 10080]) |
 | Multi-party Schnorr aggregation (Grin-style aggsig: partial sign + verify + aggregate, no key-coefficient tweaks) | ✅ Done — 2-party + 3-party round-trip tests pass |
 | Adaptor-signature variants of slate signing | ⬜ Not yet started |
 
@@ -86,6 +86,8 @@ Available now in `crates/smirk-wasm/`:
 | `grin_schnorr_partial_verify(s_i, R_i, P_i, R_total, P_total, msg)` | `bool` — verify a partial signature |
 | `grin_schnorr_aggregate_partials(partials_concat_hex)` | `hex` — sum of N partial scalars (mod n) |
 | `grin_schnorr_final_signature(R_total, aggregate_s)` | `hex` — 64-byte aggregate signature; verify with `grin_schnorr_verify` against `P_total` |
+| `grin_kernel_sig_msg(kind, fee?, lock_height?, relative_height?)` | `hex` — 32-byte BLAKE2b message to Schnorr-sign for a kernel of the given type |
+| `grin_kernel_features_bytes(kind, fee?, lock_height?, relative_height?)` | `hex` — kernel features in v2 wire format (for slate v4 kernel serialization) |
 | `grin_slate_round_trip(slate_json)` | `string` — canonicalized JSON if input is a valid v4 slate, throws otherwise |
 | `grin_slate_summary(slate_json)` | `JSON: { id, state, amount, fee, num_participants, num_signed }` for UI display |
 | `grin_pedersen_commit(value, blinding_factor_hex)` | `hex` — 33-byte Pedersen commitment |

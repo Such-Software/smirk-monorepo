@@ -309,6 +309,83 @@ pub fn grin_bullet_proof_rewind(
 }
 
 // =============================================================================
+// Kernel features + signing message
+// =============================================================================
+
+/// Compute the 32-byte BLAKE2b message that should be Schnorr-signed for a
+/// kernel of the given type.
+///
+/// `kind` selects the variant: `"plain"`, `"coinbase"`, `"height_locked"`,
+/// or `"nrd"`. `fee` is required for everything except coinbase.
+/// `lock_height` is required for `height_locked` only. `relative_height` is
+/// required for `nrd` only and must be in `[1, 10080]` (one week).
+///
+/// Returns the message hash as 64 hex chars.
+#[wasm_bindgen]
+pub fn grin_kernel_sig_msg(
+    kind: &str,
+    fee: Option<u64>,
+    lock_height: Option<u64>,
+    relative_height: Option<u32>,
+) -> Result<String, JsValue> {
+    let features = build_kernel_features(kind, fee, lock_height, relative_height)?;
+    let msg = features.sig_msg().map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(msg))
+}
+
+/// Serialize kernel features in Grin's v2 protocol wire format.
+///
+/// Returns the bytes as hex.
+#[wasm_bindgen]
+pub fn grin_kernel_features_bytes(
+    kind: &str,
+    fee: Option<u64>,
+    lock_height: Option<u64>,
+    relative_height: Option<u32>,
+) -> Result<String, JsValue> {
+    let features = build_kernel_features(kind, fee, lock_height, relative_height)?;
+    let bytes = features.to_v2_bytes().map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(bytes))
+}
+
+fn build_kernel_features(
+    kind: &str,
+    fee: Option<u64>,
+    lock_height: Option<u64>,
+    relative_height: Option<u32>,
+) -> Result<grin_ext::KernelFeatures, JsValue> {
+    match kind {
+        "plain" => Ok(grin_ext::KernelFeatures::Plain {
+            fee: fee.ok_or_else(|| JsValue::from_str("plain kernels require fee"))?,
+        }),
+        "coinbase" => Ok(grin_ext::KernelFeatures::Coinbase),
+        "height_locked" => {
+            let fee = fee.ok_or_else(|| JsValue::from_str("height_locked kernels require fee"))?;
+            let lock_height = lock_height
+                .ok_or_else(|| JsValue::from_str("height_locked kernels require lock_height"))?;
+            Ok(grin_ext::KernelFeatures::HeightLocked { fee, lock_height })
+        }
+        "nrd" => {
+            let fee = fee.ok_or_else(|| JsValue::from_str("nrd kernels require fee"))?;
+            let rh = relative_height
+                .ok_or_else(|| JsValue::from_str("nrd kernels require relative_height"))?;
+            if rh > u16::MAX as u32 {
+                return Err(JsValue::from_str(&format!(
+                    "relative_height {rh} > u16::MAX"
+                )));
+            }
+            Ok(grin_ext::KernelFeatures::Nrd {
+                fee,
+                relative_height: rh as u16,
+            })
+        }
+        other => Err(JsValue::from_str(&format!(
+            "unknown kernel kind {other:?}; expected plain, coinbase, height_locked, or nrd"
+        ))),
+    }
+}
+
+// =============================================================================
 // Multi-party Schnorr aggregation (Grin slate signing)
 // =============================================================================
 
