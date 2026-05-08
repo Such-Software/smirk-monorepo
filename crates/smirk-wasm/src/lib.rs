@@ -42,8 +42,8 @@ mod transaction;
 // Re-export public functions
 pub use address::validate_address;
 pub use grin::{
-    grin_derive_extended_key, grin_derive_keys, grin_ext_version, grin_secp256k1_public_key,
-    grin_slatepack_address,
+    grin_derive_extended_key, grin_derive_keys, grin_ext_version, grin_schnorr_sign,
+    grin_schnorr_verify, grin_secp256k1_public_key, grin_slatepack_address,
 };
 pub use keys::derive_key_image;
 pub use signing::{compute_key_image, derive_output_key_image, estimate_fee, sign_transaction};

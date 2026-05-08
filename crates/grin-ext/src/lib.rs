@@ -12,10 +12,12 @@
 //! (in smirk-backend) for the methodology.
 
 pub mod bip32;
+pub mod schnorr;
 pub mod secp256k1;
 pub mod seed;
 pub mod slatepack_address;
 
+pub use schnorr::{sign as schnorr_sign, sign_with_nonce, verify as schnorr_verify, Signature};
 pub use secp256k1::public_key_from_secret_key;
 pub use seed::{mnemonic_to_extended_private_key, ExtendedPrivateKey};
 pub use slatepack_address::{slatepack_address, Network};
