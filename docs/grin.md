@@ -35,7 +35,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slatepack address derivation (`m/0/1/0` → BLAKE2b → ed25519 → bech32) | ✅ Done — verified against Grim GUI for the standard zero-entropy BIP39 test mnemonic |
 | Schnorr sign/verify (secp256k1, single-signer) | ✅ Done — round-trip self-consistent; byte-equivalence with grin-wallet sigs not yet validated against fixtures |
 | Slate v4 types + JSON round-trip | ✅ Done — parses + re-serializes a real `grin-wallet` fixture without data loss |
-| Pedersen commitments + BP+ | ⬜ Not yet started — next |
+| Pedersen commitments + BP+ | 🔬 Spike done, implementation pending — see "BP+ implementation choices" below |
 | Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
 | Slatepack codec (age encryption + ASCII armor) | ⬜ Not yet started |
 | NRD kernel construction | ⬜ Not yet started |
@@ -83,6 +83,42 @@ Available now in `crates/smirk-wasm/`:
 | `grin_ext_version()` | grin-ext crate version string, for runtime version checks |
 
 More exports land as the underlying `crates/grin-ext/` surface grows.
+
+## BP+ implementation choices
+
+Bulletproofs+ over secp256k1 is the next major piece for transaction
+construction. Two paths considered, both verified to compile to wasm32:
+
+### Path A — `secp256k1-zkp` Rust crate (FFI to libsecp256k1-zkp C library)
+
+- **Pros:** the C implementation is the canonical Grin BP+ source. Same
+  byte-for-byte output as `grin-wallet`. WASM build links cleanly via
+  `cc-rs` cross-compiling the C to wasm32. Side benefit: also gets us
+  `aggsig` (could swap our pure-Rust Schnorr for byte-equivalent
+  grin-wallet sigs).
+- **Cons:** the Rust crate's bindings (v0.11) only expose **legacy
+  Borromean range proofs**, not BP+. Adding BP+ Rust bindings would
+  require either an upstream contribution (slow review cycle) or our
+  own FFI wrapper around `secp256k1_bulletproofs_plus_*` C functions
+  (small surface, but ongoing maintenance against upstream).
+- **Verdict:** viable but requires writing FFI plumbing ourselves.
+
+### Path B — Port `monero-oxide`'s BP+ algorithm to `k256`
+
+- **Pros:** pure Rust, no FFI. The BP+ algorithm is curve-agnostic; only
+  the curve operations need to be swapped from `curve25519-dalek::EdwardsPoint`
+  to `k256::ProjectivePoint`. The reference implementation is in our
+  workspace (`crates/monero-oxide/monero-oxide/ringct/bulletproofs/src/plus/`)
+  and well-tested.
+- **Cons:** ~3–5 days of focused work plus careful curve-specific
+  generator/hash-to-curve implementation. Won't be byte-equivalent to
+  `grin-wallet`'s output unless we match generator points exactly.
+- **Verdict:** preferred path long-term. Cleaner code ownership, no FFI.
+
+The decision between these paths gets made when BP+ implementation
+actually starts — in the meantime, the slate types treat the rangeproof
+as opaque hex bytes, which is enough to parse and forward existing
+slates without verifying the proof.
 
 ## Reference
 
