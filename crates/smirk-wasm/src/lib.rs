@@ -30,6 +30,7 @@
 use wasm_bindgen::prelude::*;
 
 mod address;
+mod grin;
 mod keys;
 mod output;
 mod result;
@@ -40,8 +41,9 @@ mod transaction;
 
 // Re-export public functions
 pub use address::validate_address;
+pub use grin::{grin_derive_extended_key, grin_ext_version};
 pub use keys::derive_key_image;
-pub use signing::{estimate_fee, sign_transaction, derive_output_key_image, compute_key_image};
+pub use signing::{compute_key_image, derive_output_key_image, estimate_fee, sign_transaction};
 pub use transaction::parse_tx;
 
 /// Simple test function to verify WASM is loaded.
