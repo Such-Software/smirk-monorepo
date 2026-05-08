@@ -33,12 +33,13 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | `public_key_from_secret_key()` (compressed secp256k1, via `k256` crate) | ✅ Done — independently verified against Node's `crypto` |
 | BIP32 CKDpriv child key derivation (hardened + non-hardened) | ✅ Done |
 | Slatepack address derivation (`m/0/1/0` → BLAKE2b → ed25519 → bech32) | ✅ Done — verified against Grim GUI for the standard zero-entropy BIP39 test mnemonic |
-| Schnorr sign/verify (secp256k1) | ⬜ Not yet started |
-| Slate v4 types + JSON round-trip | ⬜ Not yet started |
-| Pedersen commitments + BP+ | ⬜ Not yet started |
+| Schnorr sign/verify (secp256k1, single-signer) | ✅ Done — round-trip self-consistent; byte-equivalence with grin-wallet sigs not yet validated against fixtures |
+| Slate v4 types + JSON round-trip | ✅ Done — parses + re-serializes a real `grin-wallet` fixture without data loss |
+| Pedersen commitments + BP+ | ⬜ Not yet started — next |
 | Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
 | Slatepack codec (age encryption + ASCII armor) | ⬜ Not yet started |
 | NRD kernel construction | ⬜ Not yet started |
+| Multi-party Schnorr aggregation (MuSig-style for slate signing) | ⬜ Not yet started |
 | Adaptor-signature variants of slate signing | ⬜ Not yet started |
 
 ## Key derivation chain
@@ -75,6 +76,10 @@ Available now in `crates/smirk-wasm/`:
 | `grin_secp256k1_public_key(secret_key_hex)` | `hex` — 33-byte compressed pubkey |
 | `grin_slatepack_address(mnemonic, index, network)` | `string` — bech32 slatepack address (e.g. `grin1...` mainnet, `tgrin1...` testnet) |
 | `grin_derive_keys(mnemonic, network)` | `JSON: { extended_private_key_hex, secret_key_hex, chain_code_hex, public_key_hex, slatepack_address }` (convenience) |
+| `grin_schnorr_sign(secret_key_hex, secret_nonce_hex, message_hex)` | `hex` — 64-byte compact Schnorr signature |
+| `grin_schnorr_verify(signature_hex, message_hex, public_key_hex)` | `bool` — true if signature is valid |
+| `grin_slate_round_trip(slate_json)` | `string` — canonicalized JSON if input is a valid v4 slate, throws otherwise |
+| `grin_slate_summary(slate_json)` | `JSON: { id, state, amount, fee, num_participants, num_signed }` for UI display |
 | `grin_ext_version()` | grin-ext crate version string, for runtime version checks |
 
 More exports land as the underlying `crates/grin-ext/` surface grows.
