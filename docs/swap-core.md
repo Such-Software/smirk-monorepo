@@ -15,6 +15,11 @@ The `swap-core` crate will house both — and the state machine that drives a sw
 
 Stub. The crate exists in the workspace so future work is "add to existing crate" rather than "set up new crate." `lib.rs` exposes only `VERSION`.
 
+The two main dependencies the swap engine will need are now both available in the workspace:
+
+- **`crates/grin-ext/`** — Schnorr sign/verify over secp256k1, BLAKE2b challenge hash, slate v4 parse/serialize. Adaptor-signature variants of Schnorr signing are a clean extension on top of what's there.
+- **`crates/secp256k1zkp/`** — Bulletproofs, Pedersen commitments, and aggsig from Grin's libsecp256k1-zkp. Provides the byte-equivalent-to-grin-wallet primitives needed for swap-side commitments and proofs.
+
 ## Planned shape
 
 Public surface, when populated:

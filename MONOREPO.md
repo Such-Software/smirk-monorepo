@@ -20,20 +20,33 @@ A 19-crate vendored workspace — a fork of [monero-oxide](https://github.com/mo
 
 See [docs/monero-wownero.md](docs/monero-wownero.md) for design notes.
 
+### `crates/secp256k1zkp/`
+
+Vendored copy of [`grin_secp256k1zkp`](https://github.com/mimblewimble/rust-secp256k1-zkp) v0.7.15 — Grin's fork of `rust-secp256k1-zkp`. Provides Bulletproofs (BP, the original — Grin uses this, not BP+), Pedersen commitments, and aggsig that the upstream `secp256k1-zkp` Rust crate doesn't bind.
+
+The crate is FFI to `libsecp256k1-zkp` (C). The C source is vendored in-tree at `crates/secp256k1zkp/depend/secp256k1-zkp/` (the original release used a git submodule; we replaced it with the contents at the pinned commit so monorepo clones are self-contained).
+
+**Smirk patches applied** (all labeled with `// Smirk patch:` comments for clean upstream sync):
+- `wasm-sysroot/` directory with minimal libc forward-declaration headers so clang's wasm32 frontend can compile the C source
+- `build.rs` adds `wasm-sysroot` as an include path when targeting wasm32
+- Rust sources alias `size_t` to `usize` locally (the upstream `libc` crate doesn't expose `libc::size_t` on wasm32-unknown-unknown); `core::ffi::*` replaces `libc::c_int` / `c_uchar` / `c_uint` / `c_void`
+
+Consumed by `crates/grin-ext/` via path dep.
+
 ### `crates/smirk-wasm/`
 
 The wasm-bindgen wrapper. Single WASM bundle that exposes:
 
 - **Monero/Wownero functions:** `validate_address`, `parse_tx`, `derive_key_image`, `derive_output_key_image`, `compute_key_image`, `estimate_fee`, `sign_transaction`. The `coin: "xmr" | "wow"` field on transaction params selects between Monero (ring 16, RCT type 6) and Wownero (ring 22, RCT type 8) at runtime.
-- **Grin functions:** `grin_derive_extended_key`, `grin_ext_version`. The Grin surface is being built out incrementally — see [docs/grin.md](docs/grin.md).
+- **Grin functions:** seed/key derivation, slatepack address (Grim-compatible), Schnorr sign/verify, slate v4 parse/round-trip, Pedersen commit, Bulletproof create/verify/rewind. See [docs/grin.md](docs/grin.md) for the full export list.
 
 Output: `crates/smirk-wasm/pkg/` (gitignored, produced by `make wasm`).
 
 ### `crates/grin-ext/`
 
-Smirk's Grin / Mimblewimble protocol implementation. Reimplemented from primitives (HMAC-SHA512, secp256k1, ed25519, etc.) rather than forked from upstream `grin-wallet`, because we need to extend it with features that don't exist upstream (atomic-swap adaptor signatures, NRD-kernel time-locks).
+Smirk's Grin / Mimblewimble protocol implementation. Built up from primitives (HMAC-SHA512, k256 / secp256k1zkp, ed25519, etc.) rather than forked from upstream `grin-wallet`, because we need to extend it with features that don't exist upstream (atomic-swap adaptor signatures, NRD-kernel time-locks, custom slate workflows).
 
-Built up incrementally across releases — see [docs/grin.md](docs/grin.md) for what's currently shipped vs what's still in flight.
+Currently shipped: seed → extended key, BIP32 child derivation, slatepack address (Grim-verified), Schnorr sign/verify, SlateV4 types + JSON round-trip, Pedersen + Bulletproofs. Still in flight: slatepack codec, slate construction, NRD kernels, multi-party Schnorr aggregation, adaptor sigs. See [docs/grin.md](docs/grin.md) for the full status table.
 
 ### `crates/swap-core/`
 
@@ -52,7 +65,13 @@ Planned layout when populated:
 
 ## Git subtree workflow
 
-`crates/monero-oxide/` and `crates/smirk-wasm/` were imported via `git subtree`, preserving full upstream history.
+Three crates are imported via `git subtree`, preserving full upstream history:
+
+| Path | Upstream | Purpose |
+|---|---|---|
+| `crates/monero-oxide/` | `monero-oxide/monero-oxide` (forked at `Such-Software/monero-oxide`) | Monero + Wownero transaction library |
+| `crates/smirk-wasm/` | `Such-Software/smirk-wasm` | wasm-bindgen wrapper |
+| `crates/secp256k1zkp/` | `mimblewimble/rust-secp256k1-zkp` | Grin's secp256k1-zkp Rust bindings |
 
 ### Pulling Monero upstream changes
 
@@ -62,6 +81,16 @@ git subtree pull --prefix=crates/monero-oxide upstream-monero-oxide main --squas
 ```
 
 Conflicts will land in `crates/monero-oxide/**/Cargo.toml` (the package-rename diffs) and possibly the root `Cargo.toml` if upstream changed their workspace structure. Resolution rule: keep `wownero-*` package names locally, take upstream's version bumps and structural changes. See `crates/monero-oxide/PUBLISHING.md`.
+
+### Pulling secp256k1zkp upstream changes
+
+```bash
+git remote add upstream-secp256k1zkp https://github.com/mimblewimble/rust-secp256k1-zkp.git  # one-time
+git fetch upstream-secp256k1zkp
+git subtree pull --prefix=crates/secp256k1zkp upstream-secp256k1zkp main --squash
+```
+
+Then re-apply our wasm32 patches if upstream conflicts (look for `// Smirk patch:` comments). The patches are localized to four Rust files (`ffi.rs`, `lib.rs`, `aggsig.rs`, `pedersen.rs`) and one `build.rs` change, plus the in-tree `wasm-sysroot/` directory.
 
 ### Pushing back to the standalone monero-oxide fork (for crates.io publish)
 

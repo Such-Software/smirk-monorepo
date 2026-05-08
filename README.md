@@ -7,12 +7,13 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | Component | Status |
 |---|---|
 | `crates/monero-oxide/` | Working — Monero + Wownero transaction construction, in production via the smirk-extension v0.2.x stack |
-| `crates/smirk-wasm/` | Working — exposes Monero/Wownero crypto + initial Grin functions to JS |
-| `crates/grin-ext/` | Active development — Grin protocol reimplementation in progress |
+| `crates/secp256k1zkp/` | Vendored — Grin's `grin_secp256k1zkp` v0.7.15 + Smirk patches for wasm32. Provides Bulletproofs, Pedersen commitments, aggsig |
+| `crates/smirk-wasm/` | Working — single WASM bundle exposing Monero/Wownero/Grin crypto to JS |
+| `crates/grin-ext/` | Active development — seed derivation, slatepack address (Grim-compatible), Schnorr, slate v4, Pedersen + Bulletproofs all done; slatepack codec, slate construction, NRD kernels, adaptor sigs in flight |
 | `crates/swap-core/` | Stub — atomic swap primitives, implementation pending |
 | `packages/` | Not yet populated — TypeScript migration is still upcoming |
 
-The browser extension currently lives at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension). It will be migrated into `packages/extension/` here once the Grin reimplementation reaches feature parity with the existing vendored MWC wallet stack.
+The browser extension currently lives at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension). It will be migrated into `packages/extension/` here once `crates/grin-ext/` reaches feature parity with the existing vendored MWC stack.
 
 ## Layout
 
@@ -20,6 +21,8 @@ The browser extension currently lives at [Such-Software/smirk-extension](https:/
 smirk-monorepo/
 ├── crates/                   # Rust workspace
 │   ├── monero-oxide/         # vendored — Monero + Wownero transaction library
+│   ├── secp256k1zkp/         # vendored — Grin's secp256k1-zkp Rust bindings
+│   │                         #   (Bulletproofs, Pedersen, aggsig); patched for wasm32
 │   ├── smirk-wasm/           # wasm-bindgen wrapper, single WASM bundle for JS consumers
 │   ├── grin-ext/             # Grin / Mimblewimble protocol implementation
 │   └── swap-core/            # atomic swap primitives (stub)
