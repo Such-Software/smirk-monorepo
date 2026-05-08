@@ -1,0 +1,78 @@
+# Smirk Monorepo build orchestration.
+#
+# Cross-language build commands. See MONOREPO.md for layout details.
+
+.PHONY: help build test check clean wasm rust-build rust-test rust-check \
+        ts-build ts-test wasm-clean rust-clean ts-clean
+
+# Default target — show help
+help:
+	@echo "Smirk monorepo make targets:"
+	@echo ""
+	@echo "  make build       Build everything (Rust crates, WASM bundle, TS packages)"
+	@echo "  make test        Run all tests (cargo test --workspace + npm test)"
+	@echo "  make check       Fast type/lint check without producing binaries"
+	@echo "  make wasm        Build only the smirk-wasm WASM bundle"
+	@echo "  make clean       Remove all build outputs (target/, pkg/, dist/, node_modules/)"
+	@echo ""
+	@echo "Sub-targets (rarely needed directly):"
+	@echo "  make rust-build  cargo build --release --workspace"
+	@echo "  make rust-test   cargo test --workspace"
+	@echo "  make rust-check  cargo check --workspace"
+	@echo "  make ts-build    npm run build --workspaces --if-present"
+	@echo "  make ts-test     npm test --workspaces --if-present"
+
+# Top-level orchestration
+build: rust-build wasm ts-build
+
+test: rust-test ts-test
+
+check: rust-check
+
+clean: rust-clean wasm-clean ts-clean
+
+# Rust targets
+rust-build:
+	cargo build --release --workspace
+
+rust-test:
+	cargo test --workspace
+
+rust-check:
+	cargo check --workspace
+
+rust-clean:
+	cargo clean
+
+# WASM bundle (smirk-wasm crate → pkg/)
+wasm:
+	cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
+	wasm-bindgen --target web \
+	  --out-dir crates/smirk-wasm/pkg \
+	  target/wasm32-unknown-unknown/release/smirk_wasm.wasm
+	@echo ""
+	@echo "WASM bundle built:"
+	@ls -lh crates/smirk-wasm/pkg/
+
+wasm-clean:
+	rm -rf crates/smirk-wasm/pkg
+
+# TypeScript targets — populated when packages/ is wired up in session 2
+ts-build:
+	@if [ -f package.json ]; then \
+	  npm run build --workspaces --if-present; \
+	else \
+	  echo "No root package.json yet — TS workspace lands in session 2"; \
+	fi
+
+ts-test:
+	@if [ -f package.json ]; then \
+	  npm test --workspaces --if-present; \
+	else \
+	  echo "No root package.json yet — TS workspace lands in session 2"; \
+	fi
+
+ts-clean:
+	rm -rf node_modules
+	rm -rf packages/*/dist
+	rm -rf packages/*/node_modules
