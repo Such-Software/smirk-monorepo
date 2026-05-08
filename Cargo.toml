@@ -1,32 +1,39 @@
 [workspace]
 resolver = "2"
 members = [
-  "monero-oxide/io",
-  "monero-oxide/ed25519",
-  "monero-oxide/primitives",
-  "monero-oxide/ringct/mlsag",
-  "monero-oxide/ringct/clsag",
-  "monero-oxide/ringct/borromean",
-  "monero-oxide/ringct/bulletproofs/generators",
-  "monero-oxide/ringct/bulletproofs",
-  "monero-oxide",
+  # Vendored monero-oxide fork (Monero + Wownero transaction library)
+  # See crates/monero-oxide/README.md for upstream provenance
+  "crates/monero-oxide/monero-oxide/io",
+  "crates/monero-oxide/monero-oxide/ed25519",
+  "crates/monero-oxide/monero-oxide/primitives",
+  "crates/monero-oxide/monero-oxide/ringct/mlsag",
+  "crates/monero-oxide/monero-oxide/ringct/clsag",
+  "crates/monero-oxide/monero-oxide/ringct/borromean",
+  "crates/monero-oxide/monero-oxide/ringct/bulletproofs/generators",
+  "crates/monero-oxide/monero-oxide/ringct/bulletproofs",
+  "crates/monero-oxide/monero-oxide",
 
-  "monero-oxide/wallet/base58",
-  "monero-oxide/wallet/address",
+  "crates/monero-oxide/monero-oxide/wallet/base58",
+  "crates/monero-oxide/monero-oxide/wallet/address",
 
-  "monero-oxide/epee",
+  "crates/monero-oxide/monero-oxide/epee",
 
-  "monero-oxide/interface",
-  "monero-oxide/interface/daemon",
-  "monero-oxide/interface/daemon/simple-request",
+  "crates/monero-oxide/monero-oxide/interface",
+  "crates/monero-oxide/monero-oxide/interface/daemon",
+  "crates/monero-oxide/monero-oxide/interface/daemon/simple-request",
 
-  "monero-oxide/wallet",
+  "crates/monero-oxide/monero-oxide/wallet",
 
-  "tests/no-std",
-  "tests/verify-chain",
+  "crates/monero-oxide/tests/no-std",
+  "crates/monero-oxide/tests/verify-chain",
+
+  # Smirk client crates
+  "crates/smirk-wasm",
+  "crates/swap-core",
 ]
 
 # Always compile Monero (and a variety of dependencies) with optimizations
+# Inherited from monero-oxide upstream — keep in sync when subtree-pulling
 [profile.dev.package]
 subtle = { opt-level = 3 }
 curve25519-dalek = { opt-level = 3 }
@@ -46,13 +53,14 @@ wownero-mlsag = { opt-level = 3 }
 wownero-clsag = { opt-level = 3 }
 wownero-borromean = { opt-level = 3 }
 wownero-bulletproofs-generators = { opt-level = 3 }
-wownero-bulletproofs = {opt-level = 3 }
+wownero-bulletproofs = { opt-level = 3 }
 wownero-oxide = { opt-level = 3 }
 
 [profile.release]
 panic = "unwind"
 overflow-checks = true
 
+# Inherited from monero-oxide upstream
 [workspace.lints.clippy]
 incompatible_msrv = "allow" # Manually checked with a GitHub workflow
 unwrap_or_default = "allow"
