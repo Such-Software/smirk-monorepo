@@ -13,7 +13,7 @@ The existing [smirk-extension](https://github.com/Such-Software/smirk-extension)
 | HMAC-SHA512 (key derivation) | `hmac` + `sha2` crates |
 | BIP39 (mnemonic ↔ entropy) | `bip39` crate |
 | secp256k1 + Schnorr | (planned) `secp256k1` / `secp256k1-zkp` |
-| Bulletproofs+ range proofs | (planned) `secp256k1-zkp` |
+| Bulletproofs range proofs (BP, not BP+) | (planned) `secp256k1-zkp` |
 | ed25519 (slatepack address) | `curve25519-dalek` (already pulled by `monero-oxide`) |
 | Bech32 (slatepack address) | (planned) `bech32` |
 | BLAKE2b | (planned) `blake2b_simd` |
@@ -35,7 +35,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Slatepack address derivation (`m/0/1/0` → BLAKE2b → ed25519 → bech32) | ✅ Done — verified against Grim GUI for the standard zero-entropy BIP39 test mnemonic |
 | Schnorr sign/verify (secp256k1, single-signer) | ✅ Done — round-trip self-consistent; byte-equivalence with grin-wallet sigs not yet validated against fixtures |
 | Slate v4 types + JSON round-trip | ✅ Done — parses + re-serializes a real `grin-wallet` fixture without data loss |
-| Pedersen commitments + BP+ | 🔬 Spike done, implementation pending — see "BP+ implementation choices" below |
+| Pedersen commitments + Bulletproofs (BP) | 🔬 Path chosen (`secp256k1-zkp` Rust crate via FFI to libsecp256k1-zkp), implementation pending |
 | Slate construction (input/output selection, blinding factors, kernel) | ⬜ Not yet started |
 | Slatepack codec (age encryption + ASCII armor) | ⬜ Not yet started |
 | NRD kernel construction | ⬜ Not yet started |
@@ -84,41 +84,35 @@ Available now in `crates/smirk-wasm/`:
 
 More exports land as the underlying `crates/grin-ext/` surface grows.
 
-## BP+ implementation choices
+## Bulletproofs (BP) implementation path
 
-Bulletproofs+ over secp256k1 is the next major piece for transaction
-construction. Two paths considered, both verified to compile to wasm32:
+**Grin uses the original Bulletproofs (BP), not BP+.** Confirmed in
+`grin/core/src/libtx/proof.rs`, which calls `secp.bullet_proof(...)` /
+`secp.verify_bullet_proof(...)` — wrappers over `secp256k1_bulletproof_*`
+in the C library. BP+ was discussed for Grin but never adopted.
 
-### Path A — `secp256k1-zkp` Rust crate (FFI to libsecp256k1-zkp C library)
+The chosen path is the `secp256k1-zkp` Rust crate (v0.11+), which wraps
+the canonical libsecp256k1-zkp C library:
 
-- **Pros:** the C implementation is the canonical Grin BP+ source. Same
-  byte-for-byte output as `grin-wallet`. WASM build links cleanly via
-  `cc-rs` cross-compiling the C to wasm32. Side benefit: also gets us
-  `aggsig` (could swap our pure-Rust Schnorr for byte-equivalent
-  grin-wallet sigs).
-- **Cons:** the Rust crate's bindings (v0.11) only expose **legacy
-  Borromean range proofs**, not BP+. Adding BP+ Rust bindings would
-  require either an upstream contribution (slow review cycle) or our
-  own FFI wrapper around `secp256k1_bulletproofs_plus_*` C functions
-  (small surface, but ongoing maintenance against upstream).
-- **Verdict:** viable but requires writing FFI plumbing ourselves.
+- The crate's `RangeProof::new` / `verify` / `rewind` are exactly the
+  BP functions Grin uses (the `rewind` API to recover amount + message
+  is a BP-only feature; its presence confirms the binding is BP, not BP+).
+- Cross-compiles cleanly to `wasm32-unknown-unknown` (verified via spike —
+  `cc-rs` cross-compiles the underlying C to wasm32 with no extra setup).
+- Byte-equivalent to `grin-wallet` by construction (same C library).
+- Side benefit: gives us `aggsig` for Schnorr signatures too — a future
+  optimization is swapping our pure-Rust Schnorr for the exact Grin
+  byte format if that interop matters.
 
-### Path B — Port `monero-oxide`'s BP+ algorithm to `k256`
+Implementation effort: ~1 day to add the dep, write a thin Rust wrapper
+exposing `RangeProof::new(commit, value, blind, ...)` and `verify`,
+add WASM exports, write round-trip tests against fixture proofs from
+real grin-wallet outputs.
 
-- **Pros:** pure Rust, no FFI. The BP+ algorithm is curve-agnostic; only
-  the curve operations need to be swapped from `curve25519-dalek::EdwardsPoint`
-  to `k256::ProjectivePoint`. The reference implementation is in our
-  workspace (`crates/monero-oxide/monero-oxide/ringct/bulletproofs/src/plus/`)
-  and well-tested.
-- **Cons:** ~3–5 days of focused work plus careful curve-specific
-  generator/hash-to-curve implementation. Won't be byte-equivalent to
-  `grin-wallet`'s output unless we match generator points exactly.
-- **Verdict:** preferred path long-term. Cleaner code ownership, no FFI.
-
-The decision between these paths gets made when BP+ implementation
-actually starts — in the meantime, the slate types treat the rangeproof
-as opaque hex bytes, which is enough to parse and forward existing
-slates without verifying the proof.
+**Earlier doc revisions in this repo incorrectly described Grin as
+using BP+** — that was wrong. Slate types still treat the rangeproof as
+opaque hex bytes, which remains correct and unblocks all surfaces that
+don't depend on producing or verifying valid range proofs.
 
 ## Reference
 
