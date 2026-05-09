@@ -107,11 +107,26 @@ jobs:
       - name: Install TS deps
         run: npm install
 
+      # Build in topological dependency order: leaves first, then
+      # consumers. `tsc -p tsconfig.json` (the per-package `build`
+      # script) IS a typecheck that emits — running it in order means
+      # each consumer finds its deps' `dist/` already populated.
+      #
+      # `npm run typecheck --workspaces` doesn't emit dist/ files, so
+      # running it before build leaves later workspaces unable to
+      # resolve their @smirk/* imports.
+      #
+      # When adding a new TS package, append it here in dep order.
+      - name: Build workspace (topological)
+        run: |
+          npm run build -w @smirk/wasm
+          npm run build -w @smirk/assets
+          npm run build -w @smirk/core
+          npm run build -w @smirk/ui
+          npm run build -w @smirk/extension
+
       - name: Typecheck workspace
         run: npm run typecheck --workspaces --if-present
-
-      - name: Build workspace
-        run: npm run build --workspaces --if-present
 
       - name: Test workspace
         run: npm test --workspaces --if-present
