@@ -29,5 +29,11 @@ export * from './api';
 // Crypto
 export * from './crypto';
 
+// Address derivation + validation
+export * from './address';
+
+// HD wallet derivation
+export * from './hd';
+
 // Shared types
 export * from './types';

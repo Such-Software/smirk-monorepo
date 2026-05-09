@@ -13,8 +13,9 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `crates/btc-ext/` | Working — BIP32/BIP39 derivation, P2WPKH (BIP84) + P2TR (BIP86) addresses for BTC + LTC, PSBT signing. Built on rust-bitcoin |
 | `crates/swap-core/` | Stub — atomic swap state machine, implementation pending (v0.4 work) |
 | `packages/wasm/` | Working — `@smirk/wasm` TS bindings around the WASM crypto bundle |
-| `packages/core/` | Skeleton — shared TS lib (HD derivation, API client, address codecs); content migrates from smirk-extension |
-| `packages/extension/` `packages/mobile/` `packages/desktop/` | Not yet populated — UX shells still upcoming |
+| `packages/core/` | Working — shared TS lib (API client, crypto, BIP-137 signing, address codecs, HD derivation, types) |
+| `packages/extension/` | Skeleton — Chrome MV3 + Firefox shell, builds and loads; UI migration in progress |
+| `packages/mobile/` `packages/desktop/` | Not yet populated — UX shells still upcoming |
 
 The browser extension currently lives at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension). It will be migrated into `packages/extension/` here as the TS workspace is built out.
 
@@ -32,7 +33,8 @@ smirk-monorepo/
 │   └── swap-core/            # atomic swap state machine (stub — v0.4)
 ├── packages/                 # npm workspace (TypeScript)
 │   ├── wasm/                 # @smirk/wasm — TS bindings around crates/smirk-wasm/pkg/
-│   └── core/                 # @smirk/core — shared HD derivation, API client, codecs
+│   ├── core/                 # @smirk/core — API client, crypto, HD derivation, codecs
+│   └── extension/            # @smirk/extension — Chrome MV3 + Firefox shell (skeleton)
 ├── docs/                     # design notes per crate
 ├── Cargo.toml                # flat Rust workspace, all crates listed at root
 ├── package.json              # npm workspace root

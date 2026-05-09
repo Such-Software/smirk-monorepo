@@ -1,0 +1,27 @@
+{
+  "name": "@smirk/extension",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Smirk browser extension (Chrome MV3 + Firefox). Skeleton — incremental migration from Such-Software/smirk-extension is in progress.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "build:chrome": "vite build && cp manifest.json dist/manifest.json",
+    "build:firefox": "vite build && cp manifest.firefox.json dist/manifest.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@smirk/core": "*",
+    "@smirk/wasm": "*",
+    "preact": "^10.19.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "vite": "^5.4.0"
+  }
+}

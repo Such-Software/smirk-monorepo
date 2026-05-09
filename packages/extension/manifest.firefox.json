@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Smirk Wallet (dev)",
+  "version": "0.0.1",
+  "description": "Smirk multi-currency wallet — monorepo skeleton build. Not for production use.",
+  "permissions": ["storage", "alarms", "notifications", "scripting", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Smirk"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{smirk-monorepo-skeleton@such-software.dev}",
+      "strict_min_version": "115.0"
+    }
+  }
+}

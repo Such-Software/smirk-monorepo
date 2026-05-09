@@ -24,7 +24,10 @@
     "@smirk/wasm": "*",
     "@noble/ciphers": "^0.5.0",
     "@noble/curves": "^1.4.0",
-    "@noble/hashes": "^1.4.0"
+    "@noble/hashes": "^1.4.0",
+    "@scure/base": "^2.0.0",
+    "@scure/bip32": "^2.0.1",
+    "@scure/bip39": "^2.0.1"
   },
   "license": "MIT",
   "publishConfig": {

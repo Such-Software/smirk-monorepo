@@ -82,18 +82,31 @@ const addr = grin.slatepackAddress(mnemonic, 0, 'mainnet');
 
 ### `packages/core/` — `@smirk/core`
 
-Shared TypeScript code consumed by the browser extension, mobile app, and desktop app:
-- HD key derivation (BIP-39 + per-asset derivation paths)
-- API client for the Smirk backend (auth, social tipping, LWS, etc.)
-- Address codecs (BTC, LTC, XMR/WOW, Grin)
-- Shared types (wallet state, slate v4 helpers, asset metadata)
+Shared TypeScript code consumed by the browser extension, mobile app, and desktop app. Imports zero WASM — stays loadable in any context (browser, service worker, Node, Deno).
 
-Currently a skeleton — content migrates in over multiple commits from the legacy `Such-Software/smirk-extension` repo's `src/lib/`.
+Currently shipped:
+- **API client** — `SmirkApi` class + singleton `api`; covers auth, keys, link tips, social tips, wallet UTXO (BTC/LTC), wallet LWS (XMR/WOW), Grin slatepack relay + output store, prices/sparklines, blockchain heights. Bearer-token auth, 30s timeout, exponential-backoff retries on 5xx for idempotent endpoints.
+- **Crypto** — PBKDF2-SHA256 (WebCrypto, 600k iters) + XChaCha20-Poly1305 for at-rest seed encryption; secp256k1 ECDH for tip envelopes; BIP-137 Bitcoin message signing for `extensionRegister` proof-of-key-control.
+- **Address derivation + validation** — bech32 P2WPKH for BTC/LTC, Cryptonote (prefix + spend + view + Keccak checksum, Monero base58) for XMR/WOW, slatepack bech32 for Grin.
+- **HD wallet** — BIP39 mnemonic ↔ seed, BIP32 secp256k1 derivation for BTC/LTC, three derivation generations (v1 legacy / v2 buggy SLIP-10 / v3 Cake-compatible) for XMR/WOW so old wallets can be swept.
+- **Types** — `AssetType`, tip and key shapes used at the API surface.
+
+Chain-specific transaction crypto lives in `@smirk/wasm` (Rust). The wallet shells compose `@smirk/core` + `@smirk/wasm` + their own UI layer.
+
+### `packages/extension/` — `@smirk/extension`
+
+Browser extension shell (Chrome MV3 + Firefox), Vite + Preact. Currently a **skeleton** — proves the build pipeline (Vite → `@smirk/core` + `@smirk/wasm` → loadable extension) works, with the substantive popup/background/content code migrating in from [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) over multiple commits.
+
+```bash
+make ext-chrome   # builds packages/extension/dist/  (load as unpacked Chrome extension)
+make ext-firefox  # same dist/, but with Firefox manifest
+```
+
+The vite config at `packages/extension/vite.config.ts` copies the WASM bundle from `crates/smirk-wasm/pkg/` into `dist/wasm/` so the MV3 service worker can `fetch()` it at runtime. Run `make wasm` first if you haven't built the WASM bundle yet.
 
 ### Planned (not yet populated)
 
 - `packages/ui/` — shared Preact components used by extension + mobile + desktop
-- `packages/extension/` — Chrome MV3 + Firefox manifest, popup, background, content scripts
 - `packages/mobile/` — Capacitor app (iOS + Android)
 - `packages/desktop/` — Tauri app (Win/Mac/Linux)
 
