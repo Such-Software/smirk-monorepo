@@ -30,6 +30,7 @@
 use wasm_bindgen::prelude::*;
 
 mod address;
+mod bitcoin;
 mod grin;
 mod keys;
 mod output;
@@ -41,6 +42,7 @@ mod transaction;
 
 // Re-export public functions
 pub use address::validate_address;
+pub use bitcoin::{btc_derive_address, btc_sign_psbt};
 pub use grin::{
     grin_adaptor_complete, grin_adaptor_extract_secret, grin_adaptor_partial_sign,
     grin_adaptor_partial_verify, grin_blind_add, grin_blind_sub, grin_blind_sum,

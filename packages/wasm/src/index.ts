@@ -429,3 +429,51 @@ export const grin = {
       signatureHex,
     ),
 };
+
+// =============================================================================
+// Bitcoin / Litecoin
+// =============================================================================
+//
+// One namespace covers both chains — they differ only in network params
+// (HRP, version bytes), which are passed via the `network` argument.
+
+export type BtcNetwork = 'btc-mainnet' | 'btc-testnet' | 'ltc-mainnet' | 'ltc-testnet';
+export type BtcAddressKind = 'p2wpkh' | 'p2tr';
+
+export const bitcoin = {
+  /**
+   * Derive a BTC or LTC address from a BIP39 mnemonic + BIP32 path.
+   *
+   * @example
+   * ```ts
+   * // Native segwit (BIP84):
+   * bitcoin.deriveAddress(mnemonic, '', 'btc-mainnet', "m/84'/0'/0'/0/0", 'p2wpkh')
+   * // Taproot (BIP86):
+   * bitcoin.deriveAddress(mnemonic, '', 'btc-mainnet', "m/86'/0'/0'/0/0", 'p2tr')
+   * // Litecoin segwit:
+   * bitcoin.deriveAddress(mnemonic, '', 'ltc-mainnet', "m/84'/2'/0'/0/0", 'p2wpkh')
+   * ```
+   */
+  deriveAddress: (
+    mnemonic: string,
+    passphrase: string,
+    network: BtcNetwork,
+    path: string,
+    kind: BtcAddressKind,
+  ): string => wasm.btc_derive_address(mnemonic, passphrase, network, path, kind),
+
+  /**
+   * Sign a base64-encoded PSBT. Walks the per-input `bip32_derivation`
+   * map and signs every input whose origin matches `mnemonic` derived at
+   * `masterPath`. Inputs that don't match are left untouched.
+   *
+   * Returns JSON: `{ "psbt": "<base64>", "inputs_total": N, "inputs_signed": M }`.
+   */
+  signPsbt: (
+    mnemonic: string,
+    passphrase: string,
+    network: BtcNetwork,
+    masterPath: string,
+    psbtBase64: string,
+  ): string => wasm.btc_sign_psbt(mnemonic, passphrase, network, masterPath, psbtBase64),
+};

@@ -25,6 +25,10 @@ wownero-io = { path = "../monero-oxide/monero-oxide/io", default-features = fals
 # Smirk's Grin / Mimblewimble crate — slate construction, slatepack codec,
 # NRD kernels, atomic-swap adaptor sigs (built up across v0.3 → v0.4)
 grin-ext = { path = "../grin-ext" }
+
+# Smirk's BTC/LTC crate — BIP32 derivation, P2WPKH + P2TR address encoding,
+# PSBT signing. Built on rust-bitcoin; parameterized for both chains.
+btc-ext = { path = "../btc-ext" }
 subtle = { version = "2.6.1", default-features = false }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }
 # Use same rand_core version as monero-oxide

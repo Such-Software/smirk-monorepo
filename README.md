@@ -10,6 +10,7 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `crates/secp256k1zkp/` | Vendored — Grin's `grin_secp256k1zkp` v0.7.15 + Smirk patches for wasm32. Provides Bulletproofs, Pedersen commitments, aggsig |
 | `crates/smirk-wasm/` | Working — single WASM bundle exposing Monero/Wownero/Grin crypto to JS |
 | `crates/grin-ext/` | Working — seed derivation, slatepack address (Grim-verified), Schnorr (single + multi-party + adaptor), slate v4, Pedersen + Bulletproofs, slatepack codec (armor + bin + age encryption), kernels (incl. NRD), full slate construction (standard + invoice flow), transaction wire-format assembly, payment proofs |
+| `crates/btc-ext/` | Working — BIP32/BIP39 derivation, P2WPKH (BIP84) + P2TR (BIP86) addresses for BTC + LTC, PSBT signing. Built on rust-bitcoin |
 | `crates/swap-core/` | Stub — atomic swap state machine, implementation pending (v0.4 work) |
 | `packages/wasm/` | Working — `@smirk/wasm` TS bindings around the WASM crypto bundle |
 | `packages/core/` | Skeleton — shared TS lib (HD derivation, API client, address codecs); content migrates from smirk-extension |
@@ -27,6 +28,7 @@ smirk-monorepo/
 │   │                         #   (Bulletproofs, Pedersen, aggsig); patched for wasm32
 │   ├── smirk-wasm/           # wasm-bindgen wrapper, single WASM bundle for JS consumers
 │   ├── grin-ext/             # Grin / Mimblewimble protocol implementation
+│   ├── btc-ext/              # BTC + LTC: BIP32, P2WPKH/P2TR addresses, PSBT signing
 │   └── swap-core/            # atomic swap state machine (stub — v0.4)
 ├── packages/                 # npm workspace (TypeScript)
 │   ├── wasm/                 # @smirk/wasm — TS bindings around crates/smirk-wasm/pkg/

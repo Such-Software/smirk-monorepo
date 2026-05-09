@@ -1,0 +1,46 @@
+[package]
+name = "btc-ext"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Smirk's BTC/LTC support — BIP32 derivation, address encoding, PSBT signing. Built on rust-bitcoin; parameterized for BTC and LTC."
+repository = "https://github.com/Such-Software/smirk-monorepo"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# BIP39 mnemonic — same library grin-ext uses.
+bip39 = { version = "2.1", default-features = false, features = ["std", "zeroize"] }
+
+# rust-bitcoin — the canonical Rust Bitcoin library. Provides BIP32, PSBT,
+# Taproot, transaction construction, address encoding. We use it for BTC
+# directly and reuse its primitives for LTC by overriding network params
+# (HRP, version bytes) at the encoding layer.
+bitcoin = { version = "0.32", default-features = false, features = ["std", "secp-recovery", "rand-std", "base64"] }
+
+# bech32 — used directly for encoding P2WPKH (bech32) and P2TR (bech32m)
+# addresses with LTC's HRPs (`ltc`, `tltc`), since rust-bitcoin's
+# `bitcoin::address::Address` is hardcoded to BTC HRPs.
+bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
+
+# bs58 — Base58Check for legacy P2PKH/P2SH addresses (LTC, optional fallback).
+bs58 = { version = "0.5", default-features = false, features = ["alloc", "check"] }
+
+# Hex encoding for ergonomic test fixtures and external API surfaces.
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+
+# Serde for any structured types we expose to wasm-bindgen / TS consumers.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+# Zeroize secrets where rust-bitcoin doesn't already.
+zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
+
+# Enable js-feature deps on WASM targets so randomness works in browsers.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[lints]
+workspace = true

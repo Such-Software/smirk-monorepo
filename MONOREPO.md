@@ -39,6 +39,7 @@ The wasm-bindgen wrapper. Single WASM bundle that exposes:
 
 - **Monero/Wownero functions:** `validate_address`, `parse_tx`, `derive_key_image`, `derive_output_key_image`, `compute_key_image`, `estimate_fee`, `sign_transaction`. The `coin: "xmr" | "wow"` field on transaction params selects between Monero (ring 16, RCT type 6) and Wownero (ring 22, RCT type 8) at runtime.
 - **Grin functions:** seed/key derivation, slatepack address (Grim-compatible), Schnorr sign/verify, slate v4 parse/round-trip, Pedersen commit, Bulletproof create/verify/rewind. See [docs/grin.md](docs/grin.md) for the full export list.
+- **BTC/LTC functions:** `btc_derive_address` (P2WPKH or P2TR for either chain, mainnet or testnet), `btc_sign_psbt` (base64 PSBT in/out). Network passed as a string (`"btc-mainnet"`, `"ltc-mainnet"`, etc.).
 
 Output: `crates/smirk-wasm/pkg/` (gitignored, produced by `make wasm`).
 
@@ -47,6 +48,19 @@ Output: `crates/smirk-wasm/pkg/` (gitignored, produced by `make wasm`).
 Smirk's Grin / Mimblewimble protocol implementation. Built up from primitives (HMAC-SHA512, k256 / secp256k1zkp, ed25519, etc.) rather than forked from upstream `grin-wallet`, because we need to extend it with features that don't exist upstream (atomic-swap adaptor signatures, NRD-kernel time-locks, custom slate workflows).
 
 Currently shipped: seed → extended key, BIP32 child derivation, slatepack address (Grim-verified), Schnorr sign/verify, SlateV4 types + JSON round-trip, Pedersen + Bulletproofs. Still in flight: slatepack codec, slate construction, NRD kernels, multi-party Schnorr aggregation, adaptor sigs. See [docs/grin.md](docs/grin.md) for the full status table.
+
+### `crates/btc-ext/`
+
+Smirk's BTC and LTC support, built on [rust-bitcoin](https://github.com/rust-bitcoin/rust-bitcoin) v0.32. One crate covers both chains because Litecoin is byte-compatible with Bitcoin at the consensus and transaction layer; the only differences that matter to a wallet are address-encoding parameters, which we model in [`network.rs`](../crates/btc-ext/src/network.rs).
+
+Currently shipped:
+- **BIP32 / BIP39 derivation** — mnemonic → master xprv → child xprv along an arbitrary BIP32 path. Test-vectorized against the Trezor canonical all-abandon mnemonic.
+- **Address derivation** — P2WPKH (BIP84, `bc1q…` / `ltc1q…` / `tb1q…` / `tltc1q…`) and P2TR (BIP86 key-only, `bc1p…` / `ltc1p…`). bech32 / bech32m encoding done via the `bech32` crate so we can use LTC's HRPs (`ltc`, `tltc`) — rust-bitcoin's own `Address` type is BTC-only.
+- **PSBT signing** — base64-in / base64-out. Walks per-input `bip32_derivation` maps; signs every input whose origin matches the supplied xprv, leaves the rest untouched.
+
+Test vectors include the canonical BIP84 and BIP86 reference values from the BIPs themselves. See `crates/btc-ext/src/{bip32,address}.rs` for the unit tests.
+
+UTXO selection, fee estimation, and tx broadcast are deliberately out of scope here — those live in `@smirk/core` (TypeScript, infrastructure-aware) and call this crate via the WASM bridge.
 
 ### `crates/swap-core/`
 
