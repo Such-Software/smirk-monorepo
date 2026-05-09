@@ -47,5 +47,25 @@ export type { AssetIconProps } from './components/AssetIcon';
 export { BalanceCard } from './components/BalanceCard';
 export type { BalanceCardProps } from './components/BalanceCard';
 
+// ----- Shell -----
+export { AppShell } from './components/shell/AppShell';
+export type { AppShellProps } from './components/shell/AppShell';
+export { BottomNav } from './components/shell/BottomNav';
+export type { BottomNavProps } from './components/shell/BottomNav';
+
+// ----- State / hooks -----
+export {
+  StateProvider,
+  useIsPopout,
+  usePopupState,
+  useRoute,
+  useWizard,
+} from './state/hooks';
+export type {
+  StateProviderProps,
+  UseRouteApi,
+  UseWizardApi,
+} from './state/hooks';
+
 // ----- Helpers -----
 export { formatAmount, formatAmountWithAsset, formatAmountWithTicker } from './format';

@@ -1,51 +1,115 @@
 /**
- * Smirk popup — skeleton.
+ * Smirk popup — Phase 2 shell.
  *
- * Verifies the build pipeline (Vite → @smirk/core + @smirk/assets +
- * @smirk/ui + @smirk/wasm → MV3 popup) wires up end-to-end. The
- * substantive UI rebuild against UI_DESIGN.md principles lands in
- * later commits.
+ * Real `AppShell` with bottom nav + tab switching + persistent route
+ * (survives popup close, restored on reopen). Each tab is a placeholder
+ * that fills in across subsequent phases. Pop-out wired to
+ * `chrome.windows.create` so opening it shows the same state as the
+ * popup it came from.
  */
 
 import { render } from 'preact';
-import { CORE_PACKAGE_VERSION } from '@smirk/core';
-import { listAssets } from '@smirk/assets';
 import {
-  ActionButton,
-  ActionRow,
-  BalanceCard,
+  PopupStateStore,
+  RouteController,
+  autoDetectEphemeralStorage,
+} from '@smirk/core';
+import {
+  AppShell,
+  StateProvider,
   UI_PACKAGE_VERSION,
 } from '@smirk/ui';
+import { listAssets } from '@smirk/assets';
+
+// Boot the state foundation. One store + one router shared across the
+// whole popup tree; pop-out windows construct their own (different
+// instance, same backing storage — they sync via cross-context
+// notifications).
+const storage = autoDetectEphemeralStorage();
+const store = new PopupStateStore(storage);
+const router = new RouteController(store);
+
+function openPopOut() {
+  const popoutUrl = chrome.runtime.getURL('popup.html');
+  void chrome.windows.create({
+    url: popoutUrl,
+    type: 'popup',
+    width: 480,
+    height: 720,
+  });
+  // Close the popup so we don't have two windows showing the same
+  // content. The pop-out picks up exactly where this popup was via
+  // the shared `chrome.storage.session`.
+  window.close();
+}
 
 function App() {
-  const assets = listAssets();
+  return (
+    <StateProvider store={store} router={router}>
+      <AppShell
+        onPopOut={openPopOut}
+        routes={{
+          home: <HomeStub />,
+          swap: <SwapStub />,
+          inbox: <InboxStub />,
+          settings: <SettingsStub />,
+        }}
+      />
+    </StateProvider>
+  );
+}
 
+// ----- Tab placeholders -----
+//
+// Each tab gets a real screen in subsequent phases. For now these
+// just announce themselves so we can verify the shell wiring.
+
+function HomeStub() {
+  const assets = listAssets();
   return (
     <div>
-      <span class="tag">Skeleton</span>
-      <h1 style={{ marginTop: 12 }}>Smirk</h1>
-      <p class="muted">
-        <code>core@{CORE_PACKAGE_VERSION}</code> · <code>ui@{UI_PACKAGE_VERSION}</code>
+      <h2 style={{ fontSize: 16, marginTop: 0 }}>Home</h2>
+      <p class="muted" style={{ fontSize: 12 }}>
+        Phase 2 shell — total balance, action row, asset list, recent activity all
+        land in Phase 3.
       </p>
+      <p class="muted" style={{ fontSize: 11 }}>
+        ui@{UI_PACKAGE_VERSION} · {assets.length} assets registered
+      </p>
+    </div>
+  );
+}
 
-      <ActionRow class="actions">
-        <ActionButton label="Tip" icon="🎁" onClick={() => console.log('tip')} />
-        <ActionButton label="Send" icon="↗" onClick={() => console.log('send')} />
-        <ActionButton label="Swap" icon="⇄" onClick={() => console.log('swap')} />
-        <ActionButton label="Claim" icon="📥" onClick={() => console.log('claim')} />
-      </ActionRow>
+function SwapStub() {
+  return (
+    <div>
+      <h2 style={{ fontSize: 16, marginTop: 0 }}>Swap</h2>
+      <p class="muted" style={{ fontSize: 12 }}>
+        Aggregator (THORChain) vs Native (P2P) sub-toggle lands when the THORChain
+        prototype work begins.
+      </p>
+    </div>
+  );
+}
 
-      <h2 style={{ fontSize: 13, marginTop: 20, color: 'rgba(255,255,255,0.5)' }}>
-        Wallet ({assets.length} assets)
-      </h2>
-      <div>
-        {assets.map((a) => (
-          <BalanceCard key={a.id} assetId={a.id} balanceAtomic={0n} />
-        ))}
-      </div>
+function InboxStub() {
+  return (
+    <div>
+      <h2 style={{ fontSize: 16, marginTop: 0 }}>Inbox</h2>
+      <p class="muted" style={{ fontSize: 12 }}>
+        Slatepacks, swap rounds, tip notes, and DMs land here. Empty for now.
+      </p>
+    </div>
+  );
+}
 
-      <p class="muted" style={{ marginTop: 16, fontSize: 11 }}>
-        Production extension still at <code>Such-Software/smirk-extension</code>
+function SettingsStub() {
+  return (
+    <div>
+      <h2 style={{ fontSize: 16, marginTop: 0 }}>Settings</h2>
+      <p class="muted" style={{ fontSize: 12 }}>
+        Per-asset RPC config, denomination, spam mode, view-key export, seed
+        reveal. All TBD.
       </p>
     </div>
   );

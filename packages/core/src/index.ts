@@ -35,5 +35,8 @@ export * from './address';
 // HD wallet derivation
 export * from './hd';
 
+// Popup state, route persistence, wizard scaffold
+export * from './state';
+
 // Shared types
 export * from './types';

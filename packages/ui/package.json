@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@smirk/assets": "*",
+    "@smirk/core": "*",
     "preact": "^10.19.0"
   },
   "license": "MIT"
