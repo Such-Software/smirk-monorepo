@@ -21,7 +21,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@smirk/wasm": "*"
+    "@smirk/wasm": "*",
+    "@noble/ciphers": "^0.5.0",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0"
   },
   "license": "MIT",
   "publishConfig": {

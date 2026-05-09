@@ -1,0 +1,260 @@
+/**
+ * Smirk API client — mixes all domain-specific method groups into a
+ * single class.
+ *
+ * Most callers should import the singleton `api`:
+ *
+ * ```ts
+ * import { api } from '@smirk/core';
+ * api.setAccessToken('...');
+ * const tip = await api.getTip(linkId);
+ * ```
+ *
+ * Construct your own `SmirkApi(baseUrl)` only when you need to point at
+ * a non-default backend (test fixtures, local dev).
+ */
+
+import { ApiClient, ApiResponse } from './client';
+import { createAuthMethods, AuthMethods } from './auth';
+import { createKeysMethods, KeysMethods } from './keys';
+import { createTipsMethods, TipsMethods } from './tips';
+import { createSocialMethods, SocialMethods } from './social';
+import { createWalletUtxoMethods, WalletUtxoMethods } from './wallet-utxo';
+import { createWalletLwsMethods, WalletLwsMethods } from './wallet-lws';
+import { createGrinMethods, GrinMethods } from './grin';
+
+export type { ApiResponse } from './client';
+export { ApiClient } from './client';
+export * from './parse';
+
+export type { AuthMethods } from './auth';
+export type { KeysMethods } from './keys';
+export type { TipsMethods } from './tips';
+export type {
+  SocialMethods,
+  SocialLookupResponse,
+  CreateSocialTipRequest,
+  CreateSocialTipResponse,
+  ClaimableTip,
+  SentTip,
+  ReceivedTip,
+  PublicTipInfo,
+} from './social';
+export type { WalletUtxoMethods } from './wallet-utxo';
+export type { WalletLwsMethods } from './wallet-lws';
+export type { GrinMethods } from './grin';
+
+/**
+ * Combined Smirk API client. Implements every domain method group;
+ * subclass the underlying `ApiClient` for bearer-token auth and retry.
+ */
+export class SmirkApi
+  extends ApiClient
+  implements
+    AuthMethods,
+    KeysMethods,
+    TipsMethods,
+    Omit<SocialMethods, 'getReceivedTips'>,
+    WalletUtxoMethods,
+    WalletLwsMethods,
+    GrinMethods
+{
+  // Auth
+  telegramLogin: AuthMethods['telegramLogin'];
+  refreshToken: AuthMethods['refreshToken'];
+  extensionRegister: AuthMethods['extensionRegister'];
+  checkRestore: AuthMethods['checkRestore'];
+
+  // Keys
+  registerKey: KeysMethods['registerKey'];
+  getUserKeys: KeysMethods['getUserKeys'];
+  getUserKeyForAsset: KeysMethods['getUserKeyForAsset'];
+
+  // Link tips
+  createTip: TipsMethods['createTip'];
+  getTip: TipsMethods['getTip'];
+  getTipStatus: TipsMethods['getTipStatus'];
+  claimTip: TipsMethods['claimTip'];
+  getSentTips: TipsMethods['getSentTips'];
+  getReceivedTips: TipsMethods['getReceivedTips'];
+
+  // Social tips — note: SocialMethods.getReceivedTips is renamed to
+  // getReceivedSocialTips here because TipsMethods already exposes
+  // getReceivedTips for link tips.
+  lookupSocial: SocialMethods['lookupSocial'];
+  lookupSmirkName: SocialMethods['lookupSmirkName'];
+  createSocialTip: SocialMethods['createSocialTip'];
+  getClaimableTips: SocialMethods['getClaimableTips'];
+  getReceivedSocialTips: SocialMethods['getReceivedTips'];
+  getSentSocialTips: SocialMethods['getSentSocialTips'];
+  claimSocialTip: SocialMethods['claimSocialTip'];
+  clawbackSocialTip: SocialMethods['clawbackSocialTip'];
+  confirmTipSweep: SocialMethods['confirmTipSweep'];
+  getPublicSocialTip: SocialMethods['getPublicSocialTip'];
+
+  // Wallet UTXO (BTC/LTC)
+  getUtxoBalance: WalletUtxoMethods['getUtxoBalance'];
+  getUtxos: WalletUtxoMethods['getUtxos'];
+  broadcastTx: WalletUtxoMethods['broadcastTx'];
+  getHistory: WalletUtxoMethods['getHistory'];
+  estimateFee: WalletUtxoMethods['estimateFee'];
+
+  // Wallet LWS (XMR/WOW)
+  getLwsBalance: WalletLwsMethods['getLwsBalance'];
+  getUnspentOuts: WalletLwsMethods['getUnspentOuts'];
+  getRandomOuts: WalletLwsMethods['getRandomOuts'];
+  submitLwsTx: WalletLwsMethods['submitLwsTx'];
+  getLwsHistory: WalletLwsMethods['getLwsHistory'];
+  registerLws: WalletLwsMethods['registerLws'];
+  deactivateLws: WalletLwsMethods['deactivateLws'];
+
+  // Grin
+  createGrinRelay: GrinMethods['createGrinRelay'];
+  getGrinPendingSlatepacks: GrinMethods['getGrinPendingSlatepacks'];
+  signGrinSlatepack: GrinMethods['signGrinSlatepack'];
+  finalizeGrinSlatepack: GrinMethods['finalizeGrinSlatepack'];
+  cancelGrinSlatepack: GrinMethods['cancelGrinSlatepack'];
+  getGrinUserBalance: GrinMethods['getGrinUserBalance'];
+  getGrinUserHistory: GrinMethods['getGrinUserHistory'];
+  getGrinOutputs: GrinMethods['getGrinOutputs'];
+  recordGrinOutput: GrinMethods['recordGrinOutput'];
+  lockGrinOutputs: GrinMethods['lockGrinOutputs'];
+  unlockGrinOutputs: GrinMethods['unlockGrinOutputs'];
+  spendGrinOutputs: GrinMethods['spendGrinOutputs'];
+  recordGrinTransaction: GrinMethods['recordGrinTransaction'];
+  updateGrinTransaction: GrinMethods['updateGrinTransaction'];
+  broadcastGrinTransaction: GrinMethods['broadcastGrinTransaction'];
+
+  constructor(baseUrl?: string) {
+    super(baseUrl);
+
+    const auth = createAuthMethods(this);
+    const keys = createKeysMethods(this);
+    const tips = createTipsMethods(this);
+    const social = createSocialMethods(this);
+    const utxo = createWalletUtxoMethods(this);
+    const lws = createWalletLwsMethods(this);
+    const grin = createGrinMethods(this);
+
+    this.telegramLogin = auth.telegramLogin;
+    this.refreshToken = auth.refreshToken;
+    this.extensionRegister = auth.extensionRegister;
+    this.checkRestore = auth.checkRestore;
+
+    this.registerKey = keys.registerKey;
+    this.getUserKeys = keys.getUserKeys;
+    this.getUserKeyForAsset = keys.getUserKeyForAsset;
+
+    this.createTip = tips.createTip;
+    this.getTip = tips.getTip;
+    this.getTipStatus = tips.getTipStatus;
+    this.claimTip = tips.claimTip;
+    this.getSentTips = tips.getSentTips;
+    this.getReceivedTips = tips.getReceivedTips;
+
+    this.lookupSocial = social.lookupSocial;
+    this.lookupSmirkName = social.lookupSmirkName;
+    this.createSocialTip = social.createSocialTip;
+    this.getClaimableTips = social.getClaimableTips;
+    this.getReceivedSocialTips = social.getReceivedTips;
+    this.getSentSocialTips = social.getSentSocialTips;
+    this.claimSocialTip = social.claimSocialTip;
+    this.clawbackSocialTip = social.clawbackSocialTip;
+    this.confirmTipSweep = social.confirmTipSweep;
+    this.getPublicSocialTip = social.getPublicSocialTip;
+
+    this.getUtxoBalance = utxo.getUtxoBalance;
+    this.getUtxos = utxo.getUtxos;
+    this.broadcastTx = utxo.broadcastTx;
+    this.getHistory = utxo.getHistory;
+    this.estimateFee = utxo.estimateFee;
+
+    this.getLwsBalance = lws.getLwsBalance;
+    this.getUnspentOuts = lws.getUnspentOuts;
+    this.getRandomOuts = lws.getRandomOuts;
+    this.submitLwsTx = lws.submitLwsTx;
+    this.getLwsHistory = lws.getLwsHistory;
+    this.registerLws = lws.registerLws;
+    this.deactivateLws = lws.deactivateLws;
+
+    this.createGrinRelay = grin.createGrinRelay;
+    this.getGrinPendingSlatepacks = grin.getGrinPendingSlatepacks;
+    this.signGrinSlatepack = grin.signGrinSlatepack;
+    this.finalizeGrinSlatepack = grin.finalizeGrinSlatepack;
+    this.cancelGrinSlatepack = grin.cancelGrinSlatepack;
+    this.getGrinUserBalance = grin.getGrinUserBalance;
+    this.getGrinUserHistory = grin.getGrinUserHistory;
+    this.getGrinOutputs = grin.getGrinOutputs;
+    this.recordGrinOutput = grin.recordGrinOutput;
+    this.lockGrinOutputs = grin.lockGrinOutputs;
+    this.unlockGrinOutputs = grin.unlockGrinOutputs;
+    this.spendGrinOutputs = grin.spendGrinOutputs;
+    this.recordGrinTransaction = grin.recordGrinTransaction;
+    this.updateGrinTransaction = grin.updateGrinTransaction;
+    this.broadcastGrinTransaction = grin.broadcastGrinTransaction;
+  }
+
+  /** Current blockchain heights for all networks. */
+  getBlockchainHeights(): Promise<
+    ApiResponse<{
+      btc: number | null;
+      ltc: number | null;
+      xmr: number | null;
+      wow: number | null;
+      grin: number | null;
+    }>
+  > {
+    return this.request('/wallet/heights', { method: 'GET' });
+  }
+
+  /** Backend health check. */
+  healthCheck(): Promise<ApiResponse<{ status: string }>> {
+    return this.request('/health', { method: 'GET' });
+  }
+
+  /** Current cryptocurrency prices. */
+  getPrices(): Promise<
+    ApiResponse<{
+      btc: number | null;
+      ltc: number | null;
+      xmr: number | null;
+      wow: number | null;
+      grin: number | null;
+      updated_at: string;
+    }>
+  > {
+    return this.request('/prices', { method: 'GET' });
+  }
+
+  /** Sparkline (2-week downsampled price history) for an asset. */
+  getSparkline(
+    asset: string,
+  ): Promise<
+    ApiResponse<{ prices: number[]; min: number; max: number; change_pct: number }>
+  > {
+    return this.request(`/prices/sparkline/${asset}`, { method: 'GET' });
+  }
+
+  /**
+   * Migrate user keys to a new derivation scheme on the backend.
+   * Updates user_keys + wallets tables to match the new pubkeys derived
+   * client-side after a derivation-version bump.
+   */
+  migrateKeys(
+    keys: Array<{
+      asset: string;
+      public_key: string;
+      public_spend_key?: string;
+      address?: string;
+      view_key?: string;
+    }>,
+  ): Promise<ApiResponse<{ migrated: boolean }>> {
+    return this.request('/auth/migrate-keys', {
+      method: 'POST',
+      body: JSON.stringify({ keys }),
+    });
+  }
+}
+
+/** Default API instance pointing at production. */
+export const api = new SmirkApi();
