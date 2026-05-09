@@ -1,0 +1,30 @@
+{
+  "name": "@smirk/wasm",
+  "version": "0.0.1",
+  "description": "TypeScript wrapper around the smirk-wasm WASM crypto bundle. Re-exports every function with proper types and provides a typed initialization flow.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./pkg": {
+      "import": "../../crates/smirk-wasm/pkg/smirk_wasm.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
