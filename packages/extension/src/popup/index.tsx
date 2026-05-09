@@ -9,8 +9,11 @@
 
 import { render } from 'preact';
 import { CORE_PACKAGE_VERSION } from '@smirk/core';
+import { listAssets } from '@smirk/assets';
 
 function App() {
+  const assets = listAssets();
+
   return (
     <div>
       <span class="tag">Skeleton</span>
@@ -19,17 +22,14 @@ function App() {
         Monorepo build · <code>@smirk/core@{CORE_PACKAGE_VERSION}</code>
       </p>
 
+      <h2 style={{ fontSize: 14, marginTop: 16 }}>Registered assets ({assets.length})</h2>
       <ul>
-        <li>
-          <strong>Crypto:</strong> Rust crates (<code>monero-oxide</code>,{' '}
-          <code>grin-ext</code>, <code>btc-ext</code>) → WASM
-        </li>
-        <li>
-          <strong>HTTP / state:</strong> <code>@smirk/core</code>
-        </li>
-        <li>
-          <strong>UI:</strong> migration in progress
-        </li>
+        {assets.map((a) => (
+          <li key={a.id}>
+            <strong>{a.ticker}</strong> · <code>{a.id}</code> · {a.family.family} ·{' '}
+            decimals={a.decimals}
+          </li>
+        ))}
       </ul>
 
       <p class="muted" style={{ marginTop: 24, fontSize: 11 }}>

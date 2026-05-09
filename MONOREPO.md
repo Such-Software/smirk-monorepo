@@ -93,6 +93,31 @@ Currently shipped:
 
 Chain-specific transaction crypto lives in `@smirk/wasm` (Rust). The wallet shells compose `@smirk/core` + `@smirk/wasm` + their own UI layer.
 
+### `packages/assets/` — `@smirk/assets`
+
+Pure-data registry of every chain Smirk supports. The "what is BTC, what is XMR, what is Grin" answer in one place — decimals, ticker, display name, derivation paths, network metadata, capability flags (segwit / taproot / MWEB / payment proofs / NRD kernels / view tags / …), confirmation requirements, swap-route support.
+
+Definitions are JSON-serializable and import nothing chain-specific. Crypto functions live elsewhere (`@smirk/wasm` for WASM-backed chains, `@smirk/core` for pure-JS); consumers compose registry data with adapter code at the call site.
+
+Discriminated by chain family — `utxo` / `cryptonote` / `mimblewimble` — with per-family feature blocks so chain-specific quirks (LTC's MWEB, Grin's payment proofs) don't leak into UI code as `if (asset === 'ltc')` branches.
+
+Static-first, dynamic-capable: the 5 built-ins (`btc`, `ltc`, `xmr`, `wow`, `grin`) register at module load; `registry.register(def)` adds further chains without recompiling the package.
+
+```ts
+import { registry, listAssets, ASSET_IDS } from '@smirk/assets';
+
+const btc = registry.mustGet(ASSET_IDS.BTC);
+console.log(btc.decimals);  // 8
+
+for (const asset of listAssets({ swapRoute: 'thorchain' })) {
+  console.log(asset.ticker);  // BTC, LTC, XMR
+}
+```
+
+44 unit tests cover the registry behavior plus per-asset sanity checks (WOW decimals = 11 not 12, XMR ring size = 16, Grin slate version, etc.).
+
+See [docs/UI_DESIGN.md](docs/UI_DESIGN.md) Principle 6 for the design rationale — no hardcoded `if (asset === 'btc')` branches anywhere in the wallet UI; everything iterates over the registry.
+
 ### `packages/extension/` — `@smirk/extension`
 
 Browser extension shell (Chrome MV3 + Firefox), Vite + Preact. Currently a **skeleton** — proves the build pipeline (Vite → `@smirk/core` + `@smirk/wasm` → loadable extension) works, with the substantive popup/background/content code migrating in from [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) over multiple commits.
