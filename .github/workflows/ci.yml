@@ -29,11 +29,18 @@ jobs:
       - name: cargo check
         run: cargo check --workspace --all-features
 
+      # Test only the Smirk crates. Vendored monero-oxide ships
+      # daemon-RPC integration tests that require a live monerod at
+      # 127.0.0.1:18081 and would always fail in CI.
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test -p smirk-wasm -p grin-ext -p btc-ext -p swap-core
 
+      # Clippy only the Smirk crates. The vendored secp256k1zkp +
+      # monero-oxide subtrees ship code that pre-dates several modern
+      # clippy lints (redundant_field_names, etc.); we don't restyle
+      # vendored code. Add new Smirk crates to this list as they land.
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy -p smirk-wasm -p grin-ext -p btc-ext -p swap-core --all-targets -- -D warnings
 
   wasm:
     name: WASM bundle

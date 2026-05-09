@@ -4,11 +4,11 @@
 //! receiver names the price (think "merchant pay-this-link") and the
 //! sender funds it.
 //!
-//! - **I1** — receiver declares amount + their output (commit + bulletproof)
-//!            + their pubkey/nonce.
+//! - **I1** — receiver declares amount + their output (commit +
+//!   bulletproof) + their pubkey/nonce.
 //! - **I2** — sender adds their pubkey/nonce + partial sig.
 //! - **I3** — receiver adds their partial + aggregates; produces final
-//!            kernel sig.
+//!   kernel sig.
 //!
 //! Same multi-party Schnorr math underneath — only the slate state codes
 //! and "who's first" semantics differ from the standard ceremony.
@@ -90,7 +90,7 @@ pub fn receiver_init_i1_with_id(
         KernelFeatures::Nrd {
             relative_height, ..
         } => Some(KernelFeaturesArgsV4 {
-            lock_hgt: relative_height as u64,
+            lock_hgt: u64::from(relative_height),
         }),
         KernelFeatures::Plain { .. } | KernelFeatures::Coinbase => None,
     };

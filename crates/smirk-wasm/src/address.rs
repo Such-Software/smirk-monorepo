@@ -44,14 +44,17 @@ fn validate_wownero_address(address: &str) -> Result<AddressInfo, String> {
     // Read varint prefix
     let (prefix, prefix_len) = read_varint(&raw)?;
 
-    // Determine address type from prefix
+    // Determine address type from prefix.
+    //
+    // TODO: Wownero testnet validation. Wownero shares the standard prefix
+    // (4146) between mainnet and testnet, so prefix alone can't
+    // disambiguate — would need a leading-character or version-byte
+    // check. Until we have testnet support in the wallet, mainnet-only
+    // is acceptable.
     let (network, is_subaddress, has_payment_id) = match prefix {
-        // Mainnet
         4146 => ("mainnet", false, false),   // Standard
         6810 => ("mainnet", false, true),    // Integrated
         12208 => ("mainnet", true, false),   // Subaddress
-        // Testnet (same prefixes for wownero testnet)
-        4146 if address.starts_with("9") => ("testnet", false, false),
         _ => return Err(format!("Unknown Wownero prefix: {}", prefix)),
     };
 

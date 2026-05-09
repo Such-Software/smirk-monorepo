@@ -2,6 +2,13 @@
 //!
 //! This module computes the key_offset and commitment mask needed to spend
 //! outputs, using the view key and transaction public key from LWS data.
+//
+// TODO(post-port-review): this module was lifted verbatim from the
+// pre-monorepo `smirk-wasm-monero` package; pre-existing clippy noise
+// (useless_conversion across `EdwardsPoint::from(_.into())` chains)
+// is allowed here so CI passes. Clean up when we revisit XMR/WOW
+// signing for the registry-aware send flow.
+#![allow(clippy::useless_conversion)]
 
 use monero_oxide::ed25519::{CompressedPoint, Point, Scalar};
 use monero_oxide::primitives::keccak256;
@@ -94,6 +101,11 @@ pub fn derive_commitment_mask(
 /// Derives the view tag for an output.
 ///
 /// view_tag = first byte of Hs("view_tag" || 8Ra || output_index)
+///
+/// Currently unused — kept for the eventual XMR view-tag scanning path
+/// (Salvium hardfork onward; lets a wallet skip output decryption when
+/// the view tag doesn't match before doing the expensive ed25519 ops).
+#[allow(dead_code)]
 pub fn derive_view_tag(
     view_key: &[u8; 32],
     tx_pub_key: &[u8; 32],

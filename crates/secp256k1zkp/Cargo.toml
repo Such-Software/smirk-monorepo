@@ -21,15 +21,18 @@ cc = "1.0"
 name = "secp256k1zkp"
 path = "src/lib.rs"
 
+# Smirk patch: removed obsolete `dev` feature and its `clippy` optional
+# dep. They wired clippy-as-rustc-plugin (pre-2018 pattern); the `plugin`
+# unstable feature was removed from rustc in 1.75.0 so any build with
+# `--all-features` fails. Modern clippy is `cargo clippy` — no opt-in
+# needed. See `crates/secp256k1zkp/src/lib.rs` for the matching change.
 [features]
 unstable = []
 default = []
 bullet-proof-sizing = []
-dev = ["clippy"]
 
 [dependencies]
 arrayvec = "0.7"
-clippy = {version = "0.0", optional = true}
 rand = "0.5"
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }

@@ -88,7 +88,7 @@ pub fn sender_init_s1_with_id(
         KernelFeatures::Nrd {
             relative_height, ..
         } => Some(KernelFeaturesArgsV4 {
-            lock_hgt: relative_height as u64,
+            lock_hgt: u64::from(relative_height),
         }),
         KernelFeatures::Plain { .. } | KernelFeatures::Coinbase => None,
     };
@@ -168,9 +168,9 @@ pub struct ReceiverRoundOutput {
     pub context: ReceiverContext,
 }
 
-/// Run the receiver round: take an S1 slate, add a new output (commitment
-/// + bulletproof), compute the receiver's partial signature, return the
-/// S2 slate.
+/// Run the receiver round: take an S1 slate, add a new output
+/// (commitment + bulletproof), compute the receiver's partial signature,
+/// return the S2 slate.
 pub fn receiver_round_s2(params: &ReceiverRoundParams) -> Result<ReceiverRoundOutput, String> {
     if params.s1_slate.sta != SlateStateV4::Standard1 {
         return Err(format!(

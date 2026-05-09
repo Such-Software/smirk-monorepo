@@ -24,7 +24,7 @@ pub fn grin_point_add(a_hex: &str, b_hex: &str) -> Result<String, JsValue> {
 /// 33-byte (66-hex-char) pubkeys. Returns the sum as 33-byte hex.
 #[wasm_bindgen]
 pub fn grin_point_sum(points_concat_hex: &str) -> Result<String, JsValue> {
-    if points_concat_hex.len() % 66 != 0 {
+    if !points_concat_hex.len().is_multiple_of(66) {
         return Err(JsValue::from_str(&format!(
             "concatenated pubkeys length must be a multiple of 66 hex chars; got {}",
             points_concat_hex.len()
@@ -119,7 +119,7 @@ pub fn grin_schnorr_partial_verify(
 /// 32-byte (64-hex-char) scalars. Returns the aggregate as 32-byte hex.
 #[wasm_bindgen]
 pub fn grin_schnorr_aggregate_partials(partials_concat_hex: &str) -> Result<String, JsValue> {
-    if partials_concat_hex.len() % 64 != 0 {
+    if !partials_concat_hex.len().is_multiple_of(64) {
         return Err(JsValue::from_str(&format!(
             "concatenated partials length must be a multiple of 64 hex chars; got {}",
             partials_concat_hex.len()

@@ -22,7 +22,6 @@
 //! decoder, which sees zero senders + zero recipients and then the payload.
 //! Populating the metadata with sender/recipient info is a follow-up.
 
-use age::secrecy::ExposeSecret;
 use age::x25519::{Identity as AgeIdentity, Recipient as AgeRecipient};
 use bech32::{ToBase32, Variant};
 use curve25519_dalek::edwards::CompressedEdwardsY;
@@ -263,10 +262,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// `age::secrecy::ExposeSecret` lives in deps; making sure the import is
-    /// actually used so the import line stays clean.
-    #[allow(dead_code)]
-    fn _import_check(id: &AgeIdentity) {
-        let _ = id.to_string().expose_secret().clone();
-    }
 }

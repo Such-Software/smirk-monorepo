@@ -83,15 +83,15 @@ impl KernelFeatures {
             3 => {
                 let lh = lock_hgt
                     .ok_or_else(|| "NRD kernel requires feat_args.lock_hgt".to_string())?;
-                if lh == 0 || lh > NRD_MAX_RELATIVE_HEIGHT as u64 {
+                if lh == 0 || lh > u64::from(NRD_MAX_RELATIVE_HEIGHT) {
                     return Err(format!(
                         "NRD relative_height {lh} out of range [1, {NRD_MAX_RELATIVE_HEIGHT}]"
                     ));
                 }
-                Ok(KernelFeatures::Nrd {
-                    fee,
-                    relative_height: lh as u16,
-                })
+                // Bounds-checked above (lh <= NRD_MAX_RELATIVE_HEIGHT, which fits u16).
+                #[allow(clippy::cast_possible_truncation)]
+                let relative_height = lh as u16;
+                Ok(KernelFeatures::Nrd { fee, relative_height })
             }
             other => Err(format!("unknown kernel feature byte: {other}")),
         }
@@ -118,8 +118,7 @@ impl KernelFeatures {
             } => {
                 if *relative_height == 0 || *relative_height > NRD_MAX_RELATIVE_HEIGHT {
                     return Err(format!(
-                        "NRD relative_height {} out of range [1, {NRD_MAX_RELATIVE_HEIGHT}]",
-                        relative_height
+                        "NRD relative_height {relative_height} out of range [1, {NRD_MAX_RELATIVE_HEIGHT}]"
                     ));
                 }
                 hasher.update(&fee.to_be_bytes());
@@ -160,8 +159,7 @@ impl KernelFeatures {
             } => {
                 if *relative_height == 0 || *relative_height > NRD_MAX_RELATIVE_HEIGHT {
                     return Err(format!(
-                        "NRD relative_height {} out of range [1, {NRD_MAX_RELATIVE_HEIGHT}]",
-                        relative_height
+                        "NRD relative_height {relative_height} out of range [1, {NRD_MAX_RELATIVE_HEIGHT}]"
                     ));
                 }
                 out.extend_from_slice(&fee.to_be_bytes());

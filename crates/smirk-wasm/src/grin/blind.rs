@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 /// `scalars_concat_hex` is the concatenation of N 64-hex-char scalars.
 #[wasm_bindgen]
 pub fn grin_blind_sum(scalars_concat_hex: &str) -> Result<String, JsValue> {
-    if scalars_concat_hex.len() % 64 != 0 {
+    if !scalars_concat_hex.len().is_multiple_of(64) {
         return Err(JsValue::from_str(&format!(
             "scalars length must be a multiple of 64 hex chars; got {}",
             scalars_concat_hex.len()
@@ -60,7 +60,7 @@ pub fn grin_sender_blind_excess(
     kernel_offset_hex: &str,
 ) -> Result<String, JsValue> {
     let split = |concat: &str, name: &str| -> Result<Vec<[u8; 32]>, JsValue> {
-        if concat.len() % 64 != 0 {
+        if !concat.len().is_multiple_of(64) {
             return Err(JsValue::from_str(&format!(
                 "{name} length must be a multiple of 64 hex chars; got {}",
                 concat.len()

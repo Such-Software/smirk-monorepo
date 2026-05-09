@@ -23,7 +23,14 @@ use super::build_kernel_features;
 /// `lock_height` and `relative_height` are required for the corresponding
 /// kernel kinds. `slate_id` is the caller-supplied slate UUID — pass a
 /// fresh v4 UUID string (e.g. `crypto.randomUUID()` in the browser).
+//
+// Wasm-bindgen exports take all params positionally — the JS side calls
+// this as `grin_sender_init_s1(...9 args...)`. Folding into a struct
+// would force the JS caller to build an object literal, which doesn't
+// improve the call site for a one-shot init function. Allow the wide
+// signature.
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn grin_sender_init_s1(
     slate_id: &str,
     amount: u64,
@@ -140,7 +147,11 @@ pub fn grin_receiver_round_s2(
 /// construction or tampered receiver data).
 ///
 /// Returns JSON: `{ "slate_json": "...", "final_signature_hex": "..." }`.
+//
+// Wasm-bindgen positional-arg surface — see `grin_sender_init_s1` for
+// rationale on the wide signature.
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn grin_sender_finalize_s3(
     s2_slate_json: &str,
     context_slate_id: &str,
@@ -205,7 +216,11 @@ pub fn grin_sender_finalize_s3(
 // =============================================================================
 
 /// Receiver-init for an invoice flow: receiver creates the slate first.
+//
+// Wasm-bindgen positional-arg surface — see `grin_sender_init_s1` for
+// rationale on the wide signature.
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn grin_receiver_init_i1(
     slate_id: &str,
     amount: u64,

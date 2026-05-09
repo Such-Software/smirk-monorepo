@@ -101,7 +101,7 @@ fn scalar_from_bytes(bytes: &[u8; 32]) -> Option<Scalar> {
     let scalar = Scalar::from_uint_unchecked(k256::U256::from_be_slice(bytes));
     // Check it's < curve order. k256::Scalar internally reduces, so we explicitly
     // re-encode and compare.
-    if scalar.to_bytes().as_slice() == bytes {
+    if &scalar.to_bytes()[..] == bytes {
         Some(scalar)
     } else {
         None

@@ -2,7 +2,11 @@
 //!
 //! Run with: cargo test
 
+// `tests::tests` is the existing layout — kept for now so we don't
+// rename test paths during the CI greening. Refactor when we restructure
+// smirk-wasm tests for the post-port surface.
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::result::WasmResult;
 

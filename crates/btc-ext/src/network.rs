@@ -21,6 +21,11 @@ pub enum Network {
     LtcTestnet,
 }
 
+// Per-network values are declared one arm per network rather than merged
+// (e.g. `BtcTestnet | LtcTestnet => 1`) so each row is documented at its
+// own line. Keeping the table form makes per-network changes a 1-line
+// edit and keeps the table readable as a chain reference card.
+#[allow(clippy::match_same_arms)]
 impl Network {
     /// Bech32 / bech32m human-readable prefix used for P2WPKH and P2TR.
     pub fn bech32_hrp(self) -> &'static str {

@@ -180,8 +180,7 @@ pub fn pubkey_to_commitment(pubkey_compressed: &[u8; 33]) -> Result<[u8; 33], St
         0x03 => 0x09,
         other => {
             return Err(format!(
-                "unexpected pubkey parity prefix 0x{:02x}; expected 0x02 or 0x03",
-                other
+                "unexpected pubkey parity prefix 0x{other:02x}; expected 0x02 or 0x03"
             ))
         }
     };
@@ -419,8 +418,7 @@ mod tests {
             .any(|w| w == expected_features_bytes);
         assert!(
             found,
-            "expected NRD kernel features bytes ({:?}) to appear in TX",
-            expected_features_bytes
+            "expected NRD kernel features bytes ({expected_features_bytes:?}) to appear in TX"
         );
     }
 }

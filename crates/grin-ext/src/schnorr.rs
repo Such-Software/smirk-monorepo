@@ -39,7 +39,6 @@
 use blake2::{digest::{Update, VariableOutput}, Blake2bVar};
 use k256::elliptic_curve::group::GroupEncoding;
 use k256::elliptic_curve::ops::Reduce;
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::{NonZeroScalar, ProjectivePoint, PublicKey, Scalar, SecretKey, U256};
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroize;
@@ -360,17 +359,6 @@ pub fn final_signature(public_nonce_total: &[u8; 33], aggregate_s: &[u8; 32]) ->
     Signature(sig)
 }
 
-/// Public-key from secret-key helper used in aggregation tests / WASM.
-fn pubkey_from_secret(secret_key: &[u8; 32]) -> Result<[u8; 33], String> {
-    let scalar = NonZeroScalar::try_from(secret_key.as_slice())
-        .map_err(|e| format!("invalid secret key: {e}"))?;
-    let secret = SecretKey::from(scalar);
-    let public = PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
-    let bytes = public.to_sec1_bytes();
-    let mut out = [0u8; 33];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
 
 // =============================================================================
 // Schnorr adaptor signatures (the v0.4 atomic swap unlock)
@@ -575,7 +563,7 @@ mod tests {
     }
 
     fn pubkey_for(sk: &[u8; 32]) -> [u8; 33] {
-        super::pubkey_from_secret(sk).unwrap()
+        crate::secp256k1::public_key_from_secret_key(sk).unwrap()
     }
 
     #[test]

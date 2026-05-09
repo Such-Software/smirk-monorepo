@@ -42,9 +42,9 @@ pub struct SignReport {
 /// what was signed.
 ///
 /// rust-bitcoin's `Psbt::sign` walks the `bip32_derivation` map on each
-/// input and signs with whichever child key matches the xprv's fingerprint
-/// + path. Inputs whose origin info doesn't match this xprv are left
-/// untouched, which is the correct behavior for multi-signer flows.
+/// input and signs with whichever child key matches the xprv's
+/// (fingerprint, path) origin info. Inputs whose origin doesn't match
+/// this xprv are left untouched — correct behavior for multi-signer flows.
 pub fn sign_psbt(psbt_base64: &str, xprv: &Xpriv) -> Result<(String, SignReport), PsbtError> {
     let mut psbt = Psbt::from_str(psbt_base64).map_err(|_| PsbtError::InvalidPsbt)?;
     let secp = Secp256k1::new();

@@ -6,6 +6,17 @@
 //! 3. Combine into `OutputWithDecoys`
 //! 4. Build `SignableTransaction` with destination and change
 //! 5. Sign with the spend key
+//
+// TODO(post-port-review): this module was lifted verbatim from the
+// pre-monorepo `smirk-wasm-monero` package; it carries some clippy
+// noise (useless_conversion on dalek wrappers, manual checked_div /
+// div_ceil in fee math). Allowed here so CI passes; clean up when
+// we revisit XMR/WOW signing for the registry-aware send flow.
+#![allow(
+    clippy::useless_conversion,
+    clippy::manual_div_ceil,
+    clippy::manual_checked_ops,
+)]
 
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -29,7 +40,13 @@ use crate::result::WasmResult;
 // ============================================================================
 
 /// An unspent output from LWS `get_unspent_outs`.
+///
+/// `height` and `rct` are deserialized but not currently read — they're
+/// part of the LWS API contract (round-trip fidelity) and `rct` becomes
+/// load-bearing once we wire the RingCT commitment-recovery path; until
+/// then dead-code-allowed.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct LwsOutput {
     /// Amount in atomic units
     pub amount: u64,

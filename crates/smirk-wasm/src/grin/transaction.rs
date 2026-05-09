@@ -24,7 +24,7 @@ pub fn grin_slate_to_transaction_bytes(
     let s3 = grin_ext::slate::parse_slate_v4(s3_slate_json).map_err(|e| JsValue::from_str(&e))?;
 
     // Parse inputs: concatenated (features_byte || 33-byte commit).
-    if sender_inputs_concat_hex.len() % 68 != 0 {
+    if !sender_inputs_concat_hex.len().is_multiple_of(68) {
         return Err(JsValue::from_str(&format!(
             "inputs hex length must be a multiple of 68 (one input = 1 feat + 33 commit = 34 bytes); got {}",
             sender_inputs_concat_hex.len()

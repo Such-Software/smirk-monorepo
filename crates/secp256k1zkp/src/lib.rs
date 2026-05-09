@@ -32,9 +32,13 @@
 #![deny(unused_mut)]
 #![warn(missing_docs)]
 
-#![cfg_attr(feature = "dev", allow(unstable_features))]
-#![cfg_attr(feature = "dev", feature(plugin))]
-#![cfg_attr(feature = "dev", plugin(clippy))]
+// Smirk patch: removed obsolete `dev` cargo feature. Upstream wired
+// clippy-as-rustc-plugin via `#![cfg_attr(feature = "dev", feature(plugin))]`
+// (clippy ran as a rustc plugin pre-2018). The `plugin` unstable feature
+// was removed from rustc in 1.75.0 (see rust-lang/rust#116412), so any
+// build with `--all-features` now fails. Modern clippy is `cargo clippy`
+// — no opt-in feature needed. Removing the entire `dev`/`clippy`
+// machinery as dead code.
 
 #![cfg_attr(all(test, feature = "unstable"), feature(test))]
 #[cfg(all(test, feature = "unstable"))] extern crate test;

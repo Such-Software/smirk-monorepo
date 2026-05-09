@@ -102,7 +102,10 @@ impl SlatepackBin {
         let (opt_flags, opt_bytes): (u16, Vec<u8>) = match &self.sender {
             Some(addr) => {
                 let mut buf = Vec::with_capacity(1 + addr.len());
-                let len = addr.len().min(255) as u8; // grin-wallet caps at 255
+                // grin-wallet caps the address-length prefix at 255 bytes;
+                // .min(255) below makes the truncation explicit.
+                #[allow(clippy::cast_possible_truncation)]
+                let len = addr.len().min(255) as u8;
                 buf.push(len);
                 buf.extend_from_slice(&addr.as_bytes()[..len as usize]);
                 (0x0001, buf)
@@ -110,10 +113,16 @@ impl SlatepackBin {
             None => (0x0000, Vec::new()),
         };
         out.extend_from_slice(&opt_flags.to_be_bytes());
+        // Slatepack length fields are u32 BE per the wire format. Real
+        // slatepack payloads are always well under 2^32 bytes, so the
+        // cast is safe in practice; if a >4GB sender address or payload
+        // ever showed up we'd have far worse problems.
+        #[allow(clippy::cast_possible_truncation)]
         out.extend_from_slice(&(opt_bytes.len() as u32).to_be_bytes());
         out.extend_from_slice(&opt_bytes);
 
         // payload (length-prefixed)
+        #[allow(clippy::cast_possible_truncation)]
         out.extend_from_slice(&(self.payload.len() as u32).to_be_bytes());
         out.extend_from_slice(&self.payload);
 
@@ -144,7 +153,7 @@ impl SlatepackBin {
             consumed += 1 + addr_len;
             let addr_bytes = cursor.read_bytes(addr_len)?;
             Some(
-                core::str::from_utf8(&addr_bytes)
+                core::str::from_utf8(addr_bytes)
                     .map_err(|e| format!("sender address is not UTF-8: {e}"))?
                     .to_string(),
             )
@@ -391,7 +400,7 @@ mod tests {
     #[test]
     fn armor_word_wraps_at_15_chars() {
         // Long payload to ensure we hit the word-wrap boundary.
-        let payload: Vec<u8> = (0..200).map(|i| (i & 0xff) as u8).collect();
+        let payload: Vec<u8> = (0..200u8).collect();
         let armored = armor(&payload);
         // The base58 region (between the header's '.' and the footer's '.')
         // should contain spaces inserted every 15 chars.
