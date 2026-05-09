@@ -12,16 +12,19 @@ The existing [smirk-extension](https://github.com/Such-Software/smirk-extension)
 |---|---|
 | HMAC-SHA512 (key derivation) | `hmac` + `sha2` crates |
 | BIP39 (mnemonic ↔ entropy) | `bip39` crate |
-| secp256k1 + Schnorr | (planned) `secp256k1` / `secp256k1-zkp` |
-| Bulletproofs range proofs (BP, not BP+) | (planned) `secp256k1-zkp` |
-| ed25519 (slatepack address) | `curve25519-dalek` (already pulled by `monero-oxide`) |
-| Bech32 (slatepack address) | (planned) `bech32` |
-| BLAKE2b | (planned) `blake2b_simd` |
+| secp256k1 + Schnorr | `k256` (pure Rust) for the Schnorr layer; `crates/secp256k1zkp/` (vendored `grin_secp256k1zkp` v0.7.15) for Pedersen / aggsig / Bulletproofs |
+| Bulletproofs range proofs (BP, not BP+) | `crates/secp256k1zkp/` — Grin never adopted BP+ |
+| ed25519 (slatepack address) | `curve25519-dalek` (also pulled by `monero-oxide`) |
+| Bech32 (slatepack address) | `bech32` crate |
+| BLAKE2b | `blake2` crate |
+| age encryption (slatepack mode 1) | `age` crate (pure Rust, ChaCha20-Poly1305 + scrypt + X25519) |
 | Slate types (V4) | **Smirk** — match upstream byte-for-byte serialization |
-| Slate construction logic | **Smirk** — round-trip flow, kernel offset, signature aggregation |
-| Slatepack codec | **Smirk** — ASCII armor + age encryption |
-| NRD kernel construction | **Smirk** — only-Smirk |
+| Slate construction logic (S1/S2/S3 + I1/I2/I3) | **Smirk** — sender-driven and invoice (receiver-driven) ceremonies |
+| Slatepack codec | **Smirk** — ASCII armor + binary `SlatepackBin` + age encryption |
+| Kernel construction (Plain / Coinbase / HeightLocked / NRD) | **Smirk** |
 | Adaptor-signature variants | **Smirk** — doesn't exist upstream |
+| Payment proofs | **Smirk** — ed25519-signed `(amount, kernel_commitment, sender_address)` receipt |
+| Transaction wire-format assembly | **Smirk** — finalized slate → broadcastable tx bytes |
 
 Crypto primitives are well-tested upstream — we don't reimplement them. Protocol logic is ours so we can extend it freely.
 
@@ -75,7 +78,7 @@ Two-tier verification before any feature ships:
 
 ## WASM exports
 
-Available now in `crates/smirk-wasm/`:
+Available now in `crates/smirk-wasm/src/grin/` (organized into submodules — `keys`, `schnorr`, `multiparty`, `adaptor`, `bulletproof`, `blind`, `slate`, `slate_builder`, `kernel`, `transaction`, `payment_proof`, `slatepack`):
 
 | Function | Returns |
 |---|---|
