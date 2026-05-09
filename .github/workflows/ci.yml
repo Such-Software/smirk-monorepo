@@ -35,12 +35,14 @@ jobs:
       - name: cargo test
         run: cargo test -p smirk-wasm -p grin-ext -p btc-ext -p swap-core
 
-      # Clippy only the Smirk crates. The vendored secp256k1zkp +
-      # monero-oxide subtrees ship code that pre-dates several modern
-      # clippy lints (redundant_field_names, etc.); we don't restyle
+      # Clippy only the Smirk crates. `--no-deps` is load-bearing — `-p`
+      # filters which crate cargo focuses on but vendored transitive
+      # deps still get linted without it. The secp256k1zkp + monero-oxide
+      # subtrees ship code that pre-dates several modern clippy lints
+      # (redundant_field_names, into_iter_on_ref, etc.); we don't restyle
       # vendored code. Add new Smirk crates to this list as they land.
       - name: cargo clippy
-        run: cargo clippy -p smirk-wasm -p grin-ext -p btc-ext -p swap-core --all-targets -- -D warnings
+        run: cargo clippy -p smirk-wasm -p grin-ext -p btc-ext -p swap-core --all-targets --no-deps -- -D warnings
 
   wasm:
     name: WASM bundle

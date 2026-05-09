@@ -34,14 +34,32 @@ import { hmac } from '@noble/hashes/hmac';
 import { sha512 } from '@noble/hashes/sha512';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { ed25519 } from '@noble/curves/ed25519';
+import { registry } from '@smirk/assets';
 
-/** SLIP-0044 BIP44 coin types. */
+/**
+ * SLIP-0044 BIP44 coin types, sourced from the asset registry.
+ *
+ * Adding a new chain to the wallet means adding it to `@smirk/assets`
+ * — the value flows here automatically. The `assertCoinType` helper
+ * keeps strict typing while making the runtime lookup explicit.
+ */
 const COIN_TYPES = {
-  btc: 0,
-  ltc: 2,
-  xmr: 128,
-  wow: 2086,
+  btc: assertCoinType('btc'),
+  ltc: assertCoinType('ltc'),
+  xmr: assertCoinType('xmr'),
+  wow: assertCoinType('wow'),
 } as const;
+
+function assertCoinType(id: 'btc' | 'ltc' | 'xmr' | 'wow'): number {
+  const def = registry.mustGet(id);
+  const mainnet = def.networks.mainnet;
+  if (!mainnet) {
+    throw new Error(
+      `@smirk/core/hd: asset "${id}" must define a mainnet network with a BIP44 coin type`,
+    );
+  }
+  return mainnet.bip44CoinType;
+}
 
 export interface GrinKeys {
   /** Private key (32 bytes) — ed25519 scalar. */

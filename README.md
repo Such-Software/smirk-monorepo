@@ -15,6 +15,7 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `packages/wasm/` | Working — `@smirk/wasm` TS bindings around the WASM crypto bundle |
 | `packages/core/` | Working — shared TS lib (API client, crypto, BIP-137 signing, address codecs, HD derivation, types) |
 | `packages/assets/` | Working — `@smirk/assets` registry: pure-data definitions (decimals, family, capabilities, networks) for every chain Smirk supports. 44 unit tests. |
+| `packages/ui/` | Skeleton — `@smirk/ui` shared Preact components (BalanceCard, ActionButton/Row, AssetIcon, formatAmount). Registry-driven, zero hardcoded chains |
 | `packages/extension/` | Skeleton — Chrome MV3 + Firefox shell, builds and loads; UI migration in progress |
 | `packages/mobile/` `packages/desktop/` | Not yet populated — UX shells still upcoming |
 
@@ -36,6 +37,7 @@ smirk-monorepo/
 │   ├── wasm/                 # @smirk/wasm — TS bindings around crates/smirk-wasm/pkg/
 │   ├── core/                 # @smirk/core — API client, crypto, HD derivation, codecs
 │   ├── assets/               # @smirk/assets — pure-data registry of every supported chain
+│   ├── ui/                   # @smirk/ui — shared Preact components (BalanceCard, ActionButton, ...)
 │   └── extension/            # @smirk/extension — Chrome MV3 + Firefox shell (skeleton)
 ├── docs/                     # design notes per crate
 ├── Cargo.toml                # flat Rust workspace, all crates listed at root
