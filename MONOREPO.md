@@ -54,14 +54,34 @@ Adaptor-signature primitives and atomic swap state machine. Currently a stub —
 
 ## Packages (TypeScript)
 
-Empty for now. The browser extension currently lives at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension); migration into `packages/extension/` follows once `crates/grin-ext/` reaches feature parity with the existing Grin stack in that repo.
+npm workspace at the monorepo root. All packages share `tsconfig.base.json` and use vanilla `tsc` for builds (no bundler at the lib level — bundling happens at the consumer level via Vite for the extension, etc.).
 
-Planned layout when populated:
+### `packages/wasm/` — `@smirk/wasm`
 
-- `packages/core/` — HD derivation, API client, address codecs (extracted from today's `smirk-extension/src/lib/`)
-- `packages/wasm/` — thin TS re-export of `crates/smirk-wasm/pkg/` with TS types
-- `packages/extension/` — Chrome MV3 + Firefox extension
+Thin TypeScript wrapper around the wasm-bindgen output at `crates/smirk-wasm/pkg/`. Exposes every Grin/Monero/Wownero/aggregate function organized into `monero` and `grin` namespaces with TypeScript types. Consumers must call `await initialize()` once before using.
+
+```ts
+import { initialize, grin } from '@smirk/wasm';
+await initialize();
+const addr = grin.slatepackAddress(mnemonic, 0, 'mainnet');
+```
+
+### `packages/core/` — `@smirk/core`
+
+Shared TypeScript code consumed by the browser extension, mobile app, and desktop app:
+- HD key derivation (BIP-39 + per-asset derivation paths)
+- API client for the Smirk backend (auth, social tipping, LWS, etc.)
+- Address codecs (BTC, LTC, XMR/WOW, Grin)
+- Shared types (wallet state, slate v4 helpers, asset metadata)
+
+Currently a skeleton — content migrates in over multiple commits from the legacy `Such-Software/smirk-extension` repo's `src/lib/`.
+
+### Planned (not yet populated)
+
+- `packages/ui/` — shared Preact components used by extension + mobile + desktop
+- `packages/extension/` — Chrome MV3 + Firefox manifest, popup, background, content scripts
 - `packages/mobile/` — Capacitor app (iOS + Android)
+- `packages/desktop/` — Tauri app (Win/Mac/Linux)
 
 ## Git subtree workflow
 

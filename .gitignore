@@ -15,13 +15,13 @@ scripts/env-stub.cjs
 node_modules/
 .npm/
 .pnpm-store/
-dist/
 build/
 .parcel-cache/
 .next/
 .turbo/
 
-# TypeScript
+# TypeScript build artifacts
+packages/*/dist/
 *.tsbuildinfo
 
 # Capacitor

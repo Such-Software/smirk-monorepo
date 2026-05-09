@@ -3,7 +3,8 @@
 # Cross-language build commands. See MONOREPO.md for layout details.
 
 .PHONY: help build test check clean wasm wasm-node wasm-smoke rust-build \
-        rust-test rust-check ts-build ts-test wasm-clean rust-clean ts-clean
+        rust-test rust-check ts-build ts-test ts-typecheck ts-install \
+        wasm-clean rust-clean ts-clean
 
 # Default target — show help
 help:
@@ -72,20 +73,19 @@ wasm-smoke: wasm-node
 wasm-clean:
 	rm -rf crates/smirk-wasm/pkg crates/smirk-wasm/pkg-node
 
-# TypeScript targets — populated when packages/ is wired up in session 2
-ts-build:
-	@if [ -f package.json ]; then \
-	  npm run build --workspaces --if-present; \
-	else \
-	  echo "No root package.json yet — TS workspace lands in session 2"; \
-	fi
+# TypeScript workspace targets
+
+ts-install:
+	npm install
+
+ts-build: ts-install wasm
+	npm run build --workspaces --if-present
+
+ts-typecheck:
+	npm run typecheck --workspaces --if-present
 
 ts-test:
-	@if [ -f package.json ]; then \
-	  npm test --workspaces --if-present; \
-	else \
-	  echo "No root package.json yet — TS workspace lands in session 2"; \
-	fi
+	npm test --workspaces --if-present
 
 ts-clean:
 	rm -rf node_modules
