@@ -32,20 +32,26 @@ Top-level navigation is **verbs**, not **nouns**:
 
 | Tab          | Purpose                                                       |
 |--------------|---------------------------------------------------------------|
-| **Home**     | Total balance across assets, recent activity, quick actions   |
-| **Wallet**   | Per-asset balances and addresses (the only asset-list view)   |
+| **Home**     | Total balance, action row, asset list, recent activity        |
 | **Swap**     | Cross-chain swap interface (THORChain v0.3, native v0.4+)     |
-| **Activity** | Transaction history, pending Grin slatepacks, unclaimed tips  |
+| **Inbox**    | Slatepacks, swap rounds, incoming tips with notes, e2ee DMs   |
+| **Settings** | Wallet config, custom RPC servers, view-key export, seed      |
 
-Asset selection is a sub-step *inside* each flow, never the entry
-point. The user clicks "Send" and is then asked which asset; the user
-clicks "Create Tip" and is then asked the amount and asset. This
-inverts the legacy model where the user clicks "BTC" → then "Send" —
-the action they wanted was Send, not BTC.
+Four tabs total. Per-asset detail (address, view key, per-chain
+history, RPC override) lives as a drill-down screen *from* Home, not
+as its own tab — modern wallet pattern (Phantom, Trust, Cake) where
+the asset list IS the wallet view.
 
-The Wallet tab still exists as a place to inspect per-asset state
-(balance, address, view key, derivation path). It's a reference view,
-not the primary navigation.
+Asset selection is a sub-step *inside* each action flow, never the
+entry point. The user clicks "Send" and is then asked which asset;
+the user clicks "Create Tip" and is then asked the amount and asset.
+This inverts the legacy model where the user clicks "BTC" → then
+"Send" — the action they wanted was Send, not BTC.
+
+The action row on Home contains the four universal verbs:
+**Tip · Send · Receive · Swap**. "Claim" is contextual — it appears
+only when there's a claimable tip, and it lives where the tip lives
+(Inbox), not as a top-level action.
 
 ## Principle 2 — No transparent / shielded vault split
 
@@ -69,30 +75,77 @@ Where privacy considerations *do* surface in the UI:
 
 Not in the asset list.
 
-## Principle 3 — Grin gets a Message Center
+## Principle 3 — Unified Inbox for everything that arrives
 
-Grin's interactive transaction model (slatepacks) breaks the standard
-"address → amount → send" UX. A slatepack is an inbound message that
-needs a response, more than it is a passive receive event.
+Slatepacks aren't the only thing that flows in. Atomic-swap rounds
+(v0.4+) need responses. Incoming tips can carry notes. Free-form
+e2ee messages between users (v0.4+) ride the same relay. Lumping
+all of these into one tab — **Inbox** — gives users a single
+"what needs my attention" surface and re-uses one backend primitive
+across four item kinds.
 
-Concretely, Grin transactions surface in the UI as:
+| Kind | Source | Visual / actions |
+|---|---|---|
+| 📝 Slatepack | Grin sender | "Sign" / "Finalize" / "Cancel" |
+| ⇄ Swap round | v0.4 atomic-swap counterparty | "Respond" / "Cancel" |
+| 🎁 Tip | Incoming tip with optional note | "Claim" + read note |
+| 💬 Message | Free text, ≤240 chars, e2ee | Read + "Reply" + "Block" |
 
-- A **Pending Slatepacks** list under the Activity tab — items
-  requiring the user to sign or finalize.
-- **Clipboard auto-detect** — when the popup opens, scan the
-  clipboard for a `BEGINSLATEPACK…ENDSLATEPACK` block and offer to
-  process it via a non-modal toast (with explicit user consent before
-  reading clipboard contents in flows where consent isn't already
-  granted).
-- An **Invoice flow** treated as a first-class peer to the standard
-  Send flow — the user can request payment by generating an invoice
-  slatepack, distinct from "give me your address."
+All four ride the same backend envelope — the existing slatepack
+relay endpoint generalizes to take a `kind` field plus an
+encrypted-to-recipient payload. Backend stores ciphertext + metadata
++ TTL only; never sees plaintext. Same relay primitive for all
+four = one schema to maintain, one code path to harden.
 
-The "interactive" flag on the asset registry (see Principle 6)
-controls whether an asset uses the Address paradigm or the Slatepack
-paradigm in send/receive flows. Grin is the only such asset today;
-the design needs to accommodate at least one more in the future
-(MWC, Beam, future MW chains).
+**Versioning:**
+- v0.3 — Inbox surface ships with slatepacks (existing) + tips with
+  optional notes.
+- v0.4 — adds swap-round items.
+- v0.4 (or v0.5) — adds free-form e2ee messages.
+
+**Slatepack-specific behaviors:**
+
+- **Clipboard auto-detect** — when the popup opens, scan for
+  `BEGINSLATEPACK…ENDSLATEPACK` and offer to ingest via a non-modal
+  toast (with explicit consent for clipboard read).
+- **Invoice flow** as a first-class peer to standard Send — the
+  user can request payment by generating an invoice slatepack,
+  distinct from "give me your address."
+
+The `addressKind: 'interactive'` flag on the asset registry (Principle
+6) is what flips an asset out of the Send-to-address flow into the
+slatepack paradigm. Grin is the only such asset today; design has
+to accommodate future MW chains (Beam, MWC).
+
+**Anti-spam for free-form messages.** Three modes the user picks
+from in Settings:
+
+1. **Tip-gated** (default) — accept only from users you've previously
+   tipped, or who've previously tipped you. Social graph as filter.
+2. **Open** — any registered Smirk user can DM. Power users / public
+   tip-link recipients.
+3. **Closed** — only people in your contacts (manually allowed).
+
+Plus per-sender rate limit (default 3 / hour) and a per-recipient
+block list at every level. Block lists are encrypted blobs the
+backend stores — server has zero plaintext access.
+
+**Strategic posture.** End-to-end-encrypted messages sit Signal/Matrix
+shape (operator is a relay, never sees plaintext, can't moderate).
+That carries no MTL or chat-platform classification — Cash App and
+Venmo carry tx notes without messaging-specific licensing. The
+moderation-as-implicit-liability angle that bites unencrypted
+platforms doesn't apply here because we structurally cannot read
+content. Block + report just deletes the relayed ciphertext.
+
+What we do **NOT** ship:
+- A general /messages tab with contact list. Messages render in
+  context (alongside the tip in Inbox, alongside the slate in
+  Inbox), never as a standalone messenger app.
+- Group chat.
+- Any image / file / link surface. Text-only at 240 chars
+  trivially eliminates CSAM and spam-file vectors.
+- Search / indexing. Backend can't index ciphertext.
 
 ## Principle 4 — Swaps are top-level, with a step tracker
 
@@ -203,32 +256,75 @@ metadata is shown alongside, but never as the primary identifier.)
 Persisted grants live per-origin × per-asset. Revoking an asset's
 grant for a site is a single click.
 
+## Principle 8 — Unified balance, with denomination + hide
+
+The Home tab leads with a single large total balance — the answer to
+"how much do I have?" — rather than a stack of per-asset numbers.
+Per-asset balances are still visible (one row each in the asset
+list below), but the headline number is the sum.
+
+**Denomination is configurable.** Default to the user's reference
+fiat (USD picked at onboarding; switchable to EUR / GBP / etc.).
+Bitcoiners often want totals shown in BTC, not dollars; satoshi /
+nanogrin / atomic-WOW modes follow naturally. Tap the total to
+cycle, long-press to open the picker. Settings carries the
+permanent choice.
+
+**Pending is shown but separated.** The big number is *confirmed*
+balance. A small "+\$X.XX pending" line beneath surfaces incoming
+tips, mempool tx, swap-in-progress amounts. Different visual weight
+makes the distinction unmissable.
+
+**Hide toggle is mandatory.** An eye-icon next to the total masks
+all balance fields ("●●●●") for screen-share / coffee-shop /
+shared-laptop scenarios. This is a privacy expectation, not a
+nice-to-have — Coinbase, Trust, and most modern wallets ship it
+because users learned to expect it.
+
+**Failure states.** When the price feed is stale or unavailable,
+the fiat denomination renders as `—` with a tooltip ("Rate
+unavailable, last fetched 12m ago"). The native-denomination total
+(BTC mode, sat mode) keeps working since it's just summed atomic
+units divided by registered decimals — no network dependency.
+
+**Implementation note.** Atomic-units math is BigInt end-to-end;
+fiat conversion happens at the display layer only. Asset registry
+provides decimals, price feed provides USD-per-asset, denomination
+picker translates. No floating-point on consensus-critical values.
+
 ## Navigation summary
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Home    Wallet    Swap    Activity              [⚙]   │
+│  Home          Swap          Inbox          Settings    │
 ├─────────────────────────────────────────────────────────┤
 │                                                          │
-│  HOME:    total balance, quick actions, recent           │
-│           social activity, pending claimable tips        │
+│  HOME:    total balance (denomination toggle, hide);    │
+│           action row (Tip · Send · Receive · Swap);     │
+│           asset list (BalanceCard per chain →           │
+│             asset detail screen);                       │
+│           recent activity strip                          │
 │                                                          │
-│  WALLET:  scrollable list of registered assets;          │
-│           per-asset detail panel (balance, address,      │
-│           derivation path, view key export)              │
+│  SWAP:    aggregator vs native toggle; from/to picker;  │
+│           quote; step tracker for active swaps          │
 │                                                          │
-│  SWAP:    aggregator vs native toggle; from/to picker;   │
-│           quote; step tracker for active swaps           │
+│  INBOX:   unified item list — slatepacks, swap rounds,  │
+│           incoming tips with notes, e2ee DMs (v0.4+);   │
+│           per-item action verbs (Sign / Claim / Reply)  │
 │                                                          │
-│  ACTIVITY: tx history; pending Grin slatepacks;          │
-│            unclaimed tip links (with clawback)           │
+│  SETTINGS: wallet config, per-asset RPC overrides,      │
+│            view-key export, seed reveal,                │
+│            inbox-spam mode, denomination, etc.           │
 │                                                          │
 └─────────────────────────────────────────────────────────┘
 ```
 
+Asset detail (balance, address, view key, per-chain history, RPC
+override) is a drill-down screen *from* Home — tap any asset row.
+
 The same nav structure works on extension popup (360–400px wide),
 mobile (Capacitor full screen), and desktop (Tauri windowed). Shared
-Preact components in `packages/ui/` (planned) keep visual consistency.
+Preact components in `packages/ui/` keep visual consistency.
 
 ## Out of scope for this doc
 
