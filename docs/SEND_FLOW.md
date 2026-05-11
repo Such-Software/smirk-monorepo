@@ -12,13 +12,13 @@ popup. This doc describes the v0.3 target.
 
 Smirk derives **exactly one address per chain** for every user. There's
 no gap-limit receive-address rotation (BIP44-style), no separate change
-index. The leaf paths are fixed:
+index. The v3 (2026-05-11) leaf paths are fixed:
 
 | Asset | Path                  | Encoding   | External-wallet import |
 |-------|-----------------------|------------|-----------------------|
-| BTC   | `m/44'/0'/0'/0/0`     | P2WPKH bech32 | **Non-standard combination — import compat unverified.** See "BTC/LTC import compatibility" below. |
-| LTC   | `m/44'/2'/0'/0/0`     | P2WPKH bech32 | Same caveat as BTC. |
-| XMR   | `m/44'/128'/0'/0/0`   | Cryptonote primary (not subaddress) | Cake-compatible (matches Cake's BIP39 mode). |
+| BTC   | `m/84'/0'/0'/0/0`     | P2WPKH bech32 | Standard BIP84 — any wallet's seed-phrase import works. |
+| LTC   | `m/84'/2'/0'/0/0`     | P2WPKH bech32 | Standard BIP84 — same. |
+| XMR   | `m/44'/128'/0'/0/0`   | Cryptonote primary (not subaddress) | Cake-compatible (Cake's BIP39 mode). |
 | WOW   | `m/44'/2086'/0'/0/0`  | Cryptonote primary | Cake-compatible by the same derivation. |
 | Grin  | HMAC-SHA512 over BIP39 entropy with key `"IamVoldemort"` → ed25519 leaf | Slatepack | grin-wallet / Grim compatible. |
 
@@ -29,75 +29,58 @@ recipient in the Monero signer (XMR/WOW) are literally the user's own
 primary address. Grin's slate protocol handles change at the kernel
 level — no address needed.
 
-This is also why the WASM `bitcoin.signPsbt` takes a `masterPath` of
-`"m/44'/0'/0'"` (account level) — every input's `bip32_derivation` entry
-points at the **same** leaf path `m/44'/0'/0'/0/0`. The `build_psbt`
-test fixtures use `m/84'/0'/0'/0/0` for illustration purposes only —
-production callers from the popup must pass `m/44'/coin'/0'/0/0` to
-match what `deriveAddresses` produced at wallet creation.
+This is also why the WASM `bitcoin.signPsbt` can take a `masterPath` at
+the account level (`"m/84'/0'/0'"`) — every input's `bip32_derivation`
+entry points at the **same** leaf path `m/84'/coin'/0'/0/0`. The
+`build_psbt` test fixtures use `m/84'/0'/0'/0/0`; popup callers pass
+the same path matching what `deriveAddresses` produced at wallet
+creation.
 
-### BTC/LTC are Smirk-specific (verified 2026-05-11)
+### BTC/LTC standardization to BIP84 (shipped 2026-05-11)
 
-Smirk's BTC/LTC pair is unusual: the leaf key is derived at the
-BIP44 path `m/44'/coin'/0'/0/0` (the *legacy* path), but the address
-is encoded as **P2WPKH bech32** (the BIP84 *segwit* format).
+Pre-v0.3, Smirk shipped BTC/LTC at the BIP44 path `m/44'/coin'/0'/0/0`
+with P2WPKH bech32 encoding — a non-standard combination industry
+convention doesn't recognize (BIP44 → P2PKH; BIP84 → P2WPKH; Smirk did
+neither cleanly). **Verified empirically:** for the abandon mnemonic,
+Smirk's legacy v1/v2 derivation produces
+`bc1qmxrw6qdh5g3ztfcwm0et5l8mvws4eva24kmp8m` while standard BIP84
+produces `bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu` — Smirk seed
+phrases imported into Sparrow / Electrum / Cake / Bitcoin Core showed
+"0 balance" because each of them computed the BIP84 address instead.
 
-Industry convention:
-- BIP44 path → P2PKH legacy `1...` addresses
-- BIP49 path → P2SH-wrapped segwit `3...` addresses
-- BIP84 path → P2WPKH bech32 `bc1q...` addresses
+**v0.3 standardizes BTC/LTC on BIP84** (`m/84'/coin'/0'/0/0`). New
+wallets created after 2026-05-11 produce standard P2WPKH bech32
+addresses that any wallet's seed-phrase import reproduces. XMR/WOW
+remain at `m/44'/coin'/0'/0/0` since Cake's BIP39 mode uses that
+exact path for its mod-ℓ derivation — switching XMR/WOW would break
+Cake compat.
 
-**Verified by direct comparison** (abandon mnemonic, both addresses
-computed via `btc-ext`):
+**Pre-release migration plan (gates v0.3 launch):**
 
-```
-Smirk (BIP44 path + P2WPKH):  bc1qmxrw6qdh5g3ztfcwm0et5l8mvws4eva24kmp8m
-Standard BIP84:               bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu  ← BIP84 reference
-```
+1. Re-scan BTC/LTC addresses immediately before v0.3 launch. Initial
+   2026-05-11 sweep found a small number of affected users.
+2. DM affected users (out-of-band) with `scripts/seed-to-keys/`
+   instructions: the script prints both their *legacy* and
+   *v3-standard* addresses. They can sweep funds from legacy → v3
+   themselves (or wait until after v0.3 ships and import the legacy
+   hex private key into Sparrow/etc to spend).
+3. Same script + outreach also covers the WOW-holding users from
+   the v1/v2 → v3 derivation migration (separate concern from
+   BTC/LTC but same channel of users).
 
-Different addresses. **A Smirk seed imported by phrase into any
-standard wallet (Sparrow, Electrum, Bitcoin Core, Cake's BTC view,
-BlueWallet) will NOT show the user's Smirk BTC funds at the default
-derivation path.** Same applies for LTC.
+**After v0.3 ships:**
 
-The XMR/WOW Cake-compat claim is separate and *is* genuine — the
-legacy `smirk-extension` migration to v3 was specifically about
-Cake's BIP39 mode matching `m/44'/coin'/0'/0/0` → leaf-key reduced
-mod ℓ → spend key. That holds in the monorepo derivation. Grin's
-compat with grin-wallet/Grim is also confirmed (`"IamVoldemort"`
-HMAC key plus BIP39 entropy is the grin-wallet derivation).
+- `seed-to-keys` continues to be the recovery path for any user who
+  upgrades without sweeping first.
+- The legacy `m/44'/coin'/0'/0/0` BTC/LTC code path stays in
+  `@smirk/core/hd.ts` as `deriveLegacyBtcLtcKey` (only `deriveAllKeys`
+  v1/v2 still use it; v3 uses `deriveBip84Key`).
+- After all affected users have moved funds out, `deriveLegacyBtcLtcKey`
+  can be removed from the monorepo. Tracked in
+  `smirk-backend/docs/TECHNICAL_DEBT.md` item #15.
 
-**Recovery path for BTC/LTC into an external wallet:**
-
-The only practical way to access Smirk BTC/LTC funds from outside
-Smirk is to import the **private key** (not the seed phrase). The
-`scripts/seed-to-keys/seed-to-keys.mjs` tool outputs the hex private
-key for each chain; users can import that into:
-
-- Sparrow: File → New Wallet → "Software Wallet" → "Imported Hex" /
-  "Imported WIF".
-- Bitcoin Core: `importprivkey "<wif>"` (rescan may be needed).
-- Electrum: New wallet → "Use a master key" → paste WIF.
-
-Seed-phrase import won't work in any of these because the address
-path is non-standard.
-
-**Open decision for v0.4+:**
-
-Two options for fixing this strategically:
-
-1. **Migrate BTC/LTC to BIP84.** Same calculus as the v1/v2 → v3 XMR
-   migration: derive new addresses at `m/84'/coin'/0'/0/0`, ship a
-   sweep-and-rederive flow in the wallet. New addresses become
-   compatible with every standard wallet's seed import. Cost:
-   another migration, more user friction.
-2. **Keep the non-standard combination** and document it loudly as a
-   known limitation. Recovery via `seed-to-keys` + private-key
-   import remains the path. Cheaper, but bakes in the surprise for
-   future users.
-
-For v0.3, document the limitation honestly (this doc + the
-`seed-to-keys` README); defer the strategic decision to v0.4.
+XMR/WOW Cake-compat is unaffected by this change (their derivation
+path didn't move). Grin compat with grin-wallet/Grim also unchanged.
 
 ---
 

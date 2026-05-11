@@ -5,11 +5,19 @@
  *
  * | Asset | v3 path                  | Curve / scheme                  |
  * |-------|--------------------------|---------------------------------|
- * | BTC   | `m/44'/0'/0'/0/0`        | secp256k1, BIP32                |
- * | LTC   | `m/44'/2'/0'/0/0`        | secp256k1, BIP32                |
+ * | BTC   | `m/84'/0'/0'/0/0`        | secp256k1, BIP84 native-segwit  |
+ * | LTC   | `m/84'/2'/0'/0/0`        | secp256k1, BIP84 native-segwit  |
  * | XMR   | `m/44'/128'/0'/0/0`      | secp256k1 → mod l (Cake-compat) |
  * | WOW   | `m/44'/2086'/0'/0/0`     | secp256k1 → mod l               |
  * | Grin  | (separate — see below)   | ed25519 over `grin-ext` HMAC    |
+ *
+ * BTC/LTC switched from `m/44'/coin'/...` to `m/84'/coin'/...` on
+ * 2026-05-11 — the older path produced P2WPKH bech32 addresses at a
+ * non-standard derivation that no off-the-shelf wallet (Sparrow,
+ * Electrum, Cake, Bitcoin Core) reproduces from a seed import. v0.3
+ * standardizes on BIP84 so a Smirk seed restored anywhere matches.
+ * `deriveLegacyBtcLtcKey` keeps the old path available for the
+ * `seed-to-keys` recovery script.
  *
  * Three derivation generations exist and we keep all of them so old
  * wallets can be swept and migrated:
@@ -124,16 +132,27 @@ export function computeSeedFingerprint(mnemonic: string, passphrase = ''): strin
 }
 
 // ============================================================================
-// secp256k1 BIP44 derivation (BTC, LTC, and the Cake-compatible XMR path)
+// secp256k1 derivation (BTC, LTC, and the Cake-compatible XMR path)
 // ============================================================================
 
-/** Derive `m/44'/coin'/0'/0/0` and return the leaf priv/pub key pair. */
-function deriveBip44Key(
+/**
+ * Derive `m/<purpose>'/coin'/0'/0/0` and return the leaf priv/pub key pair.
+ *
+ * `purpose` selects the BIP44/BIP84/BIP86 hardened first segment:
+ * - `44` — BIP44 legacy path (used internally by XMR/WOW Cake-compatible
+ *   derivation, where the leaf key is then reduced mod ℓ).
+ * - `84` — BIP84 native-segwit path (used by BTC/LTC since 2026-05-11,
+ *   replacing the earlier non-standard `BIP44 path + P2WPKH encoding`
+ *   combination — see `docs/SEND_FLOW.md` § "BTC/LTC are Smirk-specific"
+ *   for the migration record).
+ */
+function deriveSecp256k1Key(
   masterSeed: Uint8Array,
   coinType: number,
+  purpose: 44 | 84,
 ): { privateKey: Uint8Array; publicKey: Uint8Array } {
   const hdKey = HDKey.fromMasterSeed(masterSeed);
-  const derived = hdKey.derive(`m/44'/${coinType}'/0'/0/0`);
+  const derived = hdKey.derive(`m/${purpose}'/${coinType}'/0'/0/0`);
 
   if (!derived.privateKey || !derived.publicKey) {
     throw new Error('Failed to derive key');
@@ -143,6 +162,36 @@ function deriveBip44Key(
     privateKey: derived.privateKey,
     publicKey: derived.publicKey,
   };
+}
+
+/** BTC/LTC standard P2WPKH derivation at `m/84'/coin'/0'/0/0`. */
+function deriveBip84Key(
+  masterSeed: Uint8Array,
+  coinType: number,
+): { privateKey: Uint8Array; publicKey: Uint8Array } {
+  return deriveSecp256k1Key(masterSeed, coinType, 84);
+}
+
+/**
+ * Pre-v0.3 BTC/LTC derivation at `m/44'/coin'/0'/0/0` (used with P2WPKH
+ * encoding — the Smirk-specific non-standard combination). Kept so the
+ * `seed-to-keys` recovery script can show users their legacy addresses
+ * for migration purposes. Not used by the current `deriveAllKeys` v3
+ * code path — use `deriveBip84Key` for new derivations.
+ */
+function deriveLegacyBtcLtcKey(
+  masterSeed: Uint8Array,
+  coinType: number,
+): { privateKey: Uint8Array; publicKey: Uint8Array } {
+  return deriveSecp256k1Key(masterSeed, coinType, 44);
+}
+
+/** Internal alias used by Cake-compatible XMR/WOW derivation. */
+function deriveBip44Key(
+  masterSeed: Uint8Array,
+  coinType: number,
+): { privateKey: Uint8Array; publicKey: Uint8Array } {
+  return deriveSecp256k1Key(masterSeed, coinType, 44);
 }
 
 // ============================================================================
@@ -352,9 +401,13 @@ export function deriveAllKeys(
   const masterSeed = mnemonicToSeed(mnemonic, passphrase);
 
   if (version === 3) {
+    // v3 BTC/LTC uses BIP84 (m/84') — the industry-standard P2WPKH path.
+    // Switched 2026-05-11; pre-v0.3 wallets used m/44' here (non-standard).
+    // Legacy `deriveLegacyBtcLtcKey` remains for the seed-to-keys recovery
+    // script so users on the old path can locate their funds.
     return {
-      btc: deriveBip44Key(masterSeed, COIN_TYPES.btc),
-      ltc: deriveBip44Key(masterSeed, COIN_TYPES.ltc),
+      btc: deriveBip84Key(masterSeed, COIN_TYPES.btc),
+      ltc: deriveBip84Key(masterSeed, COIN_TYPES.ltc),
       xmr: deriveBip32MoneroKeys(masterSeed, COIN_TYPES.xmr),
       wow: deriveBip32MoneroKeys(masterSeed, COIN_TYPES.wow),
       grin: deriveGrinKey(masterSeed),
@@ -362,9 +415,11 @@ export function deriveAllKeys(
   }
 
   if (version === 2) {
+    // v2 BTC/LTC matches the legacy pre-v0.3 path (BIP44 + P2WPKH
+    // encoding). Kept for sweep/migration of existing alpha wallets.
     return {
-      btc: deriveBip44Key(masterSeed, COIN_TYPES.btc),
-      ltc: deriveBip44Key(masterSeed, COIN_TYPES.ltc),
+      btc: deriveLegacyBtcLtcKey(masterSeed, COIN_TYPES.btc),
+      ltc: deriveLegacyBtcLtcKey(masterSeed, COIN_TYPES.ltc),
       xmr: deriveBip44MoneroKeys(masterSeed, COIN_TYPES.xmr),
       wow: deriveBip44MoneroKeys(masterSeed, COIN_TYPES.wow),
       grin: deriveGrinKey(masterSeed),
@@ -372,8 +427,8 @@ export function deriveAllKeys(
   }
 
   return {
-    btc: deriveBip44Key(masterSeed, COIN_TYPES.btc),
-    ltc: deriveBip44Key(masterSeed, COIN_TYPES.ltc),
+    btc: deriveLegacyBtcLtcKey(masterSeed, COIN_TYPES.btc),
+    ltc: deriveLegacyBtcLtcKey(masterSeed, COIN_TYPES.ltc),
     xmr: deriveCryptonoteKeys(masterSeed, 'xmr'),
     wow: deriveCryptonoteKeys(masterSeed, 'wow'),
     grin: deriveGrinKey(masterSeed),
@@ -384,8 +439,8 @@ export function deriveAllKeys(
 export function getDerivationInfo(version: DerivationVersion = 3): Record<string, string> {
   if (version === 3) {
     return {
-      btc: "m/44'/0'/0'/0/0 (BIP44 standard)",
-      ltc: "m/44'/2'/0'/0/0 (BIP44 standard)",
+      btc: "m/84'/0'/0'/0/0 (BIP84 native-segwit, standard P2WPKH)",
+      ltc: "m/84'/2'/0'/0/0 (BIP84 native-segwit, standard P2WPKH)",
       xmr: "m/44'/128'/0'/0/0 (BIP32 secp256k1, Cake Wallet compatible)",
       wow: "m/44'/2086'/0'/0/0 (BIP32 secp256k1)",
       grin: 'HMAC-SHA512(IamVoldemort, raw_entropy) → addressKey(0) (grin-wallet/Grim compatible)',

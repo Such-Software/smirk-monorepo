@@ -72,20 +72,23 @@ async function readSeedFromStdin() {
 const hex = (bytes) => Buffer.from(bytes).toString('hex');
 
 function renderVersion(version, keys) {
-  console.log(`\n=== Derivation v${version} ${version === 3 ? '(current, Cake-compatible)' : version === 2 ? '(buggy SLIP-10, do not use for new wallets)' : '(legacy custom)'} ===\n`);
+  const label =
+    version === 3
+      ? '(current — BTC/LTC standard BIP84, XMR/WOW Cake-compatible, Grin grin-wallet-compatible)'
+      : version === 2
+        ? '(legacy — BTC/LTC Smirk-specific BIP44 path + P2WPKH; XMR/WOW buggy SLIP-10)'
+        : '(legacy — BTC/LTC Smirk-specific BIP44 path + P2WPKH; XMR/WOW custom SHA256 v1)';
+  console.log(`\n=== Derivation v${version} ${label} ===\n`);
 
-  // BTC + LTC — unchanged across versions, but printed in each block
-  // for completeness. Skip in v2 since v2 is identical to v3 for
-  // these assets.
-  if (version !== 2) {
-    console.log(`BTC address:        ${btcAddress(keys.btc.publicKey)}`);
-    console.log(`BTC private key:    ${hex(keys.btc.privateKey)}`);
-    console.log(`LTC address:        ${ltcAddress(keys.ltc.publicKey)}`);
-    console.log(`LTC private key:    ${hex(keys.ltc.privateKey)}`);
-    console.log('');
-  } else {
-    console.log('BTC/LTC: identical to v3 — see v3 block.\n');
-  }
+  // BTC + LTC — v1 and v2 share the legacy Smirk-specific path (BIP44 +
+  // P2WPKH encoding, unique to Smirk pre-2026-05-11); v3 is standard BIP84
+  // that any wallet's seed import reproduces. Print both per version so
+  // users on legacy wallets see where their funds actually are.
+  console.log(`BTC address:        ${btcAddress(keys.btc.publicKey)}`);
+  console.log(`BTC private key:    ${hex(keys.btc.privateKey)}`);
+  console.log(`LTC address:        ${ltcAddress(keys.ltc.publicKey)}`);
+  console.log(`LTC private key:    ${hex(keys.ltc.privateKey)}`);
+  console.log('');
 
   // XMR / WOW — view + spend keys plus address
   console.log(`XMR address:        ${xmrAddress(keys.xmr.publicSpendKey, keys.xmr.publicViewKey)}`);
@@ -132,6 +135,10 @@ console.log('To recover funds:');
 console.log('  XMR / WOW → import the v3 (or v1/v2 if that\'s where your funds are)');
 console.log('             spend + view keys into Cake Wallet ("Restore from keys").');
 console.log('  GRIN     → import the slatepack private key into grin-wallet or Grim.');
-console.log('  BTC / LTC → import the WIF/hex private key into any wallet');
-console.log('             (Sparrow, Bitcoin Core, Electrum, etc.).');
+console.log('  BTC / LTC → For pre-v0.3 Smirk wallets, funds are at the v1/v2 address');
+console.log('             above (Smirk-specific path). Import the hex private key');
+console.log('             (NOT the seed phrase) into Sparrow / Bitcoin Core /');
+console.log('             Electrum to spend them.');
+console.log('             For v0.3+ Smirk wallets, funds are at the v3 address — any');
+console.log('             standard wallet\'s seed-phrase import will find them.');
 console.log('=================================================================');

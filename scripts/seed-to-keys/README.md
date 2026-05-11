@@ -13,29 +13,32 @@ Takes a 12-word BIP39 mnemonic and prints:
   all three derivation generations (v1, v2, v3)
 - Grin: slatepack address + private key, at all three generations
 
-## ⚠ BTC/LTC are Smirk-specific — read this before importing
+## BTC/LTC: pre-v0.3 wallets need the hex private key (not the seed)
 
-Smirk derives BTC and LTC at the **BIP44 path** `m/44'/coin'/0'/0/0`
-but encodes the result as a **P2WPKH bech32** address (a BIP84-style
-encoding). This non-standard combination means **importing your seed
-into Sparrow, Electrum, Cake's BTC view, or any other wallet will NOT
-show your Smirk BTC/LTC funds at the default settings.**
+Smirk shipped its alpha-period BTC/LTC derivation at the BIP44 path
+`m/44'/coin'/0'/0/0` with P2WPKH bech32 encoding — a Smirk-specific
+combination that no standard wallet reproduces from a seed import.
+**v0.3 (2026-05-11) switches BTC/LTC to standard BIP84** (`m/84'`),
+so future Smirk-created wallets work with any standard wallet's
+seed-phrase import.
 
-Verified 2026-05-11: for the abandon test mnemonic, Smirk produces
-`bc1qmxrw6qdh5g3ztfcwm0et5l8mvws4eva24kmp8m` while standard BIP84
-produces `bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu`.
+The script prints **all three derivation versions** for BTC/LTC.
+Match yours by registration date:
 
-To recover BTC/LTC funds in another wallet:
+- **Registered in v0.3 or later** → your funds are at the **v3**
+  address. Any standard wallet (Sparrow, Electrum, Cake, Bitcoin Core)
+  will see them by importing the seed phrase.
+- **Registered before v0.3** → your BTC/LTC funds are at the **v1/v2**
+  address (both rows show the same Smirk-specific address). Sparrow /
+  Electrum / Cake **won't see them from a seed import** — they derive
+  at standard BIP84 and check the wrong address. Import the **hex
+  private key** directly into:
+  - **Sparrow:** New Wallet → "Software Wallet" → "Imported Hex" / WIF
+  - **Bitcoin Core:** `importprivkey "<wif>"` (rescan needed)
+  - **Electrum:** New wallet → "Use a master key" → paste WIF
 
-1. Run this script to extract the **hex private key** for BTC/LTC.
-2. Import the hex/WIF private key directly (not the seed phrase) into:
-   - **Sparrow:** New Wallet → "Software Wallet" → Hex/WIF import
-   - **Bitcoin Core:** `importprivkey "<wif>"` (rescan needed)
-   - **Electrum:** New wallet → "Use a master key" → paste WIF
-
-Seed-phrase import won't work — every standard wallet derives at the
-BIP84 path, which yields a different address. XMR/WOW *are*
-Cake-compatible (verified). Grin is grin-wallet/Grim compatible.
+XMR/WOW *are* Cake-compatible (verified) — seed-phrase import to
+Cake works for those. Grin is grin-wallet/Grim compatible via seed.
 
 The user can then import the relevant keys into a target wallet:
 - **Cake Wallet** for XMR/WOW ("Restore from keys")
