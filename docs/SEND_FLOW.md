@@ -8,6 +8,97 @@ Status as of 2026-05-11: `SendWizard` UI exists in `@smirk/ui` but
 `onSubmit` is wired to a `stubSubmit` placeholder in the extension
 popup. This doc describes the v0.3 target.
 
+## Smirk's single-address scheme — read this first
+
+Smirk derives **exactly one address per chain** for every user. There's
+no gap-limit receive-address rotation (BIP44-style), no separate change
+index. The leaf paths are fixed:
+
+| Asset | Path                  | Encoding   | External-wallet import |
+|-------|-----------------------|------------|-----------------------|
+| BTC   | `m/44'/0'/0'/0/0`     | P2WPKH bech32 | **Non-standard combination — import compat unverified.** See "BTC/LTC import compatibility" below. |
+| LTC   | `m/44'/2'/0'/0/0`     | P2WPKH bech32 | Same caveat as BTC. |
+| XMR   | `m/44'/128'/0'/0/0`   | Cryptonote primary (not subaddress) | Cake-compatible (matches Cake's BIP39 mode). |
+| WOW   | `m/44'/2086'/0'/0/0`  | Cryptonote primary | Cake-compatible by the same derivation. |
+| Grin  | HMAC-SHA512 over BIP39 entropy with key `"IamVoldemort"` → ed25519 leaf | Slatepack | grin-wallet / Grim compatible. |
+
+**Implication for Send:** change always goes back to the **same** address
+the funds came from. No separate change-address derivation. The
+`changeAddress` parameter in `buildPsbt` (BTC/LTC) and the change
+recipient in the Monero signer (XMR/WOW) are literally the user's own
+primary address. Grin's slate protocol handles change at the kernel
+level — no address needed.
+
+This is also why the WASM `bitcoin.signPsbt` takes a `masterPath` of
+`"m/44'/0'/0'"` (account level) — every input's `bip32_derivation` entry
+points at the **same** leaf path `m/44'/0'/0'/0/0`. The `build_psbt`
+test fixtures use `m/84'/0'/0'/0/0` for illustration purposes only —
+production callers from the popup must pass `m/44'/coin'/0'/0/0` to
+match what `deriveAddresses` produced at wallet creation.
+
+### BTC/LTC are Smirk-specific (verified 2026-05-11)
+
+Smirk's BTC/LTC pair is unusual: the leaf key is derived at the
+BIP44 path `m/44'/coin'/0'/0/0` (the *legacy* path), but the address
+is encoded as **P2WPKH bech32** (the BIP84 *segwit* format).
+
+Industry convention:
+- BIP44 path → P2PKH legacy `1...` addresses
+- BIP49 path → P2SH-wrapped segwit `3...` addresses
+- BIP84 path → P2WPKH bech32 `bc1q...` addresses
+
+**Verified by direct comparison** (abandon mnemonic, both addresses
+computed via `btc-ext`):
+
+```
+Smirk (BIP44 path + P2WPKH):  bc1qmxrw6qdh5g3ztfcwm0et5l8mvws4eva24kmp8m
+Standard BIP84:               bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu  ← BIP84 reference
+```
+
+Different addresses. **A Smirk seed imported by phrase into any
+standard wallet (Sparrow, Electrum, Bitcoin Core, Cake's BTC view,
+BlueWallet) will NOT show the user's Smirk BTC funds at the default
+derivation path.** Same applies for LTC.
+
+The XMR/WOW Cake-compat claim is separate and *is* genuine — the
+legacy `smirk-extension` migration to v3 was specifically about
+Cake's BIP39 mode matching `m/44'/coin'/0'/0/0` → leaf-key reduced
+mod ℓ → spend key. That holds in the monorepo derivation. Grin's
+compat with grin-wallet/Grim is also confirmed (`"IamVoldemort"`
+HMAC key plus BIP39 entropy is the grin-wallet derivation).
+
+**Recovery path for BTC/LTC into an external wallet:**
+
+The only practical way to access Smirk BTC/LTC funds from outside
+Smirk is to import the **private key** (not the seed phrase). The
+`scripts/seed-to-keys/seed-to-keys.mjs` tool outputs the hex private
+key for each chain; users can import that into:
+
+- Sparrow: File → New Wallet → "Software Wallet" → "Imported Hex" /
+  "Imported WIF".
+- Bitcoin Core: `importprivkey "<wif>"` (rescan may be needed).
+- Electrum: New wallet → "Use a master key" → paste WIF.
+
+Seed-phrase import won't work in any of these because the address
+path is non-standard.
+
+**Open decision for v0.4+:**
+
+Two options for fixing this strategically:
+
+1. **Migrate BTC/LTC to BIP84.** Same calculus as the v1/v2 → v3 XMR
+   migration: derive new addresses at `m/84'/coin'/0'/0/0`, ship a
+   sweep-and-rederive flow in the wallet. New addresses become
+   compatible with every standard wallet's seed import. Cost:
+   another migration, more user friction.
+2. **Keep the non-standard combination** and document it loudly as a
+   known limitation. Recovery via `seed-to-keys` + private-key
+   import remains the path. Cheaper, but bakes in the surprise for
+   future users.
+
+For v0.3, document the limitation honestly (this doc + the
+`seed-to-keys` README); defer the strategic decision to v0.4.
+
 ---
 
 ## Universal stages
@@ -70,10 +161,13 @@ Keep `@smirk/ui` pure presentation — all chain logic in
      `selected_sum >= amount + estimated_fee`. Reject if not enough.
    - Build unsigned PSBT (BIP174):
      - Inputs: each selected UTXO with `witness_utxo`, `bip32_derivation`
-       (origin = our master xprv fingerprint + path).
+       (origin = our master xprv fingerprint + path **`m/44'/coin'/0'/0/0`**
+       — same path for every input, since Smirk uses a single-address
+       scheme).
      - Outputs: `[recipient: amount, change: selected_sum - amount - fee]`
-       where `change` is omitted if below dust limit (546 sat for BTC,
-       similar for LTC).
+       where `change_address` = `fromAddress` (single-address scheme;
+       no separate change-index derivation). Skip the change output if
+       it would be below the P2WPKH dust limit (294 sat per BIP-376).
 2. **ESTIMATE**
    - `api.estimateFee(asset)` → `{ fast, normal, slow }` sat/vB.
    - Compute virtual size: `inputs * 68 + outputs * 31 + 10` (rough P2WPKH
@@ -103,10 +197,15 @@ Keep `@smirk/ui` pure presentation — all chain logic in
 ### Edge cases for v0.3
 
 - Replace-by-fee (RBF) signaling on by default (sequence = 0xfffffffd).
-- Dust limit: skip change output if below 546 sat; the excess goes to
-  the miner as extra fee.
+- Dust limit: skip change output if below 294 sat (P2WPKH per BIP-376);
+  the excess goes to the miner as extra fee. `build_psbt` errors with
+  `DustChange` rather than silently passing through.
 - Address validation: `@smirk/core/address` already handles bech32 +
-  P2TR + legacy. Reject mainnet→testnet mismatches at the UI layer.
+  P2TR + legacy. The send UI should reject obvious garbage at the form
+  level; `build_psbt` does a final network-match check.
+- **Single-address scheme**: every spend's change goes back to the same
+  address the UTXOs came from. No privacy loss vs. the existing scheme;
+  Smirk has never had per-address rotation.
 
 ---
 
@@ -255,11 +354,32 @@ the wizard's previous "Next" buttons. Tap requires holding briefly
 ## What goes in commits as this lands
 
 - One PR per layer per asset family:
-  1. Rust: `crates/btc-ext/src/build.rs` + `extract.rs` + tests
-  2. WASM facade: expose `btc_build_psbt` + `btc_extract_tx`
-  3. TS facade: `@smirk/wasm/src/index.ts` bitcoin namespace gets `buildPsbt`
-     + `extractTx`
-  4. Handler: `packages/extension/src/popup/send-handler.ts` `sendBtc`
-  5. UI: review screen + wire `SendWizard.onSubmit` to handler
-- Test on testnet (BTC testnet3 or signet, LTC testnet) before mainnet.
-- Same series for XMR/WOW (stagenet first), Grin (testnet first).
+  1. Rust: `crates/btc-ext/src/build.rs` + tests — ✅ shipped 2026-05-11
+  2. WASM facade: `btc_build_psbt` + `btc_extract_tx` — ✅ shipped 2026-05-11
+  3. TS facade: `@smirk/wasm/src/index.ts` `bitcoin.buildPsbt` + `bitcoin.extractTx` — ✅ shipped 2026-05-11
+  4. Handler: `packages/extension/src/popup/send-handler.ts` `sendBtc` (TODO)
+  5. UI: review screen + wire `SendWizard.onSubmit` to handler (TODO)
+- Same series for XMR/WOW, then Grin.
+
+### Testing strategy: small mainnet amounts, no testnets
+
+Smirk does not exercise testnet (BTC testnet3 / signet / LTC testnet /
+XMR stagenet / Grin testnet) — production has always been mainnet-only,
+and that posture continues. Validation strategy:
+
+1. **Send the smallest sensible amount** — e.g. 1000 sat (~\$0.001 at any
+   recent BTC price), 0.0001 XMR, 0.001 GRIN. Total dollar exposure for
+   a full 5-asset end-to-end sweep: under \$1.
+2. **Receiver = dev's other wallet** — Cake / Sparrow / a second Smirk
+   install — so a successful receive proves both sides of the path.
+3. **Watch mempool acceptance** + first confirmation on a public
+   explorer. If the tx propagates and confirms, the signing + broadcast
+   path is correct.
+4. **Replay test**: send again, slightly different amount, different
+   recipient. Catches any state leakage between sends.
+5. Only after the small-amount path is solid does the asset get exposed
+   in the SendWizard for real users.
+
+Cost of this strategy: maybe \$5 in dust + fees across all 5 assets.
+Cheaper than the engineering time to set up + maintain 5 testnet
+configurations + their flakier infra.
