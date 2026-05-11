@@ -35,6 +35,29 @@ use monero_wallet::{
 use crate::output::{derive_key_offset, derive_commitment_mask};
 use crate::result::WasmResult;
 
+/// Generate a fresh per-transaction `outgoing_view_key` from OS randomness.
+///
+/// SECURITY: `outgoing_view_key` is treated as a private key by monero-oxide
+/// — it seeds the RNG that produces the per-tx scalar `r` and the ECDH
+/// shared secrets with each receiver. A constant value (e.g. zeros) lets
+/// any observer recompute `r`, derive the same shared secret, and decrypt
+/// amounts or link outputs back to the recipient.
+///
+/// Reuse across two signs of the same UTXO is also catastrophic: the same
+/// seed produces the same CLSAG nonce, and CLSAG nonce reuse on shared key
+/// material leaks the spend key. Per-tx randomness from `OsRng` avoids
+/// both failure modes.
+///
+/// **Do not** replace this with a hardcoded value, a hash of the spend
+/// key, or any other deterministic source. The regression test
+/// `test_outgoing_view_key_is_fresh_per_call` asserts this.
+pub(crate) fn fresh_outgoing_view_key() -> Zeroizing<[u8; 32]> {
+    use rand_core::RngCore;
+    let mut bytes = [0u8; 32];
+    rand_core::OsRng.fill_bytes(&mut bytes);
+    Zeroizing::new(bytes)
+}
+
 // ============================================================================
 // Input types from LWS
 // ============================================================================
@@ -457,9 +480,7 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     let fee_rate = FeeRate::new(params.fee_per_byte, params.fee_mask)
         .ok_or("Invalid fee rate")?;
 
-    // Create outgoing view key (32 bytes of zeros for now - this is used for
-    // deterministic output key generation, not critical for basic signing)
-    let outgoing_view_key = Zeroizing::new([0u8; 32]);
+    let outgoing_view_key = fresh_outgoing_view_key();
 
     // Build SignableTransaction
     // Note: Change::fingerprintable is used as we don't have the full view pair

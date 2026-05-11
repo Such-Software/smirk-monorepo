@@ -122,4 +122,39 @@ mod tests {
         assert_eq!(parsed["success"], false);
         assert!(parsed["error"].as_str().unwrap().contains("decoys"));
     }
+
+    /// SECURITY REGRESSION: `outgoing_view_key` is treated as a private key
+    /// by monero-oxide; reusing it (or, worst case, hardcoding it to zeros)
+    /// lets observers recompute per-tx scalars, derive the same ECDH shared
+    /// secrets as the receiver, and decrypt amounts / link outputs.
+    ///
+    /// This test asserts every call returns a fresh, non-zero, distinct
+    /// 32-byte key. If anyone ever reverts to a constant or deterministic
+    /// value, this fails immediately.
+    ///
+    /// Background: pre-2026-05-10 the production wallet shipped
+    /// `Zeroizing::new([0u8; 32])` here, breaking amount privacy on all
+    /// outgoing XMR/WOW transactions. See docs/MIGRATION_LOG.md or git log.
+    #[test]
+    fn test_outgoing_view_key_is_fresh_per_call() {
+        use std::collections::HashSet;
+
+        const N: usize = 256;
+        let mut seen: HashSet<[u8; 32]> = HashSet::with_capacity(N);
+        for _ in 0..N {
+            let ovk = crate::signing::fresh_outgoing_view_key();
+            let bytes: [u8; 32] = *ovk;
+            assert_ne!(
+                bytes, [0u8; 32],
+                "outgoing_view_key must NEVER be all zeros — \
+                 this seeds the per-tx RNG and is treated as a private key"
+            );
+            assert!(
+                seen.insert(bytes),
+                "outgoing_view_key collision in {} samples — \
+                 the source MUST be fresh randomness, not deterministic",
+                N
+            );
+        }
+    }
 }
