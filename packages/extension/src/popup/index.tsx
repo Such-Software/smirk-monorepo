@@ -53,9 +53,9 @@ import {
   listThemes,
   useRoute,
   useSessionState,
-  type SendSubmitResult,
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
+import { send } from './send-handler';
 import { initialize as initSmirkWasm, monero as wasmMonero } from '@smirk/wasm';
 
 /**
@@ -519,7 +519,7 @@ function HomeRouter({
         assetIds={listAssets().map((a) => a.id)}
         validateAddress={validateAddress}
         parseAmount={parseAmount}
-        onSubmit={stubSubmit}
+        onSubmit={(fields) => send(wallet, fields)}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
       />
@@ -768,11 +768,6 @@ function validateAddress(assetId: string, addr: string): string | null {
 
   const ticker = mustGetAsset(assetId).ticker;
   return `Not a valid ${ticker} address`;
-}
-
-async function stubSubmit(): Promise<SendSubmitResult> {
-  await new Promise((r) => setTimeout(r, 600));
-  return { ok: true, txid: 'stub-txid-' + Date.now().toString(36) };
 }
 
 /**
