@@ -105,18 +105,48 @@ export const win95Theme: Theme = {
       font-family: var(--smirk-font-family);
     }
 
-    /* Asset list framed as a sunken well with light inner padding. */
+    /* Asset list framed as a sunken group-box style well — gray surface
+       (matches the outer chrome) with the inset bevel + thin hairline
+       row separators between cards. Avoids the stark "white listbox"
+       look while staying authentic to Win95 group-box rendering. */
     .smirk-theme-win95 .smirk-asset-list {
-      background: var(--smirk-bg-sunken);
-      border: 1px solid #000000;
-      padding: 4px;
+      background: var(--smirk-bg-elevated);
+      box-shadow: var(--smirk-shadow-sunken);
+      padding: 2px;
+      gap: 0 !important;
     }
     .smirk-theme-win95 .smirk-balance-card {
       background: transparent;
+      border-bottom: 1px solid #808080;
+      box-shadow: inset 0 -1px 0 #ffffff;
+    }
+    .smirk-theme-win95 .smirk-balance-card:last-child {
+      border-bottom: none;
+      box-shadow: none;
     }
     .smirk-theme-win95 .smirk-balance-card:hover {
       background: var(--smirk-accent);
       color: var(--smirk-accent-fg);
+    }
+    /* When the row is hovered, the muted ticker/fiat children need to
+       flip to the inverse foreground so they don't disappear into the
+       navy-blue accent surface. */
+    .smirk-theme-win95 .smirk-balance-card:hover,
+    .smirk-theme-win95 .smirk-balance-card:hover * {
+      color: var(--smirk-accent-fg) !important;
+    }
+
+    /* Bottom-nav tabs render as flat toolbar buttons — no bevel shadow,
+       no border — overriding the generic button-bevel rule above. */
+    .smirk-theme-win95 .smirk-bottom-nav__tab {
+      box-shadow: none;
+      border: none;
+      border-top: 1px solid #808080;
+    }
+    .smirk-theme-win95 .smirk-bottom-nav__tab--active {
+      box-shadow: var(--smirk-shadow-sunken);
+      background: var(--smirk-bg-elevated) !important;
+      color: var(--smirk-fg) !important;
     }
 
   `,

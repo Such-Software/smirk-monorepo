@@ -32,10 +32,11 @@ export function BottomNav({ orientation = 'horizontal' }: BottomNavProps) {
 
   return (
     <nav
+      class="smirk-bottom-nav"
       style={{
         display: 'flex',
         flexDirection: isVertical ? 'column' : 'row',
-        borderTop: isVertical ? 'none' : '1px solid rgba(255,255,255,0.08)',
+        borderTop: isVertical ? 'none' : '1px solid var(--smirk-border)',
         flexShrink: 0,
         flex: isVertical ? 1 : 'none',
       }}
@@ -49,6 +50,9 @@ export function BottomNav({ orientation = 'horizontal' }: BottomNavProps) {
             role="tab"
             aria-selected={active}
             onClick={() => switchTab(t.id)}
+            class={['smirk-bottom-nav__tab', active && 'smirk-bottom-nav__tab--active']
+              .filter(Boolean)
+              .join(' ')}
             style={{
               display: 'flex',
               flexDirection: isVertical ? 'row' : 'column',
@@ -57,13 +61,16 @@ export function BottomNav({ orientation = 'horizontal' }: BottomNavProps) {
               gap: isVertical ? 12 : 4,
               padding: isVertical ? '12px 16px' : '8px 4px',
               flex: isVertical ? 'none' : 1,
-              background: active ? 'rgba(139, 92, 246, 0.15)' : 'transparent',
+              background: active
+                ? 'color-mix(in srgb, var(--smirk-accent) 15%, transparent)'
+                : 'transparent',
               border: 'none',
               cursor: 'pointer',
-              color: active ? '#8b5cf6' : 'rgba(255,255,255,0.7)',
+              color: active ? 'var(--smirk-accent)' : 'var(--smirk-fg-muted)',
               fontSize: 11,
               fontWeight: active ? 600 : 500,
               textAlign: isVertical ? 'left' : 'center',
+              fontFamily: 'inherit',
             }}
           >
             <span style={{ fontSize: isVertical ? 16 : 18 }}>{t.icon}</span>

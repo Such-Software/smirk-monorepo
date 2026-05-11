@@ -103,10 +103,6 @@ export function HomeTab({
             display: 'flex',
             flexDirection: 'column',
             gap: 6,
-            // Sunken-well container; in default theme this is transparent
-            // (token = `none`), in Win95 it's the inset bevel stack.
-            boxShadow: 'var(--smirk-shadow-sunken, none)',
-            padding: 'var(--smirk-asset-list-padding, 0)',
           }}
         >
           {assets.map((row) => (
