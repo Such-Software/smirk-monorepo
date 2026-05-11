@@ -2,7 +2,7 @@
 
 Smirk's Grin / Mimblewimble support is being reimplemented from primitives into `crates/grin-ext/` so we own the protocol layer end-to-end and can extend it with features (atomic-swap adaptor signatures, NRD-kernel time-locks, custom slate workflows) that don't exist in upstream `grin-wallet`.
 
-The existing [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships Grin support via vendored MWC-Wallet WebAssembly, which has been validated against the official `grin-wallet` GUI (a Smirk seed restored in `grin-wallet` recovers the same funds). That implementation serves as the behavioral oracle for the new Rust crate — the new code must produce byte-identical outputs for the same inputs before it cuts over to production.
+The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships Grin support via vendored MWC-Wallet WebAssembly, which has been validated against the official `grin-wallet` GUI (a Smirk seed restored in `grin-wallet` recovers the same funds). That implementation serves as the behavioral oracle for the new Rust crate — `crates/grin-ext/` must produce byte-identical outputs for the same inputs before it cuts over to production. The v0.3 monorepo (`packages/extension`) is the canonical client going forward; `smirk-extension` is kept frozen as the migration source.
 
 ## Approach
 
@@ -74,7 +74,7 @@ The string `"IamVoldemort"` is the literal HMAC key used by both `grin-wallet` a
 Two-tier verification before any feature ships:
 
 1. **Mathematical reproducibility** — Rust unit tests with golden vectors computed independently (e.g. via Python's `hmac` module). Any HMAC-SHA512 implementation must produce the same bytes given the same inputs.
-2. **Behavioral parity with smirk-extension v0.2.x** — once a feature has Rust unit tests passing, verify it produces the same output as the existing TypeScript/MWC stack for the same inputs. Once parity holds across a representative input set, the new code is safe to ship.
+2. **Behavioral parity with legacy smirk-extension v0.2.x** — once a feature has Rust unit tests passing, verify it produces the same output as the (frozen) TypeScript/MWC stack for the same inputs. Once parity holds across a representative input set, the new code is safe to ship into the v0.3 monorepo extension.
 
 ## WASM exports
 

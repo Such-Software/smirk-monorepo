@@ -70,9 +70,11 @@ Runs via `make wasm-smoke` (which builds the Node-target bundle first).
 - Pedersen commit + Bulletproof create/verify call into
   `libsecp256k1-zkp`'s `malloc` path, which Node's `--target nodejs`
   WASM loader can't satisfy (eager import resolution; no host malloc
-  in Node's WebAssembly env). The browser's `--target web` runtime
-  either provides the symbol or doesn't enforce eager resolution, so
-  these work in production. Native unit tests in
+  in Node's WebAssembly env). The browser's `--target no-modules`
+  build (active since 2026-05-11) ships an `env`-stub postprocess
+  (`crates/smirk-wasm/postprocess.mjs`) that satisfies these imports
+  at instantiate time, but the Node target uses a different glue
+  format that bypasses the postprocess. Native unit tests in
   `crates/grin-ext/src/bulletproof.rs::tests` cover them.
 - A future browser-based harness (puppeteer / playwright) would close
   this gap; not built yet.

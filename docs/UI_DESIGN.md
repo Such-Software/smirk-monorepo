@@ -292,6 +292,55 @@ fiat conversion happens at the display layer only. Asset registry
 provides decimals, price feed provides USD-per-asset, denomination
 picker translates. No floating-point on consensus-critical values.
 
+## Principle 9 — Themable surface, registry-driven (added 2026-05-11)
+
+The wallet ships with a theme registry in `@smirk/ui/themes/` that mirrors
+the asset-registry pattern from Principle 6. A theme is pure data:
+
+```ts
+interface Theme {
+  id: string;
+  name: string;
+  description?: string;
+  tokens: ThemeTokens;   // colors, typography, geometry, effects
+  css?: string;          // optional theme-specific selectors (bevels, etc.)
+}
+```
+
+`@smirk/ui` components consume themes **only** via CSS custom properties
+(`var(--smirk-bg)`, `var(--smirk-accent)`, …) — they never import a theme
+object. That keeps the component library theme-agnostic and lets shells
+(extension / mobile / desktop) register their own themes (e.g. macOS Aqua,
+material-mobile) without rebuilding `@smirk/ui`.
+
+**Built-ins:**
+- `defaultTheme` — dark "Smirk Bauhaus" look, the fallback for missing
+  tokens.
+- `win95Theme` — chunky bevels, MS Sans Serif, gray system palette.
+  Demonstrates the registry's coverage of variants the default doesn't
+  hint at.
+
+**Apply path:** at boot (and on every change) the shell calls
+`applyTheme(theme)`, which sets `--smirk-*` custom properties on `<html>`,
+swaps the `smirk-theme-<id>` class, and injects the theme's optional CSS
+payload into a stable `<style>` element.
+
+**Persistence:** the active theme id lives in `SessionState.ui.theme`
+(schema v3). Survives session restart via the platform's persistent
+storage tier.
+
+**Token coverage** (canonical set as of 2026-05-11): `bg`, `bgElevated`,
+`bgSunken`, `fg`, `fgMuted`, `accent`, `accentHover`, `accentFg`, `border`,
+`borderStrong`, `positive`, `negative`, `warning`, `fontFamily`,
+`fontFamilyMono`, `fontSizeBase`, `fontSizeSmall`, `radius`, `radiusSm`,
+`radiusLg`, `shadowRaised`, `shadowSunken`.
+
+**Migration debt:** v0.3 components are *progressively* moving from
+hardcoded `rgba(255,...)` inline styles to `var(--smirk-*)` consumption.
+ActionButton, BalanceCard, UnifiedBalance, BottomNav done as of
+2026-05-11; settings page, send/receive flows, lock screen still inline.
+Touch as you go — no big-bang sweep planned.
+
 ## Navigation summary
 
 ```
