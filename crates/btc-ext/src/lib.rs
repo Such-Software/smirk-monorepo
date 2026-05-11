@@ -12,10 +12,14 @@
 
 pub mod address;
 pub mod bip32;
+pub mod build;
 pub mod network;
 pub mod psbt;
 
 pub use address::{derive_address, AddressKind};
 pub use bip32::{derive_xpriv, mnemonic_to_xpriv};
+pub use build::{
+    build_psbt, extract_tx, BuildError, BuildParams, UnsignedInput, DUST_LIMIT_P2WPKH,
+};
 pub use network::Network;
 pub use psbt::sign_psbt;

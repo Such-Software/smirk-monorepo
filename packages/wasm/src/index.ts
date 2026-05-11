@@ -453,6 +453,38 @@ export const grin = {
 export type BtcNetwork = 'btc-mainnet' | 'btc-testnet' | 'ltc-mainnet' | 'ltc-testnet';
 export type BtcAddressKind = 'p2wpkh' | 'p2tr';
 
+/**
+ * Parameters for {@link bitcoin.buildPsbt}. Mirrors `BuildPsbtParamsJson`
+ * in `crates/smirk-wasm/src/bitcoin.rs` — keep the shapes in sync.
+ */
+export interface BtcBuildPsbtParams {
+  network: BtcNetwork;
+  inputs: Array<{
+    /** Hex-encoded prevout txid. */
+    txid: string;
+    /** Output index in the prevout tx. */
+    vout: number;
+    /** UTXO value in satoshis. */
+    valueSat: number;
+    /**
+     * BIP32 path from the master xprv to the key that controls this UTXO.
+     * e.g. `"m/84'/0'/0'/0/3"` for the 4th receive address on the first
+     * BIP84 mainnet account. Used to populate `bip32_derivation` so
+     * `signPsbt` can later resolve the right child key.
+     */
+    masterPath: string;
+  }>;
+  recipientAddress: string;
+  recipientSat: number;
+  /** Optional change output. Omit + set `changeSat: 0` to skip. */
+  changeAddress?: string;
+  changeSat?: number;
+  /** BIP39 mnemonic — needed to derive the master xprv at build time. */
+  mnemonic: string;
+  /** BIP39 passphrase (empty string if unused). */
+  passphrase?: string;
+}
+
 export const bitcoin = {
   /**
    * Derive a BTC or LTC address from a BIP39 mnemonic + BIP32 path.
@@ -489,4 +521,47 @@ export const bitcoin = {
     masterPath: string,
     psbtBase64: string,
   ): string => wasm.btc_sign_psbt(mnemonic, passphrase, network, masterPath, psbtBase64),
+
+  /**
+   * Build an unsigned base64-encoded PSBT for a single-recipient
+   * P2WPKH (BIP84) send. The returned PSBT is ready to feed into
+   * {@link signPsbt} (using the same mnemonic). After signing, call
+   * {@link extractTx} to get the final transaction hex.
+   *
+   * Caller's responsibility: UTXO selection, fee math (the difference
+   * between `sum(inputs)` and `recipientSat + changeSat` is the fee —
+   * we don't validate it here). Dust-limit on the change output is
+   * checked (rejects change below 294 sat) but the recipient amount
+   * is not.
+   *
+   * See `docs/SEND_FLOW.md` for the surrounding send-flow design.
+   */
+  buildPsbt: (params: BtcBuildPsbtParams): string => {
+    // Rust side reads JSON; serialize with snake_case keys to match
+    // `BuildPsbtParamsJson` field names exactly.
+    const body = {
+      network: params.network,
+      inputs: params.inputs.map((i) => ({
+        txid: i.txid,
+        vout: i.vout,
+        value_sat: i.valueSat,
+        master_path: i.masterPath,
+      })),
+      recipient_address: params.recipientAddress,
+      recipient_sat: params.recipientSat,
+      ...(params.changeAddress !== undefined ? { change_address: params.changeAddress } : {}),
+      ...(params.changeSat !== undefined ? { change_sat: params.changeSat } : {}),
+      mnemonic: params.mnemonic,
+      ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
+    };
+    return wasm.btc_build_psbt(JSON.stringify(body));
+  },
+
+  /**
+   * Extract the final network-broadcastable transaction hex from a
+   * fully-signed PSBT. After {@link signPsbt} has populated every
+   * input's witness, call this to get the hex ready for the
+   * `/wallet/broadcast` endpoint.
+   */
+  extractTx: (psbtBase64: string): string => wasm.btc_extract_tx(psbtBase64),
 };
