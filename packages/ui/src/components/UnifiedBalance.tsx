@@ -132,11 +132,10 @@ export function UnifiedBalance({
           style={{
             background: 'transparent',
             border: 'none',
-            color: 'inherit',
+            color: 'var(--smirk-fg-muted)',
             cursor: 'pointer',
             fontSize: 18,
             padding: '4px 8px',
-            opacity: 0.5,
             lineHeight: 1,
           }}
         >
@@ -148,7 +147,7 @@ export function UnifiedBalance({
         <div
           style={{
             fontSize: 11,
-            opacity: 0.5,
+            color: 'var(--smirk-fg-muted)',
             textTransform: 'uppercase',
             letterSpacing: '0.06em',
           }}
@@ -161,7 +160,7 @@ export function UnifiedBalance({
         <div
           style={{
             fontSize: 12,
-            opacity: 0.65,
+            color: 'var(--smirk-fg-muted)',
             marginTop: 4,
           }}
           title="Unconfirmed / mempool / swap-in-progress"

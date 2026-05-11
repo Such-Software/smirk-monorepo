@@ -56,7 +56,7 @@ export function BalanceCard({
 
   return (
     <Container
-      class={className}
+      class={['smirk-balance-card', className].filter(Boolean).join(' ')}
       onClick={onClick}
       style={{
         display: 'flex',
@@ -68,7 +68,8 @@ export function BalanceCard({
         border: 'none',
         cursor: onClick ? 'pointer' : 'default',
         textAlign: 'left',
-        color: 'inherit',
+        color: 'var(--smirk-fg)',
+        fontFamily: 'inherit',
       }}
     >
       <AssetIcon
@@ -79,20 +80,20 @@ export function BalanceCard({
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 500 }}>{asset.displayName}</div>
-        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
+        <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
           {asset.ticker}
         </div>
       </div>
 
       <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: 14, fontFamily: 'SF Mono, Monaco, monospace' }}>
+        <div style={{ fontSize: 14, fontFamily: 'var(--smirk-font-family-mono, monospace)' }}>
           {loading ? '—' : formatted}
         </div>
         {fiatDisplay && (
-          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>{fiatDisplay}</div>
+          <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>{fiatDisplay}</div>
         )}
         {pending && (
-          <div style={{ fontSize: 11, color: 'rgba(255,200,0,0.8)' }}>
+          <div style={{ fontSize: 11, color: 'var(--smirk-warning)' }}>
             +{pending} pending
           </div>
         )}

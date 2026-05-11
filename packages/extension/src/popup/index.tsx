@@ -20,7 +20,6 @@ import {
   SESSION_CACHE_KEY,
   WalletKeystore,
   api,
-  autoDetectEphemeralStorage,
   bootstrapAuth,
   fetchAllBalances,
   fetchPrices,
@@ -117,7 +116,17 @@ const ICON_BY_KEY: Record<string, string> = {
 const resolveIcon = (key: string): string | undefined =>
   ICON_BY_KEY[key] ? chrome.runtime.getURL(ICON_BY_KEY[key]) : undefined;
 
-const storage = autoDetectEphemeralStorage();
+// Session-state storage. Even though it's called "session" semantically,
+// the user preferences it holds (autoLockMinutes, theme, denomination,
+// balanceHidden) are real preferences — they must survive browser
+// restart. So we back on chrome.storage.local, not chrome.storage.session.
+//
+// The schema currently has no sensitive-ephemeral fields (no
+// password-mid-typing, etc.); wizards hold form fields like recipient
+// address and amount, which are not privacy-regressing if persisted.
+// If sensitive ephemeral state lands later, it should get its own
+// session-tier store rather than co-mingle here.
+const storage = new ChromeLocalStorage();
 const store = new SessionStateStore(storage);
 const router = new RouteController(store);
 

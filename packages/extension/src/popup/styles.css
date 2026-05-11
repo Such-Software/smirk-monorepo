@@ -103,8 +103,8 @@ code {
 /* Native <select> dropdown options ignore the parent's text-color and
    take their styling from the host OS chrome. Without these, options
    render as inherited white text on a default-light popup background
-   (= invisible) on most platforms. Force explicit dark theme. */
+   (= invisible) on most platforms. Force explicit theme-tracked colors. */
 select option {
-  background: #1a1a1d;
-  color: var(--fg);
+  background: var(--smirk-bg-elevated);
+  color: var(--smirk-fg);
 }

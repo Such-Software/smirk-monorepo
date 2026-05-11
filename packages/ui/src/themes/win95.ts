@@ -63,8 +63,10 @@ export const win95Theme: Theme = {
       'inset 1px 1px #0a0a0a, inset -1px -1px #ffffff, inset 2px 2px #808080, inset -2px -2px #dfdfdf',
   },
   // Theme-specific CSS for things tokens can't carry: pixelated icon
-  // rendering, native button reset, dialog title-bar gradient (when we
-  // grow a header bar to put one on).
+  // rendering, the chunky-button bevel-active feedback, asset-list
+  // sunken-well padding, and contrast resets for components that use
+  // `opacity: 0.X` to mute text (the dark theme uses opacity-on-white;
+  // on a light background it makes text invisible — restore full ink).
   css: `
     .smirk-theme-win95 img,
     .smirk-theme-win95 svg {
@@ -72,15 +74,26 @@ export const win95Theme: Theme = {
       image-rendering: -moz-crisp-edges;
       image-rendering: crisp-edges;
     }
+
+    /* Generic <button> reset — chunky bevel, square corners, raised. */
     .smirk-theme-win95 button {
-      /* Native UA button styling reasserted via tokens — wipe the round
-         corners + soft gradients some browsers add by default. */
       border: 1px solid #000000;
       cursor: default;
+      background: var(--smirk-bg-elevated);
+      color: var(--smirk-fg);
+      box-shadow: var(--smirk-shadow-raised);
+      border-radius: 0;
+      font-family: var(--smirk-font-family);
     }
-    .smirk-theme-win95 button:active {
+    .smirk-theme-win95 button:active:not(:disabled) {
       box-shadow: var(--smirk-shadow-sunken);
     }
+    .smirk-theme-win95 button:focus-visible {
+      outline: 1px dotted #000000;
+      outline-offset: -4px;
+    }
+
+    /* Inputs + selects look sunken (well into the surface). */
     .smirk-theme-win95 input,
     .smirk-theme-win95 select,
     .smirk-theme-win95 textarea {
@@ -88,6 +101,23 @@ export const win95Theme: Theme = {
       box-shadow: var(--smirk-shadow-sunken);
       background: var(--smirk-bg-sunken);
       color: var(--smirk-fg);
+      border-radius: 0;
+      font-family: var(--smirk-font-family);
     }
+
+    /* Asset list framed as a sunken well with light inner padding. */
+    .smirk-theme-win95 .smirk-asset-list {
+      background: var(--smirk-bg-sunken);
+      border: 1px solid #000000;
+      padding: 4px;
+    }
+    .smirk-theme-win95 .smirk-balance-card {
+      background: transparent;
+    }
+    .smirk-theme-win95 .smirk-balance-card:hover {
+      background: var(--smirk-accent);
+      color: var(--smirk-accent-fg);
+    }
+
   `,
 };

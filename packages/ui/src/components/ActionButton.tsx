@@ -39,13 +39,14 @@ export function ActionButton({
   variant = 'primary',
   class: className,
 }: ActionButtonProps) {
-  const bg =
-    variant === 'primary' ? 'rgba(139, 92, 246, 0.15)' : 'rgba(255, 255, 255, 0.05)';
-  const accent = variant === 'primary' ? '#8b5cf6' : 'rgba(255, 255, 255, 0.7)';
-
+  // Token-driven so themes can fully restyle. Variants:
+  // - primary: accent-tinted background, accent foreground
+  // - subtle:  elevated background, muted foreground
   return (
     <button
-      class={className}
+      class={['smirk-action-button', `smirk-action-button--${variant}`, className]
+        .filter(Boolean)
+        .join(' ')}
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -55,21 +56,26 @@ export function ActionButton({
         justifyContent: 'center',
         gap: 4,
         padding: '8px 6px',
-        background: bg,
+        background:
+          variant === 'primary'
+            ? 'color-mix(in srgb, var(--smirk-accent) 15%, var(--smirk-bg-elevated))'
+            : 'var(--smirk-bg-elevated)',
         border: 'none',
-        borderRadius: 12,
+        borderRadius: 'var(--smirk-radius-lg, 12px)',
+        boxShadow: 'var(--smirk-shadow-raised, none)',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.4 : 1,
         color: 'inherit',
         flex: 1,
         minHeight: 60,
+        fontFamily: 'inherit',
       }}
     >
       {icon && (
         <span
           style={{
             fontSize: 22,
-            color: accent,
+            color: variant === 'primary' ? 'var(--smirk-accent)' : 'var(--smirk-fg-muted)',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -78,7 +84,15 @@ export function ActionButton({
           {icon}
         </span>
       )}
-      <span style={{ fontSize: 12, fontWeight: 500, color: accent }}>{label}</span>
+      <span
+        style={{
+          fontSize: 12,
+          fontWeight: 500,
+          color: variant === 'primary' ? 'var(--smirk-accent)' : 'var(--smirk-fg-muted)',
+        }}
+      >
+        {label}
+      </span>
     </button>
   );
 }
