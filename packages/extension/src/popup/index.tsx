@@ -15,7 +15,7 @@ import { useEffect, useState } from 'preact/hooks';
 import {
   ChromeLocalStorage,
   ChromeSessionStorage,
-  PopupStateStore,
+  SessionStateStore,
   RouteController,
   SESSION_CACHE_KEY,
   WalletKeystore,
@@ -48,8 +48,12 @@ import {
   ReceiveScreen,
   SendWizard,
   StateProvider,
+  applyTheme,
+  defaultTheme,
+  getTheme,
+  listThemes,
   useRoute,
-  usePopupState,
+  useSessionState,
   type SendSubmitResult,
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
@@ -114,7 +118,7 @@ const resolveIcon = (key: string): string | undefined =>
   ICON_BY_KEY[key] ? chrome.runtime.getURL(ICON_BY_KEY[key]) : undefined;
 
 const storage = autoDetectEphemeralStorage();
-const store = new PopupStateStore(storage);
+const store = new SessionStateStore(storage);
 const router = new RouteController(store);
 
 /**
@@ -309,6 +313,19 @@ function App() {
     void refresh();
   }, []);
 
+  // Apply persisted theme on boot and whenever it changes. Subscribing
+  // here (not inside a deep child) means the theme swaps cleanly even
+  // when no tab is rendering — e.g. the Settings picker changes the
+  // theme while Home is mounted, the picker doesn't have to know
+  // about every other tab.
+  useEffect(() => {
+    const apply = (themeId: string) => {
+      applyTheme(getTheme(themeId) ?? defaultTheme);
+    };
+    void store.load().then((s) => apply(s.ui.theme ?? 'default'));
+    return store.subscribe((s) => apply(s.ui.theme ?? 'default'));
+  }, []);
+
   // Auto-poll while a chain is mid-scan. We don't want a chatty poll
   // for normal idle state (the chain advances every ~2 min for XMR/WOW,
   // not worth hammering for steady-state). Activates only when at
@@ -478,8 +495,8 @@ function HomeRouter({
   onRefresh: () => Promise<void>;
 }) {
   const { route, navigate, switchTab } = useRoute();
-  const popupState = usePopupState();
-  const balancesHidden = popupState.ui.balanceHidden;
+  const sessionState = useSessionState();
+  const balancesHidden = sessionState.ui.balanceHidden;
   const toggleBalancesHidden = () => {
     void store.update((s) => {
       s.ui.balanceHidden = !s.ui.balanceHidden;
@@ -839,9 +856,16 @@ function SettingsStub({ onLock, onForgetComplete }: {
   onLock: () => Promise<void>;
   onForgetComplete: () => Promise<void>;
 }) {
-  const popupState = usePopupState();
-  const autoLockMinutes = popupState.ui.autoLockMinutes ?? 0;
+  const sessionState = useSessionState();
+  const autoLockMinutes = sessionState.ui.autoLockMinutes ?? 0;
+  const themeId = sessionState.ui.theme ?? 'default';
   const [forgetOpen, setForgetOpen] = useState(false);
+
+  const setThemeId = async (next: string) => {
+    await store.update((s) => {
+      s.ui.theme = next;
+    });
+  };
 
   const setAutoLock = async (minutes: number) => {
     await store.update((s) => {
@@ -913,6 +937,39 @@ function SettingsStub({ onLock, onForgetComplete }: {
             trust physically.
           </p>
         )}
+      </section>
+
+      <section style={{ marginTop: 20 }}>
+        <label
+          style={{
+            display: 'block',
+            fontSize: 12,
+            opacity: 0.8,
+            marginBottom: 6,
+          }}
+        >
+          Theme
+        </label>
+        <select
+          value={themeId}
+          onChange={(e) => void setThemeId((e.target as HTMLSelectElement).value)}
+          style={{
+            width: '100%',
+            padding: '8px 10px',
+            background: 'rgba(255,255,255,0.04)',
+            color: 'inherit',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 6,
+            fontFamily: 'inherit',
+            fontSize: 13,
+          }}
+        >
+          {listThemes().map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
       </section>
 
       <button

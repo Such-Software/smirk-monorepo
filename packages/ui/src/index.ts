@@ -85,7 +85,7 @@ export type { BottomNavProps } from './components/shell/BottomNav';
 export {
   StateProvider,
   useIsPopout,
-  usePopupState,
+  useSessionState,
   useRoute,
   useWizard,
 } from './state/hooks';
@@ -94,6 +94,18 @@ export type {
   UseRouteApi,
   UseWizardApi,
 } from './state/hooks';
+
+// ----- Themes -----
+export type { Theme, ThemeTokens } from './themes';
+export {
+  defaultTheme,
+  win95Theme,
+  registerTheme,
+  listThemes,
+  getTheme,
+  applyTheme,
+  resetTheme,
+} from './themes';
 
 // ----- Helpers -----
 export { formatAmount, formatAmountWithAsset, formatAmountWithTicker } from './format';

@@ -1,14 +1,22 @@
 /**
- * Popup state — the typed store every screen reads from and writes to.
+ * Session state — the typed store every screen reads from and writes to.
  *
- * Survives popup close (via the platform's ephemeral-state backend),
- * dies on browser/app close. Sensitive form data (full address,
- * password attempt mid-typing) is *intended* to disappear when the
- * browser closes — that's the right tier.
+ * "Session" here means the user-facing app lifetime, which means
+ * different things per platform:
  *
- * Anything that needs to survive longer (user preferences, custom RPC
- * URLs, denomination, theme) goes through a separate persistent
- * store layer — see `chromeLocalStorage()` in [`./platform`].
+ * - **Extension popup:** survives popup-close (data round-trips through
+ *   `chrome.storage.session`), dies on browser-close.
+ * - **Capacitor mobile:** survives backgrounding (data round-trips
+ *   through Preferences with an ephemeral tier), dies on OS-level
+ *   tombstone / app force-quit.
+ * - **Tauri desktop:** survives window minimize/restore, dies on app
+ *   quit.
+ *
+ * Sensitive form data (full address, password mid-typing) is *intended*
+ * to disappear at session end — that's the right tier. Anything that
+ * needs to survive longer (denomination, theme, custom RPC URLs) goes
+ * through a separate persistent store — see `chromeLocalStorage()` in
+ * [`./platform`] and the platform-specific equivalents.
  *
  * State migrations — when the schema changes, bump `CURRENT_VERSION`
  * and add a migration to [`MIGRATIONS`]. Never edit a published
@@ -22,16 +30,16 @@ import { PlatformStorage } from './platform';
 // ============================================================================
 
 /** Bump on every breaking schema change; add a migration. */
-export const CURRENT_VERSION = 2;
+export const CURRENT_VERSION = 3;
 
 /**
- * The full popup state shape. Every field is restorable on reload.
+ * The full session state shape. Every field is restorable on reload.
  *
  * Keep this small + flat. Per-feature state (active wizards, scroll
  * positions) lives under named keys so multiple screens can coexist
  * without colliding.
  */
-export interface PopupState {
+export interface SessionState {
   version: number;
 
   /** Current route (which tab/screen is showing). See [`./route`]. */
@@ -50,16 +58,21 @@ export interface PopupState {
    *   preference; mirrored from `chrome.storage.local` so the chosen
    *   denomination survives browser close).
    * - `autoLockMinutes`: how long the wallet stays unlocked after the
-   *   popup closes. **Has security implications** — when > 0, the
-   *   unlocked mnemonic is mirrored to `chrome.storage.session` for
-   *   the configured duration. `0` (default) = lock immediately on
-   *   popup close (the safe default). `-1` = never auto-lock until
-   *   user manually locks or the browser closes.
+   *   session ends (popup-close on extension, backgrounding on mobile,
+   *   window-close on desktop). **Has security implications** — when
+   *   > 0, the unlocked mnemonic is mirrored to the platform's
+   *   ephemeral-keyed storage for the configured duration. `0`
+   *   (default) = lock immediately at session end (the safe default).
+   *   `-1` = never auto-lock until the user manually locks or the
+   *   app fully exits.
+   * - `theme`: id of the registered theme from `@smirk/ui/themes`.
+   *   Unknown ids fall back to the default theme at apply time.
    */
   ui: {
     balanceHidden: boolean;
     denomination: string;
     autoLockMinutes: number;
+    theme: string;
   };
 }
 
@@ -83,7 +96,7 @@ export interface WizardState {
 // Defaults + migrations
 // ============================================================================
 
-export const DEFAULT_POPUP_STATE: PopupState = {
+export const DEFAULT_SESSION_STATE: SessionState = {
   version: CURRENT_VERSION,
   route: { current: 'home' },
   scroll: {},
@@ -91,7 +104,8 @@ export const DEFAULT_POPUP_STATE: PopupState = {
   ui: {
     balanceHidden: false,
     denomination: 'USD',
-    autoLockMinutes: 0, // safe default: lock immediately on popup close
+    autoLockMinutes: 0, // safe default: lock immediately at session end
+    theme: 'default',
   },
 };
 
@@ -105,7 +119,7 @@ export const DEFAULT_POPUP_STATE: PopupState = {
  *
  * @example
  * ```ts
- * MIGRATIONS[1] = (s: PopupStateV1): PopupStateV2 => ({
+ * MIGRATIONS[1] = (s: SessionStateV1): SessionStateV2 => ({
  *   ...s,
  *   version: 2,
  *   ui: { ...s.ui, theme: 'dark' },
@@ -117,19 +131,28 @@ export type Migration<TFrom = unknown, TTo = unknown> = (state: TFrom) => TTo;
 export const MIGRATIONS: Record<number, Migration> = {
   // v1 → v2: add `ui.autoLockMinutes` (default 0 = lock immediately).
   1: (s) => {
-    const prev = s as PopupState;
+    const prev = s as SessionState;
     return {
       ...prev,
       version: 2,
       ui: { ...prev.ui, autoLockMinutes: 0 },
-    } satisfies PopupState;
+    } satisfies SessionState;
+  },
+  // v2 → v3: add `ui.theme` (default 'default' = current Smirk dark).
+  2: (s) => {
+    const prev = s as SessionState;
+    return {
+      ...prev,
+      version: 3,
+      ui: { ...prev.ui, theme: 'default' },
+    } satisfies SessionState;
   },
 };
 
 /** Apply migrations in order to bring `raw` up to `CURRENT_VERSION`. */
-export function migrate(raw: unknown): PopupState {
+export function migrate(raw: unknown): SessionState {
   if (!raw || typeof raw !== 'object') {
-    return { ...DEFAULT_POPUP_STATE };
+    return { ...DEFAULT_SESSION_STATE };
   }
   let state = raw as { version?: number };
 
@@ -141,7 +164,7 @@ export function migrate(raw: unknown): PopupState {
   // storage). Reset rather than try to forward-compat; ephemeral
   // state loss is safe — wallet seed lives elsewhere.
   if (version > CURRENT_VERSION) {
-    return { ...DEFAULT_POPUP_STATE };
+    return { ...DEFAULT_SESSION_STATE };
   }
 
   while (version < CURRENT_VERSION) {
@@ -150,7 +173,7 @@ export function migrate(raw: unknown): PopupState {
       // No migration defined; reset to defaults rather than corrupt the
       // running app. Same safe-fallback rationale as the version-too-new
       // path above.
-      return { ...DEFAULT_POPUP_STATE };
+      return { ...DEFAULT_SESSION_STATE };
     }
     state = next(state) as { version?: number };
     version = typeof state.version === 'number' ? state.version : version + 1;
@@ -158,30 +181,33 @@ export function migrate(raw: unknown): PopupState {
 
   // Final shape sanity — fill in defaults for any missing fields a
   // partial migration left behind.
-  return { ...DEFAULT_POPUP_STATE, ...(state as Partial<PopupState>) };
+  return { ...DEFAULT_SESSION_STATE, ...(state as Partial<SessionState>) };
 }
 
 // ============================================================================
 // Store
 // ============================================================================
 
+// Storage key kept as legacy `smirk:popup-state` for backward
+// compatibility with any pre-rename data already written by alpha
+// builds. The value is just an identifier; semantics are session-state.
 const STORAGE_KEY = 'smirk:popup-state';
 
 /**
- * Typed reactive store for the popup state. Wraps a [`PlatformStorage`]
+ * Typed reactive store for the session state. Wraps a [`PlatformStorage`]
  * backend with:
  *
  * - In-memory cache (avoids a round-trip per read)
  * - Atomic update via `update(fn)` (load-mutate-save)
- * - Subscriber notifications when other contexts (pop-out, second
- *   popup) write to the same storage
+ * - Subscriber notifications when other contexts (extension pop-out,
+ *   second window, etc.) write to the same storage
  *
  * Framework-agnostic — exposes `subscribe(listener)` so any UI layer
  * can wire it up. The Preact hooks live in `@smirk/ui/state`.
  */
-export class PopupStateStore {
-  private cached: PopupState | null = null;
-  private readonly listeners = new Set<(state: PopupState) => void>();
+export class SessionStateStore {
+  private cached: SessionState | null = null;
+  private readonly listeners = new Set<(state: SessionState) => void>();
   private readonly platformUnsub: () => void;
 
   /**
@@ -196,9 +222,9 @@ export class PopupStateStore {
     private readonly storage: PlatformStorage,
     private readonly key: string = STORAGE_KEY,
   ) {
-    // Listen for cross-context writes (e.g. pop-out window updating
-    // state while the popup is open). Skip writes that originated
-    // here so we don't double-notify.
+    // Listen for cross-context writes (e.g. extension pop-out window
+    // updating state while the popup is open, or a Tauri second window).
+    // Skip writes that originated here so we don't double-notify.
     this.platformUnsub = this.storage.subscribe((changedKey) => {
       if (changedKey !== this.key) return;
       void this.storage.get<unknown>(this.key).then((raw) => {
@@ -207,7 +233,7 @@ export class PopupStateStore {
           // Echo of our own write — skip.
           return;
         }
-        const next = raw === null ? { ...DEFAULT_POPUP_STATE } : migrate(raw);
+        const next = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
         this.cached = next;
         for (const l of this.listeners) l(next);
       });
@@ -215,15 +241,15 @@ export class PopupStateStore {
   }
 
   /** Read the current state. Loads from storage on first call; caches afterward. */
-  async load(): Promise<PopupState> {
+  async load(): Promise<SessionState> {
     if (this.cached) return this.cached;
     const raw = await this.storage.get<unknown>(this.key);
-    this.cached = raw === null ? { ...DEFAULT_POPUP_STATE } : migrate(raw);
+    this.cached = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
     return this.cached;
   }
 
   /** Replace the entire state. Most callers want [`update`] instead. */
-  async save(state: PopupState): Promise<void> {
+  async save(state: SessionState): Promise<void> {
     this.cached = state;
     this.lastWrittenJson = JSON.stringify(state);
     await this.storage.set(this.key, state);
@@ -236,12 +262,12 @@ export class PopupStateStore {
    * shape; both are handled.
    */
   async update(
-    mutator: (state: PopupState) => void | PopupState | Promise<void | PopupState>,
-  ): Promise<PopupState> {
+    mutator: (state: SessionState) => void | SessionState | Promise<void | SessionState>,
+  ): Promise<SessionState> {
     const current = await this.load();
-    const draft: PopupState = JSON.parse(JSON.stringify(current));
+    const draft: SessionState = JSON.parse(JSON.stringify(current));
     const result = await mutator(draft);
-    const next = (result === undefined ? draft : result) as PopupState;
+    const next = (result === undefined ? draft : result) as SessionState;
     await this.save(next);
     return next;
   }
@@ -250,15 +276,15 @@ export class PopupStateStore {
    * Reset to defaults. Useful for tests + a "clear local UI state"
    * settings option.
    */
-  async reset(): Promise<PopupState> {
-    return this.save({ ...DEFAULT_POPUP_STATE }).then(() => ({ ...DEFAULT_POPUP_STATE }));
+  async reset(): Promise<SessionState> {
+    return this.save({ ...DEFAULT_SESSION_STATE }).then(() => ({ ...DEFAULT_SESSION_STATE }));
   }
 
   /**
    * Subscribe to state changes — fires after every write (local or
    * cross-context). Returns an unsubscribe function.
    */
-  subscribe(listener: (state: PopupState) => void): () => void {
+  subscribe(listener: (state: SessionState) => void): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);

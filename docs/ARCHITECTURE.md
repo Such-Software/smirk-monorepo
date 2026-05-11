@@ -240,6 +240,59 @@ Tauri `Notification`.
 
 ---
 
+## Desktop platform — Tauri vs Electron (decided 2026-05-11)
+
+Decision: **Tauri**, with `WebviewWindow::new()` available for an
+in-app dapp browser later. Will not switch to Electron.
+
+**Context:** Smirk is building a first-party non-EVM dapp ecosystem
+(smirk.cash, play.wowne.ro, monerogue.app). An in-app browser that
+pre-injects `window.smirk` is *more* valuable for Smirk than for
+typical wallets, because Smirk publishes the dapps the wallet
+launches. ETH L1 may be added in v0.5+, which separately re-opens
+WalletConnect v2 — but that's WebSocket relay, not browser-bundled.
+
+**Why Tauri over Electron:**
+
+| | Electron | **Tauri** |
+|---|---|---|
+| Bundle | 100–300 MB | 5–20 MB |
+| Idle memory | 150–300 MB | 50–80 MB |
+| Chromium consistency | Yes (bundled) | Per-platform WebView |
+| Native Rust IPC | No (Node bridge) | Yes (`tauri::command`) |
+| Dapp browser pattern | Mature (`BrowserView`) | `WebviewWindow::new()` |
+
+The Rust-IPC win is structural — bypassing WASM for the crypto path
+on desktop is a v0.5+ optimization Electron forecloses. The
+bundle/memory wins are immediate.
+
+**Per-platform WebView caveat:**
+
+| Platform | Engine | Status |
+|---|---|---|
+| Windows | WebView2 (Chromium) | First-class — same engine as Edge |
+| macOS | WKWebView (WebKit) | First-class — Safari engine |
+| Linux | WebKitGTK | Weakest link — historical bugs in Web Crypto, WebGL, newer JS features |
+
+Because we control our own dapps, the WebKitGTK gap matters only when
+the wallet also browses third-party EVM dapps post-ETH-L1. Test
+top targets (Uniswap, OpenSea, etc.) against WebKitGTK during the
+v0.4 Tauri scaffolding before committing. If the gap is unacceptable
+at that point, the Electron decision can be revisited — but only
+once measurements force it.
+
+**`window.smirk` injection** works via Tauri's `initialization_script()`,
+which runs before page DOM. Standard MetaMask content-script pattern.
+
+**No-go reasoning for Electron** is recorded so future contributors
+don't reopen the question on first-principles: the bundle+memory
+hit, Chromium CVE cadence, and the loss of native Rust IPC together
+outweigh the consistency win for our ecosystem shape. Revisit only
+on hard data (e.g., a critical third-party dapp that won't run on
+WebKitGTK with no workaround).
+
+---
+
 ## Open questions
 
 - **Lazy-load WASM per-asset?** Split `crates/smirk-wasm` into

@@ -2,8 +2,8 @@
  * Platform-storage abstraction.
  *
  * Different runtimes have different "ephemeral state" stores with
- * different lifetime semantics. The popup-state store sits on top of
- * this interface — pick the right backend at boot, the rest of
+ * different lifetime semantics. The session-state store sits on top
+ * of this interface — pick the right backend at boot, the rest of
  * `@smirk/core/state/` doesn't care which platform it's on.
  *
  * | Platform               | Backend                          | Lifetime                          |

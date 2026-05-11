@@ -25,7 +25,7 @@
  * time — implemented in the Preact hook layer, not here.
  */
 
-import type { PopupStateStore, Route } from './popup-state';
+import type { SessionStateStore, Route } from './session-state';
 
 /** Top-level tab parsed from a route id. */
 export type Tab = 'home' | 'swap' | 'inbox' | 'settings';
@@ -40,9 +40,9 @@ export function tabOf(route: Route): Tab {
   return 'home';
 }
 
-/** Helpers that read/write the route field on a [`PopupStateStore`]. */
+/** Helpers that read/write the route field on a [`SessionStateStore`]. */
 export class RouteController {
-  constructor(private readonly store: PopupStateStore) {}
+  constructor(private readonly store: SessionStateStore) {}
 
   async get(): Promise<Route> {
     const state = await this.store.load();

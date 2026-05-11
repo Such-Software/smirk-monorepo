@@ -1,5 +1,5 @@
 /**
- * Tests for popup-state, route, wizards. Uses InMemoryStorage as the
+ * Tests for session-state, route, wizards. Uses InMemoryStorage as the
  * backend so tests are platform-independent.
  */
 
@@ -7,10 +7,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CURRENT_VERSION,
-  DEFAULT_POPUP_STATE,
+  DEFAULT_SESSION_STATE,
   InMemoryStorage,
   MIGRATIONS,
-  PopupStateStore,
+  SessionStateStore,
   RouteController,
   Wizard,
   migrate,
@@ -18,32 +18,32 @@ import {
 } from '../index';
 
 // =========================================================================
-// PopupStateStore
+// SessionStateStore
 // =========================================================================
 
 test('store returns defaults on first load', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const state = await store.load();
-  assert.deepEqual(state, DEFAULT_POPUP_STATE);
+  assert.deepEqual(state, DEFAULT_SESSION_STATE);
   store.destroy();
 });
 
 test('store persists writes across instances backed by same storage', async () => {
   const storage = new InMemoryStorage();
-  const a = new PopupStateStore(storage);
+  const a = new SessionStateStore(storage);
   await a.update((s) => {
     s.route = { current: 'swap' };
   });
   a.destroy();
 
-  const b = new PopupStateStore(storage);
+  const b = new SessionStateStore(storage);
   const state = await b.load();
   assert.equal(state.route.current, 'swap');
   b.destroy();
 });
 
 test('store update mutator can mutate draft directly', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const next = await store.update((s) => {
     s.ui.balanceHidden = true;
     s.ui.denomination = 'BTC';
@@ -54,7 +54,7 @@ test('store update mutator can mutate draft directly', async () => {
 });
 
 test('store subscribers fire on update', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   let received = 0;
   const unsub = store.subscribe(() => {
     received += 1;
@@ -74,8 +74,8 @@ test('store subscribers fire on update', async () => {
 
 test('store subscribers fire on cross-context writes (via shared storage)', async () => {
   const storage = new InMemoryStorage();
-  const a = new PopupStateStore(storage);
-  const b = new PopupStateStore(storage);
+  const a = new SessionStateStore(storage);
+  const b = new SessionStateStore(storage);
 
   // Event microtask handling needs an explicit yield — wait for the
   // subscriber callback before asserting.
@@ -100,14 +100,14 @@ test('store subscribers fire on cross-context writes (via shared storage)', asyn
 });
 
 test('store reset returns to defaults', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   await store.update((s) => {
     s.route = { current: 'inbox' };
     s.ui.balanceHidden = true;
   });
   await store.reset();
   const state = await store.load();
-  assert.deepEqual(state, DEFAULT_POPUP_STATE);
+  assert.deepEqual(state, DEFAULT_SESSION_STATE);
   store.destroy();
 });
 
@@ -116,15 +116,15 @@ test('store reset returns to defaults', async () => {
 // =========================================================================
 
 test('migrate: null/undefined raw -> defaults', () => {
-  assert.deepEqual(migrate(null), DEFAULT_POPUP_STATE);
-  assert.deepEqual(migrate(undefined), DEFAULT_POPUP_STATE);
+  assert.deepEqual(migrate(null), DEFAULT_SESSION_STATE);
+  assert.deepEqual(migrate(undefined), DEFAULT_SESSION_STATE);
 });
 
 test('migrate: state already at CURRENT_VERSION passes through (with default fill-in)', () => {
-  const raw = { ...DEFAULT_POPUP_STATE };
+  const raw = { ...DEFAULT_SESSION_STATE };
   const migrated = migrate(raw);
   assert.equal(migrated.version, CURRENT_VERSION);
-  assert.deepEqual(migrated.route, DEFAULT_POPUP_STATE.route);
+  assert.deepEqual(migrated.route, DEFAULT_SESSION_STATE.route);
 });
 
 test('migrate: state with missing fields gets defaults filled in', () => {
@@ -132,7 +132,7 @@ test('migrate: state with missing fields gets defaults filled in', () => {
   const migrated = migrate(partial);
   assert.equal(migrated.version, CURRENT_VERSION);
   assert.equal(migrated.route.current, 'swap');
-  assert.deepEqual(migrated.ui, DEFAULT_POPUP_STATE.ui);
+  assert.deepEqual(migrated.ui, DEFAULT_SESSION_STATE.ui);
   assert.deepEqual(migrated.scroll, {});
 });
 
@@ -157,7 +157,7 @@ test('migrate: registered migration runs', () => {
 test('migrate: missing migration falls back to defaults', () => {
   // version 999 — no migration path. Resets rather than corrupting state.
   const migrated = migrate({ version: 999, weirdField: true });
-  assert.deepEqual(migrated, DEFAULT_POPUP_STATE);
+  assert.deepEqual(migrated, DEFAULT_SESSION_STATE);
 });
 
 // =========================================================================
@@ -165,7 +165,7 @@ test('migrate: missing migration falls back to defaults', () => {
 // =========================================================================
 
 test('router: navigate sets the current route', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const router = new RouteController(store);
 
   await router.navigate('inbox');
@@ -180,7 +180,7 @@ test('router: navigate sets the current route', async () => {
 });
 
 test('router: back collapses one segment', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const router = new RouteController(store);
   await router.navigate('home/asset/btc');
   await router.back();
@@ -194,7 +194,7 @@ test('router: back collapses one segment', async () => {
 });
 
 test('router: scroll save + restore', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const router = new RouteController(store);
   await router.navigate('inbox');
   await router.saveScroll(420);
@@ -225,7 +225,7 @@ interface TipFields extends Record<string, unknown> {
 }
 
 test('wizard: start initializes step 0 + default fields', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const w = new Wizard<TipFields>(store, 'tip-maker', { assetId: 'btc' });
   await w.start();
   const snap = await w.snapshot();
@@ -237,7 +237,7 @@ test('wizard: start initializes step 0 + default fields', async () => {
 });
 
 test('wizard: setField + next + back', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const w = new Wizard<TipFields>(store, 'tip-maker', {});
   await w.start();
 
@@ -261,7 +261,7 @@ test('wizard: setField + next + back', async () => {
 test('wizard: state survives across store instances (popup close + reopen sim)', async () => {
   const storage = new InMemoryStorage();
 
-  const a = new PopupStateStore(storage);
+  const a = new SessionStateStore(storage);
   const wA = new Wizard<TipFields>(a, 'tip-maker', {});
   await wA.start();
   await wA.setField('assetId', 'xmr');
@@ -270,7 +270,7 @@ test('wizard: state survives across store instances (popup close + reopen sim)',
   a.destroy();
 
   // New store instance — same storage. Mimics popup close + reopen.
-  const b = new PopupStateStore(storage);
+  const b = new SessionStateStore(storage);
   const wB = new Wizard<TipFields>(b, 'tip-maker', {});
   const snap = await wB.snapshot();
   assert.notEqual(snap, null);
@@ -281,7 +281,7 @@ test('wizard: state survives across store instances (popup close + reopen sim)',
 });
 
 test('wizard: cancel removes state', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const w = new Wizard<TipFields>(store, 'tip-maker', {});
   await w.start();
   await w.setField('assetId', 'btc');
@@ -293,7 +293,7 @@ test('wizard: cancel removes state', async () => {
 });
 
 test('wizard: patchFields merges', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const w = new Wizard<TipFields>(store, 'tip-maker', { assetId: 'btc' });
   await w.start();
   await w.patchFields({ amount: '0.01', note: 'hi' });
@@ -305,7 +305,7 @@ test('wizard: patchFields merges', async () => {
 });
 
 test('wizard: goToStep validates non-negative', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const w = new Wizard<TipFields>(store, 'tip-maker', {});
   await w.start();
   await assert.rejects(() => w.goToStep(-1));
@@ -313,7 +313,7 @@ test('wizard: goToStep validates non-negative', async () => {
 });
 
 test('wizard: two wizards with different ids are independent', async () => {
-  const store = new PopupStateStore(new InMemoryStorage());
+  const store = new SessionStateStore(new InMemoryStorage());
   const tip = new Wizard<TipFields>(store, 'tip', {});
   const send = new Wizard<TipFields>(store, 'send', {});
 

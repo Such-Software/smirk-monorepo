@@ -5,19 +5,20 @@
  * negotiation) shares the same state machinery: a step counter,
  * accumulated form fields, a start timestamp. Different wizards
  * differ only in (a) their field shape and (b) the per-step render
- * logic. The state lives in the popup-state store, so closing
+ * logic. The state lives in the session-state store, so closing
  * mid-wizard and reopening picks up exactly where we left off.
  *
  * Bitwarden-style "pop-out the popup mid-form and keep going" is
- * automatic: the pop-out window reads the same store, sees the same
- * wizard state.
+ * automatic on the extension: the pop-out window reads the same store,
+ * sees the same wizard state. The same pattern covers mobile
+ * background→foreground and desktop window-switch.
  *
  * Generic over the field shape — callers parameterize by their own
  * typed fields. Steps are numeric (0..N-1); naming the steps is the
  * UI layer's job.
  */
 
-import type { PopupStateStore, WizardState } from './popup-state';
+import type { SessionStateStore, WizardState } from './session-state';
 
 /**
  * Typed wizard handle. Construct one per logical wizard (e.g. one
@@ -27,7 +28,7 @@ import type { PopupStateStore, WizardState } from './popup-state';
  */
 export class Wizard<TFields extends Record<string, unknown>> {
   constructor(
-    private readonly store: PopupStateStore,
+    private readonly store: SessionStateStore,
     /** Unique id, e.g. `"tip-maker"`. Must not collide with other wizards. */
     private readonly id: string,
     /** Default field values used when the wizard is first started. */

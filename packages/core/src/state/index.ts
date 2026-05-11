@@ -1,16 +1,20 @@
 /**
- * `@smirk/core/state` — popup state, route persistence, wizard scaffold.
+ * `@smirk/core/state` — session state, route persistence, wizard scaffold.
+ *
+ * "Session" semantics differ per platform (extension popup-close,
+ * mobile backgrounding, desktop window-close) — see
+ * [`./session-state.ts`] for the lifetime model.
  *
  * Framework-agnostic. Reactive UI bindings (Preact hooks like
- * `usePopupState`, `useRoute`, `useWizard`) live in `@smirk/ui/state`.
+ * `useSessionState`, `useRoute`, `useWizard`) live in `@smirk/ui/state`.
  *
  * @example Boot in an extension popup
  * ```ts
- * import { autoDetectEphemeralStorage, PopupStateStore, RouteController } from '@smirk/core/state';
+ * import { autoDetectEphemeralStorage, SessionStateStore, RouteController } from '@smirk/core/state';
  *
  * const storage = autoDetectEphemeralStorage();
- * const popupState = new PopupStateStore(storage);
- * const router = new RouteController(popupState);
+ * const session = new SessionStateStore(storage);
+ * const router = new RouteController(session);
  *
  * await router.navigate('home');           // go home
  * await router.navigate('home/asset/btc'); // drill into BTC
@@ -27,12 +31,12 @@
  *   note?: string;
  * }
  *
- * const tipWizard = new Wizard<TipFields>(popupState, 'tip-maker', {});
+ * const tipWizard = new Wizard<TipFields>(session, 'tip-maker', {});
  * await tipWizard.start();
  * await tipWizard.setField('assetId', 'btc');
  * await tipWizard.next();   // → step 1
- * // popup closes, browser doesn't restart
- * // popup reopens
+ * // session ends (popup closes, app backgrounded, window closes...)
+ * // session resumes
  * const snap = await tipWizard.snapshot();
  * // snap.step === 1, snap.fields.assetId === 'btc'
  * ```
@@ -49,12 +53,12 @@ export type { PlatformStorage } from './platform';
 
 export {
   CURRENT_VERSION,
-  DEFAULT_POPUP_STATE,
+  DEFAULT_SESSION_STATE,
   MIGRATIONS,
-  PopupStateStore,
+  SessionStateStore,
   migrate,
-} from './popup-state';
-export type { Migration, PopupState, Route, WizardState } from './popup-state';
+} from './session-state';
+export type { Migration, SessionState, Route, WizardState } from './session-state';
 
 export { RouteController, tabOf } from './route';
 export type { Tab } from './route';

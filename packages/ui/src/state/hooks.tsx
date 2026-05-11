@@ -1,16 +1,16 @@
 /**
  * Preact hooks wrapping `@smirk/core/state`.
  *
- * Components opt into reactive popup-state via these hooks; updates
+ * Components opt into reactive session-state via these hooks; updates
  * trigger re-renders the way React/Preact users expect. The
  * underlying store is framework-agnostic — keeps `@smirk/core` clean,
  * lets a hypothetical Tauri+Solid frontend swap in its own bindings.
  *
  * @example
  * ```tsx
- * import { StateProvider, usePopupState, useRoute, useWizard } from '@smirk/ui';
+ * import { StateProvider, useSessionState, useRoute, useWizard } from '@smirk/ui';
  *
- * function App({ store, router }: { store: PopupStateStore; router: RouteController }) {
+ * function App({ store, router }: { store: SessionStateStore; router: RouteController }) {
  *   return (
  *     <StateProvider store={store} router={router}>
  *       <Shell />
@@ -19,7 +19,7 @@
  * }
  *
  * function Shell() {
- *   const state = usePopupState();
+ *   const state = useSessionState();
  *   const { route, navigate, back } = useRoute();
  *   // ...
  * }
@@ -29,9 +29,9 @@
 import { createContext, type ComponentChildren } from 'preact';
 import { useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
-  DEFAULT_POPUP_STATE,
-  type PopupState,
-  type PopupStateStore,
+  DEFAULT_SESSION_STATE,
+  type SessionState,
+  type SessionStateStore,
   type Route,
   type RouteController,
   type Tab,
@@ -44,7 +44,7 @@ import {
 // ============================================================================
 
 interface StateContextValue {
-  store: PopupStateStore;
+  store: SessionStateStore;
   router: RouteController;
 }
 
@@ -74,20 +74,20 @@ function useStateContext(): StateContextValue {
 }
 
 // ============================================================================
-// Reactive popup state
+// Reactive session state
 // ============================================================================
 
 /**
- * Subscribe to the full popup state. Re-renders the consumer on every
+ * Subscribe to the full session state. Re-renders the consumer on every
  * state change (local or cross-context).
  *
- * On first render, returns `DEFAULT_POPUP_STATE` while the store
+ * On first render, returns `DEFAULT_SESSION_STATE` while the store
  * loads asynchronously — wrap critical reads in conditionals if you
  * need to wait for real data, or accept the default-flash.
  */
-export function usePopupState(): PopupState {
+export function useSessionState(): SessionState {
   const { store } = useStateContext();
-  const [state, setState] = useState<PopupState>(DEFAULT_POPUP_STATE);
+  const [state, setState] = useState<SessionState>(DEFAULT_SESSION_STATE);
 
   useEffect(() => {
     let alive = true;
@@ -126,14 +126,14 @@ export interface UseRouteApi {
 /**
  * Reactive route hook. Updates whenever the route changes — local
  * navigations, cross-context navigations, or restored from storage
- * on popup reopen.
+ * on session resume.
  *
  * Remembers per-tab drill-down so switching tabs and switching back
  * lands on the previously-viewed sub-screen, not the tab root.
  */
 export function useRoute(): UseRouteApi {
   const { router } = useStateContext();
-  const state = usePopupState();
+  const state = useSessionState();
   const route = state.route;
 
   // Remember each tab's most recently-viewed sub-route, so switching
@@ -184,7 +184,7 @@ export interface UseWizardApi<TFields extends Record<string, unknown>> {
 
 /**
  * Reactive wizard hook. Pass a stable wizard id and a defaults
- * object — restored across pop-out, popup close, and cross-context
+ * object — restored across pop-out, session resume, and cross-context
  * writes.
  *
  * The defaults object is captured at mount; changing it across
@@ -195,7 +195,7 @@ export function useWizard<TFields extends Record<string, unknown>>(
   defaults: TFields,
 ): UseWizardApi<TFields> {
   const { store } = useStateContext();
-  const state = usePopupState();
+  const state = useSessionState();
   const w = state.wizards[id];
 
   // Wizard handle is stable across renders. We rebuild it only when
