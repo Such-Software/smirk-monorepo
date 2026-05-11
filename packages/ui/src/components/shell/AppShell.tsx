@@ -39,14 +39,30 @@ export interface AppShellProps {
    * hidden.
    */
   onPopOut?: () => void;
+  /**
+   * Brand mark in the header / sidebar. Defaults to text-only "Smirk
+   * Wallet". Pass an icon URL to render a logo glyph alongside the
+   * label — extension/mobile/desktop each supply their own.
+   */
+  brand?: { label?: string; iconUrl?: string };
+  /**
+   * Extra content rendered in the header (between the brand and the
+   * pop-out button). Used for things like a refresh button on Home —
+   * the consumer is responsible for hiding it on tabs where it doesn't
+   * apply.
+   */
+  headerActions?: ComponentChildren;
   /** Optional class for outermost div, for consumer styling hooks. */
   class?: string;
 }
 
-export function AppShell({ routes, onPopOut, class: className }: AppShellProps) {
+export function AppShell({ routes, onPopOut, brand, headerActions, class: className }: AppShellProps) {
   const { tab } = useRoute();
   const isPopout = useIsPopout();
   const showPopOutButton = !isPopout && onPopOut !== undefined;
+
+  const label = brand?.label ?? 'Smirk Wallet';
+  const iconUrl = brand?.iconUrl;
 
   return (
     <div
@@ -59,10 +75,15 @@ export function AppShell({ routes, onPopOut, class: className }: AppShellProps) 
       }}
     >
       {!isPopout && (
-        <Header {...(showPopOutButton ? { onPopOut } : {})} />
+        <Header
+          label={label}
+          {...(iconUrl ? { iconUrl } : {})}
+          {...(showPopOutButton ? { onPopOut } : {})}
+          {...(headerActions !== undefined ? { extra: headerActions } : {})}
+        />
       )}
 
-      {isPopout && <SidebarNav />}
+      {isPopout && <SidebarNav label={label} {...(iconUrl ? { iconUrl } : {})} />}
 
       <main
         style={{
@@ -83,10 +104,13 @@ export function AppShell({ routes, onPopOut, class: className }: AppShellProps) 
 // ----- Header (popup mode) -----
 
 interface HeaderProps {
+  label: string;
+  iconUrl?: string;
   onPopOut?: () => void;
+  extra?: ComponentChildren;
 }
 
-function Header({ onPopOut }: HeaderProps) {
+function Header({ label, iconUrl, onPopOut, extra }: HeaderProps) {
   return (
     <header
       style={{
@@ -96,33 +120,60 @@ function Header({ onPopOut }: HeaderProps) {
         padding: '8px 12px',
         borderBottom: '1px solid rgba(255,255,255,0.08)',
         flexShrink: 0,
+        gap: 8,
       }}
     >
-      <span style={{ fontSize: 14, fontWeight: 600 }}>Smirk</span>
-      {onPopOut && (
-        <button
-          onClick={onPopOut}
-          aria-label="Open in window"
-          title="Open in window"
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'inherit',
-            cursor: 'pointer',
-            fontSize: 14,
-            padding: '4px 8px',
-          }}
-        >
-          ⤢
-        </button>
-      )}
+      <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={16} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {extra}
+        {onPopOut && (
+          <button
+            onClick={onPopOut}
+            aria-label="Open in window"
+            title="Open in window"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'inherit',
+              cursor: 'pointer',
+              fontSize: 14,
+              padding: '4px 8px',
+            }}
+          >
+            ⤢
+          </button>
+        )}
+      </div>
     </header>
+  );
+}
+
+interface BrandMarkProps {
+  label: string;
+  iconUrl?: string;
+  size: number;
+}
+
+function BrandMark({ label, iconUrl, size }: BrandMarkProps) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      {iconUrl && (
+        <img
+          src={iconUrl}
+          alt=""
+          width={size}
+          height={size}
+          style={{ display: 'block' }}
+        />
+      )}
+      <span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span>
+    </span>
   );
 }
 
 // ----- Sidebar (pop-out mode) -----
 
-function SidebarNav() {
+function SidebarNav({ label, iconUrl }: { label: string; iconUrl?: string }) {
   // Reuse BottomNav's logic but render as a column. Single source of
   // truth for the tab list lives in BottomNav.
   return (
@@ -138,12 +189,10 @@ function SidebarNav() {
       <div
         style={{
           padding: '12px 16px',
-          fontSize: 14,
-          fontWeight: 600,
           borderBottom: '1px solid rgba(255,255,255,0.08)',
         }}
       >
-        Smirk
+        <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={20} />
       </div>
       <BottomNav orientation="vertical" />
     </aside>

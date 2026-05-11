@@ -25,8 +25,12 @@ export interface BalanceCardProps {
   resolveIcon?: (iconKey: string) => string | undefined;
   /** Loading state — renders shimmer placeholders for the amount. */
   loading?: boolean;
+  /** Mask the amount with `●●●●●`. Pairs with the headline hide toggle. */
+  hidden?: boolean;
   class?: string;
 }
+
+const HIDDEN_PLACEHOLDER = '••••';
 
 export function BalanceCard({
   assetId,
@@ -36,12 +40,15 @@ export function BalanceCard({
   onClick,
   resolveIcon,
   loading,
+  hidden,
   class: className,
 }: BalanceCardProps) {
   const asset = mustGetAsset(assetId);
-  const formatted = formatAmountWithAsset(balanceAtomic, asset, 8);
+  const formatted = hidden
+    ? HIDDEN_PLACEHOLDER
+    : formatAmountWithAsset(balanceAtomic, asset, 8);
   const pending =
-    pendingAtomic !== undefined && pendingAtomic !== 0
+    !hidden && pendingAtomic !== undefined && pendingAtomic !== 0
       ? formatAmountWithAsset(pendingAtomic, asset, 8)
       : null;
 
@@ -54,8 +61,8 @@ export function BalanceCard({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 12,
-        padding: 12,
+        gap: 10,
+        padding: '6px 12px',
         width: '100%',
         background: 'transparent',
         border: 'none',
@@ -66,7 +73,7 @@ export function BalanceCard({
     >
       <AssetIcon
         assetId={assetId}
-        size={36}
+        size={28}
         {...(resolveIcon ? { resolveIcon } : {})}
       />
 

@@ -35,6 +35,12 @@ export * from './address';
 // HD wallet derivation
 export * from './hd';
 
+// Wallet keystore — encrypted-at-rest seed + unlock state machine
+export * from './keystore';
+
+// Bootstrap flows: auth + balances (combines keystore with the API client)
+export * from './wallet-flow';
+
 // Popup state, route persistence, wizard scaffold
 export * from './state';
 

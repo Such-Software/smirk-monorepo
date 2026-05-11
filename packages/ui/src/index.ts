@@ -41,11 +41,39 @@ export const UI_PACKAGE_VERSION = '0.0.1';
 export { ActionButton, ActionRow } from './components/ActionButton';
 export type { ActionButtonProps, ActionRowProps } from './components/ActionButton';
 
+export { Button } from './components/Button';
+export type { ButtonProps } from './components/Button';
+
 export { AssetIcon } from './components/AssetIcon';
 export type { AssetIconProps } from './components/AssetIcon';
 
 export { BalanceCard } from './components/BalanceCard';
 export type { BalanceCardProps } from './components/BalanceCard';
+
+export { UnifiedBalance, HomeActionRow } from './components/UnifiedBalance';
+export type {
+  UnifiedBalanceProps,
+  HomeActionRowProps,
+} from './components/UnifiedBalance';
+
+export { HomeTab } from './components/HomeTab';
+export type { HomeTabProps, HomeAssetRow } from './components/HomeTab';
+
+export { SendWizard } from './components/SendWizard';
+export type {
+  SendWizardProps,
+  SendFields,
+  SendSubmitResult,
+} from './components/SendWizard';
+
+export { ReceiveScreen } from './components/ReceiveScreen';
+export type { ReceiveScreenProps } from './components/ReceiveScreen';
+
+export { OnboardingWizard } from './components/OnboardingWizard';
+export type { OnboardingWizardProps } from './components/OnboardingWizard';
+
+export { LockScreen } from './components/LockScreen';
+export type { LockScreenProps } from './components/LockScreen';
 
 // ----- Shell -----
 export { AppShell } from './components/shell/AppShell';

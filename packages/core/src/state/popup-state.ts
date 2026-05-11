@@ -22,7 +22,7 @@ import { PlatformStorage } from './platform';
 // ============================================================================
 
 /** Bump on every breaking schema change; add a migration. */
-export const CURRENT_VERSION = 1;
+export const CURRENT_VERSION = 2;
 
 /**
  * The full popup state shape. Every field is restorable on reload.
@@ -44,15 +44,22 @@ export interface PopupState {
   wizards: Record<string, WizardState>;
 
   /**
-   * UI-mode flags. Pure visual state, no security implications.
+   * UI-mode flags + user preferences.
    * - `balanceHidden`: eye-icon mask (UI_DESIGN.md Principle 8).
    * - `denomination`: "USD" | "EUR" | "BTC" | "sat" | … (per-user
    *   preference; mirrored from `chrome.storage.local` so the chosen
    *   denomination survives browser close).
+   * - `autoLockMinutes`: how long the wallet stays unlocked after the
+   *   popup closes. **Has security implications** — when > 0, the
+   *   unlocked mnemonic is mirrored to `chrome.storage.session` for
+   *   the configured duration. `0` (default) = lock immediately on
+   *   popup close (the safe default). `-1` = never auto-lock until
+   *   user manually locks or the browser closes.
    */
   ui: {
     balanceHidden: boolean;
     denomination: string;
+    autoLockMinutes: number;
   };
 }
 
@@ -84,6 +91,7 @@ export const DEFAULT_POPUP_STATE: PopupState = {
   ui: {
     balanceHidden: false,
     denomination: 'USD',
+    autoLockMinutes: 0, // safe default: lock immediately on popup close
   },
 };
 
@@ -107,7 +115,15 @@ export const DEFAULT_POPUP_STATE: PopupState = {
 export type Migration<TFrom = unknown, TTo = unknown> = (state: TFrom) => TTo;
 
 export const MIGRATIONS: Record<number, Migration> = {
-  // 1: (s) => ({ ...s, version: 2, ... }),
+  // v1 → v2: add `ui.autoLockMinutes` (default 0 = lock immediately).
+  1: (s) => {
+    const prev = s as PopupState;
+    return {
+      ...prev,
+      version: 2,
+      ui: { ...prev.ui, autoLockMinutes: 0 },
+    } satisfies PopupState;
+  },
 };
 
 /** Apply migrations in order to bring `raw` up to `CURRENT_VERSION`. */

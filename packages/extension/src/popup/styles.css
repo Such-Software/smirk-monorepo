@@ -12,7 +12,9 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--fg);
-  /* Popup mode: fixed 380×600. Pop-out window resizes freely. */
+  /* Popup mode: 380×600 (Chrome's MV3 action popup ceiling). The
+     internal layout scrolls only the active tab's body — the chrome
+     (header + bottom nav) is fixed. Pop-out window resizes freely. */
   width: 380px;
   height: 600px;
   overflow: hidden;
@@ -74,4 +76,18 @@ code {
   background: rgba(255, 255, 255, 0.08);
   padding: 1px 4px;
   border-radius: 3px;
+}
+
+@keyframes smirk-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Native <select> dropdown options ignore the parent's text-color and
+   take their styling from the host OS chrome. Without these, options
+   render as inherited white text on a default-light popup background
+   (= invisible) on most platforms. Force explicit dark theme. */
+select option {
+  background: #1a1a1d;
+  color: var(--fg);
 }

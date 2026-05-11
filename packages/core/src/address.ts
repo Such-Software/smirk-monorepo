@@ -190,3 +190,132 @@ export function isValidLtcAddress(address: string): boolean {
   }
 }
 
+/**
+ * True iff `address` decodes as a valid Monero (XMR) address.
+ *
+ * Verifies the Monero base58 → byte stream → varint prefix matches
+ * mainnet (standard, integrated, or subaddress) and the trailing
+ * 4-byte Keccak-256 checksum over the rest of the payload.
+ */
+export function isValidXmrAddress(address: string): boolean {
+  return isValidCryptonoteAddress(address, [
+    NETWORKS.xmr.addressPrefix,
+    NETWORKS.xmr.integratedPrefix,
+    NETWORKS.xmr.subaddressPrefix,
+  ]);
+}
+
+/**
+ * True iff `address` decodes as a valid Wownero (WOW) address.
+ * Same construction as Monero with different prefixes.
+ */
+export function isValidWowAddress(address: string): boolean {
+  return isValidCryptonoteAddress(address, [
+    NETWORKS.wow.addressPrefix,
+    NETWORKS.wow.integratedPrefix,
+    NETWORKS.wow.subaddressPrefix,
+  ]);
+}
+
+/**
+ * True iff `address` is a valid `grin1…` slatepack address — bech32
+ * (NOT bech32m), 32-byte ed25519 public-key payload.
+ */
+export function isValidGrinSlatepackAddress(address: string): boolean {
+  try {
+    if (!address.startsWith('grin1') || !address.includes('1')) return false;
+    const decoded = bech32.decode(address as `${string}1${string}`, 1023);
+    if (decoded.prefix !== 'grin') return false;
+    const bytes = bech32.fromWords(decoded.words);
+    return bytes.length === 32;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decode + validate a Cryptonote-style address against an allowed set
+ * of prefix integers. Used by the XMR and WOW validators above.
+ *
+ * Steps: base58 decode → split into payload + 4-byte checksum →
+ * verify checksum is `keccak_256(payload)[:4]` → decode the leading
+ * varint and check it's in `allowedPrefixes`.
+ */
+function isValidCryptonoteAddress(address: string, allowedPrefixes: number[]): boolean {
+  try {
+    const data = cnBase58Decode(address);
+    if (data === null) return false;
+    if (data.length < 4) return false;
+
+    const payload = data.slice(0, data.length - 4);
+    const checksum = data.slice(data.length - 4);
+
+    const expected = keccak_256(payload).slice(0, 4);
+    for (let i = 0; i < 4; i++) {
+      if (expected[i] !== checksum[i]) return false;
+    }
+
+    const prefix = decodeVarint(payload);
+    if (prefix === null) return false;
+    return allowedPrefixes.includes(prefix.value);
+  } catch {
+    return false;
+  }
+}
+
+/** Decode the leading varint from `bytes`. Returns `null` on malformed input. */
+function decodeVarint(bytes: Uint8Array): { value: number; bytesRead: number } | null {
+  let value = 0;
+  let shift = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i]!;
+    if (shift >= 28 && (byte & 0x7f) > 0x0f) return null; // overflow guard
+    value |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) return { value, bytesRead: i + 1 };
+    shift += 7;
+    if (shift > 28) return null;
+  }
+  return null;
+}
+
+/**
+ * Inverse of `cnBase58Encode`. Returns `null` if the string contains
+ * characters outside Monero's base58 alphabet or has an invalid length
+ * for any 11-char block.
+ */
+function cnBase58Decode(s: string): Uint8Array | null {
+  const fullEncodedBlockSize = 11;
+  // Mapping from encoded block size (chars) → decoded byte count.
+  // Inverse of `getEncodedBlockSize`: positions where lookup is valid
+  // are 2,3,5,6,7,9,10,11; other lengths within a partial block are invalid.
+  const decodedSizeFor: Record<number, number> = {
+    0: 0, 2: 1, 3: 2, 5: 3, 6: 4, 7: 5, 9: 6, 10: 7, 11: 8,
+  };
+
+  const result: number[] = [];
+  for (let i = 0; i < s.length; i += fullEncodedBlockSize) {
+    const blockChars = s.slice(i, i + fullEncodedBlockSize);
+    const decodedSize = decodedSizeFor[blockChars.length];
+    if (decodedSize === undefined) return null;
+
+    let num = 0n;
+    for (const ch of blockChars) {
+      const v = CN_BASE58_ALPHABET.indexOf(ch);
+      if (v < 0) return null;
+      num = num * 58n + BigInt(v);
+    }
+
+    // Reject overflow: each decoded block must fit in `decodedSize` bytes.
+    if (num >= 1n << BigInt(decodedSize * 8)) return null;
+
+    const block: number[] = [];
+    for (let j = 0; j < decodedSize; j++) {
+      block.unshift(Number(num & 0xffn));
+      num >>= 8n;
+    }
+    for (const b of block) result.push(b);
+  }
+
+  return new Uint8Array(result);
+}
+

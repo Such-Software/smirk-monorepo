@@ -53,8 +53,8 @@ export function ActionButton({
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
-        padding: '12px 8px',
+        gap: 4,
+        padding: '8px 6px',
         background: bg,
         border: 'none',
         borderRadius: 12,
@@ -62,7 +62,7 @@ export function ActionButton({
         opacity: disabled ? 0.4 : 1,
         color: 'inherit',
         flex: 1,
-        minHeight: 72,
+        minHeight: 60,
       }}
     >
       {icon && (

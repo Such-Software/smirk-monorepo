@@ -31,12 +31,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
 
-/**
- * Endpoints whose request/response details are logged via `console.log`
- * when the request is in flight. Useful for debugging chain-specific flows
- * during development. Match is by substring.
- */
-const DEBUG_ENDPOINTS = ['/grin/', '/tips/social', '/prices'];
+// SECURITY: do not reintroduce a body-logging debug switch here. Earlier
+// revisions had a `DEBUG_ENDPOINTS` list that `console.log`'d full request
+// + response JSON for `/grin/`, `/tips/social`, and `/prices` — including
+// `encrypted_key`, slatepacks, and view-key adjacent data. Browser console
+// is exposed to crash dumps, screen-share screenshots, and any other
+// extension with devtools access. For ad-hoc debugging use Chrome's
+// Network panel; never log the body here. (See docs/SECURITY_AUDIT.md.)
 
 /**
  * Base API client with bearer-token authentication. Subclassed by
@@ -55,7 +56,6 @@ export class ApiClient {
 
   setAccessToken(token: string | null): void {
     setGlobalToken(token);
-    console.log('[API] Token set:', token ? 'yes' : 'no');
   }
 
   getAccessToken(): string | null {
@@ -74,15 +74,6 @@ export class ApiClient {
     }
 
     const url = `${this.baseUrl}${endpoint}`;
-    const method = options.method || 'GET';
-
-    const shouldLog = DEBUG_ENDPOINTS.some((e) => endpoint.includes(e));
-    if (shouldLog) {
-      console.log(`[API] ${method} ${url}`, {
-        hasAuth: !!accessToken,
-        body: options.body ? JSON.parse(options.body as string) : undefined,
-      });
-    }
 
     try {
       const controller = new AbortController();
@@ -98,9 +89,6 @@ export class ApiClient {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({ error: 'Unknown error' }));
-        if (shouldLog) {
-          console.error(`[API] ${method} ${url} FAILED:`, response.status, body);
-        }
         return {
           error: body.error || `HTTP ${response.status}`,
           status: response.status,
@@ -109,14 +97,8 @@ export class ApiClient {
       }
 
       const data = await response.json();
-      if (shouldLog) {
-        console.log(`[API] ${method} ${url} OK:`, data);
-      }
       return { data, status: response.status };
     } catch (err) {
-      if (shouldLog) {
-        console.error(`[API] ${method} ${url} EXCEPTION:`, err);
-      }
       const message =
         err instanceof Error
           ? err.name === 'AbortError'
