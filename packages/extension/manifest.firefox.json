@@ -5,6 +5,9 @@
   "description": "Smirk multi-currency wallet — monorepo skeleton build. Not for production use.",
   "permissions": ["storage", "alarms", "notifications", "scripting", "activeTab"],
   "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Smirk"
