@@ -1,0 +1,38 @@
+{
+  "name": "@smirk/swap",
+  "version": "0.0.1",
+  "description": "Swap orchestration — common Swap interface plus THORChain (v0.3) and native adaptor-sig (v0.4+) implementations. UI talks to a Swap; the Swap decides whether to drive an aggregator or a peer-to-peer flow.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./thorchain": {
+      "types": "./dist/thorchain/index.d.ts",
+      "import": "./dist/thorchain/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx src/__tests__/types.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0"
+  },
+  "dependencies": {
+    "@smirk/assets": "*"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
