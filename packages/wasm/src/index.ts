@@ -26,7 +26,19 @@
  * ```
  */
 
-import init, * as wasm from '../../../crates/smirk-wasm/pkg/smirk_wasm.js';
+// `--target no-modules` output: an IIFE that binds `wasm_bindgen` at the
+// top level. The build script (Makefile + crates/smirk-wasm/build.sh)
+// appends `export { wasm_bindgen };` so we can import it as ESM. Calling
+// `wasm_bindgen({ module_or_path })` loads/instantiates the WASM and
+// attaches every exported function to the `wasm_bindgen` function object.
+// We use `wasm_bindgen` itself as our `wasm.*` lookup target.
+// @ts-expect-error — generated file has no type declarations for the
+//                    no-modules export shim. The .d.ts only documents the
+//                    `--target web` shape.
+import { wasm_bindgen } from '../../../crates/smirk-wasm/pkg/smirk_wasm.js';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const wasm = wasm_bindgen as any;
 
 let initialized = false;
 
@@ -34,15 +46,16 @@ let initialized = false;
  * Initialize the WASM bundle. Must be called once before any other
  * function in this package. Idempotent — subsequent calls are no-ops.
  *
- * @param moduleOrPath Optional pre-fetched WASM bytes. In browser
- *   environments this is auto-resolved relative to the JS bundle URL;
- *   pass explicit bytes only if your environment doesn't support that.
+ * @param moduleOrPath Optional pre-fetched WASM bytes or URL. In browsers
+ *   the no-modules glue auto-derives the .wasm URL from the script src;
+ *   pass explicit bytes when running in a service worker or other env
+ *   without `document.currentScript`.
  */
 export async function initialize(
   moduleOrPath?: BufferSource | URL | string,
 ): Promise<void> {
   if (initialized) return;
-  await init(moduleOrPath ? { module_or_path: moduleOrPath } : undefined);
+  await wasm_bindgen(moduleOrPath ? { module_or_path: moduleOrPath } : undefined);
   initialized = true;
 }
 

@@ -49,12 +49,21 @@ rust-check:
 rust-clean:
 	cargo clean
 
-# WASM bundle for browsers (smirk-wasm crate → pkg/, --target web)
+# WASM bundle for browsers (smirk-wasm crate → pkg/, --target no-modules).
+# Why no-modules: wasm-bindgen 0.2.95+ with --target web emits `import * from "env"`
+# placeholder imports that no bundler resolves out of the box (see ARCHITECTURE.md
+# "Build-pipeline gotchas"). no-modules emits a self-contained IIFE — works in any
+# WebView (extension, Capacitor, Tauri) without bundler-specific plugins.
 wasm:
 	cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
-	wasm-bindgen --target web \
+	wasm-bindgen --target no-modules \
 	  --out-dir crates/smirk-wasm/pkg \
 	  target/wasm32-unknown-unknown/release/smirk_wasm.wasm
+	@# Patches the no-modules output: (1) replaces broken `require("env")`
+	@# C-import placeholders with no-op stubs (never invoked in our paths
+	@# per secp256k1zkp/wasm-sysroot/README.md), (2) appends `export { wasm_bindgen };`
+	@# so @smirk/wasm can import the IIFE-bound symbol as ESM.
+	@node crates/smirk-wasm/postprocess.mjs
 	@echo ""
 	@echo "WASM bundle built:"
 	@ls -lh crates/smirk-wasm/pkg/

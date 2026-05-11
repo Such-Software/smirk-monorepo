@@ -18,9 +18,15 @@ echo "Building smirk-wasm from ${WORKSPACE_ROOT}..."
 cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
 
 # Generate JS bindings — pkg/ lives next to the crate
-wasm-bindgen --target web \
+wasm-bindgen --target no-modules \
   --out-dir "${SCRIPT_DIR}/pkg" \
   "${WORKSPACE_ROOT}/target/wasm32-unknown-unknown/release/smirk_wasm.wasm"
+
+# Patches the no-modules output: (1) replaces broken `require("env")`
+# C-import placeholders with no-op stubs (never invoked in our paths per
+# secp256k1zkp/wasm-sysroot/README.md), (2) appends `export { wasm_bindgen };`
+# so @smirk/wasm can import the IIFE-bound symbol as ESM.
+node "${SCRIPT_DIR}/postprocess.mjs"
 
 echo ""
 echo "Build complete!"
