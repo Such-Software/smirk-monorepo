@@ -12,8 +12,11 @@ import type { Theme } from './types';
  * 3DDKSHADOW (#0a0a0a). Title-bar gradient #0a246a → #a6caf0.
  */
 export const win95Theme: Theme = {
+  // Stable id — kept as `win95` so any persisted user selection
+  // survives the rename. Display name uses the Microsoft codename
+  // ("Chicago") instead of the trademark.
   id: 'win95',
-  name: 'Windows 95',
+  name: "Chicago '95",
   description: 'Chunky bevels. MS Sans Serif. For aficionados.',
   tokens: {
     // Classic system gray; raised surfaces use the same color and rely
@@ -75,8 +78,12 @@ export const win95Theme: Theme = {
       image-rendering: crisp-edges;
     }
 
-    /* Generic <button> reset — chunky bevel, square corners, raised. */
-    .smirk-theme-win95 button {
+    /* Generic <button> reset — chunky bevel, square corners, raised.
+       The :not(.smirk-headline-action) qualifier skips the invisible
+       buttons wrapping the balance numerals + eye toggle, which
+       auto-size to their content and would otherwise paint the bevel
+       right against the digits. Those buttons stay un-chromed. */
+    .smirk-theme-win95 button:not(.smirk-headline-action) {
       border: 1px solid #000000;
       cursor: default;
       background: var(--smirk-bg-elevated);
@@ -85,10 +92,10 @@ export const win95Theme: Theme = {
       border-radius: 0;
       font-family: var(--smirk-font-family);
     }
-    .smirk-theme-win95 button:active:not(:disabled) {
+    .smirk-theme-win95 button:not(.smirk-headline-action):active:not(:disabled) {
       box-shadow: var(--smirk-shadow-sunken);
     }
-    .smirk-theme-win95 button:focus-visible {
+    .smirk-theme-win95 button:not(.smirk-headline-action):focus-visible {
       outline: 1px dotted #000000;
       outline-offset: -4px;
     }
@@ -134,6 +141,14 @@ export const win95Theme: Theme = {
     .smirk-theme-win95 .smirk-balance-card:hover,
     .smirk-theme-win95 .smirk-balance-card:hover * {
       color: var(--smirk-accent-fg) !important;
+    }
+
+    /* Headline balance — keep the gray surface, just give the number
+       room to breathe so it doesn't touch the chrome bevel. Override
+       padding with !important because the component uses an inline
+       style. No background override (inherits the page gray). */
+    .smirk-theme-win95 .smirk-unified-balance {
+      padding: 24px 20px 18px !important;
     }
 
     /* Bottom-nav tabs render as flat toolbar buttons — no bevel shadow,

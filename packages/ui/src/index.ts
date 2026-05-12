@@ -100,6 +100,11 @@ export type { Theme, ThemeTokens } from './themes';
 export {
   defaultTheme,
   win95Theme,
+  winxpTheme,
+  amigaTheme,
+  iosClassicTheme,
+  gameboyTheme,
+  n64Theme,
   registerTheme,
   listThemes,
   getTheme,

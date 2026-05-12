@@ -1,0 +1,12 @@
+Press Start 2P
+Designer: CodeMan38 / Cody "CodeMan38" Boisclair
+License: SIL Open Font License 1.1
+Source: https://fonts.google.com/specimen/Press+Start+2P
+
+This font is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at:
+https://openfontlicense.org
+
+The full license text is reproduced in OFL.txt files alongside the
+Lilita One bundle and is identical for this font (the OFL applies
+uniformly to both).

@@ -82,7 +82,7 @@ export function UnifiedBalance({
 
   return (
     <section
-      class={className}
+      class={['smirk-unified-balance', className].filter(Boolean).join(' ')}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -101,6 +101,7 @@ export function UnifiedBalance({
         }}
       >
         <TotalEl
+          class="smirk-headline-action"
           {...(onCycleDenomination
             ? {
                 onClick: onCycleDenomination,
@@ -114,6 +115,11 @@ export function UnifiedBalance({
             background: 'transparent',
             border: 'none',
             color: 'inherit',
+            // Buttons don't inherit font-family from their parent —
+            // UA stylesheets set their own. Force inherit so pixel
+            // themes (DMG, Workbench) actually paint the balance
+            // in their theme font.
+            fontFamily: 'inherit',
             cursor: onCycleDenomination ? 'pointer' : 'default',
             fontSize: 36,
             fontWeight: 700,
@@ -126,6 +132,7 @@ export function UnifiedBalance({
           {total}
         </TotalEl>
         <button
+          class="smirk-headline-action"
           onClick={onToggleHidden}
           aria-label={hidden ? 'Show balances' : 'Hide balances'}
           title={hidden ? 'Show balances' : 'Hide balances'}

@@ -1,6 +1,6 @@
 {
   "name": "@smirk/assets",
-  "version": "0.0.1",
+  "version": "0.3.0",
   "description": "Asset registry — pure-data definitions of every chain Smirk supports. Decimals, family classification, capabilities, confirmation requirements. Imports nothing chain-specific.",
   "type": "module",
   "main": "./dist/index.js",

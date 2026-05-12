@@ -36,4 +36,9 @@ export {
   getTheme,
 } from './registry';
 export { win95Theme } from './win95';
+export { winxpTheme } from './winxp';
+export { amigaTheme } from './amiga';
+export { iosClassicTheme } from './ios-classic';
+export { gameboyTheme } from './gameboy';
+export { n64Theme } from './n64';
 export { applyTheme, resetTheme } from './apply';

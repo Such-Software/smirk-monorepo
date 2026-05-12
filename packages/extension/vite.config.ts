@@ -46,6 +46,13 @@ function copyMonorepoAssets() {
       if (existsSync('icons')) {
         copyDirRecursive('icons', 'dist/icons');
       }
+
+      // Copy bundled theme fonts (pixel + chunky display fonts the
+      // built-in themes reference via @font-face). Loaded from a
+      // chrome-extension:// path at runtime — same-origin to the popup.
+      if (existsSync('assets/fonts')) {
+        copyDirRecursive('assets/fonts', 'dist/fonts');
+      }
     },
   };
 }

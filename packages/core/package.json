@@ -1,6 +1,6 @@
 {
   "name": "@smirk/core",
-  "version": "0.0.1",
+  "version": "0.3.0",
   "description": "Smirk wallet core: HD derivation, API client, address codecs, shared types. Consumed by extension, mobile, and desktop clients.",
   "type": "module",
   "main": "./dist/index.js",

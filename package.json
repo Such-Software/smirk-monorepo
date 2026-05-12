@@ -1,6 +1,6 @@
 {
   "name": "smirk-monorepo",
-  "version": "0.0.1",
+  "version": "0.3.0",
   "private": true,
   "description": "Smirk multi-currency wallet — TypeScript workspace root",
   "type": "module",

@@ -1,12 +1,25 @@
 import type { Theme } from './types';
 import { defaultTheme } from './default';
 import { win95Theme } from './win95';
+import { winxpTheme } from './winxp';
+import { amigaTheme } from './amiga';
+import { iosClassicTheme } from './ios-classic';
+import { gameboyTheme } from './gameboy';
+import { n64Theme } from './n64';
 
 /**
  * Built-in themes. Order is preserved for picker UI display.
  * Default must always be first.
  */
-const BUILT_INS: Theme[] = [defaultTheme, win95Theme];
+const BUILT_INS: Theme[] = [
+  defaultTheme,
+  win95Theme,
+  winxpTheme,
+  amigaTheme,
+  iosClassicTheme,
+  gameboyTheme,
+  n64Theme,
+];
 
 const registry = new Map<string, Theme>(BUILT_INS.map((t) => [t.id, t]));
 
