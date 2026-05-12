@@ -54,19 +54,58 @@ function estimateVsize(numInputs: number, numOutputs: number): number {
 }
 
 /**
- * Greedy UTXO selection: largest-first until selected ≥ target + fee.
+ * Selected input set + per-output amounts.
+ *
+ * In **sweep** mode: numOutputs = 1, no change output ever, recipient
+ * gets `sum(inputs) - feeSat`. Source address ends at 0.
+ *
+ * In **normal** mode: numOutputs = 2 unless change would be dust
+ * (< 294 sat), in which case the dust is forfeit to the miner and we
+ * fall back to numOutputs = 1. recipient gets the user-entered
+ * amount, change gets the rest.
+ */
+interface SelectedSet {
+  inputs: Array<{ txid: string; vout: number; value: number }>;
+  /** Amount the recipient will receive (in atomic units). */
+  recipientSat: number;
+  /** Change amount; 0 means no change output. */
+  changeSat: number;
+  /** Computed fee. */
+  feeSat: number;
+}
+
+/**
+ * Sweep all UTXOs into a single 1-output tx to the recipient. Fee comes
+ * out of the recipient amount — user pays the fee implicitly. Final
+ * source-address balance is exactly 0.
+ */
+function selectUtxosForSweep(
+  utxos: Array<{ txid: string; vout: number; value: number; height: number }>,
+  feeRateSatPerVb: number,
+): SelectedSet | { error: string } {
+  if (utxos.length === 0) {
+    return { error: 'No spendable UTXOs to sweep' };
+  }
+  const inputs = utxos.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value }));
+  const total = inputs.reduce((s, i) => s + i.value, 0);
+  const feeSat = Math.ceil(estimateVsize(inputs.length, 1) * feeRateSatPerVb);
+  const recipientSat = total - feeSat;
+  if (recipientSat <= 0) {
+    return {
+      error: `Sweep impossible: total ${total} sat ≤ fee ${feeSat} sat at ${feeRateSatPerVb} sat/vB`,
+    };
+  }
+  return { inputs, recipientSat, changeSat: 0, feeSat };
+}
+
+/**
+ * Normal greedy UTXO selection: largest-first until selected ≥ amount + fee.
  *
  * Fee depends on input count, which depends on selection — so we
  * loop: start with 1 input, compute fee, add inputs if short, retry.
  * Caps at 50 iterations as a sanity bound (caller's UTXO set should
  * never need more).
  */
-interface SelectedSet {
-  inputs: Array<{ txid: string; vout: number; value: number }>;
-  feeSat: number;
-  changeSat: number;
-}
-
 function selectUtxos(
   utxos: Array<{ txid: string; vout: number; value: number; height: number }>,
   targetSat: number,
@@ -115,8 +154,9 @@ function selectUtxos(
 
     return {
       inputs: selected.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value })),
-      feeSat,
+      recipientSat: targetSat,
       changeSat: numOutputs === 1 ? 0 : changeSat,
+      feeSat,
     };
   }
   return { error: 'UTXO selection did not converge (too many inputs needed)' };
@@ -125,10 +165,21 @@ function selectUtxos(
 /**
  * Send BTC or LTC.
  *
- * Flow: UTXO fetch → greedy selection at the "normal" fee tier →
- * buildPsbt → signPsbt → extractTx → broadcast. Single-recipient
- * P2WPKH only; change goes back to the from-address (Smirk's
- * single-address scheme — see `docs/SEND_FLOW.md`).
+ * Flow: UTXO fetch → selection (sweep-all or greedy) → buildPsbt →
+ * signPsbt → extractTx → broadcast. Single-recipient P2WPKH only;
+ * change goes back to the from-address (Smirk's single-address scheme
+ * — see `docs/SEND_FLOW.md`).
+ *
+ * Caller supplies the fee rate (chosen via Compose-screen fee picker)
+ * and the sweep flag — no hidden defaults or magic multipliers here.
+ *
+ * - `feeRateSatPerVb`: rate the user picked from the fee tiers shown
+ *   on the Compose screen (Fast / Normal / Slow).
+ * - `sweep`: when true, ignore `amountAtomic` and send **every UTXO**
+ *   to `toAddress` as a single 1-output tx; recipient gets
+ *   `sum(utxos) - fee`, source address ends at exactly 0. When false,
+ *   normal greedy selection: recipient gets `amountAtomic`, change
+ *   (if non-dust) goes back to from-address.
  *
  * Throws on missing keys, surfaces all other errors as
  * `{ ok: false, error }` for the wizard to display.
@@ -138,6 +189,8 @@ async function sendBtcLtc(
   asset: 'btc' | 'ltc',
   amountAtomic: bigint,
   toAddress: string,
+  feeRateSatPerVb: number,
+  sweep: boolean,
 ): Promise<SendSubmitResult> {
   if (!wallet.mnemonic) {
     return { ok: false, error: 'Wallet not unlocked (no mnemonic available)' };
@@ -158,28 +211,23 @@ async function sendBtcLtc(
     return { ok: false, error: 'No spendable UTXOs at this address' };
   }
 
-  // 2. Fee estimate. Take the "normal" tier — v0.3 doesn't expose a
-  //    fee picker yet (tracked in SEND_FLOW.md).
-  const feesResp = await api.estimateFee(asset);
-  if (feesResp.error || !feesResp.data) {
-    return { ok: false, error: feesResp.error ?? 'Failed to estimate fee' };
-  }
-  const feeRate = feesResp.data.normal ?? feesResp.data.slow ?? feesResp.data.fast;
-  if (feeRate === null || feeRate === undefined) {
-    return { ok: false, error: 'No fee rate available from Electrum' };
-  }
-
-  // 3. Pick UTXOs that cover amount + fee.
-  const target = Number(amountAtomic);
-  if (target > Number.MAX_SAFE_INTEGER) {
-    return { ok: false, error: 'Amount exceeds 9 PBTC — out of range for this codepath' };
-  }
-  const selection = selectUtxos(utxos, target, feeRate);
-  if ('error' in selection) {
-    return { ok: false, error: selection.error };
+  // 2. UTXO selection. Sweep ignores amountAtomic; normal mode uses it.
+  let selection: SelectedSet;
+  if (sweep) {
+    const r = selectUtxosForSweep(utxos, feeRateSatPerVb);
+    if ('error' in r) return { ok: false, error: r.error };
+    selection = r;
+  } else {
+    const target = Number(amountAtomic);
+    if (target > Number.MAX_SAFE_INTEGER) {
+      return { ok: false, error: 'Amount exceeds JS-safe-integer range' };
+    }
+    const r = selectUtxos(utxos, target, feeRateSatPerVb);
+    if ('error' in r) return { ok: false, error: r.error };
+    selection = r;
   }
 
-  // 4. Build the unsigned PSBT.
+  // 3. Build the unsigned PSBT.
   const network: BtcNetwork = asset === 'btc' ? 'btc-mainnet' : 'ltc-mainnet';
   // Smirk v3 single-address scheme — every input is at the same leaf.
   const masterPath = `m/84'/${asset === 'btc' ? 0 : 2}'/0'/0/0`;
@@ -194,7 +242,7 @@ async function sendBtcLtc(
         masterPath,
       })),
       recipientAddress: toAddress,
-      recipientSat: target,
+      recipientSat: selection.recipientSat,
       ...(selection.changeSat > 0
         ? { changeAddress: fromAddress, changeSat: selection.changeSat }
         : {}),
@@ -240,9 +288,25 @@ async function sendBtcLtc(
     return { ok: false, error: `Extract tx failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 
-  // 7. Broadcast.
+  // 7. Broadcast. On failure, dump tx hex + the inputs/recipient/change/fee
+  //    to the browser console so we can decode the raw tx offline
+  //    (`bitcoin-cli decoderawtransaction <hex>` or
+  //    https://blockstream.info/tools/tx-decoder) and find the exact
+  //    rejection reason. Diagnostic-only; the hex carries no private data.
   const broadcast = await api.broadcastTx(asset, txHex);
   if (broadcast.error || !broadcast.data) {
+    console.error('[smirk send] broadcast failed', {
+      asset,
+      sweep,
+      recipient: toAddress,
+      recipientSat: selection.recipientSat,
+      changeSat: selection.changeSat,
+      feeSat: selection.feeSat,
+      feeRateSatPerVb,
+      inputs: selection.inputs.map((i) => ({ txid: i.txid, vout: i.vout, value: i.value })),
+      txHex,
+      backendError: broadcast.error,
+    });
     return { ok: false, error: broadcast.error ?? 'Broadcast failed' };
   }
 
@@ -251,16 +315,29 @@ async function sendBtcLtc(
 
 /**
  * Top-level send dispatcher. SendWizard.onSubmit calls this with the
- * collected fields; we route to per-asset implementations.
+ * collected Compose-screen fields; we route to per-asset implementations.
  */
 export async function send(
   wallet: UnlockedWallet,
-  fields: { fromAssetId: string; amountAtomic: bigint; toAddress: string },
+  fields: {
+    fromAssetId: string;
+    amountAtomic: bigint;
+    toAddress: string;
+    feeRateSatPerVb: number;
+    sweep: boolean;
+  },
 ): Promise<SendSubmitResult> {
   const asset = mustGetAsset(fields.fromAssetId);
 
   if (asset.id === 'btc' || asset.id === 'ltc') {
-    return sendBtcLtc(wallet, asset.id, fields.amountAtomic, fields.toAddress);
+    return sendBtcLtc(
+      wallet,
+      asset.id,
+      fields.amountAtomic,
+      fields.toAddress,
+      fields.feeRateSatPerVb,
+      fields.sweep,
+    );
   }
 
   // Stub for assets we haven't wired yet. Returning an explicit error

@@ -44,9 +44,12 @@ export function BalanceCard({
   class: className,
 }: BalanceCardProps) {
   const asset = mustGetAsset(assetId);
+  // Balance list: full precision, no trim. Users want to see dust
+  // (e.g., 0.00800000 LTC instead of 0.008) so they know what they
+  // actually have. Matches Sparrow / Bitcoin Core convention.
   const formatted = hidden
     ? HIDDEN_PLACEHOLDER
-    : formatAmountWithAsset(balanceAtomic, asset, 8);
+    : formatAmountWithAsset(balanceAtomic, asset, 8, { trimZeros: false });
   const pending =
     !hidden && pendingAtomic !== undefined && pendingAtomic !== 0
       ? formatAmountWithAsset(pendingAtomic, asset, 8)

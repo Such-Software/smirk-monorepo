@@ -519,6 +519,25 @@ function HomeRouter({
         assetIds={listAssets().map((a) => a.id)}
         validateAddress={validateAddress}
         parseAmount={parseAmount}
+        resolveBalance={(assetId) => {
+          // Read confirmed balance from current session. Returns 0n if
+          // not yet loaded — Compose surfaces this as "Insufficient
+          // funds" if user tries to send before balances arrive.
+          const b = (session?.balances as Record<string, { confirmed: bigint } | undefined> | undefined)?.[assetId];
+          return b?.confirmed ?? 0n;
+        }}
+        resolveFeeRates={async (assetId) => {
+          if (assetId !== 'btc' && assetId !== 'ltc') {
+            // Other assets (XMR/WOW/Grin) don't use sat/vB tiers. Stub
+            // with nulls — Compose will surface "Loading…" / error.
+            return { fast: null, normal: null, slow: null };
+          }
+          const r = await api.estimateFee(assetId);
+          if (r.error || !r.data) {
+            throw new Error(r.error ?? 'Failed to fetch fee rates');
+          }
+          return { fast: r.data.fast, normal: r.data.normal, slow: r.data.slow };
+        }}
         onSubmit={(fields) => send(wallet, fields)}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}

@@ -23,12 +23,13 @@ use bitcoin::psbt::{Input as PsbtInput, Output as PsbtOutput, Psbt};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::transaction::Version;
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
-    Txid, Witness,
+    Amount, CompressedPublicKey, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
+    Witness,
 };
 use core::str::FromStr;
 use std::collections::BTreeMap;
 
+use crate::address::decode_recipient_script;
 use crate::network::Network;
 
 #[derive(Debug)]
@@ -60,8 +61,7 @@ impl core::fmt::Display for BuildError {
                 needed_sat,
             } => write!(
                 f,
-                "insufficient funds: selected {} sat, need {} sat",
-                selected_sat, needed_sat
+                "insufficient funds: selected {selected_sat} sat, need {needed_sat} sat"
             ),
             BuildError::DerivationFailed => write!(f, "BIP32 derivation failed"),
             BuildError::AddressNetworkMismatch => {
@@ -134,7 +134,7 @@ pub fn extract_tx(psbt_base64: &str) -> Result<String, BuildError> {
 /// Sequence is set to `0xfffffffd` on every input to signal RBF
 /// (BIP125). Locktime is 0 — we don't use absolute locktimes for normal
 /// sends.
-pub fn build_psbt(params: BuildParams<'_>) -> Result<String, BuildError> {
+pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
     let total_in: u64 = params.inputs.iter().map(|i| i.value_sat).sum();
     let total_out = params.recipient_sat.saturating_add(params.change_sat);
     if total_in < total_out {
@@ -154,12 +154,20 @@ pub fn build_psbt(params: BuildParams<'_>) -> Result<String, BuildError> {
     let btc_network = params.network.as_bitcoin_network();
 
     // ---- Parse recipient + change addresses ----
-    let recipient =
-        parse_address_for_network(params.recipient_address, params.network).ok_or(BuildError::InvalidRecipient)?;
-    let change = match params.change_address {
-        Some(addr) if params.change_sat > 0 => {
-            Some(parse_address_for_network(addr, params.network).ok_or(BuildError::InvalidChangeAddress)?)
-        }
+    //
+    // We can't use `bitcoin::Address::from_str` here because rust-bitcoin's
+    // Address parser only knows BTC's bech32 HRPs (`bc` / `tb`); LTC's
+    // `ltc` / `tltc` addresses would fail to parse. `decode_recipient_script`
+    // handles both chains uniformly (decodes bech32 directly, checks HRP
+    // against the selected network, constructs the script_pubkey for
+    // P2WPKH or P2TR recipients).
+    let recipient_script = decode_recipient_script(params.recipient_address, params.network)
+        .map_err(|_| BuildError::InvalidRecipient)?;
+    let change_script = match params.change_address {
+        Some(addr) if params.change_sat > 0 => Some(
+            decode_recipient_script(addr, params.network)
+                .map_err(|_| BuildError::InvalidChangeAddress)?,
+        ),
         _ => None,
     };
 
@@ -180,12 +188,12 @@ pub fn build_psbt(params: BuildParams<'_>) -> Result<String, BuildError> {
 
     let mut tx_out = vec![TxOut {
         value: Amount::from_sat(params.recipient_sat),
-        script_pubkey: recipient.script_pubkey(),
+        script_pubkey: recipient_script,
     }];
-    if let Some(c) = &change {
+    if let Some(script) = change_script {
         tx_out.push(TxOut {
             value: Amount::from_sat(params.change_sat),
-            script_pubkey: c.script_pubkey(),
+            script_pubkey: script,
         });
     }
 
@@ -239,25 +247,13 @@ pub fn build_psbt(params: BuildParams<'_>) -> Result<String, BuildError> {
 
     // Sanity check we didn't accidentally end up on the wrong network
     // (e.g. xprv is mainnet but addresses were testnet — already caught
-    // in `parse_address_for_network`, this is belt-and-suspenders).
+    // by `decode_recipient_script`'s HRP comparison, this is
+    // belt-and-suspenders).
     if params.master_xpriv.network != btc_network.into() {
         return Err(BuildError::AddressNetworkMismatch);
     }
 
     Ok(psbt.to_string())
-}
-
-/// Parse an address string under the given network. Rejects addresses
-/// whose network params don't match (mainnet ↔ testnet mismatches).
-///
-/// For LTC we currently only validate the BTC-side; full LTC HRP
-/// handling lives in `address.rs` and the LTC sender flow should
-/// validate via that path before calling here. Returning `None` for
-/// any failure keeps the call site simple.
-fn parse_address_for_network(addr_str: &str, network: Network) -> Option<Address> {
-    Address::from_str(addr_str)
-        .ok()
-        .and_then(|a| a.require_network(network.as_bitcoin_network()).ok())
 }
 
 #[cfg(test)]
@@ -281,7 +277,7 @@ mod tests {
             master_path: "m/84'/0'/0'/0/0".to_string(),
         }];
 
-        let psbt_b64 = build_psbt(BuildParams {
+        let psbt_b64 = build_psbt(&BuildParams {
             network: Network::BtcMainnet,
             inputs: &inputs,
             recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", // BIP-173 sample
@@ -301,6 +297,61 @@ mod tests {
     }
 
     #[test]
+    fn build_psbt_accepts_ltc_recipient_address() {
+        // Regression: `bitcoin::Address::from_str` doesn't know LTC HRPs,
+        // so the old `parse_address_for_network` helper rejected every
+        // valid LTC recipient. `decode_recipient_script` handles both
+        // chains via direct bech32 decoding + HRP check.
+        let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::LtcMainnet).unwrap();
+        let inputs = vec![UnsignedInput {
+            txid: "2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+            vout: 0,
+            value_sat: 1_000_000,
+            master_path: "m/84'/2'/0'/0/0".to_string(),
+        }];
+
+        let psbt_b64 = build_psbt(&BuildParams {
+            network: Network::LtcMainnet,
+            inputs: &inputs,
+            // Real-shape LTC bech32 P2WPKH; specific address doesn't matter.
+            recipient_address: "ltc1q7r4kygvluu4q8syms7kvxyl35e3aehgquatz2e",
+            recipient_sat: 999_000,
+            change_address: None,
+            change_sat: 0,
+            master_xpriv: &master,
+        })
+        .expect("build_psbt should accept LTC recipient");
+
+        let psbt = Psbt::from_str(&psbt_b64).unwrap();
+        assert_eq!(psbt.outputs.len(), 1);
+    }
+
+    #[test]
+    fn build_psbt_rejects_btc_address_on_ltc_network() {
+        // Network mismatch — BTC address sent to an LTC tx → BadHrp →
+        // InvalidRecipient.
+        let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::LtcMainnet).unwrap();
+        let inputs = vec![UnsignedInput {
+            txid: "2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+            vout: 0,
+            value_sat: 1_000_000,
+            master_path: "m/84'/2'/0'/0/0".to_string(),
+        }];
+
+        let err = build_psbt(&BuildParams {
+            network: Network::LtcMainnet,
+            inputs: &inputs,
+            recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", // BTC, not LTC
+            recipient_sat: 999_000,
+            change_address: None,
+            change_sat: 0,
+            master_xpriv: &master,
+        })
+        .unwrap_err();
+        assert!(matches!(err, BuildError::InvalidRecipient));
+    }
+
+    #[test]
     fn build_psbt_with_change() {
         let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::BtcMainnet).unwrap();
         let inputs = vec![UnsignedInput {
@@ -310,7 +361,7 @@ mod tests {
             master_path: "m/84'/0'/0'/0/0".to_string(),
         }];
 
-        let psbt_b64 = build_psbt(BuildParams {
+        let psbt_b64 = build_psbt(&BuildParams {
             network: Network::BtcMainnet,
             inputs: &inputs,
             recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
@@ -336,7 +387,7 @@ mod tests {
             master_path: "m/84'/0'/0'/0/0".to_string(),
         }];
 
-        let err = build_psbt(BuildParams {
+        let err = build_psbt(&BuildParams {
             network: Network::BtcMainnet,
             inputs: &inputs,
             recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
@@ -359,7 +410,7 @@ mod tests {
             master_path: "m/84'/0'/0'/0/0".to_string(),
         }];
 
-        let err = build_psbt(BuildParams {
+        let err = build_psbt(&BuildParams {
             network: Network::BtcMainnet,
             inputs: &inputs,
             recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
@@ -374,8 +425,12 @@ mod tests {
 
     #[test]
     fn round_trip_through_sign_psbt() {
-        // Build, then sign — sign_psbt should resolve the bip32_derivation
-        // origin and produce a signed PSBT with the input filled in.
+        // Build → sign → finalize → extract. Asserts that the final
+        // extracted tx has a non-empty witness for the input — i.e. the
+        // PSBT was actually finalized (not just signed-with-partial-sigs).
+        // Pre-2026-05-12 sign_psbt skipped finalization and extract_tx
+        // returned a tx with empty witnesses, which every node rejected
+        // as "the transaction was rejected by network rules".
         use crate::psbt::sign_psbt;
         let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::BtcMainnet).unwrap();
         let inputs = vec![UnsignedInput {
@@ -384,7 +439,7 @@ mod tests {
             value_sat: 100_000_000,
             master_path: "m/84'/0'/0'/0/0".to_string(),
         }];
-        let unsigned = build_psbt(BuildParams {
+        let unsigned = build_psbt(&BuildParams {
             network: Network::BtcMainnet,
             inputs: &inputs,
             recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
@@ -395,8 +450,20 @@ mod tests {
         })
         .unwrap();
 
-        let (_signed_psbt, report) = sign_psbt(&unsigned, &master).expect("sign");
+        let (signed_psbt, report) = sign_psbt(&unsigned, &master).expect("sign");
         assert_eq!(report.inputs_total, 1);
         assert_eq!(report.inputs_signed, 1);
+
+        // Extract the final network-format tx and verify the witness is
+        // populated. P2WPKH witness = [sig+sighash_byte, compressed_pubkey]
+        // → exactly 2 items, neither empty.
+        let tx_hex = extract_tx(&signed_psbt).expect("extract_tx");
+        let tx_bytes = hex::decode(&tx_hex).unwrap();
+        let tx: bitcoin::Transaction =
+            bitcoin::consensus::encode::deserialize(&tx_bytes).expect("decode tx");
+        assert_eq!(tx.input.len(), 1);
+        let witness = &tx.input[0].witness;
+        assert_eq!(witness.len(), 2, "P2WPKH witness should have 2 items (sig, pubkey)");
+        assert!(!witness.iter().any(<[u8]>::is_empty), "witness items must be non-empty");
     }
 }

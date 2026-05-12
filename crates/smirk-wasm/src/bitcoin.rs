@@ -66,12 +66,21 @@ pub fn btc_derive_address(
     derive_address(&child, kind, net).map_err(|e| JsValue::from_str(&format!("{e}")))
 }
 
-/// Sign a base64-encoded PSBT using a key derived from `mnemonic` at
-/// `master_path` (typically the account-level path, e.g. `"m/84'/0'/0'"`).
+/// Sign a base64-encoded PSBT with the **master** xprv derived from the
+/// mnemonic. `Psbt::sign` walks each input's `bip32_derivation` and checks
+/// the fingerprint against the provided xprv — since `btc_build_psbt`
+/// stores the master fingerprint, the master xprv is what we must pass
+/// here. Earlier revisions passed an account-level xprv and the
+/// fingerprint mismatch silently produced empty `partial_sigs`,
+/// triggering "PSBT finalization failed: Missing pubkey for a pkh/wpkh"
+/// from miniscript downstream.
 ///
-/// rust-bitcoin's PSBT signer walks the per-input `bip32_derivation` map
-/// and signs every input whose origin info matches the derived xprv's
-/// fingerprint + path. Inputs that don't match are left untouched.
+/// Inputs whose origin doesn't match this seed's master fingerprint are
+/// left untouched — correct for multi-signer flows.
+///
+/// The `master_path` parameter is **unused** (kept in the JS signature
+/// for backward compatibility with existing v0.3 callers). It can be
+/// dropped from the JS facade later; for now the wrapper ignores it.
 ///
 /// Returns JSON: `{ "psbt": "<base64>", "inputs_total": N, "inputs_signed": M }`.
 #[wasm_bindgen]
@@ -79,16 +88,14 @@ pub fn btc_sign_psbt(
     mnemonic: &str,
     passphrase: &str,
     network: &str,
-    master_path: &str,
+    _master_path: &str,
     psbt_base64: &str,
 ) -> Result<String, JsValue> {
     let net = parse_network(network)?;
     let master = mnemonic_to_xpriv(mnemonic, passphrase, net)
         .map_err(|e| JsValue::from_str(&format!("{e}")))?;
-    let xprv =
-        derive_xpriv(&master, master_path).map_err(|e| JsValue::from_str(&format!("{e}")))?;
     let (psbt_out, report) =
-        sign_psbt(psbt_base64, &xprv).map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        sign_psbt(psbt_base64, &master).map_err(|e| JsValue::from_str(&format!("{e}")))?;
 
     Ok(format!(
         r#"{{"psbt":"{}","inputs_total":{},"inputs_signed":{}}}"#,
@@ -156,7 +163,7 @@ pub fn btc_build_psbt(params_json: &str) -> Result<String, JsValue> {
         .map_err(|e| JsValue::from_str(&format!("{e}")))?;
 
     let inputs: Vec<UnsignedInput> = params.inputs.into_iter().map(Into::into).collect();
-    build_psbt(BuildParams {
+    build_psbt(&BuildParams {
         network: net,
         inputs: &inputs,
         recipient_address: &params.recipient_address,

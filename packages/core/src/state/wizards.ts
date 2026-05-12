@@ -44,16 +44,28 @@ export class Wizard<TFields extends Record<string, unknown>> {
   }
 
   /**
-   * Start (or restart) the wizard. Discards any prior state for this
-   * id. Returns the freshly-initialized state.
+   * Start the wizard. **Idempotent**: if state for this id is already
+   * persisted (e.g., popup-close + reopen mid-flow, or async session-
+   * state load completing after the React-style mount-time
+   * `if (!active) start()` guard fires), returns the existing state
+   * unchanged. Use [`cancel`] + [`start`] for an explicit restart.
+   *
+   * Idempotency is load-bearing: SendWizard / TipMaker / etc. call
+   * `start()` from a `useEffect([])` on mount. Without idempotency,
+   * the first render (which sees `active=false` because session state
+   * is still loading from `chrome.storage.local`) overwrites the real
+   * persisted wizard state with a fresh step-0 — losing whatever
+   * progress the user had before closing the popup.
    */
   async start(): Promise<WizardState> {
     const next = await this.store.update((s) => {
-      s.wizards[this.id] = {
-        step: 0,
-        fields: { ...(this.defaults as Record<string, unknown>) },
-        startedAt: Date.now(),
-      };
+      if (!Object.prototype.hasOwnProperty.call(s.wizards, this.id)) {
+        s.wizards[this.id] = {
+          step: 0,
+          fields: { ...(this.defaults as Record<string, unknown>) },
+          startedAt: Date.now(),
+        };
+      }
     });
     return next.wizards[this.id]!;
   }

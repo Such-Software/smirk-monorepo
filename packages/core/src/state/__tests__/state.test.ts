@@ -236,6 +236,40 @@ test('wizard: start initializes step 0 + default fields', async () => {
   store.destroy();
 });
 
+test('wizard: start is idempotent — does not overwrite existing state', async () => {
+  // Regression: SendWizard / TipMaker / etc. call `start()` from a
+  // `useEffect([])` on mount. The first render sees `active=false`
+  // because session-state load is async; without idempotency, that
+  // mount-time call would overwrite the persisted state with a
+  // fresh step-0 — losing wizard progress across popup close+reopen.
+  const store = new SessionStateStore(new InMemoryStorage());
+  const w = new Wizard<TipFields>(store, 'tip-maker', {});
+  await w.start();
+  await w.setField('amount', '0.005');
+  await w.next();
+  await w.setField('note', 'thanks!');
+  const beforeRestart = await w.snapshot();
+  assert.equal(beforeRestart!.step, 1);
+  assert.equal(beforeRestart!.fields.amount, '0.005');
+  assert.equal(beforeRestart!.fields.note, 'thanks!');
+
+  // Second start() should be a no-op, NOT overwrite the user's state.
+  await w.start();
+  const afterRestart = await w.snapshot();
+  assert.equal(afterRestart!.step, 1, 'step preserved');
+  assert.equal(afterRestart!.fields.amount, '0.005', 'amount preserved');
+  assert.equal(afterRestart!.fields.note, 'thanks!', 'note preserved');
+  assert.equal(afterRestart!.startedAt, beforeRestart!.startedAt, 'startedAt preserved');
+
+  // Explicit cancel + start IS the path for a fresh wizard.
+  await w.cancel();
+  await w.start();
+  const fresh = await w.snapshot();
+  assert.equal(fresh!.step, 0);
+  assert.equal(fresh!.fields.amount, undefined);
+  store.destroy();
+});
+
 test('wizard: setField + next + back', async () => {
   const store = new SessionStateStore(new InMemoryStorage());
   const w = new Wizard<TipFields>(store, 'tip-maker', {});

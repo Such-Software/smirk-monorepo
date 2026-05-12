@@ -20,6 +20,16 @@ bip39 = { version = "2.1", default-features = false, features = ["std", "zeroize
 # (HRP, version bytes) at the encoding layer.
 bitcoin = { version = "0.32", default-features = false, features = ["std", "secp-recovery", "rand-std", "base64"] }
 
+# miniscript — used for canonical PSBT finalization. After `Psbt::sign()`
+# populates `partial_sigs`, miniscript's `PsbtExt::finalize_mut` walks each
+# input, interprets the witness/redeem script (for our case: P2WPKH), and
+# builds the network-format `final_script_witness` from the partial sig +
+# pubkey. Without finalization, `Psbt::extract_tx` returns a tx with empty
+# witnesses that every node rejects as "the transaction was rejected by
+# network rules". This is the industry-standard path — Sparrow, BDK, and
+# others all use miniscript here.
+miniscript = { version = "12", default-features = false, features = ["std"] }
+
 # bech32 — used directly for encoding P2WPKH (bech32) and P2TR (bech32m)
 # addresses with LTC's HRPs (`ltc`, `tltc`), since rust-bitcoin's
 # `bitcoin::address::Address` is hardcoded to BTC HRPs.

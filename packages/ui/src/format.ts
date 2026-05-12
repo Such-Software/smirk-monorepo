@@ -34,9 +34,11 @@ export function formatAmountWithAsset(
   amountAtomic: bigint | number,
   asset: AssetDefinition,
   maxFractionalDigits?: number,
+  options?: { trimZeros?: boolean },
 ): string {
   const decimals = asset.decimals;
   const cap = Math.min(decimals, maxFractionalDigits ?? decimals);
+  const trimZeros = options?.trimZeros ?? true;
 
   const big =
     typeof amountAtomic === 'bigint' ? amountAtomic : BigInt(Math.trunc(amountAtomic));
@@ -47,13 +49,21 @@ export function formatAmountWithAsset(
   const whole = abs / divisor;
   const frac = abs % divisor;
 
-  if (cap === 0 || frac === 0n) {
+  if (cap === 0) {
+    return (negative ? '-' : '') + whole.toString();
+  }
+  if (frac === 0n && trimZeros) {
     return (negative ? '-' : '') + whole.toString();
   }
 
-  // Render fractional part with leading zeros, then trim to `cap` digits
-  // and strip trailing zeros.
-  const fracStr = frac.toString().padStart(decimals, '0').slice(0, cap).replace(/0+$/, '');
+  // Render fractional part with leading zeros, then trim to `cap` digits.
+  // Optionally strip trailing zeros (default true — typical "0.5" rather
+  // than "0.50000000"). Pass `trimZeros: false` for balance displays
+  // where the user wants to see the dust, à la Sparrow / Bitcoin Core.
+  let fracStr = frac.toString().padStart(decimals, '0').slice(0, cap);
+  if (trimZeros) {
+    fracStr = fracStr.replace(/0+$/, '');
+  }
 
   if (fracStr === '') {
     return (negative ? '-' : '') + whole.toString();

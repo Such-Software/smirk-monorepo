@@ -35,19 +35,75 @@ pub enum AddressKind {
 #[derive(Debug)]
 pub enum AddressError {
     Bech32Encode,
+    Bech32Decode,
     BadHrp,
+    UnsupportedWitness,
 }
 
 impl core::fmt::Display for AddressError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             AddressError::Bech32Encode => write!(f, "bech32 encoding failed"),
+            AddressError::Bech32Decode => write!(f, "bech32 decoding failed"),
             AddressError::BadHrp => write!(f, "invalid bech32 HRP for network"),
+            AddressError::UnsupportedWitness => {
+                write!(f, "unsupported witness version / program length")
+            }
         }
     }
 }
 
 impl std::error::Error for AddressError {}
+
+/// Decode a bech32(/bech32m) recipient address into the script_pubkey
+/// rust-bitcoin needs to build a transaction output. Supports P2WPKH
+/// (witness v0, 20-byte program) and P2TR (witness v1, 32-byte program).
+///
+/// Works for BTC and LTC. Network mismatches (e.g. mainnet `bc1` parsed
+/// under LtcMainnet) return [`AddressError::BadHrp`]. Witness versions
+/// or program lengths we don't yet support (P2WSH, future witness
+/// versions) return [`AddressError::UnsupportedWitness`].
+///
+/// We can't use rust-bitcoin's `Address::from_str` directly here because
+/// it only knows BTC HRPs (`bc`/`tb`); LTC's `ltc`/`tltc` HRPs would
+/// silently fail to parse. Doing our own bech32 decode + ScriptBuf
+/// construction handles both chains uniformly.
+pub fn decode_recipient_script(
+    addr: &str,
+    network: Network,
+) -> Result<bitcoin::ScriptBuf, AddressError> {
+    let (hrp, version, program) =
+        bech32::segwit::decode(addr).map_err(|_| AddressError::Bech32Decode)?;
+    if hrp.as_str() != network.bech32_hrp() {
+        return Err(AddressError::BadHrp);
+    }
+    match (version.to_u8(), program.len()) {
+        (0, 20) => {
+            let arr: [u8; 20] = program
+                .as_slice()
+                .try_into()
+                .map_err(|_| AddressError::Bech32Decode)?;
+            let wpkh = bitcoin::WPubkeyHash::from_byte_array(arr);
+            Ok(bitcoin::ScriptBuf::new_p2wpkh(&wpkh))
+        }
+        (1, 32) => {
+            let arr: [u8; 32] = program
+                .as_slice()
+                .try_into()
+                .map_err(|_| AddressError::Bech32Decode)?;
+            let xonly = bitcoin::secp256k1::XOnlyPublicKey::from_slice(&arr)
+                .map_err(|_| AddressError::Bech32Decode)?;
+            // The address ENCODES the post-tweak output key directly
+            // (BIP341 key-only spend). We're constructing the
+            // script_pubkey for a recipient — we never need to spend
+            // from it, so wrapping the x-only as "already tweaked" is
+            // exactly right here.
+            let tweaked = bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(xonly);
+            Ok(bitcoin::ScriptBuf::new_p2tr_tweaked(tweaked))
+        }
+        _ => Err(AddressError::UnsupportedWitness),
+    }
+}
 
 /// Derive an address from a child xprv. The xprv is expected to be already
 /// at the leaf path (e.g. `m/84'/0'/0'/0/0` for BIP84 receive index 0); we
