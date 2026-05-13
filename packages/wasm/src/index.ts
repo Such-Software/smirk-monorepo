@@ -441,7 +441,203 @@ export const grin = {
       receiverAddressHex,
       signatureHex,
     ),
+
+  // ---- High-level wallet orchestrators (Phase 1 → Phase 2)
+  //
+  // These wrap the 6 send/invoice ceremonies. Each takes a typed
+  // params struct, marshals to JSON for the wasm call, and parses
+  // the JSON result into a typed return. The wasm shim is the API
+  // boundary — see crates/smirk-wasm/src/grin/wallet_flows.rs for the
+  // canonical DTO shapes.
+
+  randomSecretNonce: (): string => wasm.grin_random_secret_nonce(),
+
+  slateV4ToBinHex: (slateJson: string): string =>
+    wasm.grin_slate_v4_to_bin_hex(slateJson),
+  slateV4FromBinHex: (binHex: string): string =>
+    wasm.grin_slate_v4_from_bin_hex(binHex),
+
+  createSendTransaction: (params: GrinCreateSendTxParams): GrinCreateSendTxResult => {
+    const json = wasm.grin_create_send_transaction(JSON.stringify(params));
+    return JSON.parse(json) as GrinCreateSendTxResult;
+  },
+  signIncomingSendSlate: (
+    params: GrinSignIncomingSendParams,
+  ): GrinSignIncomingSendResult => {
+    const json = wasm.grin_sign_incoming_send_slate(JSON.stringify(params));
+    return JSON.parse(json) as GrinSignIncomingSendResult;
+  },
+  finalizeSendSlate: (params: GrinFinalizeSendParams): GrinFinalizeSendResult => {
+    const json = wasm.grin_finalize_send_slate(JSON.stringify(params));
+    return JSON.parse(json) as GrinFinalizeSendResult;
+  },
+  createInvoice: (params: GrinCreateInvoiceParams): GrinCreateInvoiceResult => {
+    const json = wasm.grin_create_invoice(JSON.stringify(params));
+    return JSON.parse(json) as GrinCreateInvoiceResult;
+  },
+  signInvoice: (params: GrinSignInvoiceParams): GrinSignInvoiceResult => {
+    const json = wasm.grin_sign_invoice(JSON.stringify(params));
+    return JSON.parse(json) as GrinSignInvoiceResult;
+  },
+  finalizeInvoice: (
+    params: GrinFinalizeInvoiceParams,
+  ): GrinFinalizeInvoiceResult => {
+    const json = wasm.grin_finalize_invoice(JSON.stringify(params));
+    return JSON.parse(json) as GrinFinalizeInvoiceResult;
+  },
 };
+
+// ---- High-level wallet-flow params + results -------------------------------
+//
+// JSON-shape DTOs that match the Rust serde structs in
+// `crates/smirk-wasm/src/grin/wallet_flows.rs::dto`. Strings are
+// snake_case where the Rust side expects snake_case; otherwise camelCase.
+// Byte arrays are always lowercase hex.
+
+/** Pair of (4-level BIP32 path, amount) describing a wallet UTXO. */
+export interface GrinUnspentOutput {
+  /** BIP32 path that derives the output's blinding factor. */
+  path: [number, number, number, number];
+  amount: number;
+  /** 33-byte Pedersen commitment, lowercase hex (66 chars). */
+  commitment_hex: string;
+  /** Defaults to false; set true for coinbase outputs. */
+  is_coinbase?: boolean;
+}
+
+/** Change output the wallet just produced; persist for later spending. */
+export interface GrinChangeOutputInfo {
+  path: [number, number, number, number];
+  amount: number;
+  commitment_hex: string;
+  proof_hex: string;
+}
+
+/** Receiver's new output created at I1 or S2. Persist for later spending. */
+export interface GrinReceiverOutputInfo {
+  path: [number, number, number, number];
+  amount: number;
+  commitment_hex: string;
+  proof_hex: string;
+}
+
+export interface GrinCreateSendTxParams {
+  extended_private_key_hex: string;
+  inputs: GrinUnspentOutput[];
+  amount: number;
+  fee: number;
+  kernel_kind: GrinKernelKind;
+  lock_height?: number;
+  relative_height?: number;
+  change_path: [number, number, number, number];
+  kernel_offset_hex: string;
+  kernel_nonce_hex: string;
+  bp_rewind_nonce_hex: string;
+  bp_private_nonce_hex: string;
+  /** Optional pre-chosen UUID; omitted → wasm picks one. */
+  slate_id?: string;
+}
+
+export interface GrinCreateSendTxResult {
+  /** Slate v4 JSON; canonical wire form for the relay path. */
+  slate_json: string;
+  /** Compact binary form (external slatepacks), hex. */
+  slate_bin_hex: string;
+  slate_id: string;
+  /** Opaque JSON. Persist; pass back to `finalize_send_slate`. */
+  sender_context_json: string;
+  change_output?: GrinChangeOutputInfo;
+}
+
+export interface GrinSignIncomingSendParams {
+  extended_private_key_hex: string;
+  /** S1 slate as JSON (callers can derive from compact-binary via
+   *  `slateV4FromBinHex`). */
+  s1_slate_json: string;
+  output_path: [number, number, number, number];
+  receiver_kernel_nonce_hex: string;
+  bp_rewind_nonce_hex: string;
+  bp_private_nonce_hex: string;
+}
+
+export interface GrinSignIncomingSendResult {
+  slate_json: string;
+  slate_bin_hex: string;
+  output: GrinReceiverOutputInfo;
+  /** Kernel-excess 33-byte commitment, hex. Persist on receive row
+   *  so confirmed kernels can be correlated back. */
+  kernel_excess_hex: string;
+  receiver_context_json: string;
+}
+
+export interface GrinFinalizeSendParams {
+  s2_slate_json: string;
+  sender_context_json: string;
+  sender_inputs: GrinUnspentOutput[];
+  change_output?: GrinChangeOutputInfo;
+}
+
+export interface GrinFinalizeSendResult {
+  slate_json: string;
+  final_signature_hex: string;
+  kernel_excess_hex: string;
+  /** Broadcastable transaction bytes, hex — POST to backend
+   *  `/wallet/grin/broadcast`. */
+  tx_bytes_hex: string;
+}
+
+export interface GrinCreateInvoiceParams {
+  extended_private_key_hex: string;
+  amount: number;
+  fee: number;
+  kernel_kind: GrinKernelKind;
+  lock_height?: number;
+  relative_height?: number;
+  output_path: [number, number, number, number];
+  kernel_offset_hex: string;
+  receiver_kernel_nonce_hex: string;
+  bp_rewind_nonce_hex: string;
+  bp_private_nonce_hex: string;
+  slate_id?: string;
+}
+
+export interface GrinCreateInvoiceResult {
+  slate_json: string;
+  slate_bin_hex: string;
+  slate_id: string;
+  receiver_context_json: string;
+  output: GrinReceiverOutputInfo;
+}
+
+export interface GrinSignInvoiceParams {
+  extended_private_key_hex: string;
+  i1_slate_json: string;
+  inputs: GrinUnspentOutput[];
+  change_path: [number, number, number, number];
+  sender_kernel_nonce_hex: string;
+  bp_rewind_nonce_hex: string;
+  bp_private_nonce_hex: string;
+}
+
+export interface GrinSignInvoiceResult {
+  slate_json: string;
+  slate_bin_hex: string;
+  sender_context_json: string;
+  change_output?: GrinChangeOutputInfo;
+}
+
+export interface GrinFinalizeInvoiceParams {
+  i2_slate_json: string;
+  receiver_context_json: string;
+  sender_inputs: GrinUnspentOutput[];
+}
+
+export interface GrinFinalizeInvoiceResult {
+  slate_json: string;
+  final_signature_hex: string;
+  kernel_excess_hex: string;
+  tx_bytes_hex: string;
+}
 
 // =============================================================================
 // Bitcoin / Litecoin
