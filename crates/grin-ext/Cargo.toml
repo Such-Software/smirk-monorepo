@@ -74,5 +74,13 @@ rand_core = { version = "0.6", default-features = false, features = ["getrandom"
 getrandom = { version = "0.2", features = ["js"] }
 uuid = { version = "1", default-features = false, features = ["v4", "js"] }
 
+# Validation-only deps. The official grin-wallet reference impl is used by
+# integration tests in `tests/` to round-trip our slate output against the
+# reference parser and kernel-excess derivation. Never pulled into the
+# wasm or production builds — dev-only. See tests/README.md for the
+# methodology.
+[dev-dependencies]
+grin_wallet_libwallet = { path = "../../../grin-wallet/libwallet" }
+
 [lints]
 workspace = true
