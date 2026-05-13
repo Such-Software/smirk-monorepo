@@ -15,6 +15,7 @@ pub mod bip32;
 pub mod blind;
 pub mod bulletproof;
 pub mod kernel;
+pub mod keychain;
 pub mod payment_proof;
 pub mod schnorr;
 pub mod secp256k1;
@@ -27,6 +28,7 @@ pub mod slatepack_encryption;
 pub mod transaction;
 
 pub use kernel::{KernelFeatures, NRD_MAX_RELATIVE_HEIGHT};
+pub use keychain::{derive_blind, SwitchCommitmentType};
 pub use slate_builder::{
     receiver_finalize_i3, receiver_init_i1, receiver_init_i1_with_id, receiver_round_s2,
     sender_finalize_s3, sender_init_s1, sender_init_s1_with_id, sender_round_i2,

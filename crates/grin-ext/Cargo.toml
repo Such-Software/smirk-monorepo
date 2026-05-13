@@ -81,6 +81,13 @@ uuid = { version = "1", default-features = false, features = ["v4", "js"] }
 # methodology.
 [dev-dependencies]
 grin_wallet_libwallet = { path = "../../../grin-wallet/libwallet" }
+# grin_keychain is needed directly for the keychain-derivation cross-
+# validation test (`derive_blind` vs `ExtKeychain::derive_key`). Same
+# version libwallet pulls in transitively — we just want to type it
+# directly in our tests.
+grin_keychain = "5.3.3"
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
 
 [lints]
 workspace = true
