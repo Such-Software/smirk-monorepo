@@ -21,8 +21,10 @@ use crate::slate::{
     add_input_commitment, add_output_commitment, SlateStateV4, SlateV4,
 };
 use crate::slate_builder::{
-    receiver_round_s2, sender_finalize_s3, sender_init_s1, ReceiverContext, ReceiverRoundParams,
-    SenderContext, SenderFinalizeParams, SenderInitParams,
+    receiver_finalize_i3, receiver_init_i1, receiver_round_s2, sender_finalize_s3,
+    sender_init_s1, sender_round_i2, ReceiverContext, ReceiverFinalizeI3Params,
+    ReceiverInitI1Params, ReceiverRoundParams, SenderContext, SenderFinalizeParams,
+    SenderInitParams, SenderRoundI2Params,
 };
 use crate::transaction::{
     slate_to_transaction_bytes, BuildTransactionParams, TxInput, TxOutput,
@@ -501,6 +503,333 @@ pub fn finalize_send_slate(
 
     Ok(FinalizeSendOutput {
         slate: s3_slate,
+        final_signature,
+        kernel_excess,
+        tx_bytes,
+    })
+}
+
+// =============================================================================
+// Invoice ceremony (receiver-driven: I1 → I2 → I3)
+// =============================================================================
+
+/// Inputs to [`create_invoice`].
+#[derive(Debug, Clone)]
+pub struct CreateInvoiceParams {
+    /// Receiver's 64-byte BIP32 root.
+    pub extended_private_key: [u8; 64],
+    /// Amount the receiver is requesting.
+    pub amount: u64,
+    /// Fee the sender will pay. The receiver declares the fee up-front
+    /// in the invoice; sender accepts or rejects.
+    pub fee: u64,
+    pub kernel_features: KernelFeatures,
+    /// 4-level BIP32 path where the receiver derives their new output.
+    pub output_path: [u32; 4],
+    pub kernel_offset: [u8; 32],
+    pub receiver_kernel_nonce: [u8; 32],
+    pub bp_rewind_nonce: [u8; 32],
+    pub bp_private_nonce: [u8; 32],
+    pub slate_id: Option<String>,
+}
+
+/// Output of [`create_invoice`].
+#[derive(Debug, Clone)]
+pub struct CreateInvoiceOutput {
+    /// I1 slate to share with the payer.
+    pub slate: SlateV4,
+    /// Receiver context — required for the I3 finalize step.
+    pub context: ReceiverContext,
+    /// Info about the receiver's new output — persist so the wallet
+    /// can spend it later.
+    pub output: ReceiverOutputInfo,
+}
+
+/// Build the receiver's I1 slate (the invoice).
+///
+/// 1. Derive receiver's output blind via `derive_blind` (Regular).
+/// 2. Call low-level `receiver_init_i1` which builds the slate +
+///    the output's Pedersen commitment + bulletproof + the receiver's
+///    participant data (xs + nonce; partial sig comes later at I3).
+/// 3. Extract the receiver's output info (path + amount + commitment
+///    + proof) for the wallet's persistence.
+pub fn create_invoice(params: &CreateInvoiceParams) -> Result<CreateInvoiceOutput, String> {
+    let output_blind = derive_blind(
+        &params.extended_private_key,
+        &params.output_path,
+        params.amount,
+        SwitchCommitmentType::Regular,
+    )?;
+
+    let init_params = ReceiverInitI1Params {
+        amount: params.amount,
+        fee: params.fee,
+        kernel_features: params.kernel_features,
+        receiver_output_blind: output_blind,
+        receiver_kernel_nonce: params.receiver_kernel_nonce,
+        bp_rewind_nonce: params.bp_rewind_nonce,
+        bp_private_nonce: params.bp_private_nonce,
+        kernel_offset: params.kernel_offset,
+    };
+    let init_out = match &params.slate_id {
+        Some(id) => {
+            crate::slate_builder::receiver_init_i1_with_id(&init_params, id.clone())?
+        }
+        None => receiver_init_i1(&init_params)?,
+    };
+
+    // The receiver's output is the only entry in coms after I1.
+    let coms = init_out
+        .slate
+        .coms
+        .as_ref()
+        .ok_or("I1 slate is missing coms")?;
+    let first = coms
+        .first()
+        .ok_or("I1 slate has empty coms after receiver_init_i1")?;
+    let proof = first
+        .p
+        .clone()
+        .ok_or("I1 slate's output is missing its bulletproof")?;
+    let output = ReceiverOutputInfo {
+        path: params.output_path,
+        amount: params.amount,
+        commitment: first.c,
+        proof,
+    };
+
+    Ok(CreateInvoiceOutput {
+        slate: init_out.slate,
+        context: init_out.context,
+        output,
+    })
+}
+
+/// Inputs to [`sign_invoice`].
+#[derive(Debug, Clone)]
+pub struct SignInvoiceParams {
+    /// Sender's 64-byte BIP32 root.
+    pub extended_private_key: [u8; 64],
+    /// I1 slate from the recipient.
+    pub i1_slate: SlateV4,
+    /// Sender's chosen UTXOs to fund the invoice.
+    pub inputs: Vec<UnspentOutput>,
+    /// 4-level BIP32 path for sender's change output, if any.
+    pub change_path: [u32; 4],
+    pub sender_kernel_nonce: [u8; 32],
+    /// BP nonces for change output.
+    pub bp_rewind_nonce: [u8; 32],
+    pub bp_private_nonce: [u8; 32],
+}
+
+/// Output of [`sign_invoice`].
+#[derive(Debug, Clone)]
+pub struct SignInvoiceOutput {
+    /// I2 slate, ready to return to the receiver.
+    pub slate: SlateV4,
+    /// Sender context — not strictly required for invoice flow
+    /// (receiver finalizes), but useful for audit / debug.
+    pub context: SenderContext,
+    /// Info about the change output the sender created (if any).
+    pub change_output: Option<ChangeOutputInfo>,
+}
+
+/// Sign an invoice (I1 → I2) as the payer.
+///
+/// 1. Validate slate state is `Invoice1`.
+/// 2. Derive each input's blinding factor; verify on-chain commitment.
+/// 3. If `inputs_total > amount + fee`, derive change blind + Pedersen
+///    + bulletproof. (Note: fee is dictated by the receiver in the
+///    invoice; sender either accepts or rejects.)
+/// 4. Compute `sender_blind_excess = change_blind − Σ input_blinds −
+///    kernel_offset`. (Or `−Σ inputs − offset` with no change.)
+/// 5. Call low-level `sender_round_i2` — appends sender's participant
+///    data with their partial sig.
+/// 6. Append sender's input commitments to slate.coms. Append change
+///    output (commitment + proof) if any.
+pub fn sign_invoice(params: &SignInvoiceParams) -> Result<SignInvoiceOutput, String> {
+    if params.i1_slate.sta != SlateStateV4::Invoice1 {
+        return Err(format!(
+            "sign_invoice expects an I1 slate, got {:?}",
+            params.i1_slate.sta
+        ));
+    }
+    if params.inputs.is_empty() {
+        return Err("sign_invoice: no inputs provided".into());
+    }
+
+    let amount = params.i1_slate.amt;
+    let fee = params.i1_slate.fee;
+    let target = amount.checked_add(fee).ok_or("amount + fee overflows u64")?;
+
+    // Derive input blinds + verify commitments.
+    let mut input_blinds = Vec::with_capacity(params.inputs.len());
+    for input in &params.inputs {
+        let blind = derive_blind(
+            &params.extended_private_key,
+            &input.path,
+            input.amount,
+            SwitchCommitmentType::Regular,
+        )?;
+        let derived = pedersen_commit(input.amount, &blind)?;
+        if derived != input.commitment {
+            return Err(format!(
+                "input commitment mismatch at path {:?}: re-derived commitment does not match stored value",
+                input.path
+            ));
+        }
+        input_blinds.push(blind);
+    }
+
+    let inputs_total: u64 = params.inputs.iter().map(|i| i.amount).sum();
+    if inputs_total < target {
+        return Err(format!(
+            "insufficient inputs: have {} nanogrin, need {} (amount + fee)",
+            inputs_total, target
+        ));
+    }
+    let change_amount = inputs_total - target;
+
+    // Build change output if any.
+    let (sender_output_blinds, change_output) = if change_amount > 0 {
+        let change_blind = derive_blind(
+            &params.extended_private_key,
+            &params.change_path,
+            change_amount,
+            SwitchCommitmentType::Regular,
+        )?;
+        let change_commit = pedersen_commit(change_amount, &change_blind)?;
+        let change_proof = bullet_proof_create(
+            change_amount,
+            &change_blind,
+            &params.bp_rewind_nonce,
+            &params.bp_private_nonce,
+        )?;
+        (
+            vec![change_blind],
+            Some(ChangeOutputInfo {
+                path: params.change_path,
+                amount: change_amount,
+                commitment: change_commit,
+                proof: change_proof,
+            }),
+        )
+    } else {
+        (Vec::new(), None)
+    };
+
+    // Sender's blind excess scalar.
+    let kernel_offset = params.i1_slate.off;
+    let sender_blind_excess = crate::blind::sender_blind_excess(
+        &input_blinds,
+        &sender_output_blinds,
+        &kernel_offset,
+    );
+
+    // I1 → I2: sender appends participant data with their partial sig.
+    let round_out = sender_round_i2(&SenderRoundI2Params {
+        i1_slate: params.i1_slate.clone(),
+        sender_blind_excess,
+        sender_kernel_nonce: params.sender_kernel_nonce,
+    })?;
+    let mut i2_slate = round_out.slate;
+
+    // Append sender's input commitments + change output to slate.coms.
+    for input in &params.inputs {
+        add_input_commitment(&mut i2_slate, input.commitment, input.is_coinbase);
+    }
+    if let Some(change) = &change_output {
+        add_output_commitment(&mut i2_slate, change.commitment, change.proof.clone(), false);
+    }
+
+    Ok(SignInvoiceOutput {
+        slate: i2_slate,
+        context: round_out.context,
+        change_output,
+    })
+}
+
+/// Inputs to [`finalize_invoice`].
+#[derive(Debug, Clone)]
+pub struct FinalizeInvoiceParams {
+    /// I2 slate from the sender.
+    pub i2_slate: SlateV4,
+    /// Receiver context from `create_invoice`.
+    pub receiver_context: ReceiverContext,
+    /// Sender's inputs — included in the slate's coms after I2, but
+    /// also needed separately for `slate_to_transaction_bytes` to
+    /// build the binary transaction. Caller must provide them
+    /// (or the receiver wallet must extract them from the slate
+    /// and pass them through — see test for usage).
+    pub sender_inputs: Vec<UnspentOutput>,
+}
+
+/// Output of [`finalize_invoice`].
+#[derive(Debug, Clone)]
+pub struct FinalizeInvoiceOutput {
+    pub slate: SlateV4,
+    pub final_signature: [u8; 64],
+    pub kernel_excess: [u8; 33],
+    pub tx_bytes: Vec<u8>,
+}
+
+/// Finalize an invoice (I2 → I3) as the recipient: verify sender's
+/// partial signature, contribute the receiver's partial, aggregate
+/// into the final kernel signature, and emit the broadcastable
+/// transaction bytes.
+pub fn finalize_invoice(
+    params: &FinalizeInvoiceParams,
+) -> Result<FinalizeInvoiceOutput, String> {
+    let final_out = receiver_finalize_i3(&ReceiverFinalizeI3Params {
+        i2_slate: params.i2_slate.clone(),
+        receiver_context: params.receiver_context.clone(),
+    })?;
+    let i3_slate = final_out.slate;
+    let final_signature = final_out.final_signature;
+
+    // Kernel excess commitment — same point sum as the send flow.
+    let kernel_excess = point_add(&i3_slate.sigs[0].xs, &i3_slate.sigs[1].xs)?;
+
+    // Build the transaction. Lift sender's inputs to TxInput; the
+    // slate's coms list already holds receiver's output + sender's
+    // change (both with proofs) and the sender's input refs
+    // (no proofs). The transaction-builder filters by presence of a
+    // proof to separate inputs from outputs, so we pass an empty
+    // sender_change_outputs list and let the filtering handle it.
+    let sender_inputs: Vec<TxInput> = params
+        .sender_inputs
+        .iter()
+        .map(|u| TxInput {
+            features: if u.is_coinbase { 1 } else { 0 },
+            commitment: u.commitment,
+        })
+        .collect();
+
+    // Slate.coms is mixed (input refs + outputs); filter to outputs only.
+    let mut outputs_only_coms = Vec::new();
+    if let Some(coms) = &i3_slate.coms {
+        for c in coms {
+            if c.p.is_some() {
+                outputs_only_coms.push(c.clone());
+            }
+        }
+    }
+    let mut i3_outputs_only = i3_slate.clone();
+    i3_outputs_only.coms = Some(outputs_only_coms);
+    // slate_to_transaction_bytes expects state Standard3 — invoice
+    // flow ends at Invoice3 which carries the same final kernel sig.
+    // Patch the state so the transaction builder accepts it.
+    i3_outputs_only.sta = SlateStateV4::Standard3;
+
+    let tx_bytes = slate_to_transaction_bytes(&BuildTransactionParams {
+        s3_slate: i3_outputs_only,
+        sender_inputs,
+        sender_change_outputs: Vec::new(),
+        aggregated_kernel_signature: final_signature,
+    })?;
+
+    Ok(FinalizeInvoiceOutput {
+        slate: i3_slate,
         final_signature,
         kernel_excess,
         tx_bytes,

@@ -42,9 +42,11 @@ pub use transaction::{
     pubkey_to_commitment, slate_to_transaction_bytes, BuildTransactionParams, TxInput, TxOutput,
 };
 pub use wallet_flows::{
-    create_send_transaction, finalize_send_slate, sign_incoming_send_slate, ChangeOutputInfo,
-    CreateSendTxOutput, CreateSendTxParams, FinalizeSendOutput, FinalizeSendParams,
-    ReceiverOutputInfo, SignIncomingSendOutput, SignIncomingSendParams, UnspentOutput,
+    create_invoice, create_send_transaction, finalize_invoice, finalize_send_slate, sign_invoice,
+    sign_incoming_send_slate, ChangeOutputInfo, CreateInvoiceOutput, CreateInvoiceParams,
+    CreateSendTxOutput, CreateSendTxParams, FinalizeInvoiceOutput, FinalizeInvoiceParams,
+    FinalizeSendOutput, FinalizeSendParams, ReceiverOutputInfo, SignIncomingSendOutput,
+    SignIncomingSendParams, SignInvoiceOutput, SignInvoiceParams, UnspentOutput,
 };
 
 pub use bulletproof::{

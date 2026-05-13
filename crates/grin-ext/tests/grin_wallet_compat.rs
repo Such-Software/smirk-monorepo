@@ -7,10 +7,12 @@
 //! consistent under either correct or wrong-but-symmetric conventions).
 
 use grin_ext::{
-    blind, create_send_transaction, derive_blind, finalize_send_slate,
-    kernel::KernelFeatures, pedersen_commit, random_secret_nonce, sender_init_s1,
-    serialize_slate_v4, sign_incoming_send_slate, CreateSendTxParams, FinalizeSendParams,
-    SenderInitParams, SignIncomingSendParams, SwitchCommitmentType, UnspentOutput,
+    blind, create_invoice, create_send_transaction, derive_blind, finalize_invoice,
+    finalize_send_slate, kernel::KernelFeatures, pedersen_commit, random_secret_nonce,
+    sender_init_s1, serialize_slate_v4, sign_incoming_send_slate, sign_invoice,
+    CreateInvoiceParams, CreateSendTxParams, FinalizeInvoiceParams, FinalizeSendParams,
+    SenderInitParams, SignIncomingSendParams, SignInvoiceParams, SwitchCommitmentType,
+    UnspentOutput,
 };
 use grin_wallet_libwallet::Slate;
 
@@ -359,6 +361,91 @@ fn full_send_round_trip_validates_against_grin_wallet() {
         ref_s3.participant_data.len(),
         2,
         "S3 carries both sender + receiver participant data"
+    );
+}
+
+/// Full invoice ceremony round-trip: I1 → I2 → I3.
+///
+/// Receiver creates the invoice (declaring amount + their output).
+/// Sender funds it (selecting inputs, adding change). Receiver
+/// finalizes. Both sides agree on the kernel-excess commitment; the
+/// final transaction bytes parse via grin_wallet_libwallet.
+#[test]
+fn full_invoice_round_trip_validates_against_grin_wallet() {
+    let receiver_seed: [u8; 32] = [0xcc; 32];
+    let sender_seed: [u8; 32] = [0xdd; 32];
+    let receiver_ext = master_ext_from_seed(&receiver_seed);
+    let sender_ext = master_ext_from_seed(&sender_seed);
+
+    let amount = 500_000_000u64; // 0.5 GRIN
+    let fee = 8_000_000u64;
+    let kernel_features = KernelFeatures::Plain { fee };
+
+    // Receiver: declare the invoice.
+    let invoice_out = create_invoice(&CreateInvoiceParams {
+        extended_private_key: receiver_ext,
+        amount,
+        fee,
+        kernel_features,
+        output_path: [0u32, 0, 0, 0],
+        kernel_offset: [0u8; 32],
+        receiver_kernel_nonce: random_secret_nonce(),
+        bp_rewind_nonce: [0x33u8; 32],
+        bp_private_nonce: [0x44u8; 32],
+        slate_id: None,
+    })
+    .expect("create_invoice");
+    assert_eq!(invoice_out.slate.sta, grin_ext::SlateStateV4::Invoice1);
+    assert_eq!(invoice_out.output.amount, amount);
+
+    // Sender: build a synthetic on-chain UTXO that satisfies the
+    // invoice's requested amount + fee.
+    let input_path = [0u32, 0, 0, 0];
+    let input_amount = 2_000_000_000u64; // 2 GRIN — plenty
+    let input_blind =
+        derive_blind(&sender_ext, &input_path, input_amount, SwitchCommitmentType::Regular)
+            .unwrap();
+    let input_commit = pedersen_commit(input_amount, &input_blind).unwrap();
+    let sender_inputs = vec![UnspentOutput {
+        path: input_path,
+        amount: input_amount,
+        commitment: input_commit,
+        is_coinbase: false,
+    }];
+
+    // Sender: sign the invoice → I2.
+    let sign_out = sign_invoice(&SignInvoiceParams {
+        extended_private_key: sender_ext,
+        i1_slate: invoice_out.slate.clone(),
+        inputs: sender_inputs.clone(),
+        change_path: [0, 0, 1, 0],
+        sender_kernel_nonce: random_secret_nonce(),
+        bp_rewind_nonce: [0x55u8; 32],
+        bp_private_nonce: [0x66u8; 32],
+    })
+    .expect("sign_invoice");
+    assert_eq!(sign_out.slate.sta, grin_ext::SlateStateV4::Invoice2);
+
+    // Receiver: finalize the invoice → I3 + tx bytes.
+    let finalize_out = finalize_invoice(&FinalizeInvoiceParams {
+        i2_slate: sign_out.slate.clone(),
+        receiver_context: invoice_out.context.clone(),
+        sender_inputs: sender_inputs.clone(),
+    })
+    .expect("finalize_invoice");
+    assert_eq!(finalize_out.slate.sta, grin_ext::SlateStateV4::Invoice3);
+    assert!(!finalize_out.tx_bytes.is_empty(), "tx_bytes non-empty");
+
+    // I3 slate parses via grin_wallet_libwallet.
+    let i3_json = serialize_slate_v4(&finalize_out.slate).unwrap();
+    let ref_i3 = Slate::deserialize_upgrade(&i3_json)
+        .expect("grin_wallet_libwallet must accept our I3 slate");
+    assert_eq!(ref_i3.amount, amount);
+    assert_eq!(ref_i3.fee_fields.fee(), fee);
+    assert_eq!(
+        ref_i3.participant_data.len(),
+        2,
+        "I3 carries both receiver + sender participant data"
     );
 }
 
