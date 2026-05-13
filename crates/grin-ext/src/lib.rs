@@ -21,6 +21,7 @@ pub mod schnorr;
 pub mod secp256k1;
 pub mod seed;
 pub mod slate;
+pub mod slate_bin;
 pub mod slate_builder;
 pub mod slatepack;
 pub mod slatepack_address;
@@ -64,6 +65,7 @@ pub use slate::{
     add_input_commitment, add_output_commitment, parse_slate_v4, serialize_slate_v4,
     SlateStateV4, SlateV4,
 };
+pub use slate_bin::{deserialize_slate_v4_bin, serialize_slate_v4_bin};
 pub use slatepack::{
     armor as slatepack_armor, dearmor as slatepack_dearmor, SlatepackBin, SlatepackMode,
     SlatepackVersion,

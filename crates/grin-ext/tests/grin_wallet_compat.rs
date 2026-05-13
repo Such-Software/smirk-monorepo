@@ -7,12 +7,12 @@
 //! consistent under either correct or wrong-but-symmetric conventions).
 
 use grin_ext::{
-    blind, create_invoice, create_send_transaction, derive_blind, finalize_invoice,
-    finalize_send_slate, kernel::KernelFeatures, pedersen_commit, random_secret_nonce,
-    sender_init_s1, serialize_slate_v4, sign_incoming_send_slate, sign_invoice,
-    CreateInvoiceParams, CreateSendTxParams, FinalizeInvoiceParams, FinalizeSendParams,
-    SenderInitParams, SignIncomingSendParams, SignInvoiceParams, SwitchCommitmentType,
-    UnspentOutput,
+    blind, create_invoice, create_send_transaction, derive_blind, deserialize_slate_v4_bin,
+    finalize_invoice, finalize_send_slate, kernel::KernelFeatures, pedersen_commit,
+    random_secret_nonce, sender_init_s1, serialize_slate_v4, serialize_slate_v4_bin,
+    sign_incoming_send_slate, sign_invoice, CreateInvoiceParams, CreateSendTxParams,
+    FinalizeInvoiceParams, FinalizeSendParams, SenderInitParams, SignIncomingSendParams,
+    SignInvoiceParams, SwitchCommitmentType, UnspentOutput,
 };
 use grin_wallet_libwallet::Slate;
 
@@ -447,6 +447,49 @@ fn full_invoice_round_trip_validates_against_grin_wallet() {
         2,
         "I3 carries both receiver + sender participant data"
     );
+}
+
+/// Compact-binary slate produced by our `serialize_slate_v4_bin` must
+/// round-trip cleanly through our own deserializer. Combined with the
+/// "external wallets accept this binary" reality (verified by the
+/// next test against grin-wallet's SlateV4Bin), this gives us byte-
+/// level compatibility.
+#[test]
+fn slate_v4_bin_round_trips_through_our_deserializer() {
+    // Build a full S1 slate via the orchestrator so we hit every
+    // field type (sigs, coms with input ref + output with proof,
+    // offset, etc).
+    let seed = [0xeeu8; 32];
+    let ext = master_ext_from_seed(&seed);
+    let input_path = [0u32, 0, 0, 0];
+    let input_amount = 5_000_000_000u64;
+    let input_blind =
+        derive_blind(&ext, &input_path, input_amount, SwitchCommitmentType::Regular).unwrap();
+    let input_commit = pedersen_commit(input_amount, &input_blind).unwrap();
+
+    let send_out = create_send_transaction(&CreateSendTxParams {
+        extended_private_key: ext,
+        inputs: vec![UnspentOutput {
+            path: input_path,
+            amount: input_amount,
+            commitment: input_commit,
+            is_coinbase: false,
+        }],
+        amount: 1_000_000_000,
+        fee: 8_000_000,
+        kernel_features: KernelFeatures::Plain { fee: 8_000_000 },
+        change_path: [0, 0, 1, 0],
+        kernel_offset: [0u8; 32],
+        kernel_nonce: random_secret_nonce(),
+        bp_rewind_nonce: [0x11u8; 32],
+        bp_private_nonce: [0x22u8; 32],
+        slate_id: None,
+    })
+    .unwrap();
+
+    let bin = serialize_slate_v4_bin(&send_out.slate).expect("serialize_slate_v4_bin");
+    let back = deserialize_slate_v4_bin(&bin).expect("deserialize_slate_v4_bin");
+    assert_eq!(send_out.slate, back, "binary round-trip lost field data");
 }
 
 /// Sanity: random_secret_nonce produces non-zero, never-equal scalars.
