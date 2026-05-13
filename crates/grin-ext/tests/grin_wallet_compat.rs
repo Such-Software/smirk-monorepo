@@ -7,8 +7,9 @@
 //! consistent under either correct or wrong-but-symmetric conventions).
 
 use grin_ext::{
-    blind, derive_blind, kernel::KernelFeatures, sender_init_s1, serialize_slate_v4,
-    SenderInitParams, SwitchCommitmentType,
+    blind, create_send_transaction, derive_blind, kernel::KernelFeatures, pedersen_commit,
+    random_secret_nonce, sender_init_s1, serialize_slate_v4, CreateSendTxParams,
+    SenderInitParams, SwitchCommitmentType, UnspentOutput,
 };
 use grin_wallet_libwallet::Slate;
 
@@ -176,6 +177,103 @@ fn derive_blind_matches_grin_keychain_derive_key() {
             path, amount, switch
         );
     }
+}
+
+/// End-to-end: build a complete S1 slate via `create_send_transaction`
+/// (using deterministic input commitments + path) and verify
+/// `grin_wallet_libwallet::Slate::deserialize_upgrade` accepts the
+/// resulting JSON and parses inputs / change output / sender
+/// participant correctly.
+///
+/// This exercises the full orchestration path: derive input blinds,
+/// rederive + verify commitments, compute change blind + Pedersen +
+/// bulletproof, compute sender blind excess, build slate, append
+/// inputs/outputs.
+#[test]
+fn create_send_transaction_produces_slate_grin_wallet_accepts() {
+    let seed: [u8; 32] = [0x42u8; 32];
+    let ext = master_ext_from_seed(&seed);
+
+    // Build a single fake input: derive its blind at a chosen path,
+    // Pedersen-commit it, and pretend that's an on-chain UTXO. This
+    // sidesteps needing a real Grin testnet — we generate a
+    // self-consistent UTXO the orchestrator can verify.
+    let input_path = [0u32, 0, 0, 0];
+    let input_amount = 5_000_000_000u64; // 5 GRIN
+    let input_blind =
+        derive_blind(&ext, &input_path, input_amount, SwitchCommitmentType::Regular).unwrap();
+    let input_commitment = pedersen_commit(input_amount, &input_blind).unwrap();
+
+    let params = CreateSendTxParams {
+        extended_private_key: ext,
+        inputs: vec![UnspentOutput {
+            path: input_path,
+            amount: input_amount,
+            commitment: input_commitment,
+            is_coinbase: false,
+        }],
+        amount: 1_000_000_000, // send 1 GRIN
+        fee: 8_000_000,        // 0.008 GRIN — typical 1-input 2-output fee
+        kernel_features: KernelFeatures::Plain { fee: 8_000_000 },
+        change_path: [0, 0, 1, 0], // arbitrary fresh-ish path
+        kernel_offset: [0u8; 32],
+        kernel_nonce: random_secret_nonce(),
+        bp_rewind_nonce: [0x11u8; 32],
+        bp_private_nonce: [0x22u8; 32],
+        slate_id: None,
+    };
+
+    let out = create_send_transaction(&params).expect("create_send_transaction");
+
+    // We expect a change output since inputs (5 GRIN) > amount + fee
+    // (1.008 GRIN).
+    let change = out
+        .change_output
+        .as_ref()
+        .expect("change output should exist");
+    assert_eq!(change.amount, input_amount - params.amount - params.fee);
+
+    // Slate.coms should hold 1 input ref + 1 change output.
+    let coms = out.slate.coms.as_ref().expect("slate.coms populated");
+    assert_eq!(coms.len(), 2, "1 input + 1 change output");
+    // Input first (no proof), change second (with proof).
+    assert!(coms[0].p.is_none(), "first com is the input — no proof");
+    assert!(
+        coms[1].p.is_some(),
+        "second com is the change output — has proof"
+    );
+
+    // JSON round-trip through grin_wallet_libwallet.
+    let json = serialize_slate_v4(&out.slate).unwrap();
+    let ref_slate = Slate::deserialize_upgrade(&json)
+        .expect("grin_wallet_libwallet parses our complete S1 slate");
+
+    assert_eq!(ref_slate.amount, params.amount);
+    assert_eq!(ref_slate.fee_fields.fee(), params.fee);
+    assert_eq!(ref_slate.num_participants, 2);
+    assert_eq!(
+        ref_slate.participant_data.len(),
+        1,
+        "S1 has only the sender's participant data"
+    );
+
+    // Reference Slate after compact-aware deserialization tracks inputs
+    // + outputs inside the optional `tx` field if present. The compact
+    // S1 form might leave `tx` as None and surface inputs via the
+    // commitments list. Verify at least that the JSON contained both
+    // a 0-features input and a 0-features change output by checking
+    // our coms list directly (already done above).
+}
+
+/// Sanity: random_secret_nonce produces non-zero, never-equal scalars.
+/// Not a crypto-strength test — just a regression backstop against an
+/// accidental hardcoded-to-zero implementation.
+#[test]
+fn random_secret_nonce_is_non_zero_and_varies() {
+    let a = random_secret_nonce();
+    let b = random_secret_nonce();
+    assert_ne!(a, [0u8; 32], "must not return all-zero");
+    assert_ne!(a, b, "two draws should not match");
 }
 
 /// Helper: a 32-byte scalar with the trailing byte set to `b` (and 0

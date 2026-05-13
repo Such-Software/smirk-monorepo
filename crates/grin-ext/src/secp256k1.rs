@@ -13,6 +13,29 @@
 use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::{NonZeroScalar, PublicKey, SecretKey};
 
+use rand_core::{OsRng, RngCore};
+
+/// Generate a fresh, CSPRNG-derived 32-byte secret nonce suitable for
+/// use as a Schnorr kernel-signing nonce, or any other "must be fresh
+/// per-slate, must not be predictable, must not be reused" scalar.
+///
+/// Loops in the (vanishingly unlikely) case that the raw bytes happen
+/// to land on zero or >= the curve order, so the caller can always
+/// trust the result is a valid secp256k1 scalar.
+pub fn random_secret_nonce() -> [u8; 32] {
+    loop {
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        // Reject if outside the valid scalar range — `NonZeroScalar`
+        // rejects both zero and >= n; that's exactly what we want.
+        if NonZeroScalar::try_from(bytes.as_slice()).is_ok() {
+            return bytes;
+        }
+        // Otherwise, draw again. Probability of this branch firing on
+        // any sample is < 2^-128, but the loop is cheap correctness.
+    }
+}
+
 /// Derive the compressed secp256k1 public key (33 bytes) from a 32-byte
 /// secret key.
 ///

@@ -26,6 +26,7 @@ pub mod slatepack;
 pub mod slatepack_address;
 pub mod slatepack_encryption;
 pub mod transaction;
+pub mod wallet_flows;
 
 pub use kernel::{KernelFeatures, NRD_MAX_RELATIVE_HEIGHT};
 pub use keychain::{derive_blind, SwitchCommitmentType};
@@ -40,6 +41,10 @@ pub use slate_builder::{
 pub use transaction::{
     pubkey_to_commitment, slate_to_transaction_bytes, BuildTransactionParams, TxInput, TxOutput,
 };
+pub use wallet_flows::{
+    create_send_transaction, ChangeOutputInfo, CreateSendTxOutput, CreateSendTxParams,
+    UnspentOutput,
+};
 
 pub use bulletproof::{
     bullet_proof_create, bullet_proof_rewind, bullet_proof_verify, pedersen_commit,
@@ -50,9 +55,12 @@ pub use schnorr::{
     extract_adaptor_secret, final_signature, partial_sign, partial_verify, point_add, point_sum,
     sign as schnorr_sign, sign_with_nonce, verify as schnorr_verify, Signature,
 };
-pub use secp256k1::public_key_from_secret_key;
+pub use secp256k1::{public_key_from_secret_key, random_secret_nonce};
 pub use seed::{mnemonic_to_extended_private_key, ExtendedPrivateKey};
-pub use slate::{parse_slate_v4, serialize_slate_v4, SlateStateV4, SlateV4};
+pub use slate::{
+    add_input_commitment, add_output_commitment, parse_slate_v4, serialize_slate_v4,
+    SlateStateV4, SlateV4,
+};
 pub use slatepack::{
     armor as slatepack_armor, dearmor as slatepack_dearmor, SlatepackBin, SlatepackMode,
     SlatepackVersion,

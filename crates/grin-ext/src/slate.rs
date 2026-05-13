@@ -361,6 +361,55 @@ pub fn serialize_slate_v4(slate: &SlateV4) -> Result<String, String> {
     serde_json::to_string(slate).map_err(|e| format!("slate v4 serialize: {e}"))
 }
 
+// =============================================================================
+// Slate construction helpers
+// =============================================================================
+
+/// Append an input commitment (no proof) to `slate.coms`. Used by the
+/// sender after `sender_init_s1` to attach the inputs they're spending.
+///
+/// Inputs reference previously-created on-chain outputs by their
+/// Pedersen commitment; the original output's rangeproof is already on
+/// chain, so the slate only carries the commitment + the input's
+/// feature byte (0 = plain, 1 = coinbase).
+pub fn add_input_commitment(slate: &mut SlateV4, commitment: [u8; 33], is_coinbase: bool) {
+    let f = if is_coinbase { 1 } else { 0 };
+    let entry = CommitsV4 {
+        f,
+        c: commitment,
+        p: None,
+    };
+    match &mut slate.coms {
+        Some(coms) => coms.push(entry),
+        None => slate.coms = Some(vec![entry]),
+    }
+}
+
+/// Append an output commitment + bulletproof to `slate.coms`. Used by
+/// the sender for the change output, and by the receiver for the output
+/// they're receiving.
+///
+/// The proof must be the full bulletproof byte vector (~676 bytes for
+/// BP+). Without it, the network cannot verify the value is in range
+/// and the kernel signature will not validate.
+pub fn add_output_commitment(
+    slate: &mut SlateV4,
+    commitment: [u8; 33],
+    proof: Vec<u8>,
+    is_coinbase: bool,
+) {
+    let f = if is_coinbase { 1 } else { 0 };
+    let entry = CommitsV4 {
+        f,
+        c: commitment,
+        p: Some(proof),
+    };
+    match &mut slate.coms {
+        Some(coms) => coms.push(entry),
+        None => slate.coms = Some(vec![entry]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
