@@ -35,7 +35,7 @@ pub const NRD_MAX_RELATIVE_HEIGHT: u16 = 10080;
 /// Kernel feature variants. Mirrors upstream `KernelFeatures` but carries
 /// only the data needed to compute the signing message + serialize for
 /// the slate-v4 wire format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum KernelFeatures {
     /// Standard kernel — has a fee.
     Plain { fee: u64 },

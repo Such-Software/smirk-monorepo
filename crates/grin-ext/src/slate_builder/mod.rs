@@ -73,25 +73,37 @@ pub use standard::{
 // ============================================================================
 
 /// Private state the sender holds between init and finalize. Don't share.
-#[derive(Debug, Clone)]
+///
+/// Serializable so wallet shells can persist the context (in session
+/// state, IndexedDB, etc.) across the slate-exchange round-trip — the
+/// sender may close the popup between sending S1 and receiving S2.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SenderContext {
     pub slate_id: String,
     pub amount: u64,
     pub fee: u64,
     pub kernel_features: KernelFeatures,
+    #[serde(with = "crate::slate::hex_serde")]
     pub sender_blind_excess: [u8; 32],
+    #[serde(with = "crate::slate::hex_serde")]
     pub kernel_nonce: [u8; 32],
+    #[serde(with = "crate::slate::hex_serde")]
     pub kernel_offset: [u8; 32],
 }
 
-/// Private state the receiver holds between rounds.
-#[derive(Debug, Clone)]
+/// Private state the receiver holds between rounds. Serializable for
+/// the same popup-close-survives-roundtrip reason as SenderContext.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReceiverContext {
     pub slate_id: String,
     pub amount: u64,
+    #[serde(with = "crate::slate::hex_serde")]
     pub output_blind: [u8; 32],
+    #[serde(with = "crate::slate::hex_serde")]
     pub kernel_nonce: [u8; 32],
+    #[serde(with = "crate::slate::hex_serde_33")]
     pub commitment: [u8; 33],
+    #[serde(with = "crate::slate::hex_serde")]
     pub rewind_nonce: [u8; 32],
 }
 

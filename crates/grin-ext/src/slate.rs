@@ -253,7 +253,7 @@ mod string_or_u64 {
 }
 
 /// hex-encode/decode a `[u8; 32]`.
-mod hex_serde {
+pub(crate) mod hex_serde {
     use serde::{de, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(v: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
@@ -276,7 +276,7 @@ mod hex_serde_32 {
     pub use super::hex_serde::*;
 }
 
-mod hex_serde_33 {
+pub(crate) mod hex_serde_33 {
     use serde::{de, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(v: &[u8; 33], s: S) -> Result<S::Ok, S::Error> {

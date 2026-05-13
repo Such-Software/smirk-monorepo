@@ -38,6 +38,7 @@ mod slate;
 mod slate_builder;
 mod slatepack;
 mod transaction;
+mod wallet_flows;
 
 // ---------- Public re-exports ----------
 //
@@ -77,6 +78,11 @@ pub use slatepack::{
     grin_slatepack_unpack_with_secret,
 };
 pub use transaction::{grin_pubkey_to_commitment, grin_slate_to_transaction_bytes};
+pub use wallet_flows::{
+    grin_create_invoice, grin_create_send_transaction, grin_finalize_invoice,
+    grin_finalize_send_slate, grin_random_secret_nonce, grin_sign_incoming_send_slate,
+    grin_sign_invoice, grin_slate_v4_from_bin_hex, grin_slate_v4_to_bin_hex,
+};
 
 /// grin-ext crate version. Useful for runtime version sanity checks.
 #[wasm_bindgen]
