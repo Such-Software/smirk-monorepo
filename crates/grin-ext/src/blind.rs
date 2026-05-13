@@ -49,12 +49,21 @@ pub fn sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
 /// Compute the sender-side blind excess for a Grin transaction:
 ///
 /// ```text
-///   excess = Σ input_blinds − Σ output_blinds − kernel_offset
+///   excess_sender = Σ sender_output_blinds − Σ input_blinds − kernel_offset
 /// ```
 ///
-/// (Sign convention: the result, multiplied by G, equals the kernel excess
-/// public key contribution from the sender. The full kernel excess will
-/// also include the receiver's output blinding factor.)
+/// Sign convention rationale: the full kernel excess scalar `k` is
+/// `Σ all_output_blinds − Σ all_input_blinds − offset`. Splitting across
+/// participants, the receiver contributes their output blind `r_receiver`
+/// and the sender contributes `r_change − r_input − offset`. The sender's
+/// contribution multiplied by G IS the sender's `xs` public key in the
+/// slate participant data; aggregating `xs_sender + xs_receiver` must
+/// equal the kernel excess public key for kernel verification to pass.
+///
+/// Pre-2026-05-13: this function returned `inputs − outputs − offset`,
+/// the negation of the correct value. Sign was undetected because the
+/// only non-balanced test happened to flip its own labels. Caught by
+/// preparing to build the Grin send-handler on top of the function.
 ///
 /// Returns 32 bytes ready to use as a secret scalar.
 pub fn sender_blind_excess(
@@ -64,8 +73,8 @@ pub fn sender_blind_excess(
 ) -> [u8; 32] {
     let inputs_sum = sum(input_blinds);
     let outputs_sum = sum(sender_output_blinds);
-    // excess = inputs - outputs - offset
-    sub(&sub(&inputs_sum, &outputs_sum), kernel_offset)
+    // excess = outputs - inputs - offset
+    sub(&sub(&outputs_sum, &inputs_sum), kernel_offset)
 }
 
 #[cfg(test)]
@@ -118,13 +127,34 @@ mod tests {
     }
 
     #[test]
-    fn sender_blind_excess_subtracts_offset() {
-        let inputs = vec![s(10)];
-        let outputs = vec![s(0)];
+    fn sender_blind_excess_uses_outputs_minus_inputs() {
+        // The convention is `outputs - inputs - offset`. With outputs=10,
+        // inputs=0, offset=3 the result is 10 - 0 - 3 = 7. Pre-2026-05-13
+        // the implementation returned `inputs - outputs - offset` which
+        // would produce the curve-order-mod negation; this test fixes the
+        // convention so the value at index 31 reads as expected.
+        let inputs = vec![s(0)];
+        let outputs = vec![s(10)];
         let offset = s(3);
-        // excess = 10 - 0 - 3 = 7
         let expected = s(7);
         assert_eq!(sender_blind_excess(&inputs, &outputs, &offset), expected);
+    }
+
+    #[test]
+    fn sender_blind_excess_inputs_minus_outputs_negative_wraps() {
+        // outputs=5, inputs=10, offset=0 → 5 - 10 - 0 = -5 mod n. Verify
+        // the result is the curve-order-modular negation of `s(5)`, i.e.
+        // (n - 5) mod n. Sign-flip in the implementation would produce
+        // s(5) instead, so this test pinpoints the bug.
+        let inputs = vec![s(10)];
+        let outputs = vec![s(5)];
+        let offset = [0u8; 32];
+        let got = sender_blind_excess(&inputs, &outputs, &offset);
+        let pos5 = s(5);
+        // (n - 5) computed via blind::sub(0, 5)
+        let neg5 = sub(&[0u8; 32], &pos5);
+        assert_eq!(got, neg5);
+        assert_ne!(got, pos5);
     }
 
     #[test]
