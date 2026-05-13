@@ -7,9 +7,10 @@
 //! consistent under either correct or wrong-but-symmetric conventions).
 
 use grin_ext::{
-    blind, create_send_transaction, derive_blind, kernel::KernelFeatures, pedersen_commit,
-    random_secret_nonce, sender_init_s1, serialize_slate_v4, CreateSendTxParams,
-    SenderInitParams, SwitchCommitmentType, UnspentOutput,
+    blind, create_send_transaction, derive_blind, finalize_send_slate,
+    kernel::KernelFeatures, pedersen_commit, random_secret_nonce, sender_init_s1,
+    serialize_slate_v4, sign_incoming_send_slate, CreateSendTxParams, FinalizeSendParams,
+    SenderInitParams, SignIncomingSendParams, SwitchCommitmentType, UnspentOutput,
 };
 use grin_wallet_libwallet::Slate;
 
@@ -263,6 +264,102 @@ fn create_send_transaction_produces_slate_grin_wallet_accepts() {
     // commitments list. Verify at least that the JSON contained both
     // a 0-features input and a 0-features change output by checking
     // our coms list directly (already done above).
+}
+
+/// Full sender ⇄ receiver round-trip: S1 → S2 → S3, kernel excess
+/// agreed on both sides, S3 slate accepted by grin_wallet_libwallet,
+/// final transaction bytes built without error.
+///
+/// This is the headline cross-validation: it exercises every
+/// orchestrator (create_send_transaction, sign_incoming_send_slate,
+/// finalize_send_slate) and the entire low-level slate ceremony
+/// underneath. If a future change breaks any participant's math, this
+/// test catches it before any wasm rebuild or mainnet broadcast.
+#[test]
+fn full_send_round_trip_validates_against_grin_wallet() {
+    // Two separate wallets — sender and receiver have different seeds.
+    let sender_seed: [u8; 32] = [0xaa; 32];
+    let receiver_seed: [u8; 32] = [0xbb; 32];
+    let sender_ext = master_ext_from_seed(&sender_seed);
+    let receiver_ext = master_ext_from_seed(&receiver_seed);
+
+    // Sender builds an input — fake on-chain UTXO synthesized from
+    // the sender's keys at a chosen path.
+    let input_path = [0u32, 0, 0, 0];
+    let input_amount = 3_000_000_000u64;
+    let input_blind =
+        derive_blind(&sender_ext, &input_path, input_amount, SwitchCommitmentType::Regular)
+            .unwrap();
+    let input_commit = pedersen_commit(input_amount, &input_blind).unwrap();
+    let inputs = vec![UnspentOutput {
+        path: input_path,
+        amount: input_amount,
+        commitment: input_commit,
+        is_coinbase: false,
+    }];
+
+    let amount = 800_000_000u64; // 0.8 GRIN
+    let fee = 8_000_000u64;
+    let kernel_features = KernelFeatures::Plain { fee };
+
+    // Sender: create S1 slate.
+    let send_out = create_send_transaction(&CreateSendTxParams {
+        extended_private_key: sender_ext,
+        inputs: inputs.clone(),
+        amount,
+        fee,
+        kernel_features,
+        change_path: [0, 0, 1, 0],
+        kernel_offset: [0u8; 32],
+        kernel_nonce: random_secret_nonce(),
+        bp_rewind_nonce: [0x77u8; 32],
+        bp_private_nonce: [0x88u8; 32],
+        slate_id: None,
+    })
+    .expect("create_send_transaction");
+    assert_eq!(send_out.slate.sta, grin_ext::SlateStateV4::Standard1);
+
+    // Receiver: sign incoming S1 → produce S2.
+    let sign_out = sign_incoming_send_slate(&SignIncomingSendParams {
+        extended_private_key: receiver_ext,
+        s1_slate: send_out.slate.clone(),
+        output_path: [0, 0, 0, 0],
+        receiver_kernel_nonce: random_secret_nonce(),
+        bp_rewind_nonce: [0x99u8; 32],
+        bp_private_nonce: [0xaau8; 32],
+    })
+    .expect("sign_incoming_send_slate");
+    assert_eq!(sign_out.slate.sta, grin_ext::SlateStateV4::Standard2);
+    assert_eq!(sign_out.output.amount, amount);
+
+    // Sender: finalize S2 → S3 + tx bytes.
+    let finalize_out = finalize_send_slate(&FinalizeSendParams {
+        s2_slate: sign_out.slate.clone(),
+        sender_context: send_out.context.clone(),
+        sender_inputs: inputs.clone(),
+        change_output: send_out.change_output.clone(),
+    })
+    .expect("finalize_send_slate");
+    assert_eq!(finalize_out.slate.sta, grin_ext::SlateStateV4::Standard3);
+    assert!(!finalize_out.tx_bytes.is_empty(), "tx_bytes must be non-empty");
+
+    // Both sides agree on the kernel excess commitment.
+    assert_eq!(
+        sign_out.kernel_excess, finalize_out.kernel_excess,
+        "receiver's S2-computed kernel excess must match sender's S3-computed kernel excess"
+    );
+
+    // Reference parser accepts the final S3 slate.
+    let s3_json = serialize_slate_v4(&finalize_out.slate).unwrap();
+    let ref_s3 = Slate::deserialize_upgrade(&s3_json)
+        .expect("grin_wallet_libwallet must accept our S3 slate");
+    assert_eq!(ref_s3.amount, amount);
+    assert_eq!(ref_s3.fee_fields.fee(), fee);
+    assert_eq!(
+        ref_s3.participant_data.len(),
+        2,
+        "S3 carries both sender + receiver participant data"
+    );
 }
 
 /// Sanity: random_secret_nonce produces non-zero, never-equal scalars.
