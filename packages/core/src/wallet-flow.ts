@@ -173,8 +173,24 @@ export async function bootstrapAuth(
  * `smirk-extension/src/lib/balance.ts`).
  */
 export interface AssetBalance {
+  /** Spendable right now: total received − verified spent − locked. */
   confirmed: bigint;
+  /**
+   * Incoming, not-yet-mineable balance — server-reported mempool amount
+   * plus client-side `pendingOutgoing` reconciliation (Phase 2b). For
+   * CryptoNote chains this is purely incoming; outgoing is tracked
+   * separately by `pendingOutgoing` once Phase 2b lands.
+   */
   pending: bigint;
+  /**
+   * On-chain but inside the protocol lock window. CryptoNote chains
+   * (XMR ≥10 confs to spend, WOW ≥4 confs) expose this so the UI can
+   * tell the user "your change is in the chain but not spendable for
+   * another N minutes". Optional — UTXO chains and Grin leave this
+   * undefined since they don't carry a meaningful lock-window concept
+   * in our flow.
+   */
+  locked?: bigint;
   error?: string;
   /**
    * LWS scan progress for this asset (XMR/WOW only). Populated when the
@@ -183,6 +199,18 @@ export interface AssetBalance {
    * Undefined for assets that don't use LWS or when the scan is current.
    */
   scanProgress?: ScanProgress;
+  /**
+   * Chain-appropriate identifiers of inputs the network now reflects
+   * as spent, in the same format as `PendingOutgoingTx.inputs`. For
+   * CryptoNote (XMR/WOW) these are the lowercase-hex key images that
+   * verified against our spend key (the same computation as the
+   * balance verified-spent path — surfacing is free). Consumed by
+   * `reconcilePendingOutgoing()` to drop in-flight entries whose
+   * inputs are all now reflected as spent. UTXO chains and Grin
+   * leave this undefined; their pendingOutgoing entries reconcile
+   * via timing age-out.
+   */
+  verifiedSpentInputs?: string[];
 }
 
 /**
@@ -335,6 +363,11 @@ async function fetchLwsBalance(
   const pending = BigInt(result.data.pending_balance);
 
   let spent = 0n;
+  // Capture verified-spent key images for reconciliation. Same loop
+  // that decides `spent` populates this — no extra wasm calls. Each
+  // entry here is what the server flagged AND our spend key confirms,
+  // so it's safe to use as a "spent" signal for pendingOutgoing.
+  const verifiedSpentInputs: string[] = [];
   if (verifyKeyImage && result.data.spent_outputs.length > 0) {
     for (const out of result.data.spent_outputs) {
       try {
@@ -346,6 +379,7 @@ async function fetchLwsBalance(
         });
         if (computed.toLowerCase() === out.key_image.toLowerCase()) {
           spent += BigInt(out.amount);
+          verifiedSpentInputs.push(computed.toLowerCase());
         }
         // else: false positive (decoy match). Skip.
       } catch (e) {
@@ -389,10 +423,17 @@ async function fetchLwsBalance(
         }
       : undefined;
 
+  // Split locked out of pending so the UI can render the two states
+  // separately. Pre-Phase-2 they were lumped — "pending" included both
+  // mempool incoming AND on-chain-but-locked, which obscured why a
+  // user's balance was tied up.
+  const lockedClamped = locked < 0n ? 0n : locked;
   return {
     confirmed: confirmed < 0n ? 0n : confirmed,
-    pending: pending + (locked < 0n ? 0n : locked),
+    pending,
+    locked: lockedClamped,
     ...(scanProgress ? { scanProgress } : {}),
+    ...(verifiedSpentInputs.length > 0 ? { verifiedSpentInputs } : {}),
   };
 }
 
@@ -433,11 +474,45 @@ export async function fetchPrices(api: SmirkApi): Promise<Prices> {
  * assets whose price is null (no quote available). Atomic-unit math
  * uses `BigInt`, then divides by `10 ** decimals` at the very end —
  * no floating-point on amounts, only on the (price * float) display.
+ *
+ * Counts confirmed + pending + locked — i.e. "total wealth on chain",
+ * not "spendable right now". The locked component matters: a user
+ * with 32 WOW change inside the 4-conf lock window has $X of value,
+ * just not movable yet, and the headline shouldn't hide that.
  */
 export function totalFiat(
   balances: Balances,
   prices: Prices,
   decimalsByAsset: Record<string, number>,
+): number {
+  return sumBalanceFieldFiat(balances, prices, decimalsByAsset, (b) =>
+    b.confirmed + b.pending + (b.locked ?? 0n),
+  );
+}
+
+/** Fiat sum of the `pending` field across all priced assets. */
+export function pendingFiat(
+  balances: Balances,
+  prices: Prices,
+  decimalsByAsset: Record<string, number>,
+): number {
+  return sumBalanceFieldFiat(balances, prices, decimalsByAsset, (b) => b.pending);
+}
+
+/** Fiat sum of the `locked` field across all priced assets. */
+export function lockedFiat(
+  balances: Balances,
+  prices: Prices,
+  decimalsByAsset: Record<string, number>,
+): number {
+  return sumBalanceFieldFiat(balances, prices, decimalsByAsset, (b) => b.locked ?? 0n);
+}
+
+function sumBalanceFieldFiat(
+  balances: Balances,
+  prices: Prices,
+  decimalsByAsset: Record<string, number>,
+  pick: (b: AssetBalance) => bigint,
 ): number {
   let total = 0;
   for (const [asset, balance] of Object.entries(balances) as Array<[
@@ -448,12 +523,12 @@ export function totalFiat(
     if (price === null) continue;
     const decimals = decimalsByAsset[asset];
     if (decimals === undefined) continue;
-    const combined = balance.confirmed + balance.pending;
-    if (combined === 0n) continue;
+    const value = pick(balance);
+    if (value === 0n) continue;
     // Convert to a Number at this single boundary. For supported assets
     // the worst case is XMR (12 decimals) which fits well in a double's
     // 53-bit mantissa for any realistic balance.
-    const asFloat = Number(combined) / 10 ** decimals;
+    const asFloat = Number(value) / 10 ** decimals;
     total += asFloat * price;
   }
   return total;

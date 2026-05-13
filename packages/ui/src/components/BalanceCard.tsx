@@ -13,10 +13,25 @@ import { AssetIcon } from './AssetIcon';
 export interface BalanceCardProps {
   /** Asset id from `@smirk/assets`. */
   assetId: string;
-  /** Confirmed balance in atomic units. */
+  /** Confirmed (spendable) balance in atomic units. */
   balanceAtomic: bigint | number;
-  /** Optional unconfirmed balance (mempool / pending). Rendered subtly. */
+  /**
+   * Optional incoming-pending balance (mempool / 0-conf). Only rendered
+   * when non-zero — keeps the default row tight on pixel themes.
+   */
   pendingAtomic?: bigint | number;
+  /**
+   * Optional on-chain-but-locked balance (CryptoNote lock window:
+   * XMR ≥10 confs, WOW ≥4 confs). Only rendered when non-zero.
+   * UTXO chains and Grin leave this undefined.
+   */
+  lockedAtomic?: bigint | number;
+  /**
+   * Optional in-flight outgoing total. Renders as `↑ X.XX sending`
+   * in the warning color. The caller has already subtracted this
+   * from `balanceAtomic` — this prop is purely for the subline.
+   */
+  sendingAtomic?: bigint | number;
   /** Optional fiat value (already formatted: `"$12.34"`). */
   fiatDisplay?: string;
   /** Click handler — usually a navigate to the asset's detail screen. */
@@ -36,6 +51,8 @@ export function BalanceCard({
   assetId,
   balanceAtomic,
   pendingAtomic,
+  lockedAtomic,
+  sendingAtomic,
   fiatDisplay,
   onClick,
   resolveIcon,
@@ -50,21 +67,37 @@ export function BalanceCard({
   const formatted = hidden
     ? HIDDEN_PLACEHOLDER
     : formatAmountWithAsset(balanceAtomic, asset, 8, { trimZeros: false });
+  // Progressive disclosure: only render extra rows when they're non-zero.
+  // Most users at most times have nothing pending/locked, so the default
+  // row stays tight (one-line right column) even on pixel themes.
   const pending =
     !hidden && pendingAtomic !== undefined && pendingAtomic !== 0
       ? formatAmountWithAsset(pendingAtomic, asset, 8)
       : null;
+  const locked =
+    !hidden && lockedAtomic !== undefined && lockedAtomic !== 0
+      ? formatAmountWithAsset(lockedAtomic, asset, 8)
+      : null;
+  const sending =
+    !hidden && sendingAtomic !== undefined && sendingAtomic !== 0
+      ? formatAmountWithAsset(sendingAtomic, asset, 8)
+      : null;
 
   const Container = onClick ? 'button' : 'div';
+  const hasExtras = Boolean(sending || locked || pending);
 
   return (
     <Container
       class={['smirk-balance-card', className].filter(Boolean).join(' ')}
       onClick={onClick}
       style={{
+        // Outer is a column so the main row keeps its tight icon-
+        // name-balance layout and any sublines (sending / locked /
+        // pending) sit below as a full-width strip — they used to
+        // stack inside the right column, which on chunky pixel
+        // themes pushed wide enough to overlap the asset name.
         display: 'flex',
-        alignItems: 'center',
-        gap: 10,
+        flexDirection: 'column',
         padding: '6px 12px',
         width: '100%',
         background: 'transparent',
@@ -75,32 +108,72 @@ export function BalanceCard({
         fontFamily: 'inherit',
       }}
     >
-      <AssetIcon
-        assetId={assetId}
-        size={28}
-        {...(resolveIcon ? { resolveIcon } : {})}
-      />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          width: '100%',
+        }}
+      >
+        <AssetIcon
+          assetId={assetId}
+          size={28}
+          {...(resolveIcon ? { resolveIcon } : {})}
+        />
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 500 }}>{asset.displayName}</div>
-        <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
-          {asset.ticker}
-        </div>
-      </div>
-
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: 14, fontFamily: 'var(--smirk-font-family-mono, monospace)' }}>
-          {loading ? '—' : formatted}
-        </div>
-        {fiatDisplay && (
-          <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>{fiatDisplay}</div>
-        )}
-        {pending && (
-          <div style={{ fontSize: 11, color: 'var(--smirk-warning)' }}>
-            +{pending} pending
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>{asset.displayName}</div>
+          <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
+            {asset.ticker}
           </div>
-        )}
+        </div>
+
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 14, fontFamily: 'var(--smirk-font-family-mono, monospace)' }}>
+            {loading ? '—' : formatted}
+          </div>
+          {fiatDisplay && (
+            <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>{fiatDisplay}</div>
+          )}
+        </div>
       </div>
+
+      {hasExtras && (
+        <div
+          style={{
+            marginTop: 4,
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '4px 10px',
+            justifyContent: 'flex-end',
+            fontSize: 11,
+            fontFamily: 'var(--smirk-font-family-mono, monospace)',
+          }}
+        >
+          {sending && (
+            <span
+              style={{ color: 'var(--smirk-warning)' }}
+              title="Sent — waiting for confirmation"
+            >
+              ↑ {sending} sending
+            </span>
+          )}
+          {locked && (
+            <span
+              style={{ color: 'var(--smirk-fg-muted)' }}
+              title="On-chain but inside the protocol lock window"
+            >
+              🔒 {locked} locked
+            </span>
+          )}
+          {pending && (
+            <span style={{ color: 'var(--smirk-warning)' }}>
+              +{pending} pending
+            </span>
+          )}
+        </div>
+      )}
     </Container>
   );
 }

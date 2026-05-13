@@ -32,6 +32,12 @@ import {
   isValidXmrAddress,
   rebuildUnlockedFromMnemonic,
   totalFiat,
+  pendingOutgoingTotalWithFee,
+  inFlightInputsTotal,
+  expectedLockedChange,
+  isPendingOutgoingStale,
+  recentlySpentInputs,
+  reconcilePendingOutgoing,
   type Balances,
   type BootstrapAuthResult,
   type Prices,
@@ -306,6 +312,35 @@ function App() {
         fetchAllBalances(api, wallet, bootstrap, { verifyKeyImage }),
         fetchPrices(api),
       ]);
+      // Reconcile pendingOutgoing against the freshly-fetched balances
+      // before storing. Two-pass:
+      //   1. Per-asset, run reconcilePendingOutgoing against the new
+      //      verifiedSpentInputs set (XMR/WOW path — primary signal).
+      //   2. Drop any remaining entries past their per-asset age-out
+      //      (timing backstop; covers BTC/LTC which don't surface
+      //      verifiedSpentInputs and any chain where reconciliation
+      //      missed for whatever reason).
+      // Net effect: a successful XMR/WOW spend drops its
+      // pendingOutgoing entry on the next refresh after LWS reflects
+      // (~one block + scan tick), instead of waiting for the 5/30 min
+      // timeout.
+      const now = Date.now();
+      await store.update((s) => {
+        if (!s.pendingOutgoing || s.pendingOutgoing.length === 0) return;
+        let kept = s.pendingOutgoing;
+        for (const [assetId, b] of Object.entries(balances) as Array<[
+          string,
+          { verifiedSpentInputs?: string[] },
+        ]>) {
+          if (!b.verifiedSpentInputs || b.verifiedSpentInputs.length === 0) continue;
+          const verifiedSet = new Set(b.verifiedSpentInputs);
+          kept = reconcilePendingOutgoing(kept, assetId, verifiedSet);
+        }
+        kept = kept.filter((e) => !isPendingOutgoingStale(e, now));
+        if (kept.length !== s.pendingOutgoing.length) {
+          s.pendingOutgoing = kept;
+        }
+      });
       setSession((prev) =>
         prev
           ? { ...prev, balances, prices, error: null, refreshing: false, refreshedAt: new Date() }
@@ -544,21 +579,25 @@ function HomeRouter({
           }
           return { fast: r.data.fast, normal: r.data.normal, slow: r.data.slow };
         }}
-        resolveSendFeeEstimate={async (assetId) => {
+        resolveSendFeeEstimate={async (assetId, options) => {
           // Live fee preview for assets without a sat/vB tier picker.
           // Pulls per_byte_fee + fee_mask from LWS unspent_outs (the
-          // same numbers the send-handler uses at sign time) and asks
-          // wasm.estimateFee for the rounded fee assuming 1 input,
-          // 2 outputs — the typical case for our single-address scheme.
+          // same numbers the send-handler uses at sign time). Input
+          // count: 1 by default (typical send out of our single-address
+          // scheme), or the actual spendable-output count when sweep
+          // mode is requested — sweep TX size scales linearly with
+          // input count, so a 1-input estimate would massively
+          // under-report the fee for fragmented wallets.
           if (assetId !== 'xmr' && assetId !== 'wow') return null;
           const fromAddress = wallet.addresses[assetId];
           if (!fromAddress) return null;
           const viewKeyHex = bytesToHex(wallet.keys[assetId].privateViewKey);
           const unspent = await api.getUnspentOuts(assetId, fromAddress, viewKeyHex);
           if (unspent.error || !unspent.data) return null;
-          const { per_byte_fee, fee_mask } = unspent.data;
+          const { per_byte_fee, fee_mask, outputs } = unspent.data;
+          const numInputs = options?.sweep && outputs.length > 0 ? outputs.length : 1;
           const feeJson = wasmMonero.estimateFee(
-            1,
+            numInputs,
             2,
             BigInt(per_byte_fee),
             BigInt(fee_mask),
@@ -567,7 +606,49 @@ function HomeRouter({
           if (!parsed.success || parsed.data === undefined) return null;
           return BigInt(parsed.data);
         }}
-        onSubmit={(fields) => send(wallet, fields)}
+        onSubmit={async (fields) => {
+          // Build the exclude-set from existing pendingOutgoing
+          // entries for this asset so the handler doesn't pick an
+          // input we just spent before LWS/Electrum has reflected it.
+          // (Phase 2C piece 1: mempool double-spend prevention.)
+          const excludeInputs = recentlySpentInputs(
+            sessionState.pendingOutgoing ?? [],
+            fields.fromAssetId,
+          );
+          const result = await send(wallet, fields, excludeInputs);
+          if (result.ok && result.amountAtomic !== undefined && result.feeAtomic !== undefined) {
+            // One atomic store.update writes both the pendingOutgoing
+            // entry AND the wizard's lastTxid. The wizard's inner
+            // onSubmit *also* writes lastTxid via patchFields, but
+            // running both writes through this one transaction makes
+            // the txid persisted *before* the wizard advances step,
+            // so the DoneStep render never sees step=TOTAL_STEPS
+            // without a corresponding lastTxid. The wizard's
+            // subsequent write becomes idempotent.
+            const entry = {
+              asset: fields.fromAssetId,
+              txHash: result.txid,
+              amount: result.amountAtomic.toString(),
+              fee: result.feeAtomic.toString(),
+              recipient: fields.toAddress,
+              submittedAt: Date.now(),
+              ...(result.inputs && result.inputs.length > 0
+                ? { inputs: result.inputs }
+                : {}),
+              ...(result.inputsTotalAtomic !== undefined
+                ? { inputsTotal: result.inputsTotalAtomic.toString() }
+                : {}),
+            };
+            await store.update((s) => {
+              s.pendingOutgoing.push(entry);
+              const w = s.wizards.send;
+              if (w) {
+                w.fields.lastTxid = result.txid;
+              }
+            });
+          }
+          return result;
+        }}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
       />
@@ -589,14 +670,32 @@ function HomeRouter({
   // Default: Home root.
   const balances = session?.balances;
   const prices = session?.prices;
+  const decimalsByAsset: Record<string, number> = (() => {
+    const m: Record<string, number> = {};
+    for (const a of listAssets()) m[a.id] = a.decimals;
+    return m;
+  })();
   const totalDisplay = (() => {
     if (session?.error) return '—';
     if (!balances || !prices) return null;
-    const dec: Record<string, number> = {};
-    for (const a of listAssets()) dec[a.id] = a.decimals;
-    const usd = totalFiat(balances, prices, dec);
+    // Headline shows total wealth on chain (confirmed + pending +
+    // locked). We deliberately do NOT subtract pendingOutgoing here:
+    // doing so would double-count for the ~2 min window between LWS
+    // picking up the spend and the entry aging out — legacy commit
+    // 839e001's exact failure mode. The user instead sees the in-flight
+    // amount in the `sending` subtitle and on each asset row, while
+    // the headline reflects the natural LWS state.
+    const usd = totalFiat(balances, prices, decimalsByAsset);
     return formatUsd(usd);
   })();
+  // Note: the headline used to surface aggregated pending/locked/
+  // sending here as a fiat subtitle (`+ $X pending · 🔒 $Y locked`).
+  // Pulled in 2026-05-13 — the per-asset rows already show which
+  // coin has what state, which is strictly more useful than the
+  // wallet-wide aggregate. Removing it also cures a popup scrollbar
+  // that appeared when the subtitle pushed the headline card past
+  // the popup's natural height. `pendingFiat` / `lockedFiat` remain
+  // in `@smirk/core` for shells (mobile, desktop) that want them.
 
   // Collect any asset that LWS reports as still catching up. These
   // are the wallets where the displayed balance is provisional until
@@ -629,11 +728,49 @@ function HomeRouter({
         onSwap: () => void switchTab('swap'),
       }}
       assets={listAssets().map((a) => {
-        const b = (balances as Record<string, { confirmed: bigint; pending: bigint } | undefined> | undefined)?.[a.id];
+        const b = (balances as Record<string, { confirmed: bigint; pending: bigint; locked?: bigint } | undefined> | undefined)?.[a.id];
+        const hasLockedConcept =
+          a.id === 'xmr' || a.id === 'wow' || a.id === 'grin';
+        // Defense-in-depth: for chains with a `locked` concept, once
+        // LWS reflects the spend (locked > 0), the change output is
+        // already on-chain & accounted for. Suppress all in-flight
+        // adjustments — subtracting on top would double-count, the
+        // legacy-839e001 failure mode.
+        const lwsReflectsSpend =
+          hasLockedConcept &&
+          b !== undefined &&
+          b.locked !== undefined &&
+          b.locked > 0n;
+        const entries = sessionState.pendingOutgoing ?? [];
+        const sendingAmount = lwsReflectsSpend
+          ? 0n
+          : pendingOutgoingTotalWithFee(entries, a.id);
+        // For CryptoNote/Grin during in-flight: subtract the entire
+        // input total from displayed-available (change isn't spendable
+        // until lock window passes), and add (inputsTotal − amount −
+        // fee) to displayed-locked as the expected change. For UTXO:
+        // change is immediately spendable, so subtract only amount+fee.
+        const availableDeduction =
+          !lwsReflectsSpend && hasLockedConcept
+            ? inFlightInputsTotal(entries, a.id)
+            : sendingAmount;
+        const expectedLocked =
+          !lwsReflectsSpend && hasLockedConcept
+            ? expectedLockedChange(entries, a.id)
+            : 0n;
+        const rawConfirmed = b ? b.confirmed : 0n;
+        const rawLocked = b && b.locked !== undefined ? b.locked : 0n;
+        const displayedConfirmed =
+          rawConfirmed - availableDeduction < 0n
+            ? 0n
+            : rawConfirmed - availableDeduction;
+        const displayedLocked = rawLocked + expectedLocked;
         return {
           assetId: a.id,
-          balanceAtomic: b ? b.confirmed : 0n,
+          balanceAtomic: displayedConfirmed,
           ...(b && b.pending > 0n ? { pendingAtomic: b.pending } : {}),
+          ...(displayedLocked > 0n ? { lockedAtomic: displayedLocked } : {}),
+          ...(sendingAmount > 0n ? { sendingAtomic: sendingAmount } : {}),
           loading: !balances && session?.refreshing === true,
           hidden: balancesHidden,
         };

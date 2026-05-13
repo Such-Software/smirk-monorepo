@@ -213,6 +213,13 @@ async function sendBtcLtc(
   toAddress: string,
   feeRateSatPerVb: number,
   sweep: boolean,
+  /**
+   * UTXO ids (`${txid}:${vout}`) of inputs spent by still-pending
+   * sends from this wallet. We exclude these from selection so a
+   * fast second-send doesn't try to spend a UTXO that's already in
+   * the mempool — Electrum would reject as "missing inputs".
+   */
+  excludeInputs: Set<string>,
 ): Promise<SendSubmitResult> {
   if (!wallet.mnemonic) {
     return { ok: false, error: 'Wallet not unlocked (no mnemonic available)' };
@@ -223,13 +230,26 @@ async function sendBtcLtc(
     return { ok: false, error: `No ${asset.toUpperCase()} address in wallet` };
   }
 
-  // 1. Fetch UTXOs.
+  // 1. Fetch UTXOs and filter out any we've already spent in a
+  //    still-pending tx (Electrum may not have reflected the spend
+  //    yet). Without this filter, a fast second-send picks the
+  //    largest UTXO, which is the one we just spent — Electrum
+  //    rejects with "missing inputs / already in mempool".
   const utxosResp = await api.getUtxos(asset, fromAddress);
   if (utxosResp.error || !utxosResp.data) {
     return { ok: false, error: utxosResp.error ?? 'Failed to fetch UTXOs' };
   }
-  const utxos = utxosResp.data.utxos;
+  const utxos = utxosResp.data.utxos.filter(
+    (u) => !excludeInputs.has(`${u.txid}:${u.vout}`),
+  );
   if (utxos.length === 0) {
+    if (utxosResp.data.utxos.length > 0) {
+      return {
+        ok: false,
+        error:
+          'All UTXOs at this address are tied up in recent sends — wait for confirmation and try again.',
+      };
+    }
     return { ok: false, error: 'No spendable UTXOs at this address' };
   }
 
@@ -332,7 +352,17 @@ async function sendBtcLtc(
     return { ok: false, error: broadcast.error ?? 'Broadcast failed' };
   }
 
-  return { ok: true, txid: broadcast.data.txid };
+  return {
+    ok: true,
+    txid: broadcast.data.txid,
+    amountAtomic: BigInt(selection.recipientSat),
+    feeAtomic: BigInt(selection.feeSat),
+    inputs: selection.inputs.map((i) => `${i.txid}:${i.vout}`),
+    inputsTotalAtomic: selection.inputs.reduce(
+      (acc, i) => acc + BigInt(i.value),
+      0n,
+    ),
+  };
 }
 
 /**
@@ -362,6 +392,23 @@ async function sendXmrWow(
   asset: 'xmr' | 'wow',
   amountAtomic: bigint,
   toAddress: string,
+  /**
+   * Lowercase-hex computed key images of inputs spent by still-pending
+   * sends from this wallet. We exclude these from selection — the LWS
+   * `spend_key_images` filter (Phase 1) catches outputs the *server*
+   * thinks are spent, but doesn't catch the window where we just
+   * broadcast a tx and LWS hasn't yet reflected it. This cache covers
+   * that window.
+   */
+  excludeInputs: Set<string>,
+  /**
+   * Sweep mode: select every spendable output, send `sum(inputs) − fee`
+   * to recipient, no meaningful change. `amountAtomic` is ignored.
+   * RingCT requires a 2-output minimum, so monero-oxide will still
+   * create a small/zero-value change output to the sender's own
+   * address — that's protocol-mandated padding, not "real" change.
+   */
+  sweep: boolean,
 ): Promise<SendSubmitResult> {
   const fromAddress = wallet.addresses[asset];
   if (!fromAddress) {
@@ -386,20 +433,21 @@ async function sendXmrWow(
     return { ok: false, error: 'No spendable outputs at this address' };
   }
 
-  // 1a. Filter out already-spent outputs by computing the real key
-  //     image for each owned output and matching it against the
-  //     server's `spend_key_images` candidate list. This is the same
-  //     verification balance display does — without it, the largest-
-  //     first selection happily picks an already-spent output and the
-  //     daemon rejects at submit time with "key image already in chain"
-  //     surfaced as a 500. Bug observed 2026-05-12 on second WOW send.
-  const spendableOutputs: typeof lwsOutputs = [];
+  // 1a. Compute every output's key image up front, then exclude:
+  //     (a) outputs whose key image matches one of the server's
+  //         `spend_key_images` candidates (LWS-reflected spend), and
+  //     (b) outputs whose key image is in `excludeInputs` (a still-
+  //         pending send from this wallet — LWS hasn't reflected yet).
+  //     Each kept output is annotated with its key image so the post-
+  //     send pendingOutgoing entry can capture them for the next call.
+  //     Bug closed by (a) alone: legacy 500 on second-WOW-send after
+  //     spent output was reused. Bug closed by (b): mempool double-
+  //     spend rejection when two sends fire before LWS reflects the
+  //     first.
+  type SpendableOutput = (typeof lwsOutputs)[number] & { keyImage: string };
+  const spendableOutputs: SpendableOutput[] = [];
+  let blockedByLocalCache = 0;
   for (const out of lwsOutputs) {
-    if (out.spend_key_images.length === 0) {
-      // Nothing for the server to claim; output is definitely unspent.
-      spendableOutputs.push(out);
-      continue;
-    }
     let computedKi: string;
     try {
       const kiJson = wasmMonero.computeKeyImage(
@@ -408,7 +456,7 @@ async function sendXmrWow(
         out.tx_pub_key,
         out.index,
       );
-      computedKi = parseWasmResult<string>(kiJson);
+      computedKi = parseWasmResult<string>(kiJson).toLowerCase();
     } catch (e) {
       // Failure to compute key image is unusual; fall back to treating
       // this output as spent to be safe (would rather skip than risk
@@ -419,39 +467,52 @@ async function sendXmrWow(
       });
       continue;
     }
-    const computedLower = computedKi.toLowerCase();
-    const isSpent = out.spend_key_images.some(
-      (ki) => ki.toLowerCase() === computedLower,
+    // LWS-reported spend (server-side reconciliation already happened).
+    const lwsSaysSpent = out.spend_key_images.some(
+      (ki) => ki.toLowerCase() === computedKi,
     );
-    if (!isSpent) spendableOutputs.push(out);
+    if (lwsSaysSpent) continue;
+    // Local pending-outgoing cache (we spent this; LWS hasn't seen yet).
+    if (excludeInputs.has(computedKi)) {
+      blockedByLocalCache++;
+      continue;
+    }
+    spendableOutputs.push({ ...out, keyImage: computedKi });
   }
   if (spendableOutputs.length === 0) {
     return {
       ok: false,
-      error: 'No unspent outputs available — recent sends may still be pending. Try again in a minute.',
+      error:
+        blockedByLocalCache > 0
+          ? 'All outputs are tied up in recent sends — wait for confirmation and try again.'
+          : 'No unspent outputs available — recent sends may still be pending. Try again in a minute.',
     };
   }
 
-  // 2. Greedy input selection over the spendable (unspent) set. Each
-  //    loop adds the next-largest output, asks the wasm helper for the
-  //    resulting fee at (n inputs, 2 outputs), and stops when
-  //    sum(inputs) ≥ amount + fee. RingCT always carries a change
-  //    output, so num_outputs is always 2.
+  // 2. Input selection.
+  //
+  // - Normal mode: greedy largest-first until sum(inputs) ≥ amount + fee.
+  //   Re-estimates fee each loop because each input adds ~2500 bytes
+  //   to the RingCT signature, so n changes the target each iteration.
+  //
+  // - Sweep mode: select every spendable output. amount = sum − fee
+  //   (computed once, since N is known). RingCT requires a 2-output
+  //   minimum, so monero-oxide will still write a small/zero-value
+  //   change output to fromAddress — protocol-mandated padding, not
+  //   "real" change. Any tiny residual (estimated_fee − actual_fee,
+  //   rounded down to fee_mask granularity) stays with the user.
   const sortedOutputs = [...spendableOutputs].sort((a, b) => b.amount - a.amount);
-  const target = amountAtomic;
-  if (target > BigInt(Number.MAX_SAFE_INTEGER)) {
-    return { ok: false, error: 'Amount exceeds JS-safe-integer range' };
-  }
   const feePerByteBig = BigInt(per_byte_fee);
   const feeMaskBig = BigInt(fee_mask);
 
-  const selected: typeof sortedOutputs = [];
-  let selectedTotal = 0n;
-  let feeAtomic = 0n;
-  let covered = false;
-  for (const out of sortedOutputs) {
-    selected.push(out);
-    selectedTotal += BigInt(out.amount);
+  let selected: typeof sortedOutputs;
+  let selectedTotal: bigint;
+  let feeAtomic: bigint;
+  let effectiveAmount: bigint; // amount the recipient receives
+
+  if (sweep) {
+    selected = sortedOutputs;
+    selectedTotal = selected.reduce((s, o) => s + BigInt(o.amount), 0n);
     const feeJson = wasmMonero.estimateFee(selected.length, 2, feePerByteBig, feeMaskBig);
     let feeNum: number;
     try {
@@ -460,16 +521,48 @@ async function sendXmrWow(
       return { ok: false, error: `Fee estimate failed: ${e instanceof Error ? e.message : String(e)}` };
     }
     feeAtomic = BigInt(feeNum);
-    if (selectedTotal >= target + feeAtomic) {
-      covered = true;
-      break;
+    if (selectedTotal <= feeAtomic) {
+      return {
+        ok: false,
+        error: `Sweep impossible: have ${selectedTotal} atomic, fee ${feeAtomic} atomic`,
+      };
     }
-  }
-  if (!covered) {
-    return {
-      ok: false,
-      error: `Insufficient funds: have ${selectedTotal} atomic, need ${target + feeAtomic} atomic (amount + fee)`,
-    };
+    effectiveAmount = selectedTotal - feeAtomic;
+  } else {
+    const target = amountAtomic;
+    if (target > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return { ok: false, error: 'Amount exceeds JS-safe-integer range' };
+    }
+    const acc: typeof sortedOutputs = [];
+    let accTotal = 0n;
+    let accFee = 0n;
+    let covered = false;
+    for (const out of sortedOutputs) {
+      acc.push(out);
+      accTotal += BigInt(out.amount);
+      const feeJson = wasmMonero.estimateFee(acc.length, 2, feePerByteBig, feeMaskBig);
+      let feeNum: number;
+      try {
+        feeNum = parseWasmResult<number>(feeJson);
+      } catch (e) {
+        return { ok: false, error: `Fee estimate failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+      accFee = BigInt(feeNum);
+      if (accTotal >= target + accFee) {
+        covered = true;
+        break;
+      }
+    }
+    if (!covered) {
+      return {
+        ok: false,
+        error: `Insufficient funds: have ${accTotal} atomic, need ${target + accFee} atomic (amount + fee)`,
+      };
+    }
+    selected = acc;
+    selectedTotal = accTotal;
+    feeAtomic = accFee;
+    effectiveAmount = target;
   }
 
   // 3. Fetch decoys. (ringSize − 1) per input from one batched call, then
@@ -503,7 +596,7 @@ async function sendXmrWow(
     },
     decoys: decoyPool.slice(i * decoysPerInput, (i + 1) * decoysPerInput),
   }));
-  const amountNum = Number(amountAtomic);
+  const amountNum = Number(effectiveAmount);
   const params = {
     inputs,
     destinations: [{ address: toAddress, amount: amountNum }],
@@ -545,12 +638,25 @@ async function sendXmrWow(
     return { ok: false, error: submit.error ?? 'Submit failed' };
   }
 
-  return { ok: true, txid: signed.tx_hash };
+  return {
+    ok: true,
+    txid: signed.tx_hash,
+    amountAtomic: effectiveAmount,
+    feeAtomic: BigInt(signed.fee),
+    inputs: selected.map((s) => s.keyImage),
+    inputsTotalAtomic: selected.reduce((acc, s) => acc + BigInt(s.amount), 0n),
+  };
 }
 
 /**
  * Top-level send dispatcher. SendWizard.onSubmit calls this with the
  * collected Compose-screen fields; we route to per-asset implementations.
+ *
+ * `excludeInputs` is the set of identifiers (chain-appropriate format
+ * — `txid:vout` for UTXO chains, lowercase-hex key image for
+ * CryptoNote) of inputs spent by still-pending sends from the same
+ * wallet. The popup builds this from `sessionState.pendingOutgoing`
+ * via `recentlySpentInputs()` and passes it on every call.
  */
 export async function send(
   wallet: UnlockedWallet,
@@ -561,6 +667,7 @@ export async function send(
     feeRateSatPerVb: number;
     sweep: boolean;
   },
+  excludeInputs: Set<string> = new Set(),
 ): Promise<SendSubmitResult> {
   const asset = mustGetAsset(fields.fromAssetId);
 
@@ -572,21 +679,23 @@ export async function send(
       fields.toAddress,
       fields.feeRateSatPerVb,
       fields.sweep,
+      excludeInputs,
     );
   }
 
   if (asset.id === 'xmr' || asset.id === 'wow') {
-    // Phase-1 scope: single-recipient, single main address, no sweep,
-    // no subaddresses. Fee comes from LWS (`per_byte_fee` / `fee_mask`)
-    // not from the user-picker — the wizard's feeRateSatPerVb and
-    // sweep fields are deliberately ignored for these assets.
-    if (fields.sweep) {
-      return {
-        ok: false,
-        error: `Sweep mode not yet implemented for ${asset.ticker}. Use a specific amount.`,
-      };
-    }
-    return sendXmrWow(wallet, asset.id, fields.amountAtomic, fields.toAddress);
+    // Single-recipient, single main address, no subaddresses. Fee
+    // comes from LWS (per_byte_fee / fee_mask) — wizard's
+    // feeRateSatPerVb is deliberately ignored. `sweep` is honored:
+    // selects every spendable output, recipient gets sum − fee.
+    return sendXmrWow(
+      wallet,
+      asset.id,
+      fields.amountAtomic,
+      fields.toAddress,
+      excludeInputs,
+      fields.sweep,
+    );
   }
 
   // Stub for assets we haven't wired yet (Grin). Returning an explicit

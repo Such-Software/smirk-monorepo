@@ -64,3 +64,15 @@ export { RouteController, tabOf } from './route';
 export type { Tab } from './route';
 
 export { Wizard } from './wizards';
+
+export {
+  isStale as isPendingOutgoingStale,
+  pendingOutgoingFor,
+  pendingOutgoingTotal,
+  pendingOutgoingTotalWithFee,
+  inFlightInputsTotal,
+  expectedLockedChange,
+  recentlySpentInputs,
+  reconcilePendingOutgoing,
+} from './pending-outgoing';
+export type { PendingOutgoingTx } from './pending-outgoing';

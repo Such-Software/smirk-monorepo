@@ -24,13 +24,14 @@
  */
 
 import { PlatformStorage } from './platform';
+import type { PendingOutgoingTx } from './pending-outgoing';
 
 // ============================================================================
 // Schema
 // ============================================================================
 
 /** Bump on every breaking schema change; add a migration. */
-export const CURRENT_VERSION = 3;
+export const CURRENT_VERSION = 4;
 
 /**
  * The full session state shape. Every field is restorable on reload.
@@ -74,6 +75,16 @@ export interface SessionState {
     autoLockMinutes: number;
     theme: string;
   };
+
+  /**
+   * In-flight outgoing sends. Each entry holds the txHash + amount +
+   * fee returned from a successful broadcast/submit. Displayed
+   * available balance subtracts these so the user gets immediate
+   * feedback before the network scanner catches up. Entries age out
+   * per-asset (see `./pending-outgoing`). Survives popup-close,
+   * dies on browser-close — appropriate window for the use case.
+   */
+  pendingOutgoing: PendingOutgoingTx[];
 }
 
 export interface Route {
@@ -107,6 +118,7 @@ export const DEFAULT_SESSION_STATE: SessionState = {
     autoLockMinutes: 0, // safe default: lock immediately at session end
     theme: 'default',
   },
+  pendingOutgoing: [],
 };
 
 /**
@@ -145,6 +157,15 @@ export const MIGRATIONS: Record<number, Migration> = {
       ...prev,
       version: 3,
       ui: { ...prev.ui, theme: 'default' },
+    } satisfies SessionState;
+  },
+  // v3 → v4: add `pendingOutgoing` for sender-side in-flight tracking.
+  3: (s) => {
+    const prev = s as Omit<SessionState, 'pendingOutgoing'>;
+    return {
+      ...prev,
+      version: 4,
+      pendingOutgoing: [],
     } satisfies SessionState;
   },
 };

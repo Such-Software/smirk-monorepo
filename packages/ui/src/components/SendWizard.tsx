@@ -55,7 +55,36 @@ export interface SendFields extends Record<string, unknown> {
 }
 
 export type SendSubmitResult =
-  | { ok: true; txid: string }
+  | {
+      ok: true;
+      txid: string;
+      /**
+       * Atomic-unit amount sent to recipient. Optional for backward
+       * compat (the wizard core doesn't use it). The popup uses it
+       * when present to write a pendingOutgoing entry for instant
+       * post-send balance feedback.
+       */
+      amountAtomic?: bigint;
+      /** Atomic-unit fee paid. Same optional semantics as amountAtomic. */
+      feeAtomic?: bigint;
+      /**
+       * Sum of input atomic amounts consumed by this tx. Lets the
+       * popup compute the expected locked change (inputsTotal −
+       * amount − fee) for CryptoNote/Grin during the in-flight
+       * window — displayed as a `🔒 X.XX locked` preview until LWS
+       * reflects the actual change output.
+       */
+      inputsTotalAtomic?: bigint;
+      /**
+       * Chain-appropriate identifiers of the inputs this tx spent.
+       * Used by the popup to populate `pendingOutgoing.inputs` so a
+       * subsequent send can exclude them from selection (preventing
+       * mempool double-spend) and so balance refresh can reconcile
+       * the entry as soon as the network reflects the spend. Format
+       * matches `PendingOutgoingTx.inputs` in `@smirk/core`.
+       */
+      inputs?: string[];
+    }
   | { ok: false; error: string };
 
 /**
@@ -96,14 +125,24 @@ export interface SendWizardProps {
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
 
   /**
-   * Estimate the network fee in atomic units for one send of `assetId`
-   * (assuming a 2-output tx — recipient + change — and 1 input — the
-   * common case for Smirk's single-address scheme). Used by Compose to
-   * preview the fee for assets that don't have a user-tunable fee
-   * picker (XMR/WOW/Grin). Return `null` if the asset uses the picker
-   * tiers instead, or if the estimate isn't available yet.
+   * Estimate the network fee in atomic units for one send of `assetId`.
+   * Used by Compose to preview the fee for assets that don't have a
+   * user-tunable fee picker (XMR/WOW/Grin).
+   *
+   * `options.sweep` lets the caller request a fee for "sweep N inputs"
+   * vs the default "1-input typical" estimate — sweep TXs with many
+   * inputs run noticeably larger and the fee scales linearly, so a
+   * 1-input estimate underestimates by a significant margin for users
+   * with fragmented balances. The shell looks up the actual spendable
+   * output count from LWS / Electrum and feeds it in.
+   *
+   * Return `null` if the asset uses the picker tiers instead, or if
+   * the estimate isn't available yet.
    */
-  resolveSendFeeEstimate?: (assetId: string) => Promise<bigint | null>;
+  resolveSendFeeEstimate?: (
+    assetId: string,
+    options?: { sweep?: boolean },
+  ) => Promise<bigint | null>;
 
   /**
    * Build, sign, and broadcast. Wizard advances to "done" on success.
@@ -432,7 +471,10 @@ function Compose({
   parseAmount: (assetId: string, text: string) => bigint | null;
   resolveBalance: (assetId: string) => bigint;
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
-  resolveSendFeeEstimate?: (assetId: string) => Promise<bigint | null>;
+  resolveSendFeeEstimate?: (
+    assetId: string,
+    options?: { sweep?: boolean },
+  ) => Promise<bigint | null>;
   /**
    * Fires on every state change (amount text, fee tier, custom rate,
    * sweep toggle). Parent uses this to persist Compose state into
@@ -462,10 +504,16 @@ function Compose({
   const [customRateText, setCustomRateText] = useState<string>(
     initialCustomRate !== undefined ? String(initialCustomRate) : '',
   );
-  // Sweep depends on a known fee (so we can compute balance − fee). For
-  // non-UTXO chains, force-disable until Phase 2 wires it through the
-  // sendXmrWow / Grin handlers.
-  const [sweep, setSweep] = useState(usesFeePicker ? initialSweep : false);
+  // Sweep needs a knowable fee (so we can compute balance − fee).
+  //  - UTXO: selectedFeeSat from the tier picker.
+  //  - CryptoNote (XMR/WOW): estimatedFeeAtomic from
+  //    resolveSendFeeEstimate; the handler honors `sweep: true` and
+  //    consumes every spendable output, paying (sum − real_fee) to
+  //    the recipient.
+  //  - Mimblewimble (Grin): handler doesn't yet support sweep, so we
+  //    suppress the toggle below until that lands.
+  const sweepSupported = usesFeePicker || asset.family.family === 'cryptonote';
+  const [sweep, setSweep] = useState(sweepSupported ? initialSweep : false);
   const [tiers, setTiers] = useState<FeeTiers | null>(null);
   const [tiersError, setTiersError] = useState<string | null>(null);
   // For non-picker assets: live fee estimate fetched on mount via the
@@ -511,15 +559,21 @@ function Compose({
     };
   }, [assetId, resolveFeeRates, usesFeePicker]);
 
-  // For non-picker assets, fetch a live fee estimate on mount via the
-  // shell callback (popup hits LWS per_byte_fee + wasm.estimate_fee).
-  // Estimate assumes 1 input + 2 outputs (recipient + change), which
-  // is the typical case for Smirk's single-address scheme.
+  // For non-picker assets, fetch a live fee estimate via the shell
+  // callback (popup hits LWS per_byte_fee + wasm.estimate_fee). For
+  // normal sends we use the 1-input estimate (typical case for
+  // Smirk's single-address scheme). For sweep mode we pass
+  // `{ sweep: true }` so the shell sizes the estimate against the
+  // user's actual spendable-output count — wallets with fragmented
+  // balances would otherwise display a sweep amount that's larger
+  // than what they actually receive after the per-input fee scaling.
+  // Re-runs when `sweep` toggles so the displayed amount tracks the
+  // actual fee that will get applied.
   useEffect(() => {
     if (usesFeePicker || !resolveSendFeeEstimate) return;
     let alive = true;
     setEstimatedFeeAtomic(null);
-    resolveSendFeeEstimate(assetId).then(
+    resolveSendFeeEstimate(assetId, { sweep }).then(
       (fee) => {
         if (alive && fee !== null) setEstimatedFeeAtomic(fee);
       },
@@ -532,7 +586,7 @@ function Compose({
     return () => {
       alive = false;
     };
-  }, [assetId, usesFeePicker, resolveSendFeeEstimate]);
+  }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep]);
 
   // Selected rate for the standard tiers passes through `applyFloor` so
   // we never ship a rate at the protocol minimum that some nodes round
@@ -553,8 +607,23 @@ function Compose({
     selectedRate !== null ? feeForTier(selectedRate, sweep) : null;
 
   // In sweep mode, amount is implicit: balance − fee.
+  //  - UTXO: fee comes from the user-picked tier (selectedFeeSat).
+  //  - Non-UTXO (XMR/WOW): fee comes from the live estimate we
+  //    fetched via resolveSendFeeEstimate. The estimate is for 1
+  //    input but the actual sweep may consume more — the handler
+  //    recomputes against real N and pays the difference out of the
+  //    sweep amount, so the user receives slightly less than the
+  //    preview if their wallet has many small outputs. Honest
+  //    framing: it's "approximately your balance", not "exactly".
+  const sweepFee = usesFeePicker
+    ? selectedFeeSat !== null
+      ? BigInt(selectedFeeSat)
+      : null
+    : estimatedFeeAtomic;
   const sweepAmountAtomic =
-    sweep && selectedFeeSat !== null ? balanceAtomic - BigInt(selectedFeeSat) : null;
+    sweep && sweepFee !== null && balanceAtomic > sweepFee
+      ? balanceAtomic - sweepFee
+      : null;
 
   // Effective amount the user is trying to send (atomic):
   //  - sweep mode: balance − fee
@@ -640,7 +709,7 @@ function Compose({
             cursor: sweep ? 'not-allowed' : 'text',
           }}
         />
-        {usesFeePicker && (
+        {sweepSupported && (
           <button
             onClick={() => setSweep((s) => !s)}
             aria-pressed={sweep}
@@ -879,7 +948,10 @@ function Review({
   sweep: boolean;
   parseAmount: (assetId: string, text: string) => bigint | null;
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
-  resolveSendFeeEstimate?: (assetId: string) => Promise<bigint | null>;
+  resolveSendFeeEstimate?: (
+    assetId: string,
+    options?: { sweep?: boolean },
+  ) => Promise<bigint | null>;
   onSubmit: (args: { amountAtomic: bigint; feeRateSatPerVb: number }) => Promise<SendSubmitResult>;
 }) {
   const asset = mustGetAsset(assetId);
@@ -891,17 +963,19 @@ function Review({
 
   // Re-fetch the live fee estimate on mount for non-picker assets, same
   // pattern as Compose. Estimate may have shifted in the time it took
-  // the user to review.
+  // the user to review; in sweep mode the input count is significant
+  // so we tell the shell to size the estimate for the actual spendable
+  // output count.
   useEffect(() => {
     if (usesFeePicker || !resolveSendFeeEstimate) return;
     let alive = true;
-    resolveSendFeeEstimate(assetId).then((fee) => {
+    resolveSendFeeEstimate(assetId, { sweep }).then((fee) => {
       if (alive && fee !== null) setEstimatedFeeAtomic(fee);
     }, () => undefined);
     return () => {
       alive = false;
     };
-  }, [assetId, usesFeePicker, resolveSendFeeEstimate]);
+  }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep]);
 
   // Re-fetch tiers on mount — rates may have shifted since Compose loaded
   // them. Cheap insurance against signing a stale fee. (Skipped for
@@ -1002,10 +1076,42 @@ function DoneStep({
   onClose: () => void;
 }) {
   const explorerUrl = txid && assetId ? explorerTxUrl(assetId, txid) : null;
+  const [copied, setCopied] = useState(false);
+  const copyTxid = () => {
+    if (!txid) return;
+    void navigator.clipboard.writeText(txid).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    });
+  };
+  // Diagnostic — if we render the Done step without a txid, log so
+  // the next time this bug shows up we can read the cause from the
+  // console rather than guess. The wizard's inner onSubmit only
+  // patches `lastTxid` on result.ok, so an absent txid here means
+  // the wizard advanced without going through the success path
+  // (or the send-handler returned ok:true with a falsy txid).
+  if (!txid && typeof console !== 'undefined') {
+    console.warn('[smirk send] DoneStep rendered without txid', { assetId });
+  }
   return (
     <div style={{ textAlign: 'center', padding: '24px 16px' }}>
       <div style={{ fontSize: 40 }}>✓</div>
       <div style={{ fontSize: 16, fontWeight: 600, marginTop: 8 }}>Sent</div>
+      {!txid && (
+        <div
+          style={{
+            marginTop: 14,
+            fontSize: 12,
+            color: 'var(--smirk-fg-muted)',
+            lineHeight: 1.4,
+          }}
+        >
+          Transaction submitted, but the wizard didn't capture the txid.
+          <br />
+          Check the asset's history or the recipient address to confirm
+          it landed.
+        </div>
+      )}
       {txid && (
         <div style={{ marginTop: 14 }}>
           <div
@@ -1014,38 +1120,83 @@ function DoneStep({
               color: 'var(--smirk-fg-muted)',
               textTransform: 'uppercase',
               marginBottom: 4,
+              letterSpacing: '0.06em',
             }}
           >
             Transaction ID
           </div>
-          <div
+          {/* Click to copy. The data-no-uppercase attribute is the
+              opt-out hook for pixel themes (DMG/Workbench) that
+              uppercase everything — the hex itself should stay
+              mixed case so users can match against block explorers
+              that round-trip it verbatim. */}
+          <button
+            onClick={copyTxid}
+            data-no-uppercase
+            title="Click to copy"
             style={{
               fontFamily: 'var(--smirk-font-family-mono)',
               fontSize: 11,
               wordBreak: 'break-all',
-              padding: '6px 10px',
+              padding: '8px 10px',
               background: 'var(--smirk-bg-sunken)',
+              border: '1px solid var(--smirk-border)',
               borderRadius: 'var(--smirk-radius, 8px)',
+              color: 'inherit',
+              cursor: 'pointer',
+              width: '100%',
+              textAlign: 'center',
+              lineHeight: 1.3,
             }}
           >
             {txid}
-          </div>
-          {explorerUrl && (
-            <a
-              href={explorerUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+          </button>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              marginTop: 8,
+              justifyContent: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <button
+              onClick={copyTxid}
               style={{
-                display: 'inline-block',
-                marginTop: 8,
                 fontSize: 12,
-                color: 'var(--smirk-accent)',
-                textDecoration: 'underline',
+                padding: '6px 12px',
+                background: 'var(--smirk-bg-elevated)',
+                border: '1px solid var(--smirk-border-strong, var(--smirk-border))',
+                borderRadius: 'var(--smirk-radius, 8px)',
+                color: 'inherit',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
               }}
             >
-              View on explorer ↗
-            </a>
-          )}
+              {copied ? '✓ Copied' : '⧉ Copy'}
+            </button>
+            {explorerUrl && (
+              <a
+                href={explorerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontSize: 12,
+                  padding: '6px 12px',
+                  background: 'var(--smirk-accent)',
+                  color: 'var(--smirk-accent-fg)',
+                  borderRadius: 'var(--smirk-radius, 8px)',
+                  textDecoration: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  fontFamily: 'inherit',
+                  fontWeight: 600,
+                }}
+              >
+                Open in Explorer ↗
+              </a>
+            )}
+          </div>
         </div>
       )}
       <PrimaryButton onClick={onClose}>Done</PrimaryButton>

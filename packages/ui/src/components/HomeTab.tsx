@@ -25,6 +25,19 @@ export interface HomeAssetRow {
   balanceAtomic: bigint | number;
   /** Optional unconfirmed balance (mempool / pending). */
   pendingAtomic?: bigint | number;
+  /**
+   * Optional on-chain-but-locked balance (CryptoNote lock window).
+   * Renders as a `🔒 X.XX locked` subline beneath the amount when
+   * non-zero.
+   */
+  lockedAtomic?: bigint | number;
+  /**
+   * Optional outgoing-in-flight total (sender-side pendingOutgoing,
+   * see `@smirk/core/state/pending-outgoing`). Already subtracted from
+   * `balanceAtomic` by the caller — this is only for the
+   * `↑ X.XX sending` subline so the user knows where it went.
+   */
+  sendingAtomic?: bigint | number;
   /** Optional fiat value already formatted (e.g. `"$12.34"`). */
   fiatDisplay?: string;
   /** Loading state for this row's amount. */
@@ -111,6 +124,8 @@ export function HomeTab({
               assetId={row.assetId}
               balanceAtomic={row.balanceAtomic}
               {...(row.pendingAtomic !== undefined ? { pendingAtomic: row.pendingAtomic } : {})}
+              {...(row.lockedAtomic !== undefined ? { lockedAtomic: row.lockedAtomic } : {})}
+              {...(row.sendingAtomic !== undefined ? { sendingAtomic: row.sendingAtomic } : {})}
               {...(row.fiatDisplay !== undefined ? { fiatDisplay: row.fiatDisplay } : {})}
               {...(row.loading !== undefined ? { loading: row.loading } : {})}
               {...(row.hidden !== undefined ? { hidden: row.hidden } : {})}

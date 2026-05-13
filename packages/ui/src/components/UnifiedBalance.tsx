@@ -25,10 +25,21 @@ export interface UnifiedBalanceProps {
    */
   totalDisplay: string | null;
   /**
-   * Already-formatted pending total. Omit (or pass `null`) when there's
-   * nothing pending. Empty string suppresses the row.
+   * Already-formatted pending-incoming total. Omit/null/"" suppresses
+   * the row.
    */
   pendingDisplay?: string | null;
+  /**
+   * Already-formatted locked total (on-chain but inside lock window —
+   * CryptoNote chains only). Omit/null/"" suppresses the row.
+   */
+  lockedDisplay?: string | null;
+  /**
+   * Already-formatted "in-flight outgoing" total across all assets
+   * (sender-side pendingOutgoing — see
+   * `@smirk/core/state/pending-outgoing`). Omit/null/"" suppresses.
+   */
+  sendingDisplay?: string | null;
   /**
    * Currently active denomination label, shown subtly under the total
    * (e.g. `"USD"`, `"BTC"`, `"sat"`). Helps the user understand what
@@ -61,6 +72,8 @@ const HIDDEN_PLACEHOLDER = '••••••';
 export function UnifiedBalance({
   totalDisplay,
   pendingDisplay,
+  lockedDisplay,
+  sendingDisplay,
   denominationLabel,
   onCycleDenomination,
   onPickDenomination,
@@ -71,6 +84,10 @@ export function UnifiedBalance({
 }: UnifiedBalanceProps) {
   const showPending =
     !hidden && !loading && pendingDisplay !== undefined && pendingDisplay !== null && pendingDisplay !== '';
+  const showLocked =
+    !hidden && !loading && lockedDisplay !== undefined && lockedDisplay !== null && lockedDisplay !== '';
+  const showSending =
+    !hidden && !loading && sendingDisplay !== undefined && sendingDisplay !== null && sendingDisplay !== '';
 
   const total = hidden
     ? HIDDEN_PLACEHOLDER
@@ -163,16 +180,36 @@ export function UnifiedBalance({
         </div>
       )}
 
-      {showPending && (
+      {(showPending || showLocked || showSending) && (
         <div
           style={{
             fontSize: 12,
             color: 'var(--smirk-fg-muted)',
             marginTop: 4,
+            display: 'flex',
+            gap: 10,
+            flexWrap: 'wrap',
+            justifyContent: 'center',
           }}
-          title="Unconfirmed / mempool / swap-in-progress"
         >
-          + {pendingDisplay} pending
+          {showSending && (
+            <span
+              style={{ color: 'var(--smirk-warning)' }}
+              title="In-flight outgoing transactions — waiting for network confirmation"
+            >
+              ↑ {sendingDisplay} sending
+            </span>
+          )}
+          {showPending && (
+            <span title="Unconfirmed / mempool / swap-in-progress">
+              + {pendingDisplay} pending
+            </span>
+          )}
+          {showLocked && (
+            <span title="On-chain but inside the protocol lock window (XMR ≥10 confs, WOW ≥4 confs to be spendable)">
+              🔒 {lockedDisplay} locked
+            </span>
+          )}
         </div>
       )}
     </section>
