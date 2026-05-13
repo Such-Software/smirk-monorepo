@@ -96,6 +96,16 @@ export interface SendWizardProps {
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
 
   /**
+   * Estimate the network fee in atomic units for one send of `assetId`
+   * (assuming a 2-output tx — recipient + change — and 1 input — the
+   * common case for Smirk's single-address scheme). Used by Compose to
+   * preview the fee for assets that don't have a user-tunable fee
+   * picker (XMR/WOW/Grin). Return `null` if the asset uses the picker
+   * tiers instead, or if the estimate isn't available yet.
+   */
+  resolveSendFeeEstimate?: (assetId: string) => Promise<bigint | null>;
+
+  /**
    * Build, sign, and broadcast. Wizard advances to "done" on success.
    * `sweep: true` → 1-output tx, `amountAtomic` is the final recipient
    * amount the Compose screen computed (= balance − fee).
@@ -185,6 +195,9 @@ export function SendWizard(props: SendWizardProps) {
           parseAmount={props.parseAmount}
           resolveBalance={props.resolveBalance}
           resolveFeeRates={props.resolveFeeRates}
+          {...(props.resolveSendFeeEstimate
+            ? { resolveSendFeeEstimate: props.resolveSendFeeEstimate }
+            : {})}
           onChange={(state) => {
             // Persist on every edit so closing the popup mid-Compose
             // doesn't lose what was typed. Re-mount reads from the same
@@ -222,6 +235,9 @@ export function SendWizard(props: SendWizardProps) {
             sweep={fields.sweep ?? false}
             parseAmount={props.parseAmount}
             resolveFeeRates={props.resolveFeeRates}
+            {...(props.resolveSendFeeEstimate
+              ? { resolveSendFeeEstimate: props.resolveSendFeeEstimate }
+              : {})}
             onSubmit={async ({ amountAtomic, feeRateSatPerVb }) => {
               const result = await props.onSubmit({
                 fromAssetId: fields.fromAssetId!,
@@ -326,7 +342,10 @@ function EnterAddress({
           setError(null);
         }}
         placeholder={`${asset.displayName} address`}
-        rows={3}
+        // 5 rows so 95-char cryptonote addresses fit without scrolling
+        // even in pixel themes (DMG, Workbench) where Press Start 2P
+        // wraps to ~25 chars per row.
+        rows={5}
         autoFocus
         style={textareaStyle}
       />
@@ -400,6 +419,7 @@ function Compose({
   parseAmount,
   resolveBalance,
   resolveFeeRates,
+  resolveSendFeeEstimate,
   onChange,
   onContinue,
 }: {
@@ -412,6 +432,7 @@ function Compose({
   parseAmount: (assetId: string, text: string) => bigint | null;
   resolveBalance: (assetId: string) => bigint;
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
+  resolveSendFeeEstimate?: (assetId: string) => Promise<bigint | null>;
   /**
    * Fires on every state change (amount text, fee tier, custom rate,
    * sweep toggle). Parent uses this to persist Compose state into
@@ -432,14 +453,25 @@ function Compose({
 }) {
   const asset = mustGetAsset(assetId);
   const balanceAtomic = resolveBalance(assetId);
+  // UTXO chains (BTC/LTC) let the user pick a fee tier; CryptoNote
+  // (XMR/WOW) and Mimblewimble (Grin) take the fee from the network /
+  // wallet logic and don't surface a picker.
+  const usesFeePicker = asset.family.family === 'utxo';
   const [amountText, setAmountText] = useState(initialAmountText);
   const [tier, setTier] = useState<FeeTier>(initialTier);
   const [customRateText, setCustomRateText] = useState<string>(
     initialCustomRate !== undefined ? String(initialCustomRate) : '',
   );
-  const [sweep, setSweep] = useState(initialSweep);
+  // Sweep depends on a known fee (so we can compute balance − fee). For
+  // non-UTXO chains, force-disable until Phase 2 wires it through the
+  // sendXmrWow / Grin handlers.
+  const [sweep, setSweep] = useState(usesFeePicker ? initialSweep : false);
   const [tiers, setTiers] = useState<FeeTiers | null>(null);
   const [tiersError, setTiersError] = useState<string | null>(null);
+  // For non-picker assets: live fee estimate fetched on mount via the
+  // shell-supplied callback. `null` = no callback wired or still
+  // loading; otherwise a bigint atomic-units estimate.
+  const [estimatedFeeAtomic, setEstimatedFeeAtomic] = useState<bigint | null>(null);
 
   // Persist Compose state to wizard.fields on every change so the
   // popup-close + reopen path restores exactly what was typed.
@@ -458,8 +490,11 @@ function Compose({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amountText, tier, customForPersist, sweep]);
 
-  // Load fee tiers on mount.
+  // Load fee tiers on mount. Skip for non-UTXO assets — their fees
+  // come from the send-handler at sign-time, not a Compose-screen
+  // picker.
   useEffect(() => {
+    if (!usesFeePicker) return;
     let alive = true;
     setTiers(null);
     setTiersError(null);
@@ -474,7 +509,30 @@ function Compose({
     return () => {
       alive = false;
     };
-  }, [assetId, resolveFeeRates]);
+  }, [assetId, resolveFeeRates, usesFeePicker]);
+
+  // For non-picker assets, fetch a live fee estimate on mount via the
+  // shell callback (popup hits LWS per_byte_fee + wasm.estimate_fee).
+  // Estimate assumes 1 input + 2 outputs (recipient + change), which
+  // is the typical case for Smirk's single-address scheme.
+  useEffect(() => {
+    if (usesFeePicker || !resolveSendFeeEstimate) return;
+    let alive = true;
+    setEstimatedFeeAtomic(null);
+    resolveSendFeeEstimate(assetId).then(
+      (fee) => {
+        if (alive && fee !== null) setEstimatedFeeAtomic(fee);
+      },
+      () => {
+        // Swallow estimate failures — fall back to the generic
+        // "computed at send time" copy below. A failed estimate
+        // shouldn't block the user from continuing.
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [assetId, usesFeePicker, resolveSendFeeEstimate]);
 
   // Selected rate for the standard tiers passes through `applyFloor` so
   // we never ship a rate at the protocol minimum that some nodes round
@@ -522,10 +580,24 @@ function Compose({
     effectiveAtomic + BigInt(selectedFeeSat) > balanceAtomic
   ) {
     validationError = 'Insufficient funds (amount + fee exceeds balance)';
+  } else if (
+    !usesFeePicker &&
+    effectiveAtomic !== null &&
+    effectiveAtomic > balanceAtomic
+  ) {
+    // For non-UTXO chains we don't know the fee at Compose time; the
+    // handler computes it. The picker-floor check above is skipped, so
+    // do a coarse `amount > balance` check here. The handler will still
+    // return a precise "Insufficient funds: have X need amount + fee"
+    // if the fee pushes us over.
+    validationError = 'Insufficient funds';
   }
 
-  const canContinue =
-    selectedFeeSat !== null && effectiveAtomic !== null && effectiveAtomic > 0n && !validationError;
+  // For UTXO assets, gate Continue on a picked fee. For others, the
+  // fee is computed at sign-time, so amount-only validation is enough.
+  const canContinue = usesFeePicker
+    ? selectedFeeSat !== null && effectiveAtomic !== null && effectiveAtomic > 0n && !validationError
+    : effectiveAtomic !== null && effectiveAtomic > 0n && !validationError;
 
   const totalAtomic =
     effectiveAtomic !== null && selectedFeeSat !== null
@@ -545,7 +617,9 @@ function Compose({
         Balance: <strong>{formatAmount(balanceAtomic, assetId, 8)}</strong> {asset.ticker}
       </div>
 
-      {/* Amount field + Max */}
+      {/* Amount field + Max. Max only renders for UTXO chains — for
+          CryptoNote/Mimblewimble we don't know the fee at compose
+          time so sweep is deferred to a Phase-2 handler. */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
         <input
           type="text"
@@ -566,19 +640,21 @@ function Compose({
             cursor: sweep ? 'not-allowed' : 'text',
           }}
         />
-        <button
-          onClick={() => setSweep((s) => !s)}
-          aria-pressed={sweep}
-          style={{
-            ...maxButtonStyle,
-            background: sweep
-              ? 'color-mix(in srgb, var(--smirk-accent) 30%, var(--smirk-bg-elevated))'
-              : 'var(--smirk-bg-elevated)',
-            color: sweep ? 'var(--smirk-accent)' : 'var(--smirk-fg)',
-          }}
-        >
-          MAX
-        </button>
+        {usesFeePicker && (
+          <button
+            onClick={() => setSweep((s) => !s)}
+            aria-pressed={sweep}
+            style={{
+              ...maxButtonStyle,
+              background: sweep
+                ? 'color-mix(in srgb, var(--smirk-accent) 30%, var(--smirk-bg-elevated))'
+                : 'var(--smirk-bg-elevated)',
+              color: sweep ? 'var(--smirk-accent)' : 'var(--smirk-fg)',
+            }}
+          >
+            MAX
+          </button>
+        )}
       </div>
 
       {validationError && <FieldError>{validationError}</FieldError>}
@@ -586,8 +662,8 @@ function Compose({
       {/* Recipient — read-only here, tap to edit goes back */}
       <ReviewRow label="To" value={truncateMiddle(toAddress, 24)} mono small />
 
-      {/* Fee tier picker */}
-      <div style={{ marginTop: 4 }}>
+      {/* Fee tier picker (UTXO chains only) */}
+      {usesFeePicker && <div style={{ marginTop: 4 }}>
         <div
           style={{
             fontSize: 10,
@@ -666,26 +742,56 @@ function Compose({
             )}
           </div>
         )}
-      </div>
+      </div>}
 
-      {/* Total */}
-      <div
-        style={{
-          marginTop: 4,
-          padding: '6px 10px',
-          background: 'var(--smirk-bg-sunken)',
-          borderRadius: 'var(--smirk-radius, 8px)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontSize: 12,
-        }}
-      >
-        <span style={{ color: 'var(--smirk-fg-muted)' }}>Total (amount + fee)</span>
-        <strong style={{ fontFamily: 'var(--smirk-font-family-mono)' }}>
-          {totalAtomic !== null ? formatAmount(totalAtomic, assetId, 8) : '—'} {asset.ticker}
-        </strong>
-      </div>
+      {/* Fee preview for non-picker assets. When the shell wires
+          resolveSendFeeEstimate, show the live estimate (atomic →
+          formatted); otherwise fall back to the generic copy so the
+          user at least knows where the fee comes from. */}
+      {!usesFeePicker && (
+        <div
+          style={{
+            marginTop: 4,
+            padding: '6px 10px',
+            background: 'var(--smirk-bg-sunken)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: 12,
+          }}
+        >
+          <span style={{ color: 'var(--smirk-fg-muted)' }}>Network fee (est.)</span>
+          <strong style={{ fontFamily: 'var(--smirk-font-family-mono)' }}>
+            {estimatedFeeAtomic !== null
+              ? `${formatAmount(estimatedFeeAtomic, assetId, 8)} ${asset.ticker}`
+              : '…'}
+          </strong>
+        </div>
+      )}
+
+      {/* Total. For non-picker assets we don't know the fee yet, so the
+          "amount + fee" total row is suppressed; the Review screen will
+          display the final fee once the handler has computed it. */}
+      {usesFeePicker && (
+        <div
+          style={{
+            marginTop: 4,
+            padding: '6px 10px',
+            background: 'var(--smirk-bg-sunken)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: 12,
+          }}
+        >
+          <span style={{ color: 'var(--smirk-fg-muted)' }}>Total (amount + fee)</span>
+          <strong style={{ fontFamily: 'var(--smirk-font-family-mono)' }}>
+            {totalAtomic !== null ? formatAmount(totalAtomic, assetId, 8) : '—'} {asset.ticker}
+          </strong>
+        </div>
+      )}
 
       <div style={{ marginTop: 4 }}>
         <Button
@@ -762,6 +868,7 @@ function Review({
   sweep,
   parseAmount,
   resolveFeeRates,
+  resolveSendFeeEstimate,
   onSubmit,
 }: {
   assetId: string;
@@ -772,18 +879,36 @@ function Review({
   sweep: boolean;
   parseAmount: (assetId: string, text: string) => bigint | null;
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
+  resolveSendFeeEstimate?: (assetId: string) => Promise<bigint | null>;
   onSubmit: (args: { amountAtomic: bigint; feeRateSatPerVb: number }) => Promise<SendSubmitResult>;
 }) {
   const asset = mustGetAsset(assetId);
+  const usesFeePicker = asset.family.family === 'utxo';
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tiers, setTiers] = useState<FeeTiers | null>(null);
+  const [estimatedFeeAtomic, setEstimatedFeeAtomic] = useState<bigint | null>(null);
+
+  // Re-fetch the live fee estimate on mount for non-picker assets, same
+  // pattern as Compose. Estimate may have shifted in the time it took
+  // the user to review.
+  useEffect(() => {
+    if (usesFeePicker || !resolveSendFeeEstimate) return;
+    let alive = true;
+    resolveSendFeeEstimate(assetId).then((fee) => {
+      if (alive && fee !== null) setEstimatedFeeAtomic(fee);
+    }, () => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [assetId, usesFeePicker, resolveSendFeeEstimate]);
 
   // Re-fetch tiers on mount — rates may have shifted since Compose loaded
   // them. Cheap insurance against signing a stale fee. (Skipped for
-  // custom tier — user explicitly set their rate.)
+  // custom tier — user explicitly set their rate; and for non-picker
+  // assets — their fee comes from the handler, not a tier.)
   useEffect(() => {
-    if (feeTier === 'custom') return;
+    if (!usesFeePicker || feeTier === 'custom') return;
     let alive = true;
     resolveFeeRates(assetId).then((t) => {
       if (alive) setTiers(t);
@@ -791,14 +916,16 @@ function Review({
     return () => {
       alive = false;
     };
-  }, [assetId, feeTier, resolveFeeRates]);
+  }, [assetId, feeTier, resolveFeeRates, usesFeePicker]);
 
   // Same rate-resolution as Compose: standard tiers get the relay floor
   // (so 'normal' at 1.0 sat/vB displays + ships as 1.1); Custom is
-  // verbatim.
+  // verbatim. For non-picker assets the rate is meaningless — the
+  // dispatcher ignores feeRateSatPerVb for XMR/WOW/Grin.
   const electrumRate = feeTier === 'custom' ? null : (tiers?.[feeTier] ?? null);
-  const rate: number | null =
-    feeTier === 'custom'
+  const rate: number | null = !usesFeePicker
+    ? 0
+    : feeTier === 'custom'
       ? (customFeeRate ?? null)
       : electrumRate !== null
         ? applyFloor(electrumRate)
@@ -838,10 +965,21 @@ function Review({
         }
       />
       <ReviewRow label="To" value={toAddress} mono />
-      <ReviewRow
-        label="Fee tier"
-        value={`${feeTier} (${rate !== null && rate !== undefined ? `${rate} sat/vB` : 'loading…'})`}
-      />
+      {usesFeePicker ? (
+        <ReviewRow
+          label="Fee tier"
+          value={`${feeTier} (${rate !== null && rate !== undefined ? `${rate} sat/vB` : 'loading…'})`}
+        />
+      ) : (
+        <ReviewRow
+          label="Network fee"
+          value={
+            estimatedFeeAtomic !== null
+              ? `~${formatAmountWithAsset(estimatedFeeAtomic, asset, 8)} ${asset.ticker}`
+              : 'Estimating…'
+          }
+        />
+      )}
       {error && <FieldError>{error}</FieldError>}
       <PrimaryButton disabled={submitting || !canSend} onClick={handleSubmit}>
         {submitting ? 'Sending…' : sweep ? 'Send Max 🔓' : 'Send 🔓'}

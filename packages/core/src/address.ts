@@ -22,8 +22,17 @@ import { keccak_256 } from '@noble/hashes/sha3';
 const NETWORKS = {
   btc: { bech32: 'bc', pubkeyHash: 0x00, scriptHash: 0x05 },
   ltc: { bech32: 'ltc', pubkeyHash: 0x30, scriptHash: 0x32 },
+  // Cryptonote network prefixes are encoded as varints in the address
+  // payload. Values from upstream `cryptonote_config.h`:
+  //   XMR mainnet: address=18 (0x12), integrated=19 (0x13), subaddress=42 (0x2A)
+  //   WOW mainnet: address=4146 (0x1032), integrated=4148 (0x1034),
+  //                subaddress=12208 (0x2FB0)
+  // Empirically verified 2026-05-12: a WOW subaddress straight from Stack
+  // Wallet (`WW3pXrjga...CCM5ge`) decodes to varint prefix 12208 — the
+  // previous constants `integratedPrefix: 4147` and `subaddressPrefix:
+  // 6810` were both wrong and silently failed every WOW subaddress send.
   xmr: { addressPrefix: 18, integratedPrefix: 19, subaddressPrefix: 42 },
-  wow: { addressPrefix: 4146, integratedPrefix: 4147, subaddressPrefix: 6810 },
+  wow: { addressPrefix: 4146, integratedPrefix: 4148, subaddressPrefix: 12208 },
 } as const;
 
 // ============================================================================

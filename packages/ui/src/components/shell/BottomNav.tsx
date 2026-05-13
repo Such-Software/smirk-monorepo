@@ -26,7 +26,7 @@ const TABS: TabConfig[] = [
 ];
 
 export function BottomNav({ orientation = 'horizontal' }: BottomNavProps) {
-  const { tab: activeTab, switchTab } = useRoute();
+  const { tab: activeTab, switchTab, navigate, route } = useRoute();
 
   const isVertical = orientation === 'vertical';
 
@@ -44,12 +44,23 @@ export function BottomNav({ orientation = 'horizontal' }: BottomNavProps) {
     >
       {TABS.map((t) => {
         const active = t.id === activeTab;
+        // Mobile UX convention: tapping the *current* tab pops to the
+        // tab root (escapes any drill-down like home/send or
+        // home/asset/btc). Tapping a *different* tab uses switchTab,
+        // which remembers each tab's last sub-route so coming back
+        // resumes where you were. Pre-fix, every tap went through
+        // switchTab and restored the drill-down — making the Home
+        // button useless once you'd opened Send or Receive.
+        const onTabClick =
+          active && route.current !== t.id
+            ? () => void navigate(t.id)
+            : () => void switchTab(t.id);
         return (
           <button
             key={t.id}
             role="tab"
             aria-selected={active}
-            onClick={() => switchTab(t.id)}
+            onClick={onTabClick}
             class={['smirk-bottom-nav__tab', active && 'smirk-bottom-nav__tab--active']
               .filter(Boolean)
               .join(' ')}

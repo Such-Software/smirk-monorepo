@@ -102,6 +102,12 @@ const verifyKeyImage = async ({
   return result.data;
 };
 
+function bytesToHex(b: Uint8Array): string {
+  return Array.from(b)
+    .map((x) => x.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 /**
  * Map asset registry `iconKey` → bundled coin SVG path. The extension
  * package owns its own icon assets; `@smirk/ui` stays asset-free.
@@ -538,6 +544,29 @@ function HomeRouter({
           }
           return { fast: r.data.fast, normal: r.data.normal, slow: r.data.slow };
         }}
+        resolveSendFeeEstimate={async (assetId) => {
+          // Live fee preview for assets without a sat/vB tier picker.
+          // Pulls per_byte_fee + fee_mask from LWS unspent_outs (the
+          // same numbers the send-handler uses at sign time) and asks
+          // wasm.estimateFee for the rounded fee assuming 1 input,
+          // 2 outputs — the typical case for our single-address scheme.
+          if (assetId !== 'xmr' && assetId !== 'wow') return null;
+          const fromAddress = wallet.addresses[assetId];
+          if (!fromAddress) return null;
+          const viewKeyHex = bytesToHex(wallet.keys[assetId].privateViewKey);
+          const unspent = await api.getUnspentOuts(assetId, fromAddress, viewKeyHex);
+          if (unspent.error || !unspent.data) return null;
+          const { per_byte_fee, fee_mask } = unspent.data;
+          const feeJson = wasmMonero.estimateFee(
+            1,
+            2,
+            BigInt(per_byte_fee),
+            BigInt(fee_mask),
+          );
+          const parsed = JSON.parse(feeJson) as { success: boolean; data?: number };
+          if (!parsed.success || parsed.data === undefined) return null;
+          return BigInt(parsed.data);
+        }}
         onSubmit={(fields) => send(wallet, fields)}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
@@ -786,6 +815,22 @@ function validateAddress(assetId: string, addr: string): string | null {
   if (ok) return null;
 
   const ticker = mustGetAsset(assetId).ticker;
+
+  // For CryptoNote chains (XMR/WOW), if the decode failed, look for the
+  // first character outside the Monero base58 alphabet and surface it
+  // — copy-paste from a web/chat context often introduces `0`, `O`,
+  // `I`, `l`, or HTML-escape gunk (`&`, `;`) that's not in the
+  // alphabet. The generic "not a valid address" doesn't help the user
+  // figure out which char to retype.
+  if (assetId === 'xmr' || assetId === 'wow') {
+    const cnAlphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    for (let i = 0; i < trimmed.length; i++) {
+      if (!cnAlphabet.includes(trimmed[i]!)) {
+        return `Not a valid ${ticker} address — char '${trimmed[i]}' at position ${i + 1} isn't in base58 (likely copy-paste mangled)`;
+      }
+    }
+  }
+
   return `Not a valid ${ticker} address`;
 }
 

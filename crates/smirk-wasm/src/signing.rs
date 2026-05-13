@@ -297,10 +297,15 @@ fn parse_address(address: &str, network: Network) -> Result<MoneroAddress, Strin
 
 /// Parse a Wownero address manually.
 ///
-/// Wownero prefixes from cryptonote_config.h:
-/// - Standard: 4146 (varint: [0xB2, 0x20])
-/// - Integrated: 6810 (varint: [0x9A, 0x35])
-/// - Subaddress: 12208 (varint: [0xB0, 0x5F])
+/// Wownero prefixes from upstream `cryptonote_config.h`:
+/// - Standard:    4146  (0x1032, varint [0xB2, 0x20])
+/// - Integrated:  4148  (0x1034, varint [0xB4, 0x20])
+/// - Subaddress: 12208  (0x2FB0, varint [0xB0, 0x5F])
+///
+/// Pre-2026-05-12: the integrated arm was 6810, which doesn't match any
+/// real Wownero address — phantom value from a stale doc. Verified by
+/// round-tripping a Stack-Wallet subaddress (`WW3pXrjga...CCM5ge` →
+/// prefix 12208) and aligning with current upstream constants.
 fn parse_wownero_address(address: &str, network: Network) -> Result<MoneroAddress, String> {
     use monero_base58::decode_check;
 
@@ -315,7 +320,7 @@ fn parse_wownero_address(address: &str, network: Network) -> Result<MoneroAddres
     // Determine address type from prefix
     let (is_subaddress, has_payment_id) = match prefix {
         4146 => (false, false),   // Standard
-        6810 => (false, true),    // Integrated
+        4148 => (false, true),    // Integrated
         12208 => (true, false),   // Subaddress
         _ => return Err(format!("Unknown Wownero prefix: {}", prefix)),
     };

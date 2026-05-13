@@ -39,25 +39,30 @@ export function Button({
   fullWidth = true,
   class: className,
 }: ButtonProps) {
+  // Read colors from theme tokens (set as CSS custom properties by
+  // applyTheme) instead of hardcoding. Pre-fix this used #8b5cf6 (the
+  // Smirk-Dark purple) for every primary button on every theme, so
+  // DMG / Workbench / etc. all had jarring purple buttons against
+  // their palettes. Tokens always inherit from the active theme.
   const styles = (() => {
     switch (variant) {
       case 'primary':
         return {
-          background: '#8b5cf6',
-          color: '#ffffff',
+          background: 'var(--smirk-accent)',
+          color: 'var(--smirk-accent-fg)',
           border: 'none',
         };
       case 'secondary':
         return {
           background: 'transparent',
           color: 'inherit',
-          border: '1px solid rgba(255,255,255,0.18)',
+          border: '1px solid var(--smirk-border-strong, var(--smirk-border))',
         };
       case 'danger':
         return {
-          background: 'rgba(239, 68, 68, 0.15)',
-          color: '#ef4444',
-          border: '1px solid rgba(239, 68, 68, 0.4)',
+          background: 'color-mix(in srgb, var(--smirk-negative) 15%, transparent)',
+          color: 'var(--smirk-negative)',
+          border: '1px solid color-mix(in srgb, var(--smirk-negative) 40%, transparent)',
         };
     }
   })();

@@ -24,9 +24,31 @@ import {
 import { mustGetAsset } from '@smirk/assets';
 import {
   bitcoin as wasmBitcoin,
+  monero as wasmMonero,
   type BtcNetwork,
 } from '@smirk/wasm';
 import type { SendSubmitResult } from '@smirk/ui';
+
+function bytesToHex(b: Uint8Array): string {
+  return Array.from(b)
+    .map((x) => x.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Parse a `WasmResult` envelope JSON (`{ success, data?, error? }`) and
+ * return `data` on success. Throws with the envelope's `error` on failure.
+ */
+function parseWasmResult<T>(json: string): T {
+  const parsed = JSON.parse(json) as { success: boolean; data?: T; error?: string };
+  if (!parsed.success) {
+    throw new Error(parsed.error ?? 'wasm call returned success=false with no error');
+  }
+  if (parsed.data === undefined) {
+    throw new Error('wasm call returned success=true with no data');
+  }
+  return parsed.data;
+}
 
 /**
  * P2WPKH transaction-size estimator (BIP-141 vsize).
@@ -314,6 +336,219 @@ async function sendBtcLtc(
 }
 
 /**
+ * Send XMR or WOW.
+ *
+ * Flow: get_unspent_outs → greedy input selection (iterating fee estimate
+ * with the wasm helper) → get_random_outs (ring-size − 1 decoys per
+ * input, distributed across inputs) → wasm.sign_transaction → submitLwsTx
+ * with `recipient_address` + `amount` + `tx_hash` so the backend can
+ * insert a `pending_transactions` row for instant smirk-to-smirk pending
+ * detection (only fires when the recipient is a registered Smirk address;
+ * backend silently skips for external sends — see legacy commit `3afce50`).
+ *
+ * No fee picker, no sweep yet. Fee comes from LWS's `per_byte_fee`
+ * (rounded to `fee_mask`); change goes back to the sender's single
+ * address (Smirk uses one main address per asset — no subaddresses).
+ *
+ * Privacy-critical: every transaction must use a fresh `outgoing_view_key`
+ * from OS randomness. That happens inside `wasm.sign_transaction` —
+ * NEVER hardcoded, never zero-init. Pre-2026-05-10 the wasm had a
+ * `Zeroizing::new([0u8; 32])` bug there that killed amount privacy on
+ * every Smirk XMR/WOW tx; the regression test
+ * `test_outgoing_view_key_is_fresh_per_call` guards it now.
+ */
+async function sendXmrWow(
+  wallet: UnlockedWallet,
+  asset: 'xmr' | 'wow',
+  amountAtomic: bigint,
+  toAddress: string,
+): Promise<SendSubmitResult> {
+  const fromAddress = wallet.addresses[asset];
+  if (!fromAddress) {
+    return { ok: false, error: `No ${asset.toUpperCase()} address in wallet` };
+  }
+  const keys = wallet.keys[asset];
+  const viewKeyHex = bytesToHex(keys.privateViewKey);
+  const spendKeyHex = bytesToHex(keys.privateSpendKey);
+
+  // 1. Fetch unspent outputs from LWS. The endpoint applies a server-side
+  //    lock-window cushion (XMR ≥10 confs, WOW ≥4 confs) so anything
+  //    returned here is past lock-time. BUT LWS still returns outputs
+  //    that look spendable to it without the spend key — including ones
+  //    we've already spent (the spend-key-images list ships candidates
+  //    the daemon flagged, and we have to verify them ourselves).
+  const unspentResp = await api.getUnspentOuts(asset, fromAddress, viewKeyHex);
+  if (unspentResp.error || !unspentResp.data) {
+    return { ok: false, error: unspentResp.error ?? 'Failed to fetch unspent outputs' };
+  }
+  const { outputs: lwsOutputs, per_byte_fee, fee_mask } = unspentResp.data;
+  if (lwsOutputs.length === 0) {
+    return { ok: false, error: 'No spendable outputs at this address' };
+  }
+
+  // 1a. Filter out already-spent outputs by computing the real key
+  //     image for each owned output and matching it against the
+  //     server's `spend_key_images` candidate list. This is the same
+  //     verification balance display does — without it, the largest-
+  //     first selection happily picks an already-spent output and the
+  //     daemon rejects at submit time with "key image already in chain"
+  //     surfaced as a 500. Bug observed 2026-05-12 on second WOW send.
+  const spendableOutputs: typeof lwsOutputs = [];
+  for (const out of lwsOutputs) {
+    if (out.spend_key_images.length === 0) {
+      // Nothing for the server to claim; output is definitely unspent.
+      spendableOutputs.push(out);
+      continue;
+    }
+    let computedKi: string;
+    try {
+      const kiJson = wasmMonero.computeKeyImage(
+        viewKeyHex,
+        spendKeyHex,
+        out.tx_pub_key,
+        out.index,
+      );
+      computedKi = parseWasmResult<string>(kiJson);
+    } catch (e) {
+      // Failure to compute key image is unusual; fall back to treating
+      // this output as spent to be safe (would rather skip than risk
+      // double-spend rejection at submit).
+      console.warn('[smirk send xmr/wow] key-image compute failed; skipping output', {
+        global_index: out.global_index,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      continue;
+    }
+    const computedLower = computedKi.toLowerCase();
+    const isSpent = out.spend_key_images.some(
+      (ki) => ki.toLowerCase() === computedLower,
+    );
+    if (!isSpent) spendableOutputs.push(out);
+  }
+  if (spendableOutputs.length === 0) {
+    return {
+      ok: false,
+      error: 'No unspent outputs available — recent sends may still be pending. Try again in a minute.',
+    };
+  }
+
+  // 2. Greedy input selection over the spendable (unspent) set. Each
+  //    loop adds the next-largest output, asks the wasm helper for the
+  //    resulting fee at (n inputs, 2 outputs), and stops when
+  //    sum(inputs) ≥ amount + fee. RingCT always carries a change
+  //    output, so num_outputs is always 2.
+  const sortedOutputs = [...spendableOutputs].sort((a, b) => b.amount - a.amount);
+  const target = amountAtomic;
+  if (target > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return { ok: false, error: 'Amount exceeds JS-safe-integer range' };
+  }
+  const feePerByteBig = BigInt(per_byte_fee);
+  const feeMaskBig = BigInt(fee_mask);
+
+  const selected: typeof sortedOutputs = [];
+  let selectedTotal = 0n;
+  let feeAtomic = 0n;
+  let covered = false;
+  for (const out of sortedOutputs) {
+    selected.push(out);
+    selectedTotal += BigInt(out.amount);
+    const feeJson = wasmMonero.estimateFee(selected.length, 2, feePerByteBig, feeMaskBig);
+    let feeNum: number;
+    try {
+      feeNum = parseWasmResult<number>(feeJson);
+    } catch (e) {
+      return { ok: false, error: `Fee estimate failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    feeAtomic = BigInt(feeNum);
+    if (selectedTotal >= target + feeAtomic) {
+      covered = true;
+      break;
+    }
+  }
+  if (!covered) {
+    return {
+      ok: false,
+      error: `Insufficient funds: have ${selectedTotal} atomic, need ${target + feeAtomic} atomic (amount + fee)`,
+    };
+  }
+
+  // 3. Fetch decoys. (ringSize − 1) per input from one batched call, then
+  //    slice into per-input rings.
+  const ringSize = asset === 'wow' ? 22 : 16;
+  const decoysPerInput = ringSize - 1;
+  const totalDecoys = decoysPerInput * selected.length;
+  const decoysResp = await api.getRandomOuts(asset, totalDecoys);
+  if (decoysResp.error || !decoysResp.data) {
+    return { ok: false, error: decoysResp.error ?? 'Failed to fetch decoys' };
+  }
+  const decoyPool = decoysResp.data.outputs;
+  if (decoyPool.length < totalDecoys) {
+    return {
+      ok: false,
+      error: `LWS returned ${decoyPool.length} decoys, expected ${totalDecoys}`,
+    };
+  }
+
+  // 4. Build TxParams JSON. Field names are snake_case to match the
+  //    Rust serde contract (see crates/smirk-wasm/src/signing.rs::TxParams).
+  const inputs = selected.map((out, i) => ({
+    output: {
+      amount: out.amount,
+      public_key: out.public_key,
+      tx_pub_key: out.tx_pub_key,
+      index: out.index,
+      global_index: out.global_index,
+      height: out.height,
+      rct: out.rct,
+    },
+    decoys: decoyPool.slice(i * decoysPerInput, (i + 1) * decoysPerInput),
+  }));
+  const amountNum = Number(amountAtomic);
+  const params = {
+    inputs,
+    destinations: [{ address: toAddress, amount: amountNum }],
+    change_address: fromAddress,
+    fee_per_byte: per_byte_fee,
+    fee_mask,
+    view_key: viewKeyHex,
+    spend_key: spendKeyHex,
+    network: 'mainnet',
+    coin: asset,
+  };
+
+  // 5. Sign. `wasm.sign_transaction` generates a fresh outgoing_view_key
+  //    from OsRng internally (see signing.rs::fresh_outgoing_view_key).
+  let signed: { tx_hex: string; tx_hash: string; fee: number };
+  try {
+    const signedJson = wasmMonero.signTransaction(JSON.stringify(params));
+    signed = parseWasmResult<{ tx_hex: string; tx_hash: string; fee: number }>(signedJson);
+  } catch (e) {
+    return { ok: false, error: `Sign tx failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  // 6. Submit. Passing recipient + amount + tx_hash lets the backend
+  //    insert a pending_transactions row when the recipient is also a
+  //    Smirk user (per legacy commit `3afce50`). For external sends the
+  //    backend silently skips the insert. The recipient sees pending
+  //    balance immediately; sender's own pending tracking is Phase 2.
+  const submit = await api.submitLwsTx(asset, signed.tx_hex, toAddress, amountNum, signed.tx_hash);
+  if (submit.error || !submit.data) {
+    console.error('[smirk send xmr/wow] submit failed', {
+      asset,
+      recipient: toAddress,
+      amount: amountNum,
+      txHash: signed.tx_hash,
+      fee: signed.fee,
+      inputCount: selected.length,
+      backendError: submit.error,
+    });
+    return { ok: false, error: submit.error ?? 'Submit failed' };
+  }
+
+  return { ok: true, txid: signed.tx_hash };
+}
+
+/**
  * Top-level send dispatcher. SendWizard.onSubmit calls this with the
  * collected Compose-screen fields; we route to per-asset implementations.
  */
@@ -340,10 +575,24 @@ export async function send(
     );
   }
 
-  // Stub for assets we haven't wired yet. Returning an explicit error
-  // means the wizard surfaces "Send not implemented for <asset>" rather
-  // than the previous fake-success stub that pretended a fake txid was
-  // valid. Closes the footgun.
+  if (asset.id === 'xmr' || asset.id === 'wow') {
+    // Phase-1 scope: single-recipient, single main address, no sweep,
+    // no subaddresses. Fee comes from LWS (`per_byte_fee` / `fee_mask`)
+    // not from the user-picker — the wizard's feeRateSatPerVb and
+    // sweep fields are deliberately ignored for these assets.
+    if (fields.sweep) {
+      return {
+        ok: false,
+        error: `Sweep mode not yet implemented for ${asset.ticker}. Use a specific amount.`,
+      };
+    }
+    return sendXmrWow(wallet, asset.id, fields.amountAtomic, fields.toAddress);
+  }
+
+  // Stub for assets we haven't wired yet (Grin). Returning an explicit
+  // error means the wizard surfaces "Send not implemented for <asset>"
+  // rather than the previous fake-success stub that pretended a fake
+  // txid was valid. Closes the footgun.
   return {
     ok: false,
     error: `Send is not yet implemented in v0.3 for ${asset.ticker}. Use the legacy Smirk extension v0.2.x, or run scripts/seed-to-keys to extract keys for an external wallet.`,
