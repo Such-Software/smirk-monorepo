@@ -49,6 +49,7 @@ import {
   AppShell,
   GrinRequestWizard,
   HomeTab,
+  InboxTab,
   LockScreen,
   OnboardingWizard,
   ReceiveScreen,
@@ -60,6 +61,7 @@ import {
   listThemes,
   useRoute,
   useSessionState,
+  type InboxItem,
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { send } from './send-handler';
@@ -89,6 +91,45 @@ function ensureWasmInit(): Promise<void> {
     wasmInitPromise = initSmirkWasm(wasmUrl);
   }
   return wasmInitPromise;
+}
+
+/**
+ * Pull the user's pending Grin slatepacks from the relay and shape them
+ * for the InboxTab component. Shared by the 30-second poll loop and the
+ * manual refresh handler in InboxRouter.
+ */
+async function fetchGrinInbox(userId: string): Promise<{
+  items: InboxItem[];
+  loading: boolean;
+  error: string | null;
+}> {
+  const r = await api.getGrinPendingSlatepacks(userId);
+  if (r.error || !r.data) {
+    return { items: [], loading: false, error: r.error ?? 'Failed to load inbox' };
+  }
+  const items: InboxItem[] = [
+    ...r.data.pending_to_sign.map((e) => ({
+      kind: 'pending_to_sign' as const,
+      relayId: e.id,
+      slateId: e.slate_id,
+      counterpartyUserId: e.sender_user_id,
+      amountAtomic: BigInt(e.amount),
+      slatepack: e.slatepack,
+      createdAt: e.created_at,
+      expiresAt: e.expires_at,
+    })),
+    ...r.data.pending_to_finalize.map((e) => ({
+      kind: 'pending_to_finalize' as const,
+      relayId: e.id,
+      slateId: e.slate_id,
+      counterpartyUserId: e.sender_user_id,
+      amountAtomic: BigInt(e.amount),
+      slatepack: e.slatepack,
+      createdAt: e.created_at,
+      expiresAt: e.expires_at,
+    })),
+  ];
+  return { items, loading: false, error: null };
 }
 
 const verifyKeyImage = async ({
@@ -270,6 +311,11 @@ async function writeSessionCache(wallet: UnlockedWallet, minutes: number): Promi
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
+  const [grinInbox, setGrinInbox] = useState<{
+    items: InboxItem[];
+    loading: boolean;
+    error: string | null;
+  }>({ items: [], loading: false, error: null });
 
   // Refresh from the keystore. Called on mount and after every state
   // transition (create / unlock / lock / destroy) so the gate re-renders.
@@ -384,6 +430,32 @@ function App() {
     return store.subscribe((s) => apply(s.ui.theme ?? 'default'));
   }, []);
 
+  // Grin inbox poller — fetch pending slatepacks every 30 s while the
+  // popup is open and the wallet is unlocked. The poll is gated on
+  // wallet+session being ready so it never races initial auth.
+  // Refresh fires immediately on first ready-state, then on the
+  // interval; closing the popup cancels the timer (chrome.alarms picks
+  // this up at v0.4 mobile time).
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked' || !session || session.error) {
+      return undefined;
+    }
+    const userId = walletState.wallet.fingerprint;
+    let alive = true;
+    const tick = async () => {
+      setGrinInbox((s) => ({ ...s, loading: true }));
+      const next = await fetchGrinInbox(userId);
+      if (!alive) return;
+      setGrinInbox(next);
+    };
+    void tick();
+    const handle = setInterval(() => void tick(), 30000);
+    return () => {
+      alive = false;
+      clearInterval(handle);
+    };
+  }, [walletState, session?.error, session?.bootstrap]);
+
   // Auto-poll while a chain is mid-scan. We don't want a chatty poll
   // for normal idle state (the chain advances every ~2 min for XMR/WOW,
   // not worth hammering for steady-state). Activates only when at
@@ -473,6 +545,12 @@ function App() {
     session
       ? refreshBalances(walletState.wallet, session.bootstrap)
       : Promise.resolve();
+  const refreshGrinInbox = async () => {
+    if (walletState.kind !== 'unlocked') return;
+    setGrinInbox((s) => ({ ...s, loading: true }));
+    setGrinInbox(await fetchGrinInbox(walletState.wallet.fingerprint));
+  };
+
   return (
     <StateProvider store={store} router={router}>
       <AppShell
@@ -481,6 +559,7 @@ function App() {
           label: 'Smirk Wallet',
           iconUrl: chrome.runtime.getURL('icons/favicon-16.png'),
         }}
+        tabBadges={{ inbox: grinInbox.items.length }}
         headerActions={
           session && !session.error ? (
             <RefreshIconButton
@@ -498,7 +577,13 @@ function App() {
             />
           ),
           swap: <SwapStub />,
-          inbox: <InboxStub />,
+          inbox: (
+            <InboxRouter
+              wallet={walletState.wallet}
+              inbox={grinInbox}
+              onRefresh={refreshGrinInbox}
+            />
+          ),
           settings: (
             <SettingsStub
               onLock={lockHandler}
@@ -1209,14 +1294,37 @@ function SwapStub() {
   );
 }
 
-function InboxStub() {
+function InboxRouter({
+  wallet,
+  inbox,
+  onRefresh,
+}: {
+  wallet: UnlockedWallet;
+  inbox: { items: InboxItem[]; loading: boolean; error: string | null };
+  onRefresh: () => Promise<void>;
+}) {
+  const { navigate } = useRoute();
+  // Tap → drop the slatepack onto the clipboard and route into the
+  // appropriate wizard. For pending_to_finalize we drop into the
+  // SendWizard (the user's prior wizard.fields hold the matching
+  // sender context); for pending_to_sign Phase 3.4 will replace the
+  // home/receive route with a dedicated paste-incoming wizard.
+  const handleOpen = (slatepack: string, target: 'send' | 'receive') => {
+    void navigator.clipboard.writeText(slatepack).catch(() => undefined);
+    void navigate(target === 'send' ? 'home/send' : 'home/receive');
+    // wallet param is reserved for Phase 3.4 (paste-incoming wizard will
+    // need wallet.mnemonic + wallet.addresses.grin to sign as S2).
+    void wallet;
+  };
   return (
-    <div>
-      <h2 style={{ fontSize: 16, marginTop: 0 }}>Inbox</h2>
-      <p class="muted" style={{ fontSize: 12 }}>
-        Slatepacks, swap rounds, tip notes, and DMs land here. Empty for now.
-      </p>
-    </div>
+    <InboxTab
+      items={inbox.items}
+      loading={inbox.loading}
+      error={inbox.error}
+      onRefresh={() => void onRefresh()}
+      onOpenIncomingSign={(item) => handleOpen(item.slatepack, 'receive')}
+      onOpenIncomingFinalize={(item) => handleOpen(item.slatepack, 'send')}
+    />
   );
 }
 

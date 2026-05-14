@@ -235,7 +235,10 @@ export interface GrinBuildSlateResult {
   sender_inputs_json: string;
   /** Serialized GrinChangeOutputInfo. Omitted/empty when no change. */
   change_output_json?: string;
-  /** Backend relay id, set iff recipient is a Smirk user. */
+  /** Backend relay id, set whenever the slatepack was posted to the
+   *  Smirk relay. The relay accepts any well-formed slatepack; whether
+   *  the recipient (a registered Smirk user vs. an external wallet)
+   *  picks it up is independent of this id existing. */
   relay_id?: string;
 }
 export type GrinBuildSlateOutcome = GrinBuildSlateResult | { ok: false; error: string };
@@ -1424,7 +1427,7 @@ function GrinExchange(props: GrinExchangeProps) {
             marginTop: 6,
           }}
         >
-          Also delivered via Smirk relay — recipient will see it in their Inbox.
+          Posted to Smirk relay — if the recipient is a Smirk user, it'll appear in their Inbox.
         </div>
       )}
 

@@ -89,6 +89,15 @@ export type { OnboardingWizardProps } from './components/OnboardingWizard';
 export { LockScreen } from './components/LockScreen';
 export type { LockScreenProps } from './components/LockScreen';
 
+export { InboxTab } from './components/InboxTab';
+export type {
+  InboxTabProps,
+  InboxItem,
+  InboxItemBase,
+  InboxItemPendingToSign,
+  InboxItemPendingToFinalize,
+} from './components/InboxTab';
+
 // ----- Shell -----
 export { AppShell } from './components/shell/AppShell';
 export type { AppShellProps } from './components/shell/AppShell';

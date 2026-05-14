@@ -10,6 +10,12 @@ import { useRoute } from '../../state/hooks';
 export interface BottomNavProps {
   /** `horizontal` (popup, default) or `vertical` (sidebar). */
   orientation?: 'horizontal' | 'vertical';
+  /**
+   * Optional per-tab badge counts. When > 0, the tab renders a small
+   * pill next to its label. Today only the Inbox tab uses this (pending
+   * Grin exchanges). Counts above 99 render as "99+".
+   */
+  badges?: Partial<Record<Tab, number>>;
 }
 
 interface TabConfig {
@@ -25,7 +31,7 @@ const TABS: TabConfig[] = [
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
 
-export function BottomNav({ orientation = 'horizontal' }: BottomNavProps) {
+export function BottomNav({ orientation = 'horizontal', badges }: BottomNavProps) {
   const { tab: activeTab, switchTab, navigate, route } = useRoute();
 
   const isVertical = orientation === 'vertical';
@@ -84,7 +90,39 @@ export function BottomNav({ orientation = 'horizontal' }: BottomNavProps) {
               fontFamily: 'inherit',
             }}
           >
-            <span style={{ fontSize: isVertical ? 16 : 18 }}>{t.icon}</span>
+            <span
+              style={{
+                fontSize: isVertical ? 16 : 18,
+                position: 'relative',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {t.icon}
+              {badges && (badges[t.id] ?? 0) > 0 && (
+                <span
+                  aria-label={`${badges[t.id]} pending`}
+                  style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -8,
+                    minWidth: 14,
+                    height: 14,
+                    padding: '0 4px',
+                    borderRadius: 7,
+                    background: 'var(--smirk-accent)',
+                    color: 'var(--smirk-accent-fg, #fff)',
+                    fontSize: 9,
+                    fontWeight: 700,
+                    lineHeight: '14px',
+                    textAlign: 'center',
+                  }}
+                >
+                  {(badges[t.id] ?? 0) > 99 ? '99+' : badges[t.id]}
+                </span>
+              )}
+            </span>
             <span>{t.label}</span>
           </button>
         );

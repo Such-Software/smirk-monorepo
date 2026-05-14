@@ -289,17 +289,21 @@ export async function startGrinSend(args: {
 
   let relay_id: string | undefined;
   const armored = armorSlate(sendResult.slate_json, args.senderSlatepackAddress);
-  if (args.recipientUserId) {
-    const relay = await api.createGrinRelay({
-      senderUserId: args.userId,
-      slatepack: armored,
-      slateId: sendResult.slate_id,
-      amount: args.amount,
-      recipientUserId: args.recipientUserId,
-      recipientAddress: args.recipientSlatepackAddress,
-    });
-    if (relay.data) relay_id = relay.data.id;
-  }
+  // Smirk-to-Smirk auto-detect: always post the S1 to the relay with the
+  // recipient's slatepack address. Backend matches that address against
+  // the `wallets` table — if the recipient is a registered Smirk user,
+  // the slatepack lands in their pending_to_sign queue. If not, the relay
+  // entry expires after 7 days unused; the sender's wizard surface stays
+  // clipboard-mode (the armored slatepack is also returned to the caller).
+  const relay = await api.createGrinRelay({
+    senderUserId: args.userId,
+    slatepack: armored,
+    slateId: sendResult.slate_id,
+    amount: args.amount,
+    ...(args.recipientUserId ? { recipientUserId: args.recipientUserId } : {}),
+    recipientAddress: args.recipientSlatepackAddress,
+  });
+  if (relay.data) relay_id = relay.data.id;
 
   return {
     slate_id: sendResult.slate_id,

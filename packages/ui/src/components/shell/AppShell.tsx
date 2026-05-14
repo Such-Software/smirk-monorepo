@@ -52,11 +52,16 @@ export interface AppShellProps {
    * apply.
    */
   headerActions?: ComponentChildren;
+  /**
+   * Optional per-tab badge counts forwarded to the BottomNav (Inbox
+   * uses this for pending Grin exchanges; future surfaces could too).
+   */
+  tabBadges?: Partial<Record<Tab, number>>;
   /** Optional class for outermost div, for consumer styling hooks. */
   class?: string;
 }
 
-export function AppShell({ routes, onPopOut, brand, headerActions, class: className }: AppShellProps) {
+export function AppShell({ routes, onPopOut, brand, headerActions, tabBadges, class: className }: AppShellProps) {
   const { tab } = useRoute();
   const isPopout = useIsPopout();
   const showPopOutButton = !isPopout && onPopOut !== undefined;
@@ -83,7 +88,13 @@ export function AppShell({ routes, onPopOut, brand, headerActions, class: classN
         />
       )}
 
-      {isPopout && <SidebarNav label={label} {...(iconUrl ? { iconUrl } : {})} />}
+      {isPopout && (
+        <SidebarNav
+          label={label}
+          {...(iconUrl ? { iconUrl } : {})}
+          {...(tabBadges ? { badges: tabBadges } : {})}
+        />
+      )}
 
       <main
         style={{
@@ -96,7 +107,7 @@ export function AppShell({ routes, onPopOut, brand, headerActions, class: classN
         {routes[tab]}
       </main>
 
-      {!isPopout && <BottomNav />}
+      {!isPopout && <BottomNav {...(tabBadges ? { badges: tabBadges } : {})} />}
     </div>
   );
 }
@@ -173,7 +184,15 @@ function BrandMark({ label, iconUrl, size }: BrandMarkProps) {
 
 // ----- Sidebar (pop-out mode) -----
 
-function SidebarNav({ label, iconUrl }: { label: string; iconUrl?: string }) {
+function SidebarNav({
+  label,
+  iconUrl,
+  badges,
+}: {
+  label: string;
+  iconUrl?: string;
+  badges?: Partial<Record<Tab, number>>;
+}) {
   // Reuse BottomNav's logic but render as a column. Single source of
   // truth for the tab list lives in BottomNav.
   return (
@@ -194,7 +213,7 @@ function SidebarNav({ label, iconUrl }: { label: string; iconUrl?: string }) {
       >
         <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={20} />
       </div>
-      <BottomNav orientation="vertical" />
+      <BottomNav orientation="vertical" {...(badges ? { badges } : {})} />
     </aside>
   );
 }
