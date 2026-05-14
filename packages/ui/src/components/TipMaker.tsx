@@ -21,7 +21,7 @@
  * + posts to /api/v1/social/tip via @smirk/core.
  */
 
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { mustGetAsset, listAssets } from '@smirk/assets';
 import { AssetIcon } from './AssetIcon';
 import { formatAmountWithTicker } from '../format';
@@ -409,15 +409,12 @@ export function TipMaker(props: TipMakerProps) {
             style={{ ...inputStyle, flex: 1 }}
           />
           {asset && (
-            <button onClick={() => cycleAsset(setAssetId, visibleAssetIds, assetId)} style={assetChipStyle}>
-              <AssetIcon
-                assetId={assetId}
-                size={18}
-                {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
-              />
-              <span style={{ marginLeft: 4 }}>{asset.ticker}</span>
-              <span style={{ marginLeft: 4, opacity: 0.5 }}>▼</span>
-            </button>
+            <AssetDropdown
+              value={assetId}
+              onChange={setAssetId}
+              options={visibleAssetIds}
+              {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
+            />
           )}
         </div>
         {asset && (
@@ -722,14 +719,126 @@ function Toggle({
   );
 }
 
-function cycleAsset(
-  setAssetId: (id: string) => void,
-  visibleIds: string[],
-  current: string,
-) {
-  if (visibleIds.length === 0) return;
-  const idx = visibleIds.indexOf(current);
-  setAssetId(visibleIds[(idx + 1) % visibleIds.length]!);
+/**
+ * Asset picker — popover anchored under the chip. Sits next to the
+ * amount input, so we can't expand inline like the platform
+ * dropdown (would shove the input out of place). Instead the option
+ * list renders absolutely-positioned below the chip, right-aligned
+ * to the chip's right edge so it stays within the popup width.
+ *
+ * Closes when user clicks outside (via a click-listener installed on
+ * `document` while the popover is open) or selects an option.
+ */
+function AssetDropdown({
+  value,
+  onChange,
+  options,
+  resolveIcon,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  options: string[];
+  resolveIcon?: (iconKey: string) => string | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Click-outside to close. Re-bound each time `open` flips on.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      const el = containerRef.current;
+      if (!el) return;
+      if (!el.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const current = mustGetAsset(value);
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={assetChipStyle}
+      >
+        <AssetIcon
+          assetId={value}
+          size={18}
+          {...(resolveIcon ? { resolveIcon } : {})}
+        />
+        <span style={{ marginLeft: 4 }}>{current.ticker}</span>
+        <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>
+          {open ? '▲' : '▼'}
+        </span>
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 'calc(100% + 4px)',
+            zIndex: 10,
+            minWidth: 160,
+            background: 'var(--smirk-bg-elevated, rgba(20,20,20,0.95))',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 6,
+            overflow: 'hidden',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+          }}
+        >
+          {options.map((id) => {
+            const asset = mustGetAsset(id);
+            const active = id === value;
+            return (
+              <button
+                key={id}
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(id);
+                  setOpen(false);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '10px 12px',
+                  background: active
+                    ? 'color-mix(in srgb, var(--smirk-accent) 18%, transparent)'
+                    : 'transparent',
+                  border: 'none',
+                  color: active ? 'var(--smirk-accent)' : 'inherit',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  textAlign: 'left',
+                }}
+              >
+                <AssetIcon
+                  assetId={id}
+                  size={18}
+                  {...(resolveIcon ? { resolveIcon } : {})}
+                />
+                <span style={{ flex: 1 }}>{asset.ticker}</span>
+                <span style={{ fontSize: 10, opacity: 0.5 }}>
+                  {asset.displayName}
+                </span>
+                {active && <span style={{ fontSize: 10, opacity: 0.7 }}>✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // suppress unused-import warning if listAssets isn't called above —
