@@ -55,14 +55,24 @@ const import4 = __smirk_env_stub;
 const import5 = __smirk_env_stub;
 `;
 
-const beforeReplace = src;
-src = src.replace(
-  /(?:\s+const import\d+ = require\("env"\);)+/,
-  '\n' + envStub.replace(/\n/g, '\n    '),
-);
-if (src === beforeReplace) {
-  console.error('postprocess: did not find `require("env")` lines to replace.');
-  process.exit(1);
+// Replace any `const importN = require("env");` block(s) if present.
+// Once `crates/smirk-wasm/src/wasm_libc_shim.rs` (added 2026-05-14)
+// resolves libsecp256k1-zkp's malloc/free/etc. via Rust shims, the
+// wasm-bindgen output stops emitting these `env` imports entirely
+// and this replace becomes a no-op — that's fine, the env-stub
+// isn't needed anymore. We only error if we see require("env") but
+// the replace fails to consume it (would indicate a regex / output
+// format change we'd want to know about).
+if (src.includes('require("env")')) {
+  const beforeReplace = src;
+  src = src.replace(
+    /(?:\s+const import\d+ = require\("env"\);)+/,
+    '\n' + envStub.replace(/\n/g, '\n    '),
+  );
+  if (src === beforeReplace) {
+    console.error('postprocess: saw `require("env")` but the replace pattern did not match.');
+    process.exit(1);
+  }
 }
 
 // (2) Append ESM export shim if not already present.

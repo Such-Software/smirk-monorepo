@@ -39,6 +39,14 @@ mod signing;
 #[cfg(test)]
 mod tests;
 mod transaction;
+// libsecp256k1-zkp's C code references malloc/free/etc. that
+// wasm32-unknown-unknown doesn't ship. We provide Rust shims that
+// route C allocations through Rust's global allocator, so the
+// symbols resolve at link time and don't end up as env imports the
+// JS host has to satisfy. Native builds (cargo test) use the real
+// glibc; only wasm32 needs these.
+#[cfg(target_arch = "wasm32")]
+mod wasm_libc_shim;
 
 // Re-export public functions
 pub use address::validate_address;
