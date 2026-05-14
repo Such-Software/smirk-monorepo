@@ -152,6 +152,18 @@ export interface GrinMethods {
     slateId: string;
     tx: object;
   }): Promise<ApiResponse<{ success: boolean }>>;
+
+  // ----- Address registration -----
+  /**
+   * Register (or update) the user's bech32 slatepack address in the
+   * backend `wallets` table. The Grin relay's address-match query
+   * joins on `wallets.address` for asset='grin'; without this call
+   * the table stays empty for Grin (the equivalent of XMR/WOW's
+   * `registerLws`). Call on every bootstrap — idempotent UPSERT.
+   */
+  registerGrinAddress(
+    address: string,
+  ): Promise<ApiResponse<{ address: string }>>;
 }
 
 export function createGrinMethods(client: ApiClient): GrinMethods {
@@ -303,6 +315,13 @@ export function createGrinMethods(client: ApiClient): GrinMethods {
           slate_id: params.slateId,
           tx: params.tx,
         }),
+      });
+    },
+
+    async registerGrinAddress(address) {
+      return client.request('/wallet/grin/address/register', {
+        method: 'POST',
+        body: JSON.stringify({ address }),
       });
     },
   };

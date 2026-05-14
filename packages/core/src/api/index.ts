@@ -124,6 +124,7 @@ export class SmirkApi
   recordGrinTransaction: GrinMethods['recordGrinTransaction'];
   updateGrinTransaction: GrinMethods['updateGrinTransaction'];
   broadcastGrinTransaction: GrinMethods['broadcastGrinTransaction'];
+  registerGrinAddress: GrinMethods['registerGrinAddress'];
 
   constructor(baseUrl?: string) {
     super(baseUrl);
@@ -192,6 +193,7 @@ export class SmirkApi
     this.recordGrinTransaction = grin.recordGrinTransaction;
     this.updateGrinTransaction = grin.updateGrinTransaction;
     this.broadcastGrinTransaction = grin.broadcastGrinTransaction;
+    this.registerGrinAddress = grin.registerGrinAddress;
   }
 
   /** Current blockchain heights for all networks. */

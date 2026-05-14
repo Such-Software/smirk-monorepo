@@ -148,6 +148,24 @@ export async function bootstrapAuth(
 
   api.setAccessToken(result.data.accessToken);
 
+  // Register the user's bech32 Grin slatepack address into `wallets`
+  // so the relay's address-match join (`recipient_address IN (SELECT
+  // address FROM wallets WHERE user_id = $1 AND asset = 'grin')`)
+  // finds them. XMR/WOW get their `wallets` row inserted during
+  // `registerLws` from the balance fetch; Grin had no equivalent
+  // until this call.
+  //
+  // Idempotent UPSERT server-side — safe to fire on every bootstrap.
+  // Best-effort: if the backend is older than this endpoint or
+  // returns an error, we still complete the bootstrap. The user
+  // loses by-address relay routing for that session; clipboard
+  // paste flows in Inbox still work.
+  await api
+    .registerGrinAddress(wallet.addresses.grin)
+    .catch((e: unknown) => {
+      console.warn('[smirk-bootstrap] registerGrinAddress failed:', e);
+    });
+
   return {
     userId: result.data.user.id,
     ...(result.data.user.username !== undefined ? { username: result.data.user.username } : {}),
