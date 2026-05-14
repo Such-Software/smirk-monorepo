@@ -80,6 +80,14 @@ export type {
   GrinRequestFinalizeOutcome,
 } from './components/GrinRequestWizard';
 
+export { GrinPasteIncomingWizard } from './components/GrinPasteIncomingWizard';
+export type {
+  GrinPasteIncomingWizardProps,
+  GrinPasteIncomingFields,
+  GrinPasteIncomingSignResult,
+  GrinPasteIncomingSignOutcome,
+} from './components/GrinPasteIncomingWizard';
+
 export { ReceiveScreen } from './components/ReceiveScreen';
 export type { ReceiveScreenProps } from './components/ReceiveScreen';
 

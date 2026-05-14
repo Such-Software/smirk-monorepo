@@ -47,6 +47,7 @@ import {
 } from '@smirk/core';
 import {
   AppShell,
+  GrinPasteIncomingWizard,
   GrinRequestWizard,
   HomeTab,
   InboxTab,
@@ -71,6 +72,7 @@ import {
   cancelGrinSend,
   startGrinInvoice,
   processGrinI2,
+  signIncomingGrinSlate,
 } from './grin-flows';
 import { initialize as initSmirkWasm, monero as wasmMonero } from '@smirk/wasm';
 
@@ -846,6 +848,22 @@ function HomeRouter({
             void navigate('home/receive/grin-request');
           }
         }}
+        onPasteIncoming={(assetId) => {
+          // Same per-asset gate. Phase 3.4 wizard handles external-wallet
+          // S1 → our S2 reply.
+          if (assetId === 'grin') {
+            // Clear any prior wizard state so the manual-paste flow
+            // starts at step 0 with an empty textarea (Inbox-driven
+            // navigation seeds fields explicitly via the InboxRouter).
+            void store
+              .update((s) => {
+                if (s.wizards['grin-paste-incoming']) {
+                  delete s.wizards['grin-paste-incoming'];
+                }
+              })
+              .then(() => navigate('home/receive/grin-incoming'));
+          }
+        }}
       />
     );
   }
@@ -927,6 +945,73 @@ function HomeRouter({
               status: 'cancelled',
             })
             .catch(() => undefined);
+        }}
+        onExit={() => void navigate('home/receive')}
+      />
+    );
+  }
+
+  if (route.current === 'home/receive/grin-incoming') {
+    return (
+      <GrinPasteIncomingWizard
+        assetId="grin"
+        onReadClipboard={async () => navigator.clipboard.readText()}
+        onCopy={(text) => void navigator.clipboard.writeText(text)}
+        onSign={async ({ s1Armored, relayId }) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
+          try {
+            const signed = await signIncomingGrinSlate({
+              userId: wallet.fingerprint,
+              mnemonic: wallet.mnemonic,
+              receiverSlatepackAddress: wallet.addresses.grin,
+              s1Armored,
+              resolver: {
+                fetchSpendable: async () => {
+                  const r = await api.getGrinOutputs(wallet.fingerprint);
+                  if (r.error || !r.data) {
+                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
+                  }
+                  return {
+                    outputs: r.data.outputs
+                      .filter((o) => o.status === 'unspent')
+                      .map((o) => ({
+                        key_id: o.key_id,
+                        n_child: o.n_child,
+                        amount: o.amount,
+                        commitment: o.commitment,
+                        is_coinbase: o.is_coinbase,
+                      })),
+                    next_child_index: r.data.next_child_index,
+                  };
+                },
+              },
+            });
+            // When the S1 came from a Smirk relay row (Inbox tap), post
+            // the S2 back via the relay's `sign` endpoint so the
+            // sender's queue advances and the row moves from
+            // pending_to_sign → pending_to_finalize on their side.
+            // Manual-paste flows have no relayId — sender gets the S2
+            // from the clipboard copy instead.
+            if (relayId) {
+              await api
+                .signGrinSlatepack({
+                  relayId,
+                  userId: wallet.fingerprint,
+                  signedSlatepack: signed.s2_armored,
+                })
+                .catch(() => undefined);
+            }
+            return {
+              ok: true,
+              slate_id: signed.slate_id,
+              s2_armored: signed.s2_armored,
+              amount_atomic: String(signed.amount),
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
         }}
         onExit={() => void navigate('home/receive')}
       />
@@ -1304,17 +1389,41 @@ function InboxRouter({
   onRefresh: () => Promise<void>;
 }) {
   const { navigate } = useRoute();
-  // Tap → drop the slatepack onto the clipboard and route into the
-  // appropriate wizard. For pending_to_finalize we drop into the
-  // SendWizard (the user's prior wizard.fields hold the matching
-  // sender context); for pending_to_sign Phase 3.4 will replace the
-  // home/receive route with a dedicated paste-incoming wizard.
-  const handleOpen = (slatepack: string, target: 'send' | 'receive') => {
-    void navigator.clipboard.writeText(slatepack).catch(() => undefined);
-    void navigate(target === 'send' ? 'home/send' : 'home/receive');
-    // wallet param is reserved for Phase 3.4 (paste-incoming wizard will
-    // need wallet.mnemonic + wallet.addresses.grin to sign as S2).
+  // Tapping a pending_to_sign row seeds the GrinPasteIncomingWizard
+  // with the relay's slatepack + relayId so the user lands at the
+  // auto-sign step instead of pasting manually. The wizard's sign
+  // handler posts S2 back through the relay (api.signGrinSlatepack)
+  // when relayId is set, advancing the sender's queue automatically.
+  const handleOpenIncomingSign = async (
+    slatepack: string,
+    relayId: string,
+  ) => {
+    await store.update((s) => {
+      s.wizards['grin-paste-incoming'] = {
+        step: 1, // skip the Paste step — already have S1
+        startedAt: Date.now(),
+        fields: {
+          armoredIncoming: slatepack,
+          relayId,
+        },
+      };
+    });
+    void navigate('home/receive/grin-incoming');
+    // wallet param reserved for v0.4 (multi-pending tracking that keys
+    // wizard slots by counterparty / relay_id rather than overwriting
+    // the singleton slot).
     void wallet;
+  };
+  // pending_to_finalize: the SendWizard's existing wizard.fields already
+  // hold the sender context for the in-flight S1 (set on send-time).
+  // Auto-paste the S2 by writing it into the wizard's fields and
+  // navigating; the user just hits "Finalize & broadcast" in the
+  // Exchange step. If the wizard's slate_id doesn't match the inbox
+  // row (e.g. user sent twice), the user can still copy-paste manually
+  // — the clipboard fallback below covers that case.
+  const handleOpenIncomingFinalize = async (slatepack: string) => {
+    void navigator.clipboard.writeText(slatepack).catch(() => undefined);
+    void navigate('home/send');
   };
   return (
     <InboxTab
@@ -1322,8 +1431,12 @@ function InboxRouter({
       loading={inbox.loading}
       error={inbox.error}
       onRefresh={() => void onRefresh()}
-      onOpenIncomingSign={(item) => handleOpen(item.slatepack, 'receive')}
-      onOpenIncomingFinalize={(item) => handleOpen(item.slatepack, 'send')}
+      onOpenIncomingSign={(item) =>
+        void handleOpenIncomingSign(item.slatepack, item.relayId)
+      }
+      onOpenIncomingFinalize={(item) =>
+        void handleOpenIncomingFinalize(item.slatepack)
+      }
     />
   );
 }
