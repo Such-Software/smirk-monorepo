@@ -292,9 +292,10 @@ export function TipMaker(props: TipMakerProps) {
       {/* --- Recipient --- */}
       {!isPublic && (
         <div>
-          <Label>To</Label>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <PlatformPicker value={platform} onChange={setPlatform} />
+          <Label>Platform</Label>
+          <PlatformRow value={platform} onChange={setPlatform} />
+          <div style={{ marginTop: 8 }}>
+            <Label>{PLATFORM_LABEL[platform]} username</Label>
             <input
               type="text"
               value={username}
@@ -526,7 +527,7 @@ function TipSuccess({
 
 // ---- Small UI pieces ----------------------------------------------------
 
-function Label({ children }: { children: string }) {
+function Label({ children }: { children: preact.ComponentChildren }) {
   return (
     <div
       style={{
@@ -542,7 +543,13 @@ function Label({ children }: { children: string }) {
   );
 }
 
-function PlatformPicker({
+/**
+ * Three labeled toggle buttons in a row — visually unmistakable
+ * platform selector. Earlier iteration used a single cycling icon
+ * button which was too cryptic ("S" with no label meant nothing to
+ * users who hadn't read the source).
+ */
+function PlatformRow({
   value,
   onChange,
 }: {
@@ -550,22 +557,42 @@ function PlatformPicker({
   onChange: (p: TipPlatform) => void;
 }) {
   const order: TipPlatform[] = ['smirk', 'telegram', 'discord'];
-  const cycle = () => {
-    const idx = order.indexOf(value);
-    onChange(order[(idx + 1) % order.length]!);
-  };
   return (
-    <button
-      onClick={cycle}
-      title={`Platform: ${PLATFORM_LABEL[value]} — tap to cycle`}
-      style={{
-        ...assetChipStyle,
-        minWidth: 50,
-        justifyContent: 'center',
-      }}
-    >
-      <span style={{ fontSize: 14 }}>{PLATFORM_ICON[value]}</span>
-    </button>
+    <div style={{ display: 'flex', gap: 4 }}>
+      {order.map((p) => {
+        const active = p === value;
+        return (
+          <button
+            key={p}
+            onClick={() => onChange(p)}
+            title={`Send via ${PLATFORM_LABEL[p]}`}
+            style={{
+              flex: 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              padding: '8px 6px',
+              background: active
+                ? 'color-mix(in srgb, var(--smirk-accent) 20%, transparent)'
+                : 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+              border: `1px solid ${
+                active ? 'var(--smirk-accent)' : 'var(--smirk-border)'
+              }`,
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: active ? 'var(--smirk-accent)' : 'inherit',
+              fontFamily: 'inherit',
+              fontSize: 12,
+              fontWeight: active ? 600 : 500,
+            }}
+          >
+            <span style={{ fontSize: 14 }}>{PLATFORM_ICON[p]}</span>
+            <span>{PLATFORM_LABEL[p]}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

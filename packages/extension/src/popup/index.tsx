@@ -1265,12 +1265,10 @@ function HomeRouter({
     return (
       <TipMaker
         assetIds={listAssets().map((a) => a.id)}
-        // BTC/LTC tipping is fully wired this commit. XMR/WOW tipping
-        // (fresh subaddress + signTransaction) and Grin (voucher via
-        // 588ee2c primitives) ship in the next commit — hide them
-        // from the picker so the user doesn't pick one and bounce
-        // off the "ships next commit" error from dispatchSocialTip.
-        hideAssetIds={['xmr', 'wow', 'grin']}
+        // All 5 assets wired: BTC/LTC fresh-keypair, XMR/WOW
+        // fresh-primary-keypair + LWS registration, Grin
+        // voucher-pattern via createGrinVoucher (primitives in
+        // crates/grin-ext::voucher, 588ee2c).
         resolveBalance={(assetId) => {
           const b = (
             session?.balances as

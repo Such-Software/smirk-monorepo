@@ -26,11 +26,14 @@
  */
 
 import { sha256 } from '@noble/hashes/sha256';
+import { ed25519 } from '@noble/curves/ed25519';
 import type { UnlockedWallet } from '@smirk/core';
 import {
   api,
   btcAddress,
   ltcAddress,
+  xmrAddress,
+  wowAddress,
   bytesToHex,
   hexToBytes,
   createEncryptedTipPayload,
@@ -38,8 +41,10 @@ import {
   generatePrivateKey,
   generateUrlFragmentKey,
   getPublicKey,
+  randomBytes,
 } from '@smirk/core';
 import type { TipPlatform, TipSubmitFields, TipSubmitOutcome } from '@smirk/ui';
+import { grin as wasmGrin } from '@smirk/wasm';
 import { send } from './send-handler';
 
 /**
@@ -61,17 +66,10 @@ export async function dispatchSocialTip(args: {
       return await createBtcLtcTip(wallet, fields);
     }
     if (fields.assetId === 'xmr' || fields.assetId === 'wow') {
-      return {
-        ok: false,
-        error: `Tipping with ${fields.assetId.toUpperCase()} ships in the next commit — voucher / fresh-subaddress orchestration in flight.`,
-      };
+      return await createXmrWowTip(wallet, args.senderUserId, fields);
     }
     if (fields.assetId === 'grin') {
-      return {
-        ok: false,
-        error:
-          'Grin tipping ships in the next commit — voucher primitives (588ee2c) wired but the dispatcher pieces still pending.',
-      };
+      return await createGrinTip(wallet, args.senderUserId, fields);
     }
     return {
       ok: false,
@@ -136,12 +134,11 @@ async function createBtcLtcTip(
   if (!sendResult.ok) return { ok: false, error: sendResult.error };
 
   // 5. Encrypt tip private key.
-  const { encryptedKey, ephemeralPubkey, claimKeyHash, urlFragmentEncoded } =
-    encryptTipKeyForBtcLtc({
-      tipPrivateKey,
-      isPublic: fields.isPublic,
-      recipientBtcPubkeyHex,
-    });
+  const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
+    keyMaterial: tipPrivateKey,
+    isPublic: fields.isPublic,
+    recipientBtcPubkeyHex,
+  });
 
   // 6. POST to backend.
   const tip = await api.createSocialTip({
@@ -175,15 +172,7 @@ async function createBtcLtcTip(
     // DMs the recipient instead).
     shareUrl: fields.isPublic ? buildShareUrl(tip.data.tip_id, urlFragmentEncoded) : null,
     shareUrlPending: false,
-    // unused fields kept for clarity:
-    // ephemeralPubkey would be needed for direct claim — but it's
-    // already concatenated into encryptedKey per the v0.2.4 wire
-    // format (ephemeral_pubkey || ciphertext).
   };
-
-  // Reference to silence unused-var warning on ephemeralPubkey when
-  // present (it's already folded into encryptedKey above).
-  void ephemeralPubkey;
 }
 
 /**
@@ -222,29 +211,33 @@ async function lookupRecipientBtcPubkey(
 }
 
 /**
- * Encrypt the tip's private key for either targeted (ECIES to
- * recipient's BTC pubkey) or public (URL-fragment-key) tips.
+ * Encrypt arbitrary tip-key material (bytes) for either targeted
+ * (ECIES to recipient's BTC pubkey) or public (URL-fragment-key) tips.
  *
  * Wire format mirrors v0.2.4 so existing claim paths stay compatible:
  * targeted → `ephemeralPubkey(66 hex chars) || ciphertext(hex)`,
  * public → `ciphertext(hex)` (fragment key lives in URL).
+ *
+ * `keyMaterial` is whatever the asset's claim flow needs to decrypt:
+ *   - BTC/LTC: 32-byte secp256k1 private key
+ *   - XMR/WOW: 32-byte ed25519 spend key (view key re-derived from it)
+ *   - Grin: JSON-encoded voucher data (blind + commit + proof + nChild
+ *     + amount + features) — recipient sweeps the voucher commitment.
  */
-function encryptTipKeyForBtcLtc(args: {
-  tipPrivateKey: Uint8Array;
+function encryptTipKey(args: {
+  keyMaterial: Uint8Array;
   isPublic: boolean;
   recipientBtcPubkeyHex: string | undefined;
 }): {
   encryptedKey: string;
-  ephemeralPubkey: string | undefined;
   claimKeyHash: string | undefined;
   urlFragmentEncoded: string | undefined;
 } {
   if (args.isPublic) {
     const urlFragmentKey = generateUrlFragmentKey();
-    const encryptedKey = createPublicTipPayload(args.tipPrivateKey, urlFragmentKey.bytes);
+    const encryptedKey = createPublicTipPayload(args.keyMaterial, urlFragmentKey.bytes);
     return {
       encryptedKey,
-      ephemeralPubkey: undefined,
       claimKeyHash: bytesToHex(sha256(urlFragmentKey.bytes)),
       urlFragmentEncoded: urlFragmentKey.encoded,
     };
@@ -255,7 +248,7 @@ function encryptTipKeyForBtcLtc(args: {
   }
   const recipientPubkeyBytes = hexToBytes(args.recipientBtcPubkeyHex);
   const { encryptedKey, ephemeralPubkey } = createEncryptedTipPayload(
-    args.tipPrivateKey,
+    args.keyMaterial,
     recipientPubkeyBytes,
   );
   // v0.2.4 wire format: concatenate ephemeralPubkey || ciphertext so
@@ -263,10 +256,419 @@ function encryptTipKeyForBtcLtc(args: {
   // splits at 66 chars to recover both halves.
   return {
     encryptedKey: ephemeralPubkey + encryptedKey,
-    ephemeralPubkey,
     claimKeyHash: undefined,
     urlFragmentEncoded: undefined,
   };
+}
+
+// ============================================================================
+// XMR / WOW
+// ============================================================================
+//
+// Sender generates a fresh primary keypair (random 32-byte spend seed
+// reduced to an ed25519 scalar; view key = sha256(spend) reduced).
+// Recipient claims by importing the spend key — gives them full
+// authority over that single-tip wallet. View key is also shared with
+// the backend so its LWS can monitor for funding confirmations.
+
+async function createXmrWowTip(
+  wallet: UnlockedWallet,
+  senderUserId: string,
+  fields: TipSubmitFields,
+): Promise<TipSubmitOutcome> {
+  const asset = fields.assetId as 'xmr' | 'wow';
+
+  // 1. Resolve recipient BTC pubkey for targeted-tip ECIES.
+  let recipientBtcPubkeyHex: string | undefined;
+  if (!fields.isPublic) {
+    const lookup = await lookupRecipientBtcPubkey(fields.platform, fields.username);
+    if (!lookup.ok) return { ok: false, error: lookup.error };
+    recipientBtcPubkeyHex = lookup.btcPubkeyHex;
+  }
+
+  // 2. Generate fresh tip keypair (spend + view + addresses).
+  const tipKeys = generateXmrWowTipKeys(asset);
+
+  // 3. Register the tip address with LWS so its scanner picks up the
+  //    funding tx and the backend can publish confirmation status.
+  //    Backend's LWS-register endpoint is idempotent.
+  const reg = await api.registerLws(
+    senderUserId,
+    asset,
+    tipKeys.address,
+    bytesToHex(tipKeys.viewKey),
+  );
+  if (reg.error) {
+    return {
+      ok: false,
+      error: `Failed to register tip address with LWS: ${reg.error}`,
+    };
+  }
+
+  // 4. Send funds to the tip address using the existing send-handler.
+  //    XMR/WOW path ignores feeRateSatPerVb (the wasm tx-builder pulls
+  //    per_byte_fee + fee_mask from LWS at sign time), and doesn't
+  //    need excludeInputs in tipping context.
+  const sendResult = await send(wallet, {
+    fromAssetId: asset,
+    amountAtomic: fields.amountAtomic,
+    toAddress: tipKeys.address,
+    feeRateSatPerVb: 0, // ignored for xmr/wow
+    sweep: false,
+  });
+  if (!sendResult.ok) return { ok: false, error: sendResult.error };
+
+  // 5. Encrypt the spend key.
+  const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
+    keyMaterial: tipKeys.spendKey,
+    isPublic: fields.isPublic,
+    recipientBtcPubkeyHex,
+  });
+
+  // 6. POST to backend with tip_view_key so LWS can keep tracking
+  //    the tip address across confirmation count + claim.
+  const tip = await api.createSocialTip({
+    ...(fields.isPublic ? {} : { platform: fields.platform, username: fields.username }),
+    asset,
+    amount: Number(fields.amountAtomic),
+    is_public: fields.isPublic,
+    encrypted_key: encryptedKey,
+    ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
+    tip_address: tipKeys.address,
+    funding_txid: sendResult.txid,
+    tip_view_key: bytesToHex(tipKeys.viewKey),
+    sender_anonymous: fields.senderAnonymous,
+  });
+  if (tip.error || !tip.data) {
+    return {
+      ok: false,
+      error: `Funded ${asset} at ${tipKeys.address} but backend POST failed: ${
+        tip.error ?? 'unknown'
+      }. Spend key for recovery is held locally; not surfaced in this v0.3 cut — file a bug if you hit this.`,
+    };
+  }
+
+  // XMR/WOW need confirmations before the share URL is live; v0.2.4
+  // sets requirements per-asset (XMR ≥10, WOW ≥4). Recipient gets the
+  // share URL once funding_confirmations ≥ confirmations_required.
+  return {
+    ok: true,
+    tipId: tip.data.tip_id,
+    shareUrl: fields.isPublic ? buildShareUrl(tip.data.tip_id, urlFragmentEncoded) : null,
+    // Public tips need to wait for confirmations before the URL is
+    // usable from the recipient side (claim flow reads on-chain
+    // commitment). Surface as pending so the success screen reads
+    // correctly.
+    shareUrlPending: fields.isPublic,
+  };
+}
+
+/**
+ * Generate a fresh XMR/WOW primary keypair for a tip. Mirrors v0.2.4's
+ * generateXmrWowTipKeys in smirk-extension/src/background/social/crypto.ts.
+ *
+ * View key is deterministically derived from the spend key
+ * (Hs(spend) reduced mod ℓ — Monero standard) so the recipient only
+ * needs the spend key to recover both halves.
+ */
+function generateXmrWowTipKeys(asset: 'xmr' | 'wow'): {
+  spendKey: Uint8Array;
+  viewKey: Uint8Array;
+  publicSpendKey: Uint8Array;
+  publicViewKey: Uint8Array;
+  address: string;
+} {
+  const spendSeed = randomBytes(32);
+  const spendScalar = bytesToScalar(spendSeed);
+  const spendKey = scalarToBytes(spendScalar);
+
+  const viewSeed = sha256(spendKey);
+  const viewScalar = bytesToScalar(viewSeed);
+  const viewKey = scalarToBytes(viewScalar);
+
+  const publicSpendKey = ed25519.ExtendedPoint.BASE.multiply(spendScalar).toRawBytes();
+  const publicViewKey = ed25519.ExtendedPoint.BASE.multiply(viewScalar).toRawBytes();
+  const address =
+    asset === 'xmr'
+      ? xmrAddress(publicSpendKey, publicViewKey)
+      : wowAddress(publicSpendKey, publicViewKey);
+  return { spendKey, viewKey, publicSpendKey, publicViewKey, address };
+}
+
+/** Reduce 32 little-endian bytes to a valid ed25519 scalar (mod ℓ). */
+function bytesToScalar(bytes: Uint8Array): bigint {
+  let scalar = 0n;
+  for (let i = 0; i < 32; i++) {
+    scalar += BigInt(bytes[i]!) << BigInt(8 * i);
+  }
+  const L = 2n ** 252n + 27742317777372353535851937790883648493n;
+  return scalar % L;
+}
+
+/** Pack a scalar back to 32 little-endian bytes. */
+function scalarToBytes(scalar: bigint): Uint8Array {
+  const bytes = new Uint8Array(32);
+  let remaining = scalar;
+  for (let i = 0; i < 32; i++) {
+    bytes[i] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return bytes;
+}
+
+// ============================================================================
+// Grin (voucher pattern)
+// ============================================================================
+//
+// Sender builds a single-party voucher tx (createGrinVoucher in
+// crates/grin-ext/src/voucher.rs, committed 588ee2c). The voucher
+// output's secret blinding factor + commitment + range proof + n_child
+// + amount + features are JSON-encoded and encrypted to the recipient.
+// Claimer decrypts → sweep_grin_voucher → spends the commitment into
+// their own keychain non-interactively.
+
+interface GrinVoucherEncryptionData {
+  blindingFactor: string;
+  commitment: string;
+  proof: string;
+  nChild: number;
+  amount: number;
+  features: number;
+}
+
+async function createGrinTip(
+  wallet: UnlockedWallet,
+  senderUserId: string,
+  fields: TipSubmitFields,
+): Promise<TipSubmitOutcome> {
+  if (!wallet.mnemonic) {
+    return { ok: false, error: 'Wallet not unlocked' };
+  }
+
+  // 1. Resolve recipient BTC pubkey for targeted tips.
+  let recipientBtcPubkeyHex: string | undefined;
+  if (!fields.isPublic) {
+    const lookup = await lookupRecipientBtcPubkey(fields.platform, fields.username);
+    if (!lookup.ok) return { ok: false, error: lookup.error };
+    recipientBtcPubkeyHex = lookup.btcPubkeyHex;
+  }
+
+  // 2. Fetch sender's spendable Grin outputs and pick inputs to cover
+  //    voucher_amount + fee. Same greedy-with-fee-iteration scheme as
+  //    startGrinSend in grin-flows.ts.
+  const outputsResp = await api.getGrinOutputs(senderUserId);
+  if (outputsResp.error || !outputsResp.data) {
+    return {
+      ok: false,
+      error: outputsResp.error ?? 'Failed to fetch Grin outputs',
+    };
+  }
+  const spendable = outputsResp.data.outputs.filter((o) => o.status === 'unspent');
+  if (spendable.length === 0) {
+    return { ok: false, error: 'No spendable Grin outputs' };
+  }
+  const sortedDesc = [...spendable].sort((a, b) => b.amount - a.amount);
+
+  const voucherAmount = Number(fields.amountAtomic);
+  const GRIN_BASE_FEE = 1_000_000;
+  const calcFee = (numIn: number, numOut: number, numKern: number) =>
+    GRIN_BASE_FEE * Math.max(1, 4 * numOut - numIn + numKern);
+
+  let selected: typeof sortedDesc = [];
+  let totalSelected = 0;
+  let fee = 0;
+  for (let iter = 0; iter < 10; iter++) {
+    // Worst case: 2 outputs (voucher + change), 1 kernel.
+    fee = calcFee(selected.length || 1, 2, 1);
+    const target = voucherAmount + fee;
+    selected = [];
+    totalSelected = 0;
+    for (const o of sortedDesc) {
+      selected.push(o);
+      totalSelected += o.amount;
+      if (totalSelected >= target) break;
+    }
+    if (totalSelected < target) {
+      // Try a no-change tx if exact-input case fits.
+      const noChangeFee = calcFee(selected.length, 1, 1);
+      if (totalSelected >= voucherAmount + noChangeFee) {
+        fee = noChangeFee;
+        break;
+      }
+      return {
+        ok: false,
+        error: `Insufficient Grin: have ${totalSelected / 1e9}, need ${
+          target / 1e9
+        }`,
+      };
+    }
+    break;
+  }
+  const hasChange = totalSelected - voucherAmount - fee > 0;
+  if (hasChange) {
+    fee = calcFee(selected.length, 2, 1);
+  } else {
+    fee = calcFee(selected.length, 1, 1);
+  }
+
+  // 3. Pick BIP32 paths for voucher + change.
+  const nextChild = outputsResp.data.next_child_index;
+  const voucherPath: [number, number, number, number] = [0, 0, nextChild, 0];
+  const changePath: [number, number, number, number] | undefined = hasChange
+    ? [0, 0, nextChild + 1, 0]
+    : undefined;
+  const changeAmount = hasChange ? totalSelected - voucherAmount - fee : 0;
+
+  // 4. Derive extended private key from mnemonic.
+  const extKey = JSON.parse(wasmGrin.deriveExtendedKey(wallet.mnemonic)) as {
+    extended_private_key_hex: string;
+  };
+
+  // 5. Build the single-party voucher transaction.
+  const voucherResult = wasmGrin.createGrinVoucher({
+    extended_private_key_hex: extKey.extended_private_key_hex,
+    inputs: selected.map((o) => ({
+      path: [0, 0, o.n_child, 0] as [number, number, number, number],
+      amount: o.amount,
+      commitment_hex: o.commitment,
+      is_coinbase: o.is_coinbase,
+    })),
+    voucher_amount: voucherAmount,
+    fee,
+    voucher_path: voucherPath,
+    ...(changePath && changeAmount > 0
+      ? { change: { path: changePath, amount: changeAmount } }
+      : {}),
+    kernel_offset_hex: wasmGrin.randomSecretNonce(),
+    kernel_nonce_hex: wasmGrin.randomSecretNonce(),
+    bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
+    bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
+    change_bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
+    change_bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
+  });
+
+  // 6. Record the tx + lock inputs + record change atomically.
+  const slateId = randomBytesHexUuidLike(); // voucher txs aren't slate-shaped; backend keys by funding_txid which will be slate_id-compatible
+  await api.recordGrinTransaction({
+    userId: senderUserId,
+    slateId,
+    amount: voucherAmount,
+    fee,
+    direction: 'send',
+  });
+  await api.lockGrinOutputs({
+    userId: senderUserId,
+    outputIds: selected.map((o) => o.key_id),
+    txSlateId: slateId,
+  });
+
+  // 7. Broadcast the voucher tx via the backend's broadcast endpoint.
+  //    Includes change_output for atomic record-on-broadcast (the
+  //    dddb025 fix); backend INSERTs the change row alongside the
+  //    network broadcast.
+  const broadcast = await api.broadcastGrinTransaction({
+    userId: senderUserId,
+    slateId,
+    tx: { tx_bytes_hex: voucherResult.tx_bytes_hex },
+    ...(voucherResult.change
+      ? {
+          changeOutput: {
+            keyId: pathToKeyId(voucherResult.change.path),
+            nChild: voucherResult.change.path[3],
+            amount: voucherResult.change.amount,
+            commitment: voucherResult.change.commitment_hex,
+          },
+        }
+      : {}),
+  });
+  if (broadcast.error) {
+    // Rollback: unlock the inputs we locked optimistically. The
+    // backend's unlock_grin_outputs also sweeps any orphan unconfirmed
+    // change rows for this slate (per dddb025).
+    await api
+      .unlockGrinOutputs({ userId: senderUserId, txSlateId: slateId })
+      .catch(() => undefined);
+    return { ok: false, error: `Grin broadcast failed: ${broadcast.error}` };
+  }
+
+  // 8. Encrypt voucher data (JSON) — recipient needs ALL of it to
+  //    construct the sweep tx.
+  const voucherData: GrinVoucherEncryptionData = {
+    blindingFactor: voucherResult.voucher.blinding_factor_hex,
+    commitment: voucherResult.voucher.commitment_hex,
+    proof: voucherResult.voucher.proof_hex,
+    nChild: voucherResult.voucher.path[3],
+    amount: voucherResult.voucher.amount,
+    features: 0,
+  };
+  const voucherDataBytes = new TextEncoder().encode(JSON.stringify(voucherData));
+  const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
+    keyMaterial: voucherDataBytes,
+    isPublic: fields.isPublic,
+    recipientBtcPubkeyHex,
+  });
+
+  // 9. POST to backend. `tip_address` for Grin is the commitment hex
+  //    (no human-readable address — the commitment IS the spend
+  //    target). The kernel_excess from voucherResult goes into
+  //    `funding_txid` since grin txs don't have a network-level
+  //    txid distinct from the kernel.
+  const tip = await api.createSocialTip({
+    ...(fields.isPublic ? {} : { platform: fields.platform, username: fields.username }),
+    asset: 'grin',
+    amount: voucherAmount,
+    is_public: fields.isPublic,
+    encrypted_key: encryptedKey,
+    ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
+    tip_address: voucherResult.voucher.commitment_hex,
+    funding_txid: slateId,
+    grin_commitment: voucherResult.voucher.commitment_hex,
+    sender_anonymous: fields.senderAnonymous,
+  });
+
+  if (tip.error || !tip.data) {
+    return {
+      ok: false,
+      error: `Voucher broadcast but backend POST failed: ${
+        tip.error ?? 'unknown'
+      }. Voucher recoverable via stored slate_id ${slateId}.`,
+    };
+  }
+
+  // Grin needs ~10 confirmations before share URL is live.
+  return {
+    ok: true,
+    tipId: tip.data.tip_id,
+    shareUrl: fields.isPublic ? buildShareUrl(tip.data.tip_id, urlFragmentEncoded) : null,
+    shareUrlPending: fields.isPublic,
+  };
+}
+
+/**
+ * Pack a 4-level BIP32 path back into the hex key_id format the
+ * backend stores for Grin outputs. Mirrors grin-flows.ts::pathToKeyId.
+ */
+function pathToKeyId(path: [number, number, number, number]): string {
+  const out = new Uint8Array(17);
+  out[0] = 4;
+  const view = new DataView(out.buffer);
+  view.setUint32(1, path[0], false);
+  view.setUint32(5, path[1], false);
+  view.setUint32(9, path[2], false);
+  view.setUint32(13, path[3], false);
+  return bytesToHex(out);
+}
+
+/** Generate a UUID-shaped hex string. Voucher txs need a slate_id for
+ *  backend bookkeeping (the tx isn't slate-shaped; the kernel excess
+ *  is the on-chain identifier). */
+function randomBytesHexUuidLike(): string {
+  const bytes = randomBytes(16);
+  // Set version (4) and variant bits per RFC 4122.
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytesToHex(bytes);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 /**

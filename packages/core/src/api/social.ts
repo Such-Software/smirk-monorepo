@@ -33,6 +33,9 @@ export interface CreateSocialTipRequest {
   funding_txid?: string;
   /** Private view key for tip address (XMR/WOW only, for 0-conf detection). */
   tip_view_key?: string;
+  /** Voucher commitment hex (Grin only, for the non-interactive
+   *  voucher-sweep claim path). */
+  grin_commitment?: string;
   /** Hide sender identity in channel announcements (default: false). */
   sender_anonymous?: boolean;
 }
