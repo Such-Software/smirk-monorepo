@@ -330,7 +330,7 @@ export function TipMaker(props: TipMakerProps) {
       {!isPublic && (
         <div>
           <Label>Platform</Label>
-          <PlatformRow value={platform} onChange={setPlatform} />
+          <PlatformDropdown value={platform} onChange={setPlatform} />
           <div style={{ marginTop: 8 }}>
             <Label>{PLATFORM_LABEL[platform]} username</Label>
             <input
@@ -587,54 +587,102 @@ function Label({ children }: { children: preact.ComponentChildren }) {
 }
 
 /**
- * Three labeled toggle buttons in a row — visually unmistakable
- * platform selector. Earlier iteration used a single cycling icon
- * button which was too cryptic ("S" with no label meant nothing to
- * users who hadn't read the source).
+ * Inline-expanding dropdown — single row when closed, vertical list
+ * when open. Scales to N platforms without crowding the popup
+ * (popup is ~360px wide, so 3-button-row blew out horizontally as
+ * brand names grew; future Matrix/Signal/Nostr/etc. would have made
+ * it worse).
  */
-function PlatformRow({
+function PlatformDropdown({
   value,
   onChange,
 }: {
   value: TipPlatform;
   onChange: (p: TipPlatform) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  // Single source of platform ordering. Extend this when adding
+  // Matrix / Signal / Nostr / etc. — Label + Icon already keyed by
+  // TipPlatform union elsewhere in this file.
   const order: TipPlatform[] = ['smirk', 'telegram', 'discord'];
+
   return (
-    <div style={{ display: 'flex', gap: 4 }}>
-      {order.map((p) => {
-        const active = p === value;
-        return (
-          <button
-            key={p}
-            onClick={() => onChange(p)}
-            title={`Send via ${PLATFORM_LABEL[p]}`}
-            style={{
-              flex: 1,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              padding: '8px 6px',
-              background: active
-                ? 'color-mix(in srgb, var(--smirk-accent) 20%, transparent)'
-                : 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
-              border: `1px solid ${
-                active ? 'var(--smirk-accent)' : 'var(--smirk-border)'
-              }`,
-              borderRadius: 6,
-              cursor: 'pointer',
-              color: active ? 'var(--smirk-accent)' : 'inherit',
-              fontFamily: 'inherit',
-              fontSize: 12,
-              fontWeight: active ? 600 : 500,
-            }}
-          >
-            <PlatformIcon platform={p} size={16} />
-            <span>{PLATFORM_LABEL[p]}</span>
-          </button>
-        );
-      })}
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          padding: '10px 12px',
+          background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+          border: '1px solid var(--smirk-border)',
+          borderRadius: 6,
+          color: 'inherit',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          fontSize: 13,
+          fontWeight: 500,
+          boxSizing: 'border-box',
+          textAlign: 'left',
+        }}
+      >
+        <PlatformIcon platform={value} size={16} />
+        <span style={{ flex: 1 }}>{PLATFORM_LABEL[value]}</span>
+        <span style={{ opacity: 0.5, fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            marginTop: 4,
+            background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.04))',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 6,
+            overflow: 'hidden',
+          }}
+        >
+          {order.map((p) => {
+            const active = p === value;
+            return (
+              <button
+                key={p}
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(p);
+                  setOpen(false);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '10px 12px',
+                  background: active
+                    ? 'color-mix(in srgb, var(--smirk-accent) 18%, transparent)'
+                    : 'transparent',
+                  border: 'none',
+                  color: active ? 'var(--smirk-accent)' : 'inherit',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  textAlign: 'left',
+                }}
+              >
+                <PlatformIcon platform={p} size={16} />
+                <span style={{ flex: 1 }}>{PLATFORM_LABEL[p]}</span>
+                {active && <span style={{ fontSize: 10, opacity: 0.7 }}>✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
