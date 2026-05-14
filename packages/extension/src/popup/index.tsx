@@ -47,6 +47,7 @@ import {
 } from '@smirk/core';
 import {
   AppShell,
+  GrinRequestWizard,
   HomeTab,
   LockScreen,
   OnboardingWizard,
@@ -62,7 +63,13 @@ import {
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { send } from './send-handler';
-import { startGrinSend, processGrinS2, cancelGrinSend } from './grin-flows';
+import {
+  startGrinSend,
+  processGrinS2,
+  cancelGrinSend,
+  startGrinInvoice,
+  processGrinI2,
+} from './grin-flows';
 import { initialize as initSmirkWasm, monero as wasmMonero } from '@smirk/wasm';
 
 /**
@@ -746,6 +753,97 @@ function HomeRouter({
         onCopy={(text) => void navigator.clipboard.writeText(text)}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
+        onRequestInvoice={(assetId) => {
+          // Only Grin has an interactive-invoice flow today. ReceiveScreen
+          // calls this for every asset that has the callback set, so guard
+          // here rather than per-asset on the props.
+          if (assetId === 'grin') {
+            void navigate('home/receive/grin-request');
+          }
+        }}
+      />
+    );
+  }
+
+  if (route.current === 'home/receive/grin-request') {
+    return (
+      <GrinRequestWizard
+        assetId="grin"
+        parseAmount={parseAmount}
+        onBuild={async ({ amountAtomic, feeAtomic }) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
+          try {
+            const result = await startGrinInvoice({
+              userId: wallet.fingerprint,
+              mnemonic: wallet.mnemonic,
+              receiverSlatepackAddress: wallet.addresses.grin,
+              amount: Number(amountAtomic),
+              fee: Number(feeAtomic),
+              resolver: {
+                fetchSpendable: async () => {
+                  const r = await api.getGrinOutputs(wallet.fingerprint);
+                  if (r.error || !r.data) {
+                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
+                  }
+                  return {
+                    outputs: r.data.outputs
+                      .filter((o) => o.status === 'unspent')
+                      .map((o) => ({
+                        key_id: o.key_id,
+                        n_child: o.n_child,
+                        amount: o.amount,
+                        commitment: o.commitment,
+                        is_coinbase: o.is_coinbase,
+                      })),
+                    next_child_index: r.data.next_child_index,
+                  };
+                },
+              },
+            });
+            return {
+              ok: true,
+              slate_id: result.slate_id,
+              armored: result.armored,
+              receiver_context_json: result.receiver_context_json,
+              amount: result.amount,
+              fee: result.fee,
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }}
+        onFinalize={async ({ i2, receiverContextJson }) => {
+          try {
+            const result = await processGrinI2({
+              userId: wallet.fingerprint,
+              i2,
+              receiver_context_json: receiverContextJson,
+            });
+            return {
+              ok: true,
+              slate_id: result.slate_id,
+              kernel_excess_hex: result.kernel_excess_hex,
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }}
+        onCancel={async ({ slateId }) => {
+          if (!slateId) return;
+          // Phase 3.5 will add server-side unlock-reserved-output cleanup.
+          // For now, mark cancelled on backend so it stops appearing in
+          // pending lists.
+          await api
+            .updateGrinTransaction({
+              userId: wallet.fingerprint,
+              slateId,
+              status: 'cancelled',
+            })
+            .catch(() => undefined);
+        }}
+        onExit={() => void navigate('home/receive')}
       />
     );
   }

@@ -37,7 +37,7 @@ test module per file. Current state (as of 2026-05-13):
 | Crate | Test count | Coverage focus |
 |---|---|---|
 | `crates/monero-oxide/` | upstream tests + Smirk additions | RctType variants (incl. Wownero), address codecs, ringct ops |
-| `crates/grin-ext/` (unit) | 130 | seed derivation, bip32, secp256k1, switch-commitment blind derivation, slatepack address, Schnorr (single + multi-party + adaptor), slate v4 (JSON + binary), Pedersen, Bulletproofs, kernels (incl. NRD), slatepack codec (armor + bin + age encryption), 6 wallet orchestrators, payment proofs |
+| `crates/grin-ext/` (unit) | 121 | seed derivation, bip32, secp256k1, switch-commitment blind derivation, slatepack address, Schnorr (single + multi-party + adaptor), slate v4 (JSON + binary), Pedersen, Bulletproofs, kernels (incl. NRD), slatepack codec (armor + bin + age encryption), 6 wallet orchestrators, payment proofs |
 | `crates/grin-ext/` (integration) | 8 | cross-validation against `grin_wallet_libwallet` 5.4.0 — see Layer 2 below |
 | `crates/btc-ext/` | active | BIP84/BIP86 derivation, PSBT build + sign + extract, fee estimation |
 | `crates/secp256k1zkp/` | upstream tests | covered via `cargo test`; mostly the C lib's own self-tests |

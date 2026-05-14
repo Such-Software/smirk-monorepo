@@ -549,21 +549,35 @@ export async function signGrinInvoice(args: {
   };
 }
 
-/** Recipient finalizes their invoice (I2 → I3 + broadcast). */
+/** Recipient finalizes their invoice (I2 → I3 + broadcast).
+ *
+ * Sender's inputs are extracted from the I2 slate's `coms` list — entries
+ * without a rangeproof `p` are input refs (vs outputs which carry a proof).
+ * The Rust finalize uses commitment + features only, so path + amount are
+ * dummy on the receiver side.
+ */
 export async function processGrinI2(args: {
   // api: imported at top, used directly
   userId: string;
   i2: string;
   receiver_context_json: string;
-  /** Payer's inputs — required to reconstruct the broadcastable tx.
-   *  Extracted from the I2 slate's coms list by the caller. */
-  sender_inputs: GrinUnspentOutput[];
 }): Promise<GrinSendBroadcastResult> {
   const i2_slate_json = looksArmored(args.i2) ? dearmorSlate(args.i2) : args.i2;
+  const parsed = JSON.parse(i2_slate_json) as {
+    coms?: Array<{ c: string; p?: string | null; f?: number }>;
+  };
+  const sender_inputs: GrinUnspentOutput[] = (parsed.coms ?? [])
+    .filter((c) => c.p === undefined || c.p === null)
+    .map((c) => ({
+      path: [0, 0, 0, 0] as [number, number, number, number],
+      amount: 0,
+      commitment_hex: c.c,
+      is_coinbase: (c.f ?? 0) === 1,
+    }));
   const finalize: GrinFinalizeInvoiceResult = wasmGrin.finalizeInvoice({
     i2_slate_json,
     receiver_context_json: args.receiver_context_json,
-    sender_inputs: args.sender_inputs,
+    sender_inputs,
   });
   const slateId = JSON.parse(finalize.slate_json).id;
   await api.broadcastGrinTransaction({

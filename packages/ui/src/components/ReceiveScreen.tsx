@@ -49,6 +49,19 @@ export interface ReceiveScreenProps {
   initialAssetId?: string;
   /** Icon resolver passed through to AssetIcon. */
   resolveIcon?: (iconKey: string) => string | undefined;
+  /**
+   * Optional: surface a "Request specific amount" affordance below the
+   * address for assets that support it. Currently only Grin's
+   * interactive invoice flow uses this — the shell routes to a
+   * dedicated request wizard when invoked.
+   */
+  onRequestInvoice?: (assetId: string) => void;
+  /**
+   * Optional: surface a "Paste incoming slatepack" affordance. Used by
+   * Grin to sign an external sender's S1 → return S2. The shell routes
+   * to the paste-incoming wizard when invoked.
+   */
+  onPasteIncoming?: (assetId: string) => void;
   class?: string;
 }
 
@@ -84,6 +97,12 @@ export function ReceiveScreen(props: ReceiveScreenProps) {
           {...(props.renderQr ? { renderQr: props.renderQr } : {})}
           {...(props.onCopy ? { onCopy: props.onCopy } : {})}
           {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
+          {...(props.onRequestInvoice
+            ? { onRequestInvoice: props.onRequestInvoice }
+            : {})}
+          {...(props.onPasteIncoming
+            ? { onPasteIncoming: props.onPasteIncoming }
+            : {})}
         />
       )}
     </div>
@@ -124,9 +143,13 @@ function ShowAddress({
   renderQr,
   onCopy,
   resolveIcon,
+  onRequestInvoice,
+  onPasteIncoming,
 }: {
   assetId: string;
   resolveAddress: (assetId: string) => Promise<string> | string;
+  onRequestInvoice?: (assetId: string) => void;
+  onPasteIncoming?: (assetId: string) => void;
   renderQr?: (data: string) => ComponentChildren;
   onCopy?: (text: string) => void;
   resolveIcon?: (iconKey: string) => string | undefined;
@@ -208,6 +231,35 @@ function ShowAddress({
               icon={copied ? '✓' : '📋'}
               onClick={handleCopy}
             />
+          )}
+
+          {(onRequestInvoice || onPasteIncoming) && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                width: '100%',
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: '1px solid var(--smirk-border)',
+              }}
+            >
+              {onRequestInvoice && (
+                <ActionButton
+                  label="Request specific amount"
+                  icon="🧾"
+                  onClick={() => onRequestInvoice(assetId)}
+                />
+              )}
+              {onPasteIncoming && (
+                <ActionButton
+                  label="Paste incoming slatepack"
+                  icon="📥"
+                  onClick={() => onPasteIncoming(assetId)}
+                />
+              )}
+            </div>
           )}
         </>
       )}

@@ -64,7 +64,21 @@ export type {
   SendWizardProps,
   SendFields,
   SendSubmitResult,
+  GrinBuildSlateResult,
+  GrinBuildSlateOutcome,
+  GrinFinalizeResult,
+  GrinFinalizeOutcome,
 } from './components/SendWizard';
+
+export { GrinRequestWizard } from './components/GrinRequestWizard';
+export type {
+  GrinRequestWizardProps,
+  GrinRequestFields,
+  GrinRequestBuildResult,
+  GrinRequestBuildOutcome,
+  GrinRequestFinalizeResult,
+  GrinRequestFinalizeOutcome,
+} from './components/GrinRequestWizard';
 
 export { ReceiveScreen } from './components/ReceiveScreen';
 export type { ReceiveScreenProps } from './components/ReceiveScreen';
