@@ -95,6 +95,32 @@ function ensureWasmInit(): Promise<void> {
   return wasmInitPromise;
 }
 
+/** Wizard slots that hold a Grin slate ceremony in flight. Each one
+ *  persists across popup-close; left untouched forever they'd leak
+ *  state for slates the backend already dropped. */
+const GRIN_WIZARD_IDS = ['send', 'grin-request', 'grin-paste-incoming'] as const;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Drop Grin wizard slots whose `startedAt` is more than 7 days old.
+ * Matches the backend relay's row TTL — once `grin_slatepacks.expires_at`
+ * fires server-side, the local wizard has no counterparty left to
+ * resume against. Runs once on popup mount; visual age indicators on
+ * Inbox rows (1h "Stale", 24h "Expiring") are independent and never
+ * drop anything.
+ */
+async function sweepStaleGrinWizards(): Promise<void> {
+  const cutoff = Date.now() - SEVEN_DAYS_MS;
+  await store.update((s) => {
+    for (const id of GRIN_WIZARD_IDS) {
+      const w = s.wizards[id];
+      if (w && w.startedAt < cutoff) {
+        delete s.wizards[id];
+      }
+    }
+  });
+}
+
 /**
  * Pull the user's pending Grin slatepacks from the relay and shape them
  * for the InboxTab component. Shared by the 30-second poll loop and the
@@ -417,6 +443,14 @@ function App() {
 
   useEffect(() => {
     void refresh();
+    // Sweep stale Grin wizard state on mount. 7 days matches the
+    // backend relay's row TTL (`expires_at` in `grin_slatepacks`); once
+    // the relay drops a row, the local wizard slot it was tracking has
+    // no counterparty left to talk to. Shorter visual indicators (1h
+    // "Stale", 24h "Expiring") live on each Inbox row but don't drop
+    // anything — the user can still cancel/resume manually. Only the
+    // 7-day floor wipes local state, in lockstep with the backend.
+    void sweepStaleGrinWizards();
   }, []);
 
   // Apply persisted theme on boot and whenever it changes. Subscribing
@@ -1425,6 +1459,29 @@ function InboxRouter({
     void navigator.clipboard.writeText(slatepack).catch(() => undefined);
     void navigate('home/send');
   };
+  // Drop a row from the relay. Backend marks the entry cancelled; our
+  // 30s poll will pick up the removal. For pending_to_finalize rows
+  // (which represent an in-flight send we initiated), also unlock the
+  // reserved outputs and mark the local tx record cancelled so the
+  // wallet's pendingOutgoing tristate clears.
+  const handleCancel = async (item: InboxItem) => {
+    await api
+      .cancelGrinSlatepack({ relayId: item.relayId, userId: wallet.fingerprint })
+      .catch(() => undefined);
+    if (item.kind === 'pending_to_finalize') {
+      await api
+        .unlockGrinOutputs({ userId: wallet.fingerprint, txSlateId: item.slateId })
+        .catch(() => undefined);
+      await api
+        .updateGrinTransaction({
+          userId: wallet.fingerprint,
+          slateId: item.slateId,
+          status: 'cancelled',
+        })
+        .catch(() => undefined);
+    }
+    await onRefresh();
+  };
   return (
     <InboxTab
       items={inbox.items}
@@ -1437,6 +1494,7 @@ function InboxRouter({
       onOpenIncomingFinalize={(item) =>
         void handleOpenIncomingFinalize(item.slatepack)
       }
+      onCancel={(item) => void handleCancel(item)}
     />
   );
 }

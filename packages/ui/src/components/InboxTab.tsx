@@ -67,6 +67,12 @@ export interface InboxTabProps {
   /** Tapping a pending_to_finalize item: shell routes back into the
    *  SendWizard Exchange step with the relay's S2 ready to paste. */
   onOpenIncomingFinalize: (item: InboxItemPendingToFinalize) => void;
+  /**
+   * Cancel a row from the relay. Shell calls
+   * `api.cancelGrinSlatepack(item.relayId, …)` and refreshes the list.
+   * For pending_to_finalize, also unlocks the sender's reserved outputs.
+   */
+  onCancel?: (item: InboxItem) => void | Promise<void>;
 }
 
 export function InboxTab(props: InboxTabProps) {
@@ -113,6 +119,7 @@ export function InboxTab(props: InboxTabProps) {
               item={item}
               actionLabel="Sign"
               onOpen={() => props.onOpenIncomingSign(item)}
+              {...(props.onCancel ? { onCancel: () => props.onCancel!(item) } : {})}
             />
           ))
         )}
@@ -132,6 +139,7 @@ export function InboxTab(props: InboxTabProps) {
               item={item}
               actionLabel="Finalize"
               onOpen={() => props.onOpenIncomingFinalize(item)}
+              {...(props.onCancel ? { onCancel: () => props.onCancel!(item) } : {})}
             />
           ))
         )}
@@ -209,38 +217,89 @@ function InboxRow({
   item,
   actionLabel,
   onOpen,
+  onCancel,
 }: {
   item: InboxItem;
   actionLabel: string;
   onOpen: () => void;
+  onCancel?: () => void;
 }) {
+  const age = ageBucket(item.createdAt);
+  const borderColor =
+    age === 'expiring'
+      ? 'var(--smirk-negative, #ff6b6b)'
+      : age === 'stale'
+      ? 'var(--smirk-warning, #d8a14d)'
+      : 'var(--smirk-border)';
   return (
-    <button
-      onClick={onOpen}
+    <div
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
+        gap: 8,
         padding: '10px 12px',
         background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
-        border: '1px solid var(--smirk-border)',
+        border: `1px solid ${borderColor}`,
         borderRadius: 8,
-        color: 'inherit',
-        cursor: 'pointer',
-        textAlign: 'left',
-        fontFamily: 'inherit',
-        width: '100%',
+        opacity: age === 'expiring' ? 0.75 : 1,
       }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          {formatAmountWithTicker(item.amountAtomic, GRIN_ASSET_ID)}
+      <button
+        onClick={onOpen}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+          background: 'transparent',
+          border: 'none',
+          color: 'inherit',
+          cursor: 'pointer',
+          textAlign: 'left',
+          fontFamily: 'inherit',
+          flex: 1,
+          minWidth: 0,
+          padding: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>
+            {formatAmountWithTicker(item.amountAtomic, GRIN_ASSET_ID)}
+          </span>
+          {age === 'stale' && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                padding: '1px 6px',
+                borderRadius: 6,
+                background: 'var(--smirk-warning, #d8a14d)',
+                color: 'var(--smirk-bg, #000)',
+              }}
+            >
+              Stale
+            </span>
+          )}
+          {age === 'expiring' && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                padding: '1px 6px',
+                borderRadius: 6,
+                background: 'var(--smirk-negative, #ff6b6b)',
+                color: 'var(--smirk-bg, #000)',
+              }}
+            >
+              Expiring
+            </span>
+          )}
         </div>
         <div
           style={{
             fontSize: 10,
             color: 'var(--smirk-fg-muted)',
-            marginTop: 2,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -249,9 +308,29 @@ function InboxRow({
           {timeAgo(item.createdAt)} · slate {item.slateId.slice(0, 8)}…
           {item.counterpartyUserId ? ` · from ${item.counterpartyUserId.slice(0, 6)}…` : ' · external'}
         </div>
+      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <ActionButton label={actionLabel} icon="›" onClick={onOpen} />
+        {onCancel && (
+          <button
+            onClick={onCancel}
+            aria-label="Cancel"
+            title="Cancel — drop this slatepack from the relay"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--smirk-border)',
+              color: 'var(--smirk-fg-muted)',
+              cursor: 'pointer',
+              fontSize: 12,
+              padding: '4px 8px',
+              borderRadius: 6,
+            }}
+          >
+            ✕
+          </button>
+        )}
       </div>
-      <ActionButton label={actionLabel} icon="›" onClick={onOpen} />
-    </button>
+    </div>
   );
 }
 
@@ -283,4 +362,25 @@ function timeAgo(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+/**
+ * Bucket a slatepack relay row by age:
+ *   - `fresh`    (< 1h) — normal styling.
+ *   - `stale`    (≥ 1h, < 24h) — yellow border + "Stale" pill. The
+ *                counterparty has gone quiet for an hour.
+ *   - `expiring` (≥ 24h) — red border + "Expiring" pill, dimmed. The
+ *                backend drops the row at 7d; this is just a visual
+ *                signal that the user might want to chase the
+ *                counterparty or cancel manually.
+ * Purely informational — nothing is auto-dropped here.
+ */
+function ageBucket(iso: string): 'fresh' | 'stale' | 'expiring' {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return 'fresh';
+  const ms = Date.now() - t;
+  const HOUR = 60 * 60 * 1000;
+  if (ms >= 24 * HOUR) return 'expiring';
+  if (ms >= HOUR) return 'stale';
+  return 'fresh';
 }
