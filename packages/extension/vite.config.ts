@@ -42,6 +42,15 @@ function copyMonorepoAssets() {
         );
       }
 
+      // Copy the Chrome MV3 manifest by default so the bare
+      // `vite build` produces a loadable unpacked extension.
+      // Firefox builds override this afterward via
+      // `npm run build:firefox` (which does
+      // `cp manifest.firefox.json dist/manifest.json` post-vite).
+      if (existsSync('manifest.json')) {
+        copyFileSync('manifest.json', 'dist/manifest.json');
+      }
+
       // Copy icons if present.
       if (existsSync('icons')) {
         copyDirRecursive('icons', 'dist/icons');
