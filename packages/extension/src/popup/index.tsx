@@ -57,6 +57,7 @@ import {
   ReceiveScreen,
   SendWizard,
   StateProvider,
+  TipMaker,
   applyTheme,
   defaultTheme,
   getTheme,
@@ -64,6 +65,7 @@ import {
   useRoute,
   useSessionState,
   type InboxItem,
+  type RecentRecipient,
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { send } from './send-handler';
@@ -133,6 +135,26 @@ async function sweepStaleGrinWizards(): Promise<void> {
  * for the InboxTab component. Shared by the 30-second poll loop and the
  * manual refresh handler in InboxRouter.
  */
+/**
+ * Pull recent tip recipients from the current session's sent-tips
+ * history. Sorts newest-first and dedupes by platform+username so the
+ * TipMaker's chip row stays tight even when a user has tipped @bob 12
+ * times.
+ *
+ * Returns [] when session isn't loaded yet — TipMaker just renders
+ * without the "Recent" row in that case.
+ */
+function recentTipRecipients(
+  session: WalletSession | null,
+): RecentRecipient[] {
+  // Future: pull from `session.sentTips` once we cache them. For now
+  // start empty; the TipMaker renders fine without recents and the
+  // user can type the username directly. Populated in the next commit
+  // when we wire api.getSentSocialTips on bootstrap.
+  void session;
+  return [];
+}
+
 async function fetchGrinInbox(userId: string): Promise<{
   items: InboxItem[];
   loading: boolean;
@@ -1238,6 +1260,56 @@ function HomeRouter({
     );
   }
 
+  if (route.current === 'home/tip') {
+    return (
+      <TipMaker
+        assetIds={listAssets().map((a) => a.id)}
+        // Grin tipping uses the voucher path (committed primitives in
+        // 588ee2c) — full popup wiring lands in the next commit.
+        hideAssetIds={['grin']}
+        resolveBalance={(assetId) => {
+          const b = (
+            session?.balances as
+              | Record<string, { confirmed: bigint } | undefined>
+              | undefined
+          )?.[assetId];
+          return b?.confirmed ?? 0n;
+        }}
+        parseAmount={parseAmount}
+        recentRecipients={recentTipRecipients(session)}
+        lookupRecipient={async (platform, username) => {
+          // Smirk usernames → lookupSmirkName; external platforms →
+          // lookupSocial with the platform tag. Backend returns
+          // `registered` + per-asset public_keys map.
+          const r =
+            platform === 'smirk'
+              ? await api.lookupSmirkName(username)
+              : await api.lookupSocial(platform, username);
+          if (r.error || !r.data) return { registered: false, hasAssetWallet: false };
+          return {
+            registered: r.data.registered,
+            // We can refine "hasAssetWallet" per current asset later;
+            // for now any registered user is presumed to have a wallet
+            // for any asset since all v0.3 wallets register all 5.
+            hasAssetWallet: r.data.registered,
+          };
+        }}
+        onSubmit={async (_fields) => {
+          // Per-asset tip orchestration ships in the next commit.
+          // BTC/LTC: fresh keypair → buildPsbt → broadcast → POST /social/tip
+          // XMR/WOW: fresh subaddress → signTransaction → submit → POST
+          // Grin: createGrinVoucher → POST (already wired primitives)
+          return {
+            ok: false,
+            error: 'Tip orchestration ships next commit — UI is wired.',
+          };
+        }}
+        onExit={() => void navigate('home')}
+        resolveIcon={resolveIcon}
+      />
+    );
+  }
+
   // Default: Home root.
   const balances = session?.balances;
   const prices = session?.prices;
@@ -1291,9 +1363,7 @@ function HomeRouter({
         loading: session?.refreshing ?? false,
       }}
       actions={{
-        onTip: () => {
-          // TODO: tip-maker wizard route.
-        },
+        onTip: () => void navigate('home/tip'),
         onSend: () => void navigate('home/send'),
         onReceive: () => void navigate('home/receive'),
         onSwap: () => void switchTab('swap'),

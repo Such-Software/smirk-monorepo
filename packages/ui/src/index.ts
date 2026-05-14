@@ -105,6 +105,15 @@ export type { OnboardingWizardProps } from './components/OnboardingWizard';
 export { LockScreen } from './components/LockScreen';
 export type { LockScreenProps } from './components/LockScreen';
 
+export { TipMaker } from './components/TipMaker';
+export type {
+  TipMakerProps,
+  TipPlatform,
+  RecentRecipient,
+  TipSubmitFields,
+  TipSubmitOutcome,
+} from './components/TipMaker';
+
 export { InboxTab } from './components/InboxTab';
 export type {
   InboxTabProps,
