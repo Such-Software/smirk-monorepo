@@ -73,6 +73,15 @@ export interface InboxTabProps {
    * For pending_to_finalize, also unlocks the sender's reserved outputs.
    */
   onCancel?: (item: InboxItem) => void | Promise<void>;
+  /**
+   * "+ Paste a slatepack" affordance at the top of the Inbox. The shell
+   * routes to a paste screen which inspects the slate's `sta` field and
+   * dispatches to the appropriate wizard (S1 → sign-as-receiver,
+   * I1 → pay-invoice, S2 → finalize-send, I2 → finalize-invoice).
+   * Required entry point for slatepacks that didn't arrive via the
+   * Smirk relay — i.e. external grin-wallet, Grim, or clipboard handoff.
+   */
+  onPasteSlatepack?: () => void;
 }
 
 export function InboxTab(props: InboxTabProps) {
@@ -89,6 +98,29 @@ export function InboxTab(props: InboxTabProps) {
         loading={props.loading ?? false}
         {...(props.onRefresh ? { onRefresh: props.onRefresh } : {})}
       />
+
+      {props.onPasteSlatepack && (
+        <button
+          onClick={props.onPasteSlatepack}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            padding: '12px 14px',
+            background: 'var(--smirk-accent)',
+            color: 'var(--smirk-accent-fg, #fff)',
+            border: 'none',
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          + Paste a slatepack
+        </button>
+      )}
 
       {props.error && toSign.length === 0 && toFinalize.length === 0 && (
         <div
@@ -156,7 +188,8 @@ function Header({ loading, onRefresh }: { loading: boolean; onRefresh?: () => vo
       <div>
         <h2 style={{ margin: 0, fontSize: 16 }}>Inbox</h2>
         <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', marginTop: 2 }}>
-          Grin slatepacks routed through Smirk relay.
+          Pending slatepack exchanges. Smirk-to-Smirk traffic shows up
+          automatically; for everything else, use Paste.
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

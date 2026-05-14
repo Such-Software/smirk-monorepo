@@ -33,6 +33,9 @@ export interface GrinRequestFields extends Record<string, unknown> {
   lastKernelExcessHex?: string;
   /** Last build/finalize error to surface in the Exchange step. */
   exchangeError?: string;
+  /** I2 slatepack pre-filled by the Inbox dispatcher (when the user
+   *  pastes an I2 in Inbox we route here with the textarea ready). */
+  pastedI2?: string;
 }
 
 export interface GrinRequestBuildResult {
@@ -170,6 +173,7 @@ export function GrinRequestWizard(props: GrinRequestWizardProps) {
             : {})}
           {...(fields.slateId ? { slateId: fields.slateId } : {})}
           {...(fields.exchangeError ? { error: fields.exchangeError } : {})}
+          {...(fields.pastedI2 ? { pastedI2: fields.pastedI2 } : {})}
           onBuild={async (args) => {
             const result = await props.onBuild(args);
             if (result.ok) {
@@ -268,6 +272,7 @@ function Exchange({
   receiverContextJson: _receiverContextJson,
   slateId: _slateId,
   error,
+  pastedI2,
   onBuild,
   onFinalize,
 }: {
@@ -278,6 +283,8 @@ function Exchange({
   receiverContextJson?: string;
   slateId?: string;
   error?: string;
+  /** I2 slatepack pre-filled by the Inbox dispatcher. */
+  pastedI2?: string;
   onBuild: (args: {
     amountAtomic: bigint;
     feeAtomic: bigint;
@@ -286,8 +293,14 @@ function Exchange({
 }) {
   const [building, setBuilding] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
-  const [i2Text, setI2Text] = useState('');
+  const [i2Text, setI2Text] = useState(pastedI2 ?? '');
   const [copied, setCopied] = useState(false);
+
+  // Pick up Inbox-dispatched I2 if it arrives after first mount.
+  useEffect(() => {
+    if (pastedI2 && !i2Text) setI2Text(pastedI2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pastedI2]);
 
   // First-mount: auto-build the I1 if not already persisted.
   useEffect(() => {

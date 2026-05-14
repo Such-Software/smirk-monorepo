@@ -76,6 +76,10 @@ export interface SendFields extends Record<string, unknown> {
   grinChangeOutputJson?: string;
   /** Last paste/finalize error to surface in the Exchange step. */
   grinExchangeError?: string;
+  /** S2 slatepack pre-pasted by the Inbox dispatcher (when the user
+   *  pastes a slate with sta=S2 in Inbox, we deep-link here with the
+   *  S2 ready for one-tap finalize instead of forcing another paste). */
+  grinPastedS2?: string;
 }
 
 export type SendSubmitResult =
@@ -406,6 +410,7 @@ export function SendWizard(props: SendWizardProps) {
             {...(fields.grinSenderInputsJson ? { senderInputsJson: fields.grinSenderInputsJson } : {})}
             {...(fields.grinChangeOutputJson ? { changeOutputJson: fields.grinChangeOutputJson } : {})}
             {...(fields.grinExchangeError ? { error: fields.grinExchangeError } : {})}
+            {...(fields.grinPastedS2 ? { pastedS2: fields.grinPastedS2 } : {})}
             onBuild={async ({ amountAtomic, toAddress }) => {
               if (!props.onGrinBuildSlate) {
                 return {
@@ -1285,6 +1290,10 @@ interface GrinExchangeProps {
   senderInputsJson?: string;
   changeOutputJson?: string;
   error?: string;
+  /** S2 slatepack pre-filled by the Inbox dispatcher. When present the
+   *  textarea opens already populated and the user just confirms the
+   *  finalize. */
+  pastedS2?: string;
 
   onBuild: (args: { amountAtomic: bigint; toAddress: string }) => Promise<GrinBuildSlateOutcome>;
   onFinalize: (args: { s2: string }) => Promise<GrinFinalizeOutcome>;
@@ -1295,8 +1304,19 @@ function GrinExchange(props: GrinExchangeProps) {
   const asset = mustGetAsset(props.assetId);
   const [building, setBuilding] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
-  const [s2Text, setS2Text] = useState('');
+  const [s2Text, setS2Text] = useState(props.pastedS2 ?? '');
   const [copied, setCopied] = useState(false);
+
+  // If the Inbox dispatcher arrives with a pasted S2 after this
+  // component is already mounted (e.g. user switches tabs and back),
+  // pick it up. The dispatcher writes to wizard.fields.grinPastedS2
+  // which flows through props.pastedS2.
+  useEffect(() => {
+    if (props.pastedS2 && !s2Text) {
+      setS2Text(props.pastedS2);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.pastedS2]);
 
   // Trigger S1 build on first mount if we don't already have one.
   // The wizard's state persists across popup close — if the user

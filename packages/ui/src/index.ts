@@ -88,6 +88,14 @@ export type {
   GrinPasteIncomingSignOutcome,
 } from './components/GrinPasteIncomingWizard';
 
+export { GrinPayInvoiceWizard } from './components/GrinPayInvoiceWizard';
+export type {
+  GrinPayInvoiceWizardProps,
+  GrinPayInvoiceFields,
+  GrinPayInvoiceSignResult,
+  GrinPayInvoiceSignOutcome,
+} from './components/GrinPayInvoiceWizard';
+
 export { ReceiveScreen } from './components/ReceiveScreen';
 export type { ReceiveScreenProps } from './components/ReceiveScreen';
 

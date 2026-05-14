@@ -56,12 +56,6 @@ export interface ReceiveScreenProps {
    * dedicated request wizard when invoked.
    */
   onRequestInvoice?: (assetId: string) => void;
-  /**
-   * Optional: surface a "Paste incoming slatepack" affordance. Used by
-   * Grin to sign an external sender's S1 → return S2. The shell routes
-   * to the paste-incoming wizard when invoked.
-   */
-  onPasteIncoming?: (assetId: string) => void;
   class?: string;
 }
 
@@ -99,9 +93,6 @@ export function ReceiveScreen(props: ReceiveScreenProps) {
           {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
           {...(props.onRequestInvoice
             ? { onRequestInvoice: props.onRequestInvoice }
-            : {})}
-          {...(props.onPasteIncoming
-            ? { onPasteIncoming: props.onPasteIncoming }
             : {})}
         />
       )}
@@ -144,12 +135,10 @@ function ShowAddress({
   onCopy,
   resolveIcon,
   onRequestInvoice,
-  onPasteIncoming,
 }: {
   assetId: string;
   resolveAddress: (assetId: string) => Promise<string> | string;
   onRequestInvoice?: (assetId: string) => void;
-  onPasteIncoming?: (assetId: string) => void;
   renderQr?: (data: string) => ComponentChildren;
   onCopy?: (text: string) => void;
   resolveIcon?: (iconKey: string) => string | undefined;
@@ -233,7 +222,7 @@ function ShowAddress({
             />
           )}
 
-          {(onRequestInvoice || onPasteIncoming) && (
+          {onRequestInvoice && (
             <div
               style={{
                 display: 'flex',
@@ -245,20 +234,11 @@ function ShowAddress({
                 borderTop: '1px solid var(--smirk-border)',
               }}
             >
-              {onRequestInvoice && (
-                <ActionButton
-                  label="Request specific amount"
-                  icon="🧾"
-                  onClick={() => onRequestInvoice(assetId)}
-                />
-              )}
-              {onPasteIncoming && (
-                <ActionButton
-                  label="Paste incoming slatepack"
-                  icon="📥"
-                  onClick={() => onPasteIncoming(assetId)}
-                />
-              )}
+              <ActionButton
+                label="Request specific amount"
+                icon="🧾"
+                onClick={() => onRequestInvoice(assetId)}
+              />
             </div>
           )}
         </>

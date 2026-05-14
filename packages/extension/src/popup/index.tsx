@@ -48,6 +48,7 @@ import {
 import {
   AppShell,
   GrinPasteIncomingWizard,
+  GrinPayInvoiceWizard,
   GrinRequestWizard,
   HomeTab,
   InboxTab,
@@ -71,8 +72,10 @@ import {
   processGrinS2,
   cancelGrinSend,
   startGrinInvoice,
+  signGrinInvoice,
   processGrinI2,
   signIncomingGrinSlate,
+  inspectSlatepack,
 } from './grin-flows';
 import { initialize as initSmirkWasm, monero as wasmMonero } from '@smirk/wasm';
 
@@ -898,22 +901,6 @@ function HomeRouter({
             void navigate('home/receive/grin-request');
           }
         }}
-        onPasteIncoming={(assetId) => {
-          // Same per-asset gate. Phase 3.4 wizard handles external-wallet
-          // S1 → our S2 reply.
-          if (assetId === 'grin') {
-            // Clear any prior wizard state so the manual-paste flow
-            // starts at step 0 with an empty textarea (Inbox-driven
-            // navigation seeds fields explicitly via the InboxRouter).
-            void store
-              .update((s) => {
-                if (s.wizards['grin-paste-incoming']) {
-                  delete s.wizards['grin-paste-incoming'];
-                }
-              })
-              .then(() => navigate('home/receive/grin-incoming'));
-          }
-        }}
       />
     );
   }
@@ -1064,6 +1051,166 @@ function HomeRouter({
           }
         }}
         onExit={() => void navigate('home/receive')}
+      />
+    );
+  }
+
+  // Inbox → "+ Paste a slatepack" universal entry point. Inspects the
+  // sta field and routes to the appropriate downstream wizard so the
+  // user never has to know if they have an S1 / S2 / I1 / I2 in their
+  // clipboard — they just paste once and we figure out what to do.
+  if (route.current === 'home/inbox/paste') {
+    return (
+      <InboxPasteRouter
+        onReadClipboard={async () => navigator.clipboard.readText()}
+        onDispatch={async (armored) => {
+          let inspected;
+          try {
+            inspected = inspectSlatepack(armored);
+          } catch (e) {
+            return {
+              ok: false,
+              error: e instanceof Error ? e.message : 'Failed to parse slatepack',
+            };
+          }
+          switch (inspected.sta) {
+            case 'S1': {
+              await store.update((s) => {
+                s.wizards['grin-paste-incoming'] = {
+                  step: 1,
+                  startedAt: Date.now(),
+                  fields: { armoredIncoming: armored },
+                };
+              });
+              void navigate('home/receive/grin-incoming');
+              return { ok: true };
+            }
+            case 'I1': {
+              await store.update((s) => {
+                s.wizards['grin-pay-invoice'] = {
+                  step: 1, // skip Paste, go to Confirm
+                  startedAt: Date.now(),
+                  fields: {
+                    armoredIncoming: armored,
+                    inspectedAmount: inspected.amount,
+                    inspectedFee: inspected.fee,
+                    inspectedSlateId: inspected.id,
+                  },
+                };
+              });
+              void navigate('home/inbox/pay-invoice');
+              return { ok: true };
+            }
+            case 'S2': {
+              // Pre-fill the SendWizard's S2 textarea + clipboard fallback.
+              await store.update((s) => {
+                const w = s.wizards.send;
+                if (w) w.fields.grinPastedS2 = armored;
+              });
+              void navigator.clipboard.writeText(armored).catch(() => undefined);
+              void navigate('home/send');
+              return { ok: true };
+            }
+            case 'I2': {
+              await store.update((s) => {
+                const w = s.wizards['grin-request'];
+                if (w) w.fields.pastedI2 = armored;
+              });
+              void navigator.clipboard.writeText(armored).catch(() => undefined);
+              void navigate('home/receive/grin-request');
+              return { ok: true };
+            }
+            case 'S3':
+            case 'I3':
+              return {
+                ok: false,
+                error: `This slatepack is already finalized (${inspected.sta}) — nothing left to do.`,
+              };
+            default:
+              return {
+                ok: false,
+                error: `Unknown slate state "${inspected.sta}". Expected S1/S2/I1/I2.`,
+              };
+          }
+        }}
+        onExit={() => void navigate('inbox')}
+      />
+    );
+  }
+
+  if (route.current === 'home/inbox/pay-invoice') {
+    return (
+      <GrinPayInvoiceWizard
+        assetId="grin"
+        onReadClipboard={async () => navigator.clipboard.readText()}
+        onCopy={(text) => void navigator.clipboard.writeText(text)}
+        onInspect={(i1Armored) => {
+          try {
+            const i = inspectSlatepack(i1Armored);
+            return {
+              ok: true,
+              sta: i.sta,
+              amount: i.amount,
+              fee: i.fee,
+              slate_id: i.id,
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }}
+        onSign={async ({ i1Armored, relayId }) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
+          try {
+            const signed = await signGrinInvoice({
+              userId: grinUserId,
+              mnemonic: wallet.mnemonic,
+              payerSlatepackAddress: wallet.addresses.grin,
+              i1Armored,
+              resolver: {
+                fetchSpendable: async () => {
+                  const r = await api.getGrinOutputs(grinUserId);
+                  if (r.error || !r.data) {
+                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
+                  }
+                  return {
+                    outputs: r.data.outputs
+                      .filter((o) => o.status === 'unspent')
+                      .map((o) => ({
+                        key_id: o.key_id,
+                        n_child: o.n_child,
+                        amount: o.amount,
+                        commitment: o.commitment,
+                        is_coinbase: o.is_coinbase,
+                      })),
+                    next_child_index: r.data.next_child_index,
+                  };
+                },
+              },
+            });
+            if (relayId) {
+              await api
+                .signGrinSlatepack({
+                  relayId,
+                  userId: grinUserId,
+                  signedSlatepack: signed.armored,
+                })
+                .catch(() => undefined);
+            }
+            return {
+              ok: true,
+              slate_id: signed.slate_id,
+              i2_armored: signed.armored,
+              amount_atomic: String(
+                JSON.parse(signed.slate_json).amt ?? 0,
+              ),
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }}
+        onExit={() => void navigate('inbox')}
       />
     );
   }
@@ -1415,6 +1562,151 @@ function parseAmount(assetId: string, text: string): bigint | null {
   }
 }
 
+/**
+ * InboxPasteRouter — universal paste-and-dispatch screen.
+ *
+ * One textarea. User pastes a slatepack of any sta (S1/S2/I1/I2/S3/I3);
+ * the shell's onDispatch inspects the slate, seeds the appropriate
+ * wizard slot, and navigates there. The user never has to know what
+ * kind of slatepack they have — they just paste once.
+ */
+function InboxPasteRouter({
+  onReadClipboard,
+  onDispatch,
+  onExit,
+}: {
+  onReadClipboard?: () => Promise<string>;
+  onDispatch: (armored: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  onExit: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const looksLikeSlatepack = (s: string): boolean =>
+    s.trimStart().startsWith('BEGINSLATEPACK');
+
+  const submit = async () => {
+    const trimmed = text.trim();
+    if (!looksLikeSlatepack(trimmed)) {
+      setError("Doesn't look like a slatepack — expected BEGINSLATEPACK…");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    const result = await onDispatch(trimmed);
+    setBusy(false);
+    if (!result.ok) setError(result.error);
+  };
+
+  const pasteFromClipboard = async () => {
+    if (!onReadClipboard) return;
+    try {
+      const clip = await onReadClipboard();
+      if (looksLikeSlatepack(clip)) {
+        setText(clip);
+        setError(null);
+      } else {
+        setError("Clipboard doesn't contain a slatepack.");
+      }
+    } catch {
+      setError('Could not read clipboard. Paste manually below.');
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+        <button
+          onClick={onExit}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'inherit',
+            cursor: 'pointer',
+            fontSize: 12,
+            padding: '4px 8px',
+          }}
+        >
+          ‹ Back
+        </button>
+        <span style={{ opacity: 0.5 }}>Paste slatepack</span>
+        <span style={{ width: 60 }} />
+      </header>
+
+      <h2 style={{ fontSize: 15, margin: '0 0 4px' }}>Paste a slatepack</h2>
+      <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)', marginBottom: 4 }}>
+        Drop in any Grin slatepack — incoming payment (S1), invoice (I1),
+        signed response (S2/I2). We'll figure out what kind it is and
+        route you to the right next step.
+      </div>
+
+      <textarea
+        value={text}
+        onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+        placeholder="BEGINSLATEPACK.&#10;…&#10;ENDSLATEPACK."
+        rows={6}
+        autoFocus
+        style={{
+          width: '100%',
+          fontFamily: 'monospace',
+          fontSize: 11,
+          padding: '8px 10px',
+          borderRadius: 6,
+          border: '1px solid var(--smirk-border)',
+          background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+          color: 'inherit',
+          resize: 'vertical',
+          boxSizing: 'border-box',
+        }}
+      />
+
+      {error && (
+        <div style={{ fontSize: 12, color: 'var(--smirk-negative, #ff6b6b)' }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        {onReadClipboard && (
+          <button
+            onClick={pasteFromClipboard}
+            style={{
+              background: 'transparent',
+              color: 'inherit',
+              border: '1px solid var(--smirk-border)',
+              cursor: 'pointer',
+              fontSize: 12,
+              padding: '6px 12px',
+              borderRadius: 6,
+            }}
+          >
+            📋 Paste from clipboard
+          </button>
+        )}
+        <button
+          onClick={() => void submit()}
+          disabled={!text.trim() || busy}
+          style={{
+            flex: 1,
+            background: text.trim() && !busy ? 'var(--smirk-accent)' : 'rgba(255,255,255,0.06)',
+            color: 'var(--smirk-accent-fg, #fff)',
+            border: 'none',
+            cursor: text.trim() && !busy ? 'pointer' : 'not-allowed',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '8px 16px',
+            borderRadius: 6,
+            fontFamily: 'inherit',
+          }}
+        >
+          {busy ? 'Inspecting…' : 'Continue'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ----- Other tabs (still stubs) -----
 
 function SwapStub() {
@@ -1471,12 +1763,18 @@ function InboxRouter({
   };
   // pending_to_finalize: the SendWizard's existing wizard.fields already
   // hold the sender context for the in-flight S1 (set on send-time).
-  // Auto-paste the S2 by writing it into the wizard's fields and
-  // navigating; the user just hits "Finalize & broadcast" in the
-  // Exchange step. If the wizard's slate_id doesn't match the inbox
-  // row (e.g. user sent twice), the user can still copy-paste manually
-  // — the clipboard fallback below covers that case.
+  // Pre-fill the S2 textarea via wizard.fields.grinPastedS2 so the
+  // user just hits "Finalize & broadcast" in the Exchange step. If the
+  // wizard's slate_id doesn't match the inbox row (e.g. user sent
+  // twice), they can still cancel + restart manually.
   const handleOpenIncomingFinalize = async (slatepack: string) => {
+    await store.update((s) => {
+      const w = s.wizards.send;
+      if (w) {
+        w.fields.grinPastedS2 = slatepack;
+      }
+    });
+    // Clipboard fallback for the "wizard slot mismatch" case.
     void navigator.clipboard.writeText(slatepack).catch(() => undefined);
     void navigate('home/send');
   };
@@ -1509,6 +1807,16 @@ function InboxRouter({
       loading={inbox.loading}
       error={inbox.error}
       onRefresh={() => void onRefresh()}
+      onPasteSlatepack={() => {
+        // Reset prior paste-router state so the user starts fresh.
+        void store
+          .update((s) => {
+            if (s.wizards['grin-paste-router']) {
+              delete s.wizards['grin-paste-router'];
+            }
+          })
+          .then(() => navigate('home/inbox/paste'));
+      }}
       onOpenIncomingSign={(item) =>
         void handleOpenIncomingSign(item.slatepack, item.relayId)
       }
