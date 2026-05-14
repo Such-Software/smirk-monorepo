@@ -27,6 +27,7 @@ pub mod slatepack;
 pub mod slatepack_address;
 pub mod slatepack_encryption;
 pub mod transaction;
+pub mod voucher;
 pub mod wallet_flows;
 
 pub use kernel::{KernelFeatures, NRD_MAX_RELATIVE_HEIGHT};
@@ -79,6 +80,10 @@ pub use payment_proof::{
 };
 pub use slatepack_address::{
     slatepack_address, slatepack_address_ed25519_secret, slatepack_address_to_pubkey, Network,
+};
+pub use voucher::{
+    create_grin_voucher, sweep_grin_voucher, ChangePath, CreateVoucherParams,
+    CreateVoucherResult, SweepVoucherParams, SweepVoucherResult, VoucherOutput,
 };
 
 /// Crate version, exposed for runtime debugging.

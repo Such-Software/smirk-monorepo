@@ -490,6 +490,20 @@ export const grin = {
     const json = wasm.grin_finalize_invoice(JSON.stringify(params));
     return JSON.parse(json) as GrinFinalizeInvoiceResult;
   },
+  /** Sender-side: build a single-party voucher tx that places a UTXO
+   *  on chain whose blinding factor the recipient will decrypt + use
+   *  to sweep. Returns broadcastable tx bytes + the SECRET blind. */
+  createGrinVoucher: (params: GrinCreateVoucherParams): GrinCreateVoucherResult => {
+    const json = wasm.grin_create_grin_voucher(JSON.stringify(params));
+    return JSON.parse(json) as GrinCreateVoucherResult;
+  },
+  /** Claimer-side: build a single-party sweep tx that spends a
+   *  voucher commitment into the claimer's keychain. Caller has
+   *  already decrypted `voucher_blind_hex`. */
+  sweepGrinVoucher: (params: GrinSweepVoucherParams): GrinSweepVoucherResult => {
+    const json = wasm.grin_sweep_grin_voucher(JSON.stringify(params));
+    return JSON.parse(json) as GrinSweepVoucherResult;
+  },
 };
 
 // ---- High-level wallet-flow params + results -------------------------------
@@ -640,6 +654,71 @@ export interface GrinFinalizeInvoiceParams {
 export interface GrinFinalizeInvoiceResult {
   slate_json: string;
   final_signature_hex: string;
+  kernel_excess_hex: string;
+  tx_bytes_hex: string;
+}
+
+// ---- Voucher tx (social-tipping primitive) --------------------------------
+
+export interface GrinVoucherChangePath {
+  path: [number, number, number, number];
+  amount: number;
+}
+
+export interface GrinCreateVoucherParams {
+  extended_private_key_hex: string;
+  inputs: GrinUnspentOutput[];
+  voucher_amount: number;
+  fee: number;
+  voucher_path: [number, number, number, number];
+  change?: GrinVoucherChangePath;
+  kernel_offset_hex: string;
+  kernel_nonce_hex: string;
+  bp_rewind_nonce_hex: string;
+  bp_private_nonce_hex: string;
+  /** Required when `change` is set. */
+  change_bp_rewind_nonce_hex?: string;
+  change_bp_private_nonce_hex?: string;
+}
+
+/** Voucher output details — `blinding_factor_hex` is the SECRET that
+ *  grants spend authority. Caller (JS shell) encrypts this to recipient
+ *  via ECIES (targeted tip) or stores in URL fragment (public tip). */
+export interface GrinVoucherOutput {
+  path: [number, number, number, number];
+  amount: number;
+  commitment_hex: string;
+  proof_hex: string;
+  /** SECRET — never log, never transmit plaintext. */
+  blinding_factor_hex: string;
+}
+
+export interface GrinCreateVoucherResult {
+  voucher: GrinVoucherOutput;
+  change: GrinChangeOutputInfo | null;
+  kernel_excess_hex: string;
+  tx_bytes_hex: string;
+}
+
+export interface GrinSweepVoucherParams {
+  extended_private_key_hex: string;
+  voucher_commitment_hex: string;
+  /** SECRET — decrypted from the sender's encrypted payload. */
+  voucher_blind_hex: string;
+  voucher_amount: number;
+  /** 0 = plain (default), 1 = coinbase. */
+  voucher_features?: number;
+  claimer_path: [number, number, number, number];
+  fee: number;
+  kernel_offset_hex: string;
+  kernel_nonce_hex: string;
+  bp_rewind_nonce_hex: string;
+  bp_private_nonce_hex: string;
+}
+
+export interface GrinSweepVoucherResult {
+  /** Claimer's new output — persist in their grin_outputs table. */
+  output: GrinChangeOutputInfo;
   kernel_excess_hex: string;
   tx_bytes_hex: string;
 }

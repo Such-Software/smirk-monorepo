@@ -38,6 +38,7 @@ mod slate;
 mod slate_builder;
 mod slatepack;
 mod transaction;
+mod voucher;
 mod wallet_flows;
 
 // ---------- Public re-exports ----------
@@ -78,6 +79,7 @@ pub use slatepack::{
     grin_slatepack_unpack_with_secret,
 };
 pub use transaction::{grin_pubkey_to_commitment, grin_slate_to_transaction_bytes};
+pub use voucher::{grin_create_grin_voucher, grin_sweep_grin_voucher};
 pub use wallet_flows::{
     grin_create_invoice, grin_create_send_transaction, grin_finalize_invoice,
     grin_finalize_send_slate, grin_random_secret_nonce, grin_sign_incoming_send_slate,
