@@ -52,6 +52,30 @@ export interface SendFields extends Record<string, unknown> {
   sweep?: boolean;
   /** Filled in after a successful broadcast; surfaced on the Done step. */
   lastTxid?: string;
+
+  // ----- Grin-specific persistent state -----
+  //
+  // Mimblewimble's interactive flow is multi-step: sender builds S1,
+  // sends to recipient, waits for S2 response, finalizes S3, broadcasts.
+  // The wizard's step counter advances through Compose → GrinExchange
+  // → Done. While in Exchange, these fields hold the slate state so
+  // closing + reopening the popup picks up where the user left off.
+
+  /** S1 slatepack armored string the user displays/copies to recipient. */
+  grinArmoredOutgoing?: string;
+  /** Opaque sender context JSON — passed back to `onGrinFinalize`. */
+  grinSenderContextJson?: string;
+  /** Slate UUID for backend bookkeeping. */
+  grinSlateId?: string;
+  /** Backend relay entry id, set when recipient is a Smirk user. */
+  grinRelayId?: string;
+  /** Serialized GrinUnspentOutput[] used to fund this send — needed at
+   *  finalize to build the broadcastable tx bytes. */
+  grinSenderInputsJson?: string;
+  /** Serialized GrinChangeOutputInfo, present iff this tx has change. */
+  grinChangeOutputJson?: string;
+  /** Last paste/finalize error to surface in the Exchange step. */
+  grinExchangeError?: string;
 }
 
 export type SendSubmitResult =
@@ -157,10 +181,72 @@ export interface SendWizardProps {
     sweep: boolean;
   }) => Promise<SendSubmitResult>;
 
+  /**
+   * Grin: build the sender's S1 slate. Lock outputs on backend,
+   * record the pending tx, optionally drop the slatepack at the
+   * Smirk relay if the recipient is also a Smirk user. Returns the
+   * armored S1 slatepack the user shares with the recipient + the
+   * sender context the wizard persists for finalize.
+   *
+   * Only called when the chosen asset's family is `mimblewimble`.
+   * Other asset families use the one-shot `onSubmit` path.
+   */
+  onGrinBuildSlate?: (args: {
+    amountAtomic: bigint;
+    toAddress: string;
+  }) => Promise<GrinBuildSlateOutcome>;
+
+  /**
+   * Grin: receiver returned S2; finalize and broadcast. Spends
+   * inputs server-side, marks tx finalized, stamps the kernel
+   * excess. Returns the slate id (used as Grin's "txid") + the
+   * on-chain kernel commitment.
+   */
+  onGrinFinalize?: (args: {
+    s2: string;
+    senderContextJson: string;
+    senderInputsJson: string;
+    changeOutputJson: string | undefined;
+    relayId: string | undefined;
+  }) => Promise<GrinFinalizeOutcome>;
+
+  /**
+   * Grin: user-cancel mid-exchange. Unlocks outputs on backend,
+   * deletes relay entry if any, marks tx cancelled.
+   */
+  onGrinCancel?: (args: {
+    slateId: string;
+    relayId: string | undefined;
+  }) => Promise<void>;
+
   onExit: () => void;
   resolveIcon?: (iconKey: string) => string | undefined;
   class?: string;
 }
+
+export interface GrinBuildSlateResult {
+  ok: true;
+  slate_id: string;
+  /** Armored slatepack to display to the user. */
+  armored: string;
+  /** Opaque JSON the wizard persists for the finalize step. */
+  sender_context_json: string;
+  /** Serialized GrinUnspentOutput[]. */
+  sender_inputs_json: string;
+  /** Serialized GrinChangeOutputInfo. Omitted/empty when no change. */
+  change_output_json?: string;
+  /** Backend relay id, set iff recipient is a Smirk user. */
+  relay_id?: string;
+}
+export type GrinBuildSlateOutcome = GrinBuildSlateResult | { ok: false; error: string };
+
+export interface GrinFinalizeResult {
+  ok: true;
+  slate_id: string;
+  /** 33-byte kernel commitment hex — Grin's analog of a txid. */
+  kernel_excess_hex: string;
+}
+export type GrinFinalizeOutcome = GrinFinalizeResult | { ok: false; error: string };
 
 const WIZARD_ID = 'send';
 const TOTAL_STEPS = 4; // 0=asset 1=address 2=compose 3=review (success at step >=4)
@@ -264,7 +350,8 @@ export function SendWizard(props: SendWizardProps) {
         fields.fromAssetId &&
         fields.toAddress &&
         fields.amountText !== undefined &&
-        fields.feeTier && (
+        fields.feeTier &&
+        mustGetAsset(fields.fromAssetId).family.family !== 'mimblewimble' && (
           <Review
             assetId={fields.fromAssetId}
             amountText={fields.amountText}
@@ -290,6 +377,108 @@ export function SendWizard(props: SendWizardProps) {
                 await wizard.goToStep(TOTAL_STEPS);
               }
               return result;
+            }}
+          />
+        )}
+
+      {/* Step 3 — Grin: interactive Exchange step instead of one-shot Review.
+          Sender already chose amount + recipient. We build S1, show it to
+          the user (clipboard / relay drop), wait for the recipient's S2,
+          then finalize + broadcast. State persists in wizard.fields so a
+          popup-close mid-flow recovers when the user comes back. */}
+      {step === 3 &&
+        fields.fromAssetId &&
+        fields.toAddress &&
+        fields.amountText !== undefined &&
+        mustGetAsset(fields.fromAssetId).family.family === 'mimblewimble' && (
+          <GrinExchange
+            assetId={fields.fromAssetId}
+            toAddress={fields.toAddress}
+            amountText={fields.amountText}
+            parseAmount={props.parseAmount}
+            {...(fields.grinArmoredOutgoing ? { armoredOutgoing: fields.grinArmoredOutgoing } : {})}
+            {...(fields.grinSenderContextJson ? { senderContextJson: fields.grinSenderContextJson } : {})}
+            {...(fields.grinSlateId ? { slateId: fields.grinSlateId } : {})}
+            {...(fields.grinRelayId ? { relayId: fields.grinRelayId } : {})}
+            {...(fields.grinSenderInputsJson ? { senderInputsJson: fields.grinSenderInputsJson } : {})}
+            {...(fields.grinChangeOutputJson ? { changeOutputJson: fields.grinChangeOutputJson } : {})}
+            {...(fields.grinExchangeError ? { error: fields.grinExchangeError } : {})}
+            onBuild={async ({ amountAtomic, toAddress }) => {
+              if (!props.onGrinBuildSlate) {
+                return {
+                  ok: false,
+                  error: 'Grin send unavailable: no onGrinBuildSlate callback wired',
+                };
+              }
+              const result = await props.onGrinBuildSlate({ amountAtomic, toAddress });
+              if (result.ok) {
+                await wizard.patchFields({
+                  grinArmoredOutgoing: result.armored,
+                  grinSenderContextJson: result.sender_context_json,
+                  grinSlateId: result.slate_id,
+                  grinSenderInputsJson: result.sender_inputs_json,
+                  ...(result.change_output_json
+                    ? { grinChangeOutputJson: result.change_output_json }
+                    : {}),
+                  ...(result.relay_id ? { grinRelayId: result.relay_id } : {}),
+                  grinExchangeError: '',
+                });
+              } else {
+                await wizard.patchFields({ grinExchangeError: result.error });
+              }
+              return result;
+            }}
+            onFinalize={async ({ s2 }) => {
+              if (!props.onGrinFinalize) {
+                return {
+                  ok: false,
+                  error: 'Grin finalize unavailable: no onGrinFinalize callback wired',
+                };
+              }
+              if (!fields.grinSenderContextJson || !fields.grinSenderInputsJson) {
+                return {
+                  ok: false,
+                  error: 'Missing sender state — was the wizard reset mid-flow?',
+                };
+              }
+              const result = await props.onGrinFinalize({
+                s2,
+                senderContextJson: fields.grinSenderContextJson,
+                senderInputsJson: fields.grinSenderInputsJson,
+                changeOutputJson: fields.grinChangeOutputJson,
+                relayId: fields.grinRelayId,
+              });
+              if (result.ok) {
+                // Use kernel_excess as the on-chain identifier shown on
+                // the Done step. Grin block explorers index by kernel.
+                await wizard.patchFields({
+                  lastTxid: result.kernel_excess_hex,
+                  grinExchangeError: '',
+                });
+                await wizard.goToStep(TOTAL_STEPS);
+              } else {
+                await wizard.patchFields({ grinExchangeError: result.error });
+              }
+              return result;
+            }}
+            onCancel={async () => {
+              if (props.onGrinCancel && fields.grinSlateId) {
+                await props.onGrinCancel({
+                  slateId: fields.grinSlateId,
+                  relayId: fields.grinRelayId,
+                });
+              }
+              // Clear the Grin-specific persisted state before exiting.
+              await wizard.patchFields({
+                grinArmoredOutgoing: '',
+                grinSenderContextJson: '',
+                grinSlateId: '',
+                grinRelayId: '',
+                grinSenderInputsJson: '',
+                grinChangeOutputJson: '',
+                grinExchangeError: '',
+              });
+              await exit(wizard, props.onExit);
             }}
           />
         )}
@@ -1066,6 +1255,233 @@ function Review({
 // Done
 // ============================================================================
 
+// ============================================================================
+// GrinExchange — interactive S1↔S2 step for Mimblewimble sends.
+// ============================================================================
+//
+// Replaces the one-shot Review step for Grin. Phases:
+//   1. Not yet built: auto-build S1 on mount via `onBuild`.
+//   2. Built: display the armored slatepack (copy / share) + paste
+//      box for the receiver's S2 response.
+//   3. Paste received: call `onFinalize` → on success, wizard advances
+//      to Done with kernel_excess as the displayed "txid".
+//
+// All state lives in wizard.fields so a popup-close mid-exchange
+// resumes here on reopen.
+
+interface GrinExchangeProps {
+  assetId: string;
+  toAddress: string;
+  amountText: string;
+  parseAmount: (assetId: string, text: string) => bigint | null;
+
+  armoredOutgoing?: string;
+  senderContextJson?: string;
+  slateId?: string;
+  relayId?: string;
+  senderInputsJson?: string;
+  changeOutputJson?: string;
+  error?: string;
+
+  onBuild: (args: { amountAtomic: bigint; toAddress: string }) => Promise<GrinBuildSlateOutcome>;
+  onFinalize: (args: { s2: string }) => Promise<GrinFinalizeOutcome>;
+  onCancel: () => void | Promise<void>;
+}
+
+function GrinExchange(props: GrinExchangeProps) {
+  const asset = mustGetAsset(props.assetId);
+  const [building, setBuilding] = useState(false);
+  const [finalizing, setFinalizing] = useState(false);
+  const [s2Text, setS2Text] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  // Trigger S1 build on first mount if we don't already have one.
+  // The wizard's state persists across popup close — if the user
+  // already built S1 and closed the popup, we skip rebuilding.
+  useEffect(() => {
+    if (props.armoredOutgoing) return;
+    let alive = true;
+    const amountAtomic = props.parseAmount(props.assetId, props.amountText);
+    if (amountAtomic === null || amountAtomic <= 0n) return;
+    setBuilding(true);
+    props
+      .onBuild({ amountAtomic, toAddress: props.toAddress })
+      .finally(() => {
+        if (alive) setBuilding(false);
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.armoredOutgoing]);
+
+  const copy = (text: string) => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    });
+  };
+
+  const handleFinalize = async () => {
+    if (!s2Text.trim()) return;
+    setFinalizing(true);
+    await props.onFinalize({ s2: s2Text.trim() });
+    setFinalizing(false);
+  };
+
+  // ----- Building phase -----
+  if (building && !props.armoredOutgoing) {
+    return (
+      <div>
+        <StepTitle>Building slate…</StepTitle>
+        <FullPageStatus>
+          Selecting inputs, signing your half of the kernel, and locking
+          outputs on the server.
+        </FullPageStatus>
+      </div>
+    );
+  }
+
+  // ----- Build-failed (no slatepack to show, with error) -----
+  if (!props.armoredOutgoing && props.error) {
+    return (
+      <div>
+        <StepTitle>Couldn't build slate</StepTitle>
+        <FieldError>{props.error}</FieldError>
+        <PrimaryButton onClick={() => void props.onCancel()}>
+          Cancel
+        </PrimaryButton>
+      </div>
+    );
+  }
+
+  // ----- Awaiting S2 -----
+  return (
+    <div>
+      <StepTitle>Share slatepack, wait for response</StepTitle>
+      <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)', marginBottom: 10 }}>
+        Grin sends are two-way. Copy this slatepack, send it to{' '}
+        <strong>{truncateMiddle(props.toAddress, 24)}</strong>, and wait
+        for them to send their signed response back. Closing the popup
+        is fine — your state is saved.
+      </div>
+
+      <div
+        style={{
+          fontSize: 10,
+          color: 'var(--smirk-fg-muted)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          marginBottom: 4,
+        }}
+      >
+        Slatepack to share
+      </div>
+      <button
+        onClick={() => copy(props.armoredOutgoing ?? '')}
+        data-no-uppercase
+        title="Click to copy"
+        style={{
+          fontFamily: 'var(--smirk-font-family-mono)',
+          fontSize: 10,
+          wordBreak: 'break-all',
+          padding: '8px 10px',
+          background: 'var(--smirk-bg-sunken)',
+          border: '1px solid var(--smirk-border)',
+          borderRadius: 'var(--smirk-radius, 8px)',
+          color: 'inherit',
+          cursor: 'pointer',
+          width: '100%',
+          textAlign: 'left',
+          maxHeight: 110,
+          overflowY: 'auto',
+          lineHeight: 1.2,
+        }}
+      >
+        {props.armoredOutgoing}
+      </button>
+      <button
+        onClick={() => copy(props.armoredOutgoing ?? '')}
+        style={{
+          fontSize: 11,
+          padding: '4px 10px',
+          marginTop: 6,
+          background: 'var(--smirk-bg-elevated)',
+          border: '1px solid var(--smirk-border-strong, var(--smirk-border))',
+          borderRadius: 'var(--smirk-radius, 8px)',
+          color: 'inherit',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+        }}
+      >
+        {copied ? '✓ Copied' : '⧉ Copy slatepack'}
+      </button>
+      {props.relayId && (
+        <div
+          style={{
+            fontSize: 11,
+            color: 'var(--smirk-positive)',
+            marginTop: 6,
+          }}
+        >
+          Also delivered via Smirk relay — recipient will see it in their Inbox.
+        </div>
+      )}
+
+      <div
+        style={{
+          fontSize: 10,
+          color: 'var(--smirk-fg-muted)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          marginTop: 16,
+          marginBottom: 4,
+        }}
+      >
+        Paste recipient's response
+      </div>
+      <textarea
+        value={s2Text}
+        onInput={(e) => setS2Text((e.target as HTMLTextAreaElement).value)}
+        placeholder="BEGINSLATEPACK…"
+        rows={5}
+        style={textareaStyle}
+      />
+      {props.error && <FieldError>{props.error}</FieldError>}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button
+          onClick={() => void props.onCancel()}
+          style={{
+            flex: 1,
+            fontSize: 12,
+            padding: '10px 12px',
+            background: 'var(--smirk-bg-elevated)',
+            border: '1px solid var(--smirk-border-strong, var(--smirk-border))',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            color: 'inherit',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          Cancel
+        </button>
+        <Button
+          onClick={handleFinalize}
+          {...(!s2Text.trim() || finalizing ? { disabled: true } : {})}
+        >
+          {finalizing ? 'Broadcasting…' : 'Finalize & broadcast'}
+        </Button>
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', marginTop: 12 }}>
+        Locked: <strong>{props.amountText}</strong> {asset.ticker} +
+        outputs. Cancelling unlocks them.
+      </div>
+    </div>
+  );
+}
+
 function DoneStep({
   txid,
   assetId,
@@ -1219,6 +1635,11 @@ function explorerTxUrl(assetId: string, txid: string): string | null {
       return `https://xmrchain.net/tx/${txid}`;
     case 'wow':
       return `https://explore.wownero.com/tx/${txid}`;
+    case 'grin':
+      // Grin block explorers index by kernel excess commitment, not
+      // by a "txid" the way UTXO/CryptoNote chains do. Done step
+      // surfaces kernel_excess_hex in the txid slot for this asset.
+      return `https://grinexplorer.net/kernel/${txid}`;
     default:
       return null;
   }

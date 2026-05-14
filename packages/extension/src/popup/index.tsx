@@ -62,6 +62,7 @@ import {
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { send } from './send-handler';
+import { startGrinSend, processGrinS2, cancelGrinSend } from './grin-flows';
 import { initialize as initSmirkWasm, monero as wasmMonero } from '@smirk/wasm';
 
 /**
@@ -648,6 +649,88 @@ function HomeRouter({
             });
           }
           return result;
+        }}
+        onGrinBuildSlate={async ({ amountAtomic, toAddress }) => {
+          // Resolve mnemonic + wallet's slatepack address.
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
+          // Smirk-to-Smirk auto-detect (look up recipient address →
+          // user_id, drop slatepack at relay) lands in Phase 3.3 when
+          // the address-to-user endpoint is wired through the API
+          // client. For now, every Grin send is clipboard-mode; the
+          // recipient pastes our S1 into their wallet and pastes the
+          // S2 response back.
+          const recipientUserId: string | undefined = undefined;
+          try {
+            const result = await startGrinSend({
+              userId: wallet.fingerprint,
+              mnemonic: wallet.mnemonic,
+              senderSlatepackAddress: wallet.addresses.grin,
+              recipientSlatepackAddress: toAddress,
+              ...(recipientUserId ? { recipientUserId } : {}),
+              amount: Number(amountAtomic),
+              resolver: {
+                fetchSpendable: async () => {
+                  const r = await api.getGrinOutputs(wallet.fingerprint);
+                  if (r.error || !r.data) {
+                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
+                  }
+                  return {
+                    outputs: r.data.outputs
+                      .filter((o) => o.status === 'unspent')
+                      .map((o) => ({
+                        key_id: o.key_id,
+                        n_child: o.n_child,
+                        amount: o.amount,
+                        commitment: o.commitment,
+                        is_coinbase: o.is_coinbase,
+                      })),
+                    next_child_index: r.data.next_child_index,
+                  };
+                },
+              },
+            });
+            return {
+              ok: true,
+              slate_id: result.slate_id,
+              armored: result.armored,
+              sender_context_json: result.sender_context_json,
+              sender_inputs_json: JSON.stringify(result.sender_inputs),
+              ...(result.change_output
+                ? { change_output_json: JSON.stringify(result.change_output) }
+                : {}),
+              ...(result.relay_id ? { relay_id: result.relay_id } : {}),
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }}
+        onGrinFinalize={async ({ s2, senderContextJson, senderInputsJson, changeOutputJson, relayId }) => {
+          try {
+            const result = await processGrinS2({
+              userId: wallet.fingerprint,
+              s2,
+              sender_context_json: senderContextJson,
+              sender_inputs: JSON.parse(senderInputsJson),
+              ...(changeOutputJson ? { change_output: JSON.parse(changeOutputJson) } : {}),
+              ...(relayId ? { relay_id: relayId } : {}),
+            });
+            return {
+              ok: true,
+              slate_id: result.slate_id,
+              kernel_excess_hex: result.kernel_excess_hex,
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }}
+        onGrinCancel={async ({ slateId, relayId }) => {
+          await cancelGrinSend({
+            userId: wallet.fingerprint,
+            slate_id: slateId,
+            ...(relayId ? { relay_id: relayId } : {}),
+          }).catch(() => undefined);
         }}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
