@@ -51,6 +51,10 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | NRD kernel construction (sig message + v2 wire format for plain / coinbase / height-locked / NRD) | ✅ Done — sig msg composes with Schnorr round-trip; range-checked (NRD relative_height ∈ [1, 10080]) |
 | Multi-party Schnorr aggregation (Grin-style aggsig: partial sign + verify + aggregate, no key-coefficient tweaks) | ✅ Done — 2-party + 3-party round-trip tests pass |
 | Adaptor-signature variants of slate signing | ✅ Done — Schnorr adaptor sign/verify/complete/extract over secp256k1; full 2-party atomic-swap round-trip tested end-to-end (Bob's adaptor partial → Alice verifies → completion with `t` → aggregation → final Schnorr verifies → watcher extracts `t`) |
+| Switch-commitment-aware blind derivation (BIP32 child key → `blind_switch` with the J generator from secp256k1-zkp) | ✅ Done — Grin Hard Fork 2 consensus requirement; byte-equivalent with `grin_keychain::ExtKeychain::derive_key` across 5 cross-validation cases |
+| Slate v4 compact-binary serialization (`SlatepackBin` wire format) | ✅ Done — `crates/grin-ext/src/slate_bin.rs` ported from `grin_wallet_libwallet::v4_bin`; binary round-trip verified against the official library |
+| **6 high-level wallet orchestrators** in `crates/grin-ext/src/wallet_flows.rs` | ✅ Done — `create_send_transaction`, `sign_incoming_send_slate`, `finalize_send_slate`, `create_invoice`, `sign_invoice`, `finalize_invoice`. Each takes wallet-level params (extended priv key, inputs, amount, fee) and returns slate + context + tx_bytes. Mirror the XMR/WOW pattern where Rust does the signing but TS does the orchestration |
+| Cross-validation against `grin_wallet_libwallet` 5.4.0 | ✅ Done — `crates/grin-ext/tests/grin_wallet_compat.rs`: 8 tests covering sign convention, `derive_blind` vs `grin_keychain` (5 cases), full S1→S2→S3 round-trip, full I1→I2→I3 round-trip, binary slate round-trip, random secret nonce. Catches protocol-mismatch bugs that internal tests can't (e.g. the c78aff0 `outputs − inputs − offset` fix) |
 
 ## Key derivation chain
 
@@ -129,6 +133,15 @@ Available now in `crates/smirk-wasm/src/grin/` (organized into submodules — `k
 | `grin_slatepack_decrypt(encrypted_payload_hex, secret_key_hex)` | `hex` — decrypt with the recipient's ed25519 secret seed |
 | `grin_slatepack_pack_encrypted(inner_payload_hex, sender?, recipient_pubkey_hex)` | `string` — convenience: encrypt + bin (mode=1) + armor in one call |
 | `grin_slatepack_unpack_with_secret(armored, secret_key_hex)` | `JSON` — works for both plain and encrypted slatepacks; decrypts when needed |
+| `grin_create_send_transaction(params_json)` | `JSON: { slate_json, sender_context_json, change_output_info_json }` — high-level: picks inputs/change, derives blinds, computes excess + offset, emits S1 |
+| `grin_sign_incoming_send_slate(params_json)` | `JSON: { slate_json, receiver_context_json, receiver_output_info_json }` — receiver-side: adds Pedersen output + Bulletproof + partial sig → S2 |
+| `grin_finalize_send_slate(params_json)` | `JSON: { slate_json, final_signature_hex, tx_bytes_hex, kernel_excess_hex }` — sender-side: verifies S2 partial, aggregates → S3 + broadcastable TX |
+| `grin_create_invoice(params_json)` | `JSON: { slate_json, receiver_context_json, receiver_output_info_json }` — invoice-flow init (I1): receiver picks amount, adds output + partial sig |
+| `grin_sign_invoice(params_json)` | `JSON: { slate_json, sender_context_json, change_output_info_json }` — payer's response to invoice (I2): adds inputs, fee, sender partial |
+| `grin_finalize_invoice(params_json)` | `JSON: { slate_json, final_signature_hex, tx_bytes_hex, kernel_excess_hex }` — receiver-side I3: aggregate + assemble TX bytes |
+| `grin_random_secret_nonce()` | `hex` — fresh 32-byte secp256k1 scalar (mod n); used by callers needing kernel/sig nonces |
+| `grin_slate_v4_to_bin_hex(slate_json)` | `hex` — slate v4 compact-binary serialization (`SlatepackBin` payload) |
+| `grin_slate_v4_from_bin_hex(bin_hex)` | `string` — inverse: binary back to canonical slate v4 JSON |
 | `grin_ext_version()` | grin-ext crate version string, for runtime version checks |
 
 More exports land as the underlying `crates/grin-ext/` surface grows.
@@ -177,5 +190,13 @@ the binding is right there.
 
 ## Reference
 
-- `crates/grin-ext/src/seed.rs` — current implementation
-- `crates/grin-ext/src/seed.rs::tests` — golden vectors with independently-verified expected values
+- `crates/grin-ext/src/seed.rs` — mnemonic → extended private key
+- `crates/grin-ext/src/keychain.rs` — BIP32 + switch-commitment-aware blind derivation, cross-validated against `grin_keychain`
+- `crates/grin-ext/src/blind.rs` — scalar arithmetic + `sender_blind_excess` (sign convention: `outputs − inputs − offset`)
+- `crates/grin-ext/src/slate.rs` — v4 slate JSON types + round-trip
+- `crates/grin-ext/src/slate_bin.rs` — v4 compact-binary `SlatepackBin` codec (interop with grin-wallet 5.x)
+- `crates/grin-ext/src/slate_builder/` — S1/S2/S3 + I1/I2/I3 ceremony primitives
+- `crates/grin-ext/src/wallet_flows.rs` — 6 high-level orchestrators
+- `crates/grin-ext/src/kernel.rs` — Plain / Coinbase / HeightLocked / NRD kernels
+- `crates/grin-ext/src/slatepack.rs` — armor + binary mode + age encryption
+- `crates/grin-ext/tests/grin_wallet_compat.rs` — Layer-2 cross-validation against `grin_wallet_libwallet` 5.4.0 (see `docs/TESTING.md`)

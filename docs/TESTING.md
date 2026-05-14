@@ -32,14 +32,16 @@ the previous one to be green before it's worth running.
 ### Rust unit tests
 
 `make rust-test` runs `cargo test --workspace`. Each crate has its own
-test module per file. Current state (as of 2026-05-08):
+test module per file. Current state (as of 2026-05-13):
 
 | Crate | Test count | Coverage focus |
 |---|---|---|
-| `crates/monero-oxide/` | upstream tests + Smirk additions | RctType variants, address codecs, ringct ops |
-| `crates/grin-ext/` | 61 | seed derivation, bip32, secp256k1, slatepack address, Schnorr (single + multi-party), slate v4, Pedersen, Bulletproofs, slatepack codec (armor + bin + age encryption) |
+| `crates/monero-oxide/` | upstream tests + Smirk additions | RctType variants (incl. Wownero), address codecs, ringct ops |
+| `crates/grin-ext/` (unit) | 130 | seed derivation, bip32, secp256k1, switch-commitment blind derivation, slatepack address, Schnorr (single + multi-party + adaptor), slate v4 (JSON + binary), Pedersen, Bulletproofs, kernels (incl. NRD), slatepack codec (armor + bin + age encryption), 6 wallet orchestrators, payment proofs |
+| `crates/grin-ext/` (integration) | 8 | cross-validation against `grin_wallet_libwallet` 5.4.0 — see Layer 2 below |
+| `crates/btc-ext/` | active | BIP84/BIP86 derivation, PSBT build + sign + extract, fee estimation |
 | `crates/secp256k1zkp/` | upstream tests | covered via `cargo test`; mostly the C lib's own self-tests |
-| `crates/smirk-wasm/` | 9 | exposed Monero/Wownero functions |
+| `crates/smirk-wasm/` | 10 | exposed Monero/Wownero/Grin functions |
 | `crates/swap-core/` | 1 | placeholder |
 
 **Conventions per module:**
@@ -81,13 +83,40 @@ Runs via `make wasm-smoke` (which builds the Node-target bundle first).
 
 ## Layer 2: cross-implementation interop (per release candidate)
 
-**Status: planned, partial today.** Needs more upstream fixtures and a
-Grin testnet test infra.
+**Status: active for Grin; planned for other chains.** The
+grin-ext crate runs the official `grin_wallet_libwallet` 5.4.0 +
+`grin_keychain` 5.3.3 as **dev-dependencies** and cross-validates
+load-bearing primitives + full ceremony round-trips against them. This
+catches a class of bug that internal tests can't: a sign convention or
+serialization choice that's internally consistent but doesn't match
+what the network actually requires.
 
-### Upstream fixtures (today, expand as bugs are found)
+See `crates/grin-ext/tests/README.md` for the strategy doc. Real
+example caught: c78aff0 — `sender_blind_excess` returned
+`inputs − outputs − offset` (wrong by sign), all 100+ internal tests
+passed because both sides used the same wrong convention, but a real
+mainnet broadcast would have failed at kernel verification.
 
-We commit real-world output from `grin-wallet` / Grim and verify our
-crate reproduces or accepts it byte-for-byte:
+### Grin cross-validation tests (8 today)
+
+`crates/grin-ext/tests/grin_wallet_compat.rs`:
+
+1. `sender_blind_excess` sign convention matches `grin_wallet_libwallet`
+2-6. `derive_blind` byte-equivalent with `grin_keychain::ExtKeychain::derive_key`
+   across 5 cases (different paths, both switch types)
+7. Full S1→S2→S3 round-trip: our slate fed through the reference's
+   verifier produces a valid aggregate signature against the kernel
+   commitment derived from the on-chain outputs/inputs
+8. Full I1→I2→I3 round-trip: same, inverse direction
+   Plus binary slate round-trip (`SlatepackBin` codec ↔ reference's `v4_bin`)
+   and `random_secret_nonce` distribution sanity check.
+
+Dev-deps don't ship in the production WASM bundle — `grin_wallet_libwallet`
+is a `[dev-dependencies]` entry, used by `cargo test` only.
+
+### Upstream fixtures (committed, expand as bugs are found)
+
+We also commit real-world output from `grin-wallet` / Grim:
 
 - `crates/grin-ext/src/slatepack.rs::FIXTURE` — real slatepack from
   `grin-wallet/api/src/owner_rpc.rs`, verified to dearmor + parse +
@@ -95,12 +124,9 @@ crate reproduces or accepts it byte-for-byte:
 - `crates/grin-ext/src/slate.rs::FIXTURE_I2` — real slate v4 JSON,
   verified to round-trip through SlateV4 types
 
-**To add (when relevant work is done):**
-- A real `bullet_proof` produced by grin-wallet, verified by our wrapper
-- A real Schnorr signature from grin-wallet, verified by our `verify`
-  (validates wire-format byte equivalence)
-- A complete signed slate v4 from grin-wallet, end-to-end through our
-  parser + signature verifier
+**To add for other chains:**
+- BTC: a real PSBT from Sparrow / Bitcoin Core, verified to round-trip
+- XMR: a real signed tx from monero-wallet-cli, verified to parse
 
 ### Grin testnet (planned, not yet built)
 

@@ -1,12 +1,16 @@
-# Send flow — design doc
+# Send flow — reference
 
 How "user taps Send → tx lands on chain" works for each of Smirk's five
-assets. Captures the layer responsibilities so each new piece slots into
-the same plumbing.
+assets, as shipped in v0.3.
 
-Status as of 2026-05-11: `SendWizard` UI exists in `@smirk/ui` but
-`onSubmit` is wired to a `stubSubmit` placeholder in the extension
-popup. This doc describes the v0.3 target.
+Status as of 2026-05-13: end-to-end send is working for **all five
+assets** on mainnet. BTC/LTC PSBT path shipped 2026-05-11 (9b4c395),
+XMR/WOW + tri-state balance reconciliation shipped 2026-05-12 (bf3ad28,
+b2ec790), Grin Phase 3.1 (SendWizard interactive Exchange step +
+clipboard-mode wiring) shipped 2026-05-13 (0f21587). Phase 3.2–3.5
+(invoice flow, Inbox, paste-incoming, cancel/expire) is the remaining
+Grin work — see `crates/grin-ext/` notes + the v0.3 plan in
+`smirk-backend/docs/V0_3_PLAN.md`.
 
 ## Smirk's single-address scheme — read this first
 
@@ -108,23 +112,27 @@ of PREPARE / SIGN / BROADCAST for each asset.
 
 ```
 @smirk/ui
-└── SendWizard.tsx                        UI scaffolding (asset, amount, recipient, review)
-                                          ↓ onSubmit({ assetId, atomic, recipient }) → SendSubmitResult
+├── SendWizard.tsx              UI scaffolding (asset, amount, recipient, review)
+│                               ↓ onSubmit({ assetId, atomic, recipient }) → SendSubmitResult
+│                               Grin branch: onGrinBuildSlate / onGrinFinalize / onGrinCancel
+└── GrinRequestWizard.tsx       Receiver-initiated invoice flow (Phase 3.2)
 
-packages/extension/src/popup/send-handler.ts  (NEW — to be created)
-└── buildSendHandler(wallet, api, wasm)   Dispatches to per-asset send function
-    ├── sendBtc / sendLtc
-    │     PREPARE via api.getUtxos, ESTIMATE via api.estimateFee,
-    │     SIGN via wasm.bitcoin.signPsbt + wasm.bitcoin.buildPsbt (NEW),
-    │     BROADCAST via api.broadcastTx
-    ├── sendXmrWow
-    │     PREPARE via api.getLwsUnspent + api.getLwsDecoys (NEW),
-    │     SIGN via wasm.monero.signTransaction,
-    │     BROADCAST via api.submitTx (NEW — LWS submit_raw_tx wrapper)
-    └── sendGrin
-          PREPARE via api.grin.initiateSlate (NEW),
-          interactive S1 → S2 → S3 ceremony via api.grin.relay,
-          BROADCAST automatic on slate finalization
+packages/extension/src/popup/send-handler.ts        — generic dispatcher
+└── buildSendHandler(wallet, api, wasm)
+    ├── sendBtc / sendLtc       PREPARE via api.getUtxos, ESTIMATE via api.estimateFee,
+    │                           SIGN via wasm.bitcoin.buildPsbt + signPsbt + extractTx,
+    │                           BROADCAST via api.broadcastTx
+    └── sendXmrWow              PREPARE via api.getLwsUnspent + api.getLwsDecoys,
+                                key-image filter for spent outputs,
+                                SIGN via wasm.monero.signTransaction (fresh OVK per tx),
+                                BROADCAST via api.submitRawTx (LWS submit_raw_tx)
+
+packages/extension/src/popup/grin-flows.ts          — Grin orchestrator
+└── startGrinSend / processGrinS2 / cancelGrinSend
+    startGrinInvoice / signGrinInvoice / processGrinI2 / signIncomingGrinSlate
+    Plus slatepack codec (armor / dearmor / inspect) and the greedy fee iterator.
+    Each step calls into @smirk/wasm's grin namespace (which wraps the 6
+    Rust orchestrators in crates/grin-ext/src/wallet_flows.rs).
 ```
 
 Keep `@smirk/ui` pure presentation — all chain logic in
@@ -165,17 +173,16 @@ Keep `@smirk/ui` pure presentation — all chain logic in
    new `wasm.bitcoin.extractTx(psbt)` helper.
 5. **BROADCAST** — `api.broadcastTx(asset, txHex)` → `{ txid }`.
 
-### Gaps (what to build)
+### As shipped
 
-- **PSBT construction** in `crates/btc-ext/src/build.rs` — `build_psbt(
-  network, inputs, outputs, master_xpub_origin) -> psbt_base64`. Inputs
-  carry `witness_utxo` + `bip32_derivation` so the existing `sign_psbt`
-  can resolve them.
-- **PSBT extraction** — `crates/btc-ext/src/extract.rs` — `extract_tx(
-  psbt_base64) -> tx_hex` after signing is complete.
-- **TS facade** for both, exposed via `@smirk/wasm` `bitcoin.buildPsbt`
-  + `bitcoin.extractTx`.
-- **`sendBtc`/`sendLtc`** in `packages/extension/src/popup/send-handler.ts`.
+All four BTC/LTC layers landed 2026-05-11 (ad46ce6, 0d29947, 20c510a,
+9b4c395):
+
+- `crates/btc-ext/src/build.rs::build_psbt` + `extract.rs::extract_tx`
+- `crates/smirk-wasm/src/bitcoin.rs` exports `btc_build_psbt` + `btc_extract_tx`
+- `@smirk/wasm` `bitcoin.buildPsbt` + `bitcoin.extractTx` TS facades
+- `packages/extension/src/popup/send-handler.ts::sendBtc` / `sendLtc`
+- Greedy fee iterator + sweep mode + fee picker in `SendWizard`
 
 ### Edge cases for v0.3
 
@@ -218,19 +225,19 @@ LWS daemon; ring composition matters for both privacy and validity.
 5. **BROADCAST** — POST signed-tx-hex to LWS `/submit_raw_tx`. Backend
    needs a wrapper (`api.submitTx(asset, txHex)`).
 
-### Gaps (what to build)
+### As shipped
 
-- **`getLwsUnspent` / `getLwsDecoys`** wrappers in `@smirk/core/api`.
-  Backend likely has the endpoints already (used by balance fetch);
-  expose them.
-- **`api.submitTx`** wrapper to hit LWS `/submit_raw_tx` via backend.
-  Backend endpoint may exist; if not, add it.
-- **`sendXmrWow`** in `send-handler.ts`. Most of the inputs to
-  `wasm.monero.signTransaction` come from the prepare step; this
-  module's job is glue.
-- **Per-tx OVK generation** is in `crates/smirk-wasm/src/signing.rs`
-  (`fresh_outgoing_view_key()`) — but **callers must not pass a
-  hardcoded OVK in the params JSON**. Document at the JS facade.
+bf3ad28 (handler + fee preview + spent-output filter) and b2ec790
+(Phase 2 — tri-state balance, pendingOutgoing, 3-signal reconciliation):
+
+- `api.getLwsUnspent` + `api.getLwsDecoys` + `api.submitRawTx` wrappers
+  in `@smirk/core/api`.
+- `packages/extension/src/popup/send-handler.ts::sendXmrWow` glues
+  prepare → sign → broadcast.
+- Fresh OVK per tx via `fresh_outgoing_view_key()` (never hardcoded;
+  see `feedback_signing_outgoing_view_key.md` memory).
+- Key-image filter pre-sign to weed out outputs the wallet has already
+  spent (catches LWS lag after a tx hits mempool but before LWS rescans).
 
 ### Edge cases for v0.3
 
@@ -238,73 +245,116 @@ LWS daemon; ring composition matters for both privacy and validity.
   derivation should always be derivable as fallback for partial sends.
 - Sub-address support: deferred. v0.3 sends only to/from the primary
   address.
-- Locked output handling: skip locked outputs in selection; surface
-  "available vs locked" in the UI.
+- Locked output handling: skipped in selection; surfaced as the
+  **locked** band of the tri-state UI (Phase 2, b2ec790). Reconciliation
+  uses three signals (local input cache, input-identifier match vs
+  `verifiedSpentInputs`, `locked_balance > 0` fallback) to decide when a
+  `pendingOutgoing` entry has settled — avoids the four bugs we hit in
+  the legacy extension (commits 839e001, 15661ba, 1266671, ad46ce6).
 
 ---
 
 ## Grin (Mimblewimble — interactive)
 
-**Hardest case.** Sender and receiver run an interactive ceremony
-(slatepacks or compact-slates) where they each contribute signing
-material before the kernel can be finalized.
+**Hardest case.** Sender and receiver run an interactive ceremony where
+they each contribute signing material before the kernel can be
+finalized. v0.3 ships both directions of the ceremony — sender-driven
+**send** (S1→S2→S3) and receiver-driven **invoice** (I1→I2→I3) — plus a
+compact-binary slatepack codec so we interop with external `grin-wallet`
+and Grim users, not only other Smirk wallets.
 
-### Stages
+### Send (sender-driven, S1→S2→S3)
 
-1. **PREPARE (S1)**
-   - Pick our inputs (Pedersen commitments).
-   - Compute blinding excess.
-   - Generate S1 slate (slate JSON describing the tx so far).
-2. **SEND S1 to receiver**
-   - If `recipient = slatepack address`: send via Smirk's slatepack
-     relay (`api.grin.relayPostSlate(s1)`).
-   - If `recipient = file/copy-paste`: encode as base58-armored
-     slatepack, hand to user.
-3. **RECEIVE S2 (from receiver)**
-   - Receiver does their part, hands back S2.
-4. **FINALIZE (S3)**
-   - `wasm.grin.senderFinalizeS3(s2, originalContext)` →
-     final kernel signature + ready-to-submit tx bytes.
-5. **BROADCAST**
-   - `api.broadcastGrinTransaction(txHex)` → backend hits Grin node.
+1. **PREPARE (S1)** — sender picks inputs (Pedersen commitments + their
+   blinding factors), computes change blind, computes `sender_blind_excess
+   = Σoutputs − Σinputs − offset` (sign convention fix in c78aff0;
+   cross-validated against `grin_wallet_libwallet` 5.4.0), creates the
+   kernel nonce, and emits the S1 slate via `grin_create_send_transaction`.
+2. **HAND-OFF** — S1 is wrapped in a slatepack (`SlatepackBin` v1.0 →
+   ASCII armor `BEGINSLATEPACK. … . ENDSLATEPACK.`). User copies it out
+   of band (Smirk-to-Smirk relay auto-detect is Phase 3.3).
+3. **SIGN (S2 — receiver)** — receiver pastes S1, runs
+   `grin_sign_incoming_send_slate` which adds their output (Pedersen
+   commit + Bulletproof), their partial sig, and pubkeys. Returns S2 as
+   another armored slatepack.
+4. **FINALIZE (S3 — sender)** — sender pastes S2, runs
+   `grin_finalize_send_slate` which verifies the receiver's partial,
+   aggregates partials → final Schnorr signature, verifies the kernel
+   sig against `(sum_of_commitments − offset_G)`, assembles
+   broadcastable TX bytes via `grin_slate_to_transaction_bytes`.
+5. **BROADCAST** — `api.broadcastGrinTransaction(txHex)`. Kernel excess
+   from the final slate doubles as the on-chain identifier shown in the
+   "Done" screen — `https://grinexplorer.net/kernel/${excess_hex}`.
 
-### Gaps (what to build)
+### Invoice (receiver-driven, I1→I2→I3) — Phase 3.2
 
-- **Slate state machine** in `packages/core/src/grin-flow.ts` (NEW) —
-  tracks `{ pending, signed, finalized }` slates per recipient.
-- **Inbox integration** — S2 responses arrive via the slatepack relay;
-  Inbox tab (UI_DESIGN principle 3) renders them as "Response to
-  pending tx — finalize?" items.
-- **`sendGrin`** in `send-handler.ts` only kicks off S1; the actual
-  completion happens when the user opens an Inbox item.
+Same primitives, inverse direction. Receiver picks an amount, runs
+`grin_create_invoice` to emit I1 (which carries the receiver's output
+commit + range proof + partial sig), hands the armored slatepack to the
+payer. Payer runs `grin_sign_invoice` → I2 (adds inputs, fee, sender
+partial). Receiver finalizes with `grin_finalize_invoice` → broadcastable
+TX. UI surface is `GrinRequestWizard` reached from the Receive screen's
+"Request specific amount" affordance.
+
+### Where the code lives
+
+```
+crates/grin-ext/src/wallet_flows.rs      — 6 Rust orchestrators
+crates/smirk-wasm/src/grin/wallet_flows.rs  — wasm-bindgen wrappers + JSON DTOs
+packages/wasm/src/index.ts               — typed TS facades (grin.* namespace)
+packages/extension/src/popup/grin-flows.ts  — extension orchestrator:
+  startGrinSend / processGrinS2 / cancelGrinSend
+  startGrinInvoice / signGrinInvoice / processGrinI2 / signIncomingGrinSlate
+  armorSlate / dearmorSlate / inspectSlatepack
+  calcGrinFee — BASE_FEE × max(1, 4×outputs − inputs + kernels)
+packages/ui/src/components/SendWizard.tsx  — Grin Exchange step
+packages/ui/src/components/GrinRequestWizard.tsx  — invoice wizard
+```
+
+### Cross-implementation interop
+
+The slate v4 compact-binary codec (`crates/grin-ext/src/slate_bin.rs`,
+ported from grin v4_bin.rs) is what makes Smirk↔grin-wallet interop work
+— same wire bytes as `SlatepackBin` produced by grin-wallet 5.x. Verified
+end-to-end by the round-trip cross-validation tests in
+`crates/grin-ext/tests/grin_wallet_compat.rs` (S1→S2→S3 + I1→I2→I3
+against `grin_wallet_libwallet` 5.4.0 as a dev-dep oracle). See
+`docs/TESTING.md` Layer 2.
 
 ### Edge cases for v0.3
 
-- Receiver offline: S1 sits in the relay; user can re-send. Document
-  expiry behavior (slatepack relay default TTL).
-- Payment proofs: optional in v0.3 — record the kernel signature so
-  the sender can later prove the tx existed.
-- NRD kernels (relative timelocks): not used for normal sends in
-  v0.3; only for swap-refund paths in v0.4+.
+- **Persistence across popup close** — Mimblewimble's interactive flow
+  *must* survive popup-close (the receiver may take hours to respond).
+  Wizard state lives in session storage via `useWizard<GrinFields>`;
+  resuming the wizard re-renders the Exchange step with the same
+  pre-built S1 + same sender context.
+- **Payment proofs** — Rust + WASM support shipped (ed25519 receipt
+  over `(amount, kernel_commitment, sender_address)`); not yet
+  surfaced in UI. Phase 3.5.
+- **NRD kernels (relative timelocks)** — primitives shipped; not used
+  for normal sends in v0.3. Reserved for swap-refund paths in v0.4+.
+- **Slate expiry** — Phase 3.5 adds 1h warning + 24h drop with a Cancel
+  affordance per pending exchange.
 
 ---
 
-## Build order
+## Build order — as shipped
 
-Per `V0_3_PLAN.md` "Next-up build order":
-
-1. **BTC + LTC first.** Same code, different network params. Validates
-   the SendWizard → handler → wasm → broadcast → confirm-screen plumbing
-   with the simplest possible asset model. Estimate: 5–7 days end-to-end.
-2. **XMR + WOW second.** Reuse the same handler signature; the prepare
-   step is more involved (decoy selection from LWS) but signing is
-   already proven via the balance-fetch key-image verification.
-   Estimate: 5–7 days.
-3. **Grin last.** Genuinely interactive — depends on Inbox surface
-   landing first since S2-finalize happens out-of-band. Estimate: 7–10
-   days, partially gated on Inbox.
-
-Total: ~17–24 days. Realistic for 3–4 weeks calendar with iteration.
+1. **BTC + LTC** — shipped 2026-05-11 (ad46ce6, 0d29947, 20c510a, 9b4c395).
+2. **XMR + WOW** — shipped 2026-05-12 (bf3ad28 send-handler, b2ec790
+   Phase 2 reconciliation).
+3. **Grin Phase 1 (primitives)** — pre-existing; battery of cross-validation
+   tests added 2026-05-13 (c78aff0, 78aac0e, 4734707).
+4. **Grin Phase 2 (orchestrators)** — shipped 2026-05-13 (f46e96e, a61a620,
+   7e72f78 in Rust; 2a832ee binary slate codec; ef3bcdf wasm exposure;
+   f65440e TS wrappers).
+5. **Grin Phase 3.1 (SendWizard Exchange step + popup wiring)** —
+   shipped 2026-05-13 (0f21587).
+6. **Grin Phase 3.2 (invoice / Receive Request)** — in flight.
+7. **Grin Phase 3.3 (Inbox surface, Smirk-to-Smirk relay auto-detect)** — pending.
+8. **Grin Phase 3.4 (paste-incoming-slatepack)** — pending.
+9. **Grin Phase 3.5 (cancel + 1h/24h expiry)** — pending.
+10. **Grin Phase 4 (mainnet round-trip + interop test against grin-wallet CLI)** — pending.
 
 ## Review-and-confirm screen
 
@@ -333,16 +383,6 @@ the wizard's previous "Next" buttons. Tap requires holding briefly
 - XMR/WOW: shows ring size, decoy count, "private" badge.
 - Grin: shows "interactive — awaits recipient" instead of "send" since
   the broadcast doesn't happen immediately.
-
-## What goes in commits as this lands
-
-- One PR per layer per asset family:
-  1. Rust: `crates/btc-ext/src/build.rs` + tests — ✅ shipped 2026-05-11
-  2. WASM facade: `btc_build_psbt` + `btc_extract_tx` — ✅ shipped 2026-05-11
-  3. TS facade: `@smirk/wasm/src/index.ts` `bitcoin.buildPsbt` + `bitcoin.extractTx` — ✅ shipped 2026-05-11
-  4. Handler: `packages/extension/src/popup/send-handler.ts` `sendBtc` (TODO)
-  5. UI: review screen + wire `SendWizard.onSubmit` to handler (TODO)
-- Same series for XMR/WOW, then Grin.
 
 ### Testing strategy: small mainnet amounts, no testnets
 

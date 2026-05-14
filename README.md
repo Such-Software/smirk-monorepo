@@ -9,17 +9,17 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `crates/monero-oxide/` | Working — Monero + Wownero transaction construction, in production via the smirk-extension v0.2.x stack |
 | `crates/secp256k1zkp/` | Vendored — Grin's `grin_secp256k1zkp` v0.7.15 + Smirk patches for wasm32. Provides Bulletproofs, Pedersen commitments, aggsig |
 | `crates/smirk-wasm/` | Working — single WASM bundle exposing Monero/Wownero/Grin crypto to JS |
-| `crates/grin-ext/` | Working — seed derivation, slatepack address (Grim-verified), Schnorr (single + multi-party + adaptor), slate v4, Pedersen + Bulletproofs, slatepack codec (armor + bin + age encryption), kernels (incl. NRD), full slate construction (standard + invoice flow), transaction wire-format assembly, payment proofs |
-| `crates/btc-ext/` | Working — BIP32/BIP39 derivation, P2WPKH (BIP84) + P2TR (BIP86) addresses for BTC + LTC, PSBT signing. Built on rust-bitcoin |
+| `crates/grin-ext/` | Working — seed derivation, slatepack address (Grim-verified), Schnorr (single + multi-party + adaptor), slate v4 (JSON + compact binary), Pedersen + Bulletproofs, slatepack codec (armor + bin + age encryption), kernels (incl. NRD), full slate construction (standard + invoice flow), transaction wire-format assembly, payment proofs, 6 high-level wallet orchestrators, cross-validated against `grin_wallet_libwallet` 5.4.0 |
+| `crates/btc-ext/` | Working — BIP32/BIP39 derivation, P2WPKH (BIP84) + P2TR (BIP86) addresses for BTC + LTC, PSBT construction + signing + extraction. Built on rust-bitcoin |
 | `crates/swap-core/` | Stub — atomic swap state machine, implementation pending (v0.4 work) |
-| `packages/wasm/` | Working — `@smirk/wasm` TS bindings around the WASM crypto bundle |
-| `packages/core/` | Working — shared TS lib (API client, crypto, BIP-137 signing, address codecs, HD derivation, types) |
+| `packages/wasm/` | Working — `@smirk/wasm` TS bindings around the WASM crypto bundle (BTC PSBT, XMR/WOW signing, full Grin surface incl. wallet orchestrators) |
+| `packages/core/` | Working — shared TS lib (API client, crypto, BIP-137 signing, address codecs, HD derivation, session-state + wizard scaffold, pendingOutgoing reconciliation, wallet-flow composition) |
 | `packages/assets/` | Working — `@smirk/assets` registry: pure-data definitions (decimals, family, capabilities, networks) for every chain Smirk supports. 44 unit tests. |
-| `packages/ui/` | Skeleton — `@smirk/ui` shared Preact components (BalanceCard, ActionButton/Row, AssetIcon, formatAmount). Registry-driven, zero hardcoded chains |
-| `packages/extension/` | Skeleton — Chrome MV3 + Firefox shell, builds and loads; UI migration in progress |
-| `packages/mobile/` `packages/desktop/` | Not yet populated — UX shells still upcoming |
+| `packages/ui/` | Working — `@smirk/ui` shared Preact components: Home (UnifiedBalance, BalanceCard, ActionRow), SendWizard (5 assets incl. Grin interactive Exchange step), GrinRequestWizard, ReceiveScreen, OnboardingWizard, LockScreen, AppShell + BottomNav, theme registry (7 themes incl. retro themes) |
+| `packages/extension/` | Working — Chrome MV3 + Firefox MV3 shell. Keystore, wallet-flow, lockscreen, send (real BTC/LTC/XMR/WOW/Grin), receive, settings, tri-state balance (confirmed/pending/locked) with pendingOutgoing reconciliation |
+| `packages/mobile/` `packages/desktop/` | Not yet populated — Capacitor + Tauri shells planned v0.3 / v0.4+ |
 
-The browser extension currently lives at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension). It will be migrated into `packages/extension/` here as the TS workspace is built out.
+The legacy browser extension at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) is frozen at v0.2.x; `packages/extension/` here is the canonical v0.3+ client.
 
 ## Layout
 

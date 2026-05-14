@@ -42,9 +42,12 @@ smirk-monorepo/
 │   ├── mobile/        @smirk/mobile       — (future) Capacitor shell
 │   └── desktop/       @smirk/desktop      — (future) Tauri shell
 └── crates/
-    ├── smirk-wasm/    — Rust→WASM crypto (XMR/WOW/BTC/LTC signing, Grin)
+    ├── smirk-wasm/    — Rust→WASM crypto facade (XMR/WOW/BTC/LTC signing, Grin)
+    ├── grin-ext/      — Grin / Mimblewimble protocol, 6 wallet orchestrators, slate v4 (JSON+bin), cross-validated against grin-wallet
+    ├── btc-ext/       — BTC + LTC: BIP84/BIP86 derivation, PSBT build/sign/extract
+    ├── secp256k1zkp/  — vendored grin_secp256k1zkp v0.7.15 + wasm32 patches
     ├── swap-core/     — Rust adaptor-sig primitives (v0.4+)
-    └── monero-oxide/  — vendored fork of monero-oxide
+    └── monero-oxide/  — vendored fork of monero-oxide (Monero + Wownero)
 ```
 
 ### Dependency rule (one-way, top to bottom)
@@ -87,6 +90,8 @@ you're about to break this. Use the `PlatformStorage` interface.
 | Preact components (Home, Send, Receive, Onboarding, Settings, etc.) | `@smirk/ui` | Render the same in any WebView |
 | Popup state machine, route persistence, wizard scaffold | `@smirk/core/state` | Generic — wired to a `PlatformStorage` |
 | Swap orchestration interface + ThorchainSwap | `@smirk/swap` | HTTP only |
+| Grin slate orchestration (S1/S2/S3 + I1/I2/I3) | `packages/extension/src/popup/grin-flows.ts` (extension-side; folds into `@smirk/core` when mobile lands) | Calls into `@smirk/wasm` `grin.*` for crypto |
+| Pending-outgoing tri-state reconciliation | `@smirk/core/state/pending-outgoing` | Generic across XMR/WOW/Grin |
 
 ### Platform-specific (lives in `packages/<shell>/`)
 

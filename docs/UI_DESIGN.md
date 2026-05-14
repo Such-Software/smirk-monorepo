@@ -313,12 +313,20 @@ object. That keeps the component library theme-agnostic and lets shells
 (extension / mobile / desktop) register their own themes (e.g. macOS Aqua,
 material-mobile) without rebuilding `@smirk/ui`.
 
-**Built-ins:**
+**Built-ins (as of 2026-05-13):**
 - `defaultTheme` — dark "Smirk Bauhaus" look, the fallback for missing
   tokens.
-- `win95Theme` — chunky bevels, MS Sans Serif, gray system palette.
-  Demonstrates the registry's coverage of variants the default doesn't
-  hint at.
+- `win95Theme` (Chicago '95) — chunky bevels, MS Sans Serif, gray
+  system palette.
+- `winxpTheme` (Luna) — Luna blue/silver gradient, smoother bevels.
+- `amigaTheme` (Workbench) — orange-on-blue Workbench 1.3 palette.
+- `iosClassicTheme` (Glassy '07) — glossy iOS 1–6 era gradients.
+- `gameboyTheme` (DMG) — 4-color green LCD palette + Press Start 2P pixel font.
+- `n64Theme` (Ultra 64) — molded gray plastic with Lilita One display font.
+
+Codename naming (not "Windows 95", "Game Boy") avoids trademark exposure
+while staying identifiable. Fonts (Press Start 2P, Lilita One) are
+bundled as ~39KB and lazy-loaded only when the theme is active.
 
 **Apply path:** at boot (and on every change) the shell calls
 `applyTheme(theme)`, which sets `--smirk-*` custom properties on `<html>`,
@@ -337,9 +345,11 @@ storage tier.
 
 **Migration debt:** v0.3 components are *progressively* moving from
 hardcoded `rgba(255,...)` inline styles to `var(--smirk-*)` consumption.
-ActionButton, BalanceCard, UnifiedBalance, BottomNav done as of
-2026-05-11; settings page, send/receive flows, lock screen still inline.
-Touch as you go — no big-bang sweep planned.
+ActionButton, Button, BalanceCard, UnifiedBalance, BottomNav, HomeTab,
+SendWizard's Grin Exchange affordance, and GrinRequestWizard pull from
+tokens as of 2026-05-13; the older portions of SendWizard, ReceiveScreen,
+OnboardingWizard, LockScreen, and the settings page still carry inline
+styles. Touch as you go — no big-bang sweep planned.
 
 ## Navigation summary
 
@@ -387,8 +397,28 @@ Preact components in `packages/ui/` keep visual consistency.
 
 ## Status
 
-Direction set 2026-05-08. No code written against these principles
-yet — the `packages/extension/` skeleton currently reflects the
-legacy popup. Feature migration into the new UI structure begins
-once `packages/core/src/assets/` (the registry from Principle 6) is
-in place.
+Direction set 2026-05-08. As of 2026-05-13:
+
+- **Principle 1 (action-centric)** — shipped. Bottom nav has Home /
+  Swap / Inbox / Settings; Home leads with UnifiedBalance + ActionRow
+  (Tip · Send · Receive · Swap); asset picker is a sub-step inside Send
+  and Receive flows.
+- **Principle 2 (no vault split)** — shipped. Asset list is flat.
+- **Principle 3 (Unified Inbox)** — partial. Inbox tab placeholder
+  exists; Grin Phase 3.3 populates it with pending exchanges +
+  Smirk-to-Smirk relay auto-detect. Tips/messages land v0.4+.
+- **Principle 4 (Swap top-level)** — placeholder tab; THORChain wiring
+  is the next major track after Grin.
+- **Principle 5 (Tip Maker wizard)** — pending; immediate next track
+  after Grin Phase 4.
+- **Principle 6 (asset registry)** — shipped via `@smirk/assets` (44
+  unit tests, zero hardcoded chain branches in UI).
+- **Principle 7 (granular connection grants)** — pending; deferred to
+  v0.4 dapp work.
+- **Principle 8 (unified balance + denomination + hide)** — shipped via
+  `UnifiedBalance` + tri-state pending/locked rendering.
+- **Principle 9 (themable surface)** — shipped; 7 themes registered.
+
+Send is end-to-end on all 5 assets (Grin via the interactive Exchange
+step shipped in Phase 3.1). Migration debt for inline-styled components
+tracked above.
