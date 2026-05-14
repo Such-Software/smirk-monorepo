@@ -473,10 +473,17 @@ function App() {
   // interval; closing the popup cancels the timer (chrome.alarms picks
   // this up at v0.4 mobile time).
   useEffect(() => {
-    if (walletState?.kind !== 'unlocked' || !session || session.error) {
+    if (
+      walletState?.kind !== 'unlocked' ||
+      !session ||
+      session.error ||
+      !session.bootstrap?.userId
+    ) {
       return undefined;
     }
-    const userId = walletState.wallet.fingerprint;
+    // Backend's Grin endpoints key by user UUID — NOT the local seed
+    // fingerprint. bootstrap.userId is the only acceptable identifier.
+    const userId = session.bootstrap.userId;
     let alive = true;
     const tick = async () => {
       setGrinInbox((s) => ({ ...s, loading: true }));
@@ -490,7 +497,7 @@ function App() {
       alive = false;
       clearInterval(handle);
     };
-  }, [walletState, session?.error, session?.bootstrap]);
+  }, [walletState, session?.error, session?.bootstrap?.userId]);
 
   // Auto-poll while a chain is mid-scan. We don't want a chatty poll
   // for normal idle state (the chain advances every ~2 min for XMR/WOW,
@@ -583,8 +590,10 @@ function App() {
       : Promise.resolve();
   const refreshGrinInbox = async () => {
     if (walletState.kind !== 'unlocked') return;
+    const userId = session?.bootstrap?.userId;
+    if (!userId) return;
     setGrinInbox((s) => ({ ...s, loading: true }));
-    setGrinInbox(await fetchGrinInbox(walletState.wallet.fingerprint));
+    setGrinInbox(await fetchGrinInbox(userId));
   };
 
   return (
@@ -616,6 +625,7 @@ function App() {
           inbox: (
             <InboxRouter
               wallet={walletState.wallet}
+              userId={session?.bootstrap?.userId ?? ''}
               inbox={grinInbox}
               onRefresh={refreshGrinInbox}
             />
@@ -681,6 +691,12 @@ function HomeRouter({
       s.ui.balanceHidden = !s.ui.balanceHidden;
     });
   };
+  // Backend's Grin endpoints key by user UUID (`bootstrap.userId`),
+  // not the local seed fingerprint. wallet.fingerprint is a 64-char
+  // SHA-256(seed) used only for keystore lookup during auth bootstrap.
+  // Passing it as the user_id route param yields "Invalid user_id"
+  // from the backend's UUID parse.
+  const grinUserId = session?.bootstrap?.userId ?? '';
 
   // route.current is e.g. "home", "home/send", "home/receive", "home/asset/btc"
   if (route.current === 'home/send') {
@@ -792,7 +808,7 @@ function HomeRouter({
           const recipientUserId: string | undefined = undefined;
           try {
             const result = await startGrinSend({
-              userId: wallet.fingerprint,
+              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               senderSlatepackAddress: wallet.addresses.grin,
               recipientSlatepackAddress: toAddress,
@@ -800,7 +816,7 @@ function HomeRouter({
               amount: Number(amountAtomic),
               resolver: {
                 fetchSpendable: async () => {
-                  const r = await api.getGrinOutputs(wallet.fingerprint);
+                  const r = await api.getGrinOutputs(grinUserId);
                   if (r.error || !r.data) {
                     throw new Error(r.error ?? 'Failed to fetch Grin outputs');
                   }
@@ -837,7 +853,7 @@ function HomeRouter({
         onGrinFinalize={async ({ s2, senderContextJson, senderInputsJson, changeOutputJson, relayId }) => {
           try {
             const result = await processGrinS2({
-              userId: wallet.fingerprint,
+              userId: grinUserId,
               s2,
               sender_context_json: senderContextJson,
               sender_inputs: JSON.parse(senderInputsJson),
@@ -855,7 +871,7 @@ function HomeRouter({
         }}
         onGrinCancel={async ({ slateId, relayId }) => {
           await cancelGrinSend({
-            userId: wallet.fingerprint,
+            userId: grinUserId,
             slate_id: slateId,
             ...(relayId ? { relay_id: relayId } : {}),
           }).catch(() => undefined);
@@ -913,14 +929,14 @@ function HomeRouter({
           }
           try {
             const result = await startGrinInvoice({
-              userId: wallet.fingerprint,
+              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               receiverSlatepackAddress: wallet.addresses.grin,
               amount: Number(amountAtomic),
               fee: Number(feeAtomic),
               resolver: {
                 fetchSpendable: async () => {
-                  const r = await api.getGrinOutputs(wallet.fingerprint);
+                  const r = await api.getGrinOutputs(grinUserId);
                   if (r.error || !r.data) {
                     throw new Error(r.error ?? 'Failed to fetch Grin outputs');
                   }
@@ -954,7 +970,7 @@ function HomeRouter({
         onFinalize={async ({ i2, receiverContextJson }) => {
           try {
             const result = await processGrinI2({
-              userId: wallet.fingerprint,
+              userId: grinUserId,
               i2,
               receiver_context_json: receiverContextJson,
             });
@@ -974,7 +990,7 @@ function HomeRouter({
           // pending lists.
           await api
             .updateGrinTransaction({
-              userId: wallet.fingerprint,
+              userId: grinUserId,
               slateId,
               status: 'cancelled',
             })
@@ -997,13 +1013,13 @@ function HomeRouter({
           }
           try {
             const signed = await signIncomingGrinSlate({
-              userId: wallet.fingerprint,
+              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               receiverSlatepackAddress: wallet.addresses.grin,
               s1Armored,
               resolver: {
                 fetchSpendable: async () => {
-                  const r = await api.getGrinOutputs(wallet.fingerprint);
+                  const r = await api.getGrinOutputs(grinUserId);
                   if (r.error || !r.data) {
                     throw new Error(r.error ?? 'Failed to fetch Grin outputs');
                   }
@@ -1032,7 +1048,7 @@ function HomeRouter({
               await api
                 .signGrinSlatepack({
                   relayId,
-                  userId: wallet.fingerprint,
+                  userId: grinUserId,
                   signedSlatepack: signed.s2_armored,
                 })
                 .catch(() => undefined);
@@ -1415,10 +1431,15 @@ function SwapStub() {
 
 function InboxRouter({
   wallet,
+  userId,
   inbox,
   onRefresh,
 }: {
   wallet: UnlockedWallet;
+  /** Backend user UUID from `bootstrap.userId`. Required for Grin API
+   *  calls — the local seed fingerprint won't parse as a UUID
+   *  server-side. */
+  userId: string;
   inbox: { items: InboxItem[]; loading: boolean; error: string | null };
   onRefresh: () => Promise<void>;
 }) {
@@ -1466,15 +1487,15 @@ function InboxRouter({
   // wallet's pendingOutgoing tristate clears.
   const handleCancel = async (item: InboxItem) => {
     await api
-      .cancelGrinSlatepack({ relayId: item.relayId, userId: wallet.fingerprint })
+      .cancelGrinSlatepack({ relayId: item.relayId, userId })
       .catch(() => undefined);
     if (item.kind === 'pending_to_finalize') {
       await api
-        .unlockGrinOutputs({ userId: wallet.fingerprint, txSlateId: item.slateId })
+        .unlockGrinOutputs({ userId, txSlateId: item.slateId })
         .catch(() => undefined);
       await api
         .updateGrinTransaction({
-          userId: wallet.fingerprint,
+          userId,
           slateId: item.slateId,
           status: 'cancelled',
         })
