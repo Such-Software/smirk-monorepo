@@ -3,7 +3,15 @@
   "name": "Smirk Wallet (dev)",
   "version": "0.3.0",
   "description": "Smirk multi-currency wallet — monorepo skeleton build. Not for production use.",
-  "permissions": ["storage", "alarms", "notifications", "scripting", "activeTab"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "scripting",
+    "activeTab",
+    "clipboardRead",
+    "clipboardWrite"
+  ],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
