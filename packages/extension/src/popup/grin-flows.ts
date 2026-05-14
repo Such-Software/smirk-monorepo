@@ -344,16 +344,14 @@ export async function startGrinSend(args: {
     outputIds: selected.map((o) => o.key_id),
     txSlateId: sendResult.slate_id,
   });
-  if (sendResult.change_output) {
-    await api.recordGrinOutput({
-      userId: args.userId,
-      keyId: pathToKeyId(sendResult.change_output.path),
-      nChild: sendResult.change_output.path[3],
-      amount: sendResult.change_output.amount,
-      commitment: sendResult.change_output.commitment_hex,
-      txSlateId: sendResult.slate_id,
-    });
-  }
+  // NOTE: change_output is NOT recorded here in v0.3. We forward it
+  // through wizard state and the backend `broadcast_grin_transaction`
+  // handler inserts it atomically with the broadcast. Recording the
+  // change at S1 build (the v0.2.4 pattern) leaves an orphan
+  // `unconfirmed` row in the DB if the user cancels — discovered as
+  // wowovermoon's 6.14 GRIN ghost balance 2026-05-14. The change_output
+  // details still flow up to the wizard via the return value below so
+  // finalize can build the broadcastable tx bytes.
 
   let relay_id: string | undefined;
   // Encrypt the S1 to the recipient's slatepack address. Both Smirk
@@ -436,11 +434,24 @@ export async function processGrinS2(args: {
     ...(args.change_output ? { change_output: args.change_output } : {}),
   });
 
-  // Broadcast the binary tx_bytes via the backend.
+  // Broadcast the binary tx_bytes via the backend. Pass change_output
+  // through so the backend atomically records the change row alongside
+  // the broadcast — replaces the v0.2.4 pre-record pattern that
+  // leaked orphans on cancel.
   await api.broadcastGrinTransaction({
     userId: args.userId,
     slateId: JSON.parse(finalize.slate_json).id,
     tx: { tx_bytes_hex: finalize.tx_bytes_hex },
+    ...(args.change_output
+      ? {
+          changeOutput: {
+            keyId: pathToKeyId(args.change_output.path),
+            nChild: args.change_output.path[3],
+            amount: args.change_output.amount,
+            commitment: args.change_output.commitment_hex,
+          },
+        }
+      : {}),
   });
 
   // Cleanup: mark inputs spent + tx finalized + stamp kernel excess.

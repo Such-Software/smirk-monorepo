@@ -151,6 +151,20 @@ export interface GrinMethods {
     userId: string;
     slateId: string;
     tx: object;
+    /** Optional change-output details. v0.3+ clients pass this so the
+     *  backend atomically records the change row alongside the
+     *  broadcast — eliminating the orphan-on-cancel window where a
+     *  pre-broadcast record left an `unconfirmed` row stranded if the
+     *  user cancelled. v0.2.4 clients don't send this (they call
+     *  `recordGrinOutput` separately pre-broadcast); backend's INSERT
+     *  uses ON CONFLICT (commitment) DO NOTHING so both paths
+     *  coexist. */
+    changeOutput?: {
+      keyId: string;
+      nChild: number;
+      amount: number;
+      commitment: string;
+    };
   }): Promise<ApiResponse<{ success: boolean }>>;
 
   // ----- Address registration -----
@@ -314,6 +328,16 @@ export function createGrinMethods(client: ApiClient): GrinMethods {
           user_id: params.userId,
           slate_id: params.slateId,
           tx: params.tx,
+          ...(params.changeOutput
+            ? {
+                change_output: {
+                  key_id: params.changeOutput.keyId,
+                  n_child: params.changeOutput.nChild,
+                  amount: params.changeOutput.amount,
+                  commitment: params.changeOutput.commitment,
+                },
+              }
+            : {}),
         }),
       });
     },
