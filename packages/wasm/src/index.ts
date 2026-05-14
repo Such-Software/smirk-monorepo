@@ -123,6 +123,11 @@ export const grin = {
     wasm.grin_slatepack_address(mnemonic, index, network),
   slatepackAddressSecret: (mnemonic: string, index: number): string =>
     wasm.grin_slatepack_address_secret(mnemonic, index),
+  /** Decode a bech32 slatepack address back to its 32-byte ed25519
+   *  public key (hex). Used to encrypt outgoing slatepacks to a
+   *  recipient via `slatepackPackEncrypted`. */
+  slatepackAddressToPubkeyHex: (address: string): string =>
+    wasm.grin_slatepack_address_to_pubkey_hex(address),
   deriveKeys: (mnemonic: string, network: GrinNetwork): string =>
     wasm.grin_derive_keys(mnemonic, network),
 

@@ -21,7 +21,7 @@
 //! additional addresses derivable from the same wallet — used by
 //! `grin-wallet`'s payment-proof derivation index, among other things.
 
-use bech32::{ToBase32, Variant};
+use bech32::{FromBase32, ToBase32, Variant};
 use blake2::{
     digest::{Update, VariableOutput},
     Blake2bVar,
@@ -118,6 +118,37 @@ pub fn slatepack_address(
     Ok(encoded)
 }
 
+/// Decode a bech32 slatepack address back to its underlying 32-byte
+/// ed25519 public key bytes. Inverse of [`slatepack_address`].
+///
+/// Accepts either mainnet (`grin1…`) or testnet (`tgrin1…`) HRPs.
+/// Returns the network alongside the pubkey so callers can warn on
+/// HRP mismatch when sending.
+pub fn slatepack_address_to_pubkey(addr: &str) -> Result<([u8; 32], Network), String> {
+    let (hrp, data, variant) =
+        bech32::decode(addr).map_err(|e| format!("bech32 decode: {e}"))?;
+    if variant != Variant::Bech32 {
+        return Err(format!(
+            "slatepack address uses bech32 variant, got {variant:?}"
+        ));
+    }
+    let network = match hrp.as_str() {
+        HRP_MAINNET => Network::Mainnet,
+        HRP_TESTNET => Network::Testnet,
+        other => return Err(format!("unexpected HRP '{other}', expected 'grin' or 'tgrin'")),
+    };
+    let bytes = Vec::<u8>::from_base32(&data).map_err(|e| format!("base32 decode: {e}"))?;
+    if bytes.len() != 32 {
+        return Err(format!(
+            "decoded pubkey length {} != 32",
+            bytes.len()
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok((out, network))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +178,31 @@ mod tests {
         let addr0 = slatepack_address(ZERO_ENTROPY_MNEMONIC, 0, Network::Mainnet).unwrap();
         let addr1 = slatepack_address(ZERO_ENTROPY_MNEMONIC, 1, Network::Mainnet).unwrap();
         assert_ne!(addr0, addr1);
+    }
+
+    #[test]
+    fn slatepack_address_decode_round_trip_mainnet() {
+        let addr = slatepack_address(ZERO_ENTROPY_MNEMONIC, 0, Network::Mainnet).unwrap();
+        let (pubkey, network) = slatepack_address_to_pubkey(&addr).expect("decode succeeds");
+        assert_eq!(network, Network::Mainnet);
+        assert_eq!(pubkey.len(), 32);
+        // Re-encode and verify match.
+        let re_encoded =
+            bech32::encode(network.hrp(), pubkey.to_base32(), Variant::Bech32).unwrap();
+        assert_eq!(re_encoded, addr);
+    }
+
+    #[test]
+    fn slatepack_address_decode_round_trip_testnet() {
+        let addr = slatepack_address(ZERO_ENTROPY_MNEMONIC, 0, Network::Testnet).unwrap();
+        let (_, network) = slatepack_address_to_pubkey(&addr).unwrap();
+        assert_eq!(network, Network::Testnet);
+    }
+
+    #[test]
+    fn slatepack_address_decode_rejects_wrong_hrp() {
+        // A bech32 string with a non-grin HRP.
+        assert!(slatepack_address_to_pubkey("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4").is_err());
     }
 
     #[test]

@@ -77,7 +77,11 @@ import {
   signIncomingGrinSlate,
   inspectSlatepack,
 } from './grin-flows';
-import { initialize as initSmirkWasm, monero as wasmMonero } from '@smirk/wasm';
+import {
+  initialize as initSmirkWasm,
+  monero as wasmMonero,
+  grin as wasmGrin,
+} from '@smirk/wasm';
 
 /**
  * Lazy WASM-init verifier: defers `initSmirkWasm()` until the first
@@ -854,9 +858,13 @@ function HomeRouter({
           }
         }}
         onGrinFinalize={async ({ s2, senderContextJson, senderInputsJson, changeOutputJson, relayId }) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
           try {
             const result = await processGrinS2({
               userId: grinUserId,
+              mnemonic: wallet.mnemonic,
               s2,
               sender_context_json: senderContextJson,
               sender_inputs: JSON.parse(senderInputsJson),
@@ -955,9 +963,13 @@ function HomeRouter({
           }
         }}
         onFinalize={async ({ i2, receiverContextJson }) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
           try {
             const result = await processGrinI2({
               userId: grinUserId,
+              mnemonic: wallet.mnemonic,
               i2,
               receiver_context_json: receiverContextJson,
             });
@@ -1064,9 +1076,16 @@ function HomeRouter({
       <InboxPasteRouter
         onReadClipboard={async () => navigator.clipboard.readText()}
         onDispatch={async (armored) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
+          // Derive the slatepack secret upfront so we can decrypt
+          // encrypted slatepacks. Plain slatepacks work too — wasm's
+          // unpackWithSecret handles both modes.
+          const secretKeyHex = wasmGrin.slatepackAddressSecret(wallet.mnemonic, 0);
           let inspected;
           try {
-            inspected = inspectSlatepack(armored);
+            inspected = inspectSlatepack(armored, secretKeyHex);
           } catch (e) {
             return {
               ok: false,
@@ -1145,8 +1164,12 @@ function HomeRouter({
         onReadClipboard={async () => navigator.clipboard.readText()}
         onCopy={(text) => void navigator.clipboard.writeText(text)}
         onInspect={(i1Armored) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
           try {
-            const i = inspectSlatepack(i1Armored);
+            const secretKeyHex = wasmGrin.slatepackAddressSecret(wallet.mnemonic, 0);
+            const i = inspectSlatepack(i1Armored, secretKeyHex);
             return {
               ok: true,
               sta: i.sta,

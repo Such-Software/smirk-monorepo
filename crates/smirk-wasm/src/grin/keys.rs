@@ -102,6 +102,19 @@ pub fn grin_slatepack_address_secret(mnemonic: &str, index: u32) -> Result<Strin
     Ok(hex::encode(secret))
 }
 
+/// Decode a bech32 slatepack address back to its 32-byte ed25519 public
+/// key. Inverse of `grin_slatepack_address`. Returns the hex-encoded
+/// pubkey — the form `grin_slatepack_pack_encrypted` /
+/// `grin_slatepack_encrypt` expects for the recipient.
+///
+/// Accepts both mainnet (`grin1…`) and testnet (`tgrin1…`) HRPs.
+#[wasm_bindgen]
+pub fn grin_slatepack_address_to_pubkey_hex(addr: &str) -> Result<String, JsValue> {
+    let (pubkey, _network) =
+        grin_ext::slatepack_address_to_pubkey(addr).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(pubkey))
+}
+
 fn parse_network(s: &str) -> Result<grin_ext::Network, JsValue> {
     match s {
         "mainnet" => Ok(grin_ext::Network::Mainnet),

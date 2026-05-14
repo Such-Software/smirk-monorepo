@@ -56,6 +56,7 @@ pub use grin::{
     grin_sender_blind_excess, grin_sender_finalize_s3, grin_sender_init_s1, grin_sender_round_i2,
     grin_sign_payment_proof, grin_slate_round_trip, grin_slate_summary,
     grin_slate_to_transaction_bytes, grin_slatepack_address, grin_slatepack_address_secret,
+    grin_slatepack_address_to_pubkey_hex,
     grin_slatepack_armor, grin_slatepack_bin_decode, grin_slatepack_bin_encode_plain,
     grin_slatepack_dearmor, grin_slatepack_decrypt, grin_slatepack_encrypt,
     grin_slatepack_pack_encrypted, grin_slatepack_pack_plain, grin_slatepack_unpack,

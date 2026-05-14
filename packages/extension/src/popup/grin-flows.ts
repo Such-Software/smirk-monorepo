@@ -56,11 +56,39 @@ function bytesToHex(b: Uint8Array): string {
  * what users copy/paste and what we transmit over the backend relay
  * for external-wallet interop.
  *
- * Pipeline: slate JSON → compact binary (slate_v4_to_bin_hex) →
- * slatepack wire-format (slatepackPackPlain) → ASCII armor.
+ * Two modes:
+ *
+ *   - **Encrypted** (when `recipientSlatepackAddress` is provided): age-
+ *     encrypt to the recipient's ed25519 pubkey via
+ *     `slatepackPackEncrypted`. Backend relay (and any other observer)
+ *     stores only ciphertext. Recipient decrypts with their slatepack
+ *     secret. grin-wallet / Grim / v0.2.4 + v0.3 all handle this mode.
+ *   - **Plain** (no recipient): falls back to plaintext for clipboard
+ *     handoff to a recipient whose address we don't know yet (e.g. the
+ *     I1 we just generated for an invoice).
+ *
+ * Pipeline (encrypted): slate JSON → compact binary → age-encrypt to
+ * recipient → SlatepackBin mode=1 → ASCII armor.
+ * Pipeline (plain): slate JSON → compact binary → SlatepackBin mode=0
+ * → ASCII armor.
  */
-export function armorSlate(slateJson: string, senderSlatepackAddress?: string): string {
+export function armorSlate(
+  slateJson: string,
+  senderSlatepackAddress?: string,
+  recipientSlatepackAddress?: string,
+): string {
   const binHex = wasmGrin.slateV4ToBinHex(slateJson);
+  if (recipientSlatepackAddress) {
+    const recipientPubkeyHex = wasmGrin.slatepackAddressToPubkeyHex(
+      recipientSlatepackAddress,
+    );
+    const packedHex = wasmGrin.slatepackPackEncrypted(
+      binHex,
+      senderSlatepackAddress ?? null,
+      recipientPubkeyHex,
+    );
+    return wasmGrin.slatepackArmor(packedHex);
+  }
   const packedHex = wasmGrin.slatepackPackPlain(binHex, senderSlatepackAddress ?? null);
   return wasmGrin.slatepackArmor(packedHex);
 }
@@ -68,11 +96,23 @@ export function armorSlate(slateJson: string, senderSlatepackAddress?: string): 
 /**
  * Inverse of `armorSlate` — takes a BEGINSLATEPACK…ENDSLATEPACK
  * string and returns the slate JSON. Throws on malformed input.
+ *
+ * Accepts both plaintext and encrypted slatepacks. For encrypted
+ * payloads the caller must pass `secretKeyHex` (the receiver's
+ * slatepack ed25519 secret seed, from `slatepackAddressSecret`); pass
+ * `undefined` for plain-only decode.
  */
-export function dearmorSlate(armored: string): string {
+export function dearmorSlate(armored: string, secretKeyHex?: string): string {
   const packedHex = wasmGrin.slatepackDearmor(armored);
+  if (secretKeyHex) {
+    // `slatepackUnpackWithSecret` handles both modes — plain payloads
+    // ignore the key, encrypted payloads age-decrypt with it. Single
+    // call site for the unified read path.
+    const unpackedJson = wasmGrin.slatepackUnpackWithSecret(packedHex, secretKeyHex);
+    const unpacked = JSON.parse(unpackedJson) as { payload_hex: string };
+    return wasmGrin.slateV4FromBinHex(unpacked.payload_hex);
+  }
   const unpackedJson = wasmGrin.slatepackUnpack(packedHex);
-  // slatepackUnpack returns JSON with `{ payload_hex, sender? }`.
   const unpacked = JSON.parse(unpackedJson) as { payload_hex: string };
   return wasmGrin.slateV4FromBinHex(unpacked.payload_hex);
 }
@@ -81,6 +121,10 @@ export function dearmorSlate(armored: string): string {
  * Inspect a slatepack-armored slate without consuming wallet state.
  * Returns the parsed slate state code so the UI can route based on
  * `S1` / `S2` / `I1` / `I2` (sender vs receiver flow direction).
+ *
+ * `secretKeyHex` is required to decrypt encrypted slatepacks (the
+ * default mode v0.3 emits when recipient address is known); pass
+ * undefined to inspect plain slatepacks only.
  */
 export interface InspectedSlatepack {
   /** Slate state: "S1" | "S2" | "S3" | "I1" | "I2" | "I3" | "NA". */
@@ -92,8 +136,8 @@ export interface InspectedSlatepack {
   slate_json: string;
 }
 
-export function inspectSlatepack(armored: string): InspectedSlatepack {
-  const slateJson = dearmorSlate(armored);
+export function inspectSlatepack(armored: string, secretKeyHex?: string): InspectedSlatepack {
+  const slateJson = dearmorSlate(armored, secretKeyHex);
   const parsed = JSON.parse(slateJson) as {
     sta: string;
     id: string;
@@ -106,6 +150,30 @@ export function inspectSlatepack(armored: string): InspectedSlatepack {
     amount: typeof parsed.amt === 'string' ? Number(parsed.amt) : parsed.amt ?? 0,
     fee: typeof parsed.fee === 'string' ? Number(parsed.fee) : parsed.fee ?? 0,
     slate_json: slateJson,
+  };
+}
+
+/**
+ * Like `dearmorSlate` but also returns the slatepack's `sender`
+ * field (the originator's bech32 slatepack address, when present).
+ * Receiver-side flows use this to encrypt the response back to the
+ * sender without the user having to type the address again.
+ */
+export function dearmorSlateAndSender(
+  armored: string,
+  secretKeyHex?: string,
+): { slate_json: string; sender: string | null } {
+  const packedHex = wasmGrin.slatepackDearmor(armored);
+  const unpackedJson = secretKeyHex
+    ? wasmGrin.slatepackUnpackWithSecret(packedHex, secretKeyHex)
+    : wasmGrin.slatepackUnpack(packedHex);
+  const unpacked = JSON.parse(unpackedJson) as {
+    payload_hex: string;
+    sender?: string | null;
+  };
+  return {
+    slate_json: wasmGrin.slateV4FromBinHex(unpacked.payload_hex),
+    sender: unpacked.sender ?? null,
   };
 }
 
@@ -288,7 +356,18 @@ export async function startGrinSend(args: {
   }
 
   let relay_id: string | undefined;
-  const armored = armorSlate(sendResult.slate_json, args.senderSlatepackAddress);
+  // Encrypt the S1 to the recipient's slatepack address. Both Smirk
+  // (v0.2.4 + v0.3) and grin-wallet/Grim decrypt encrypted slatepacks
+  // via the ed25519 → X25519 + age scheme, so this is privacy-free
+  // upside: the relay backend (and any observer) sees only ciphertext.
+  // If the recipient address is malformed bech32, armorSlate falls back
+  // to plain via the exception path — but we'd rather let that throw so
+  // the user sees a clear error than silently leak the slate.
+  const armored = armorSlate(
+    sendResult.slate_json,
+    args.senderSlatepackAddress,
+    args.recipientSlatepackAddress,
+  );
   // Smirk-to-Smirk auto-detect: always post the S1 to the relay with the
   // recipient's slatepack address. Backend matches that address against
   // the `wallets` table — if the recipient is a registered Smirk user,
@@ -334,6 +413,9 @@ export interface GrinSendBroadcastResult {
 export async function processGrinS2(args: {
   // api: imported at top, used directly
   userId: string;
+  /** Sender's mnemonic — needed to derive the slatepack secret for
+   *  decrypting an S2 the receiver encrypted to us. */
+  mnemonic: string;
   s2: string;
   sender_context_json: string;
   sender_inputs: GrinUnspentOutput[];
@@ -342,7 +424,10 @@ export async function processGrinS2(args: {
    *  so the recipient gets notified instantly. Otherwise just broadcast. */
   relay_id?: string;
 }): Promise<GrinSendBroadcastResult> {
-  const s2_slate_json = looksArmored(args.s2) ? dearmorSlate(args.s2) : args.s2;
+  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  const s2_slate_json = looksArmored(args.s2)
+    ? dearmorSlate(args.s2, secretKeyHex)
+    : args.s2;
 
   const finalize: GrinFinalizeSendResult = wasmGrin.finalizeSendSlate({
     s2_slate_json,
@@ -472,7 +557,16 @@ export async function signGrinInvoice(args: {
   i1Armored: string;
   resolver: GrinSendInputResolver;
 }): Promise<GrinInvoiceSignedResult> {
-  const i1_slate_json = dearmorSlate(args.i1Armored);
+  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  // Pull the sender (= invoice originator = receiver of the payment)
+  // address out of the slatepack envelope so we can encrypt I2 back
+  // to them. The receiver's `slatepack_address` field is set when
+  // they build I1 via `create_invoice` — we plumbed it through the
+  // wasm DTO from grin-ext.
+  const { slate_json: i1_slate_json, sender: i1Sender } = dearmorSlateAndSender(
+    args.i1Armored,
+    secretKeyHex,
+  );
   const parsed = JSON.parse(i1_slate_json) as {
     sta: string;
     id: string;
@@ -545,7 +639,16 @@ export async function signGrinInvoice(args: {
 
   return {
     slate_id: parsed.id,
-    armored: armorSlate(signed.slate_json, args.payerSlatepackAddress),
+    // Encrypt I2 back to whoever sent us I1 (invoice originator).
+    // i1Sender is set when the originator built the I1 via the
+    // create_invoice flow; if absent (older external tooling that
+    // didn't populate the slatepack `sender` field), fall back to
+    // plaintext so the user can still copy-paste it.
+    armored: armorSlate(
+      signed.slate_json,
+      args.payerSlatepackAddress,
+      i1Sender ?? undefined,
+    ),
     slate_json: signed.slate_json,
     sender_context_json: signed.sender_context_json,
     sender_inputs: inputs,
@@ -563,10 +666,16 @@ export async function signGrinInvoice(args: {
 export async function processGrinI2(args: {
   // api: imported at top, used directly
   userId: string;
+  /** Receiver's mnemonic — derives the slatepack secret for
+   *  decrypting an I2 the payer encrypted to us. */
+  mnemonic: string;
   i2: string;
   receiver_context_json: string;
 }): Promise<GrinSendBroadcastResult> {
-  const i2_slate_json = looksArmored(args.i2) ? dearmorSlate(args.i2) : args.i2;
+  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  const i2_slate_json = looksArmored(args.i2)
+    ? dearmorSlate(args.i2, secretKeyHex)
+    : args.i2;
   const parsed = JSON.parse(i2_slate_json) as {
     coms?: Array<{ c: string; p?: string | null; f?: number }>;
   };
@@ -627,7 +736,16 @@ export async function signIncomingGrinSlate(args: {
   s1Armored: string;
   resolver: GrinSendInputResolver;
 }): Promise<GrinSignS1Result> {
-  const s1_slate_json = dearmorSlate(args.s1Armored);
+  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  // Pull the original sender's address out of the slatepack envelope
+  // so we can encrypt S2 back to them. Without `sender` (e.g. a
+  // legacy plaintext slatepack from an external wallet that didn't
+  // include it), we fall back to plain — the user can still copy
+  // S2 to clipboard and hand it back manually.
+  const { slate_json: s1_slate_json, sender: s1Sender } = dearmorSlateAndSender(
+    args.s1Armored,
+    secretKeyHex,
+  );
   const parsed = JSON.parse(s1_slate_json) as { sta: string; id: string; amt: number | string };
   if (parsed.sta !== 'S1') {
     throw new Error(`expected S1 slate, got ${parsed.sta}`);
@@ -673,7 +791,11 @@ export async function signIncomingGrinSlate(args: {
 
   return {
     slate_id: parsed.id,
-    s2_armored: armorSlate(signed.slate_json, args.receiverSlatepackAddress),
+    s2_armored: armorSlate(
+      signed.slate_json,
+      args.receiverSlatepackAddress,
+      s1Sender ?? undefined,
+    ),
     s2_slate_json: signed.slate_json,
     receiver_context_json: signed.receiver_context_json,
     output: signed.output,

@@ -77,7 +77,9 @@ pub use slatepack_encryption::{
 pub use payment_proof::{
     payment_proof_message, sign_payment_proof, verify_payment_proof, PROOF_MSG_LEN, PROOF_SIG_LEN,
 };
-pub use slatepack_address::{slatepack_address, slatepack_address_ed25519_secret, Network};
+pub use slatepack_address::{
+    slatepack_address, slatepack_address_ed25519_secret, slatepack_address_to_pubkey, Network,
+};
 
 /// Crate version, exposed for runtime debugging.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
