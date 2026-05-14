@@ -79,6 +79,7 @@ import {
   signIncomingGrinSlate,
   inspectSlatepack,
 } from './grin-flows';
+import { dispatchSocialTip } from './tip-handler';
 import {
   initialize as initSmirkWasm,
   monero as wasmMonero,
@@ -1264,9 +1265,12 @@ function HomeRouter({
     return (
       <TipMaker
         assetIds={listAssets().map((a) => a.id)}
-        // Grin tipping uses the voucher path (committed primitives in
-        // 588ee2c) — full popup wiring lands in the next commit.
-        hideAssetIds={['grin']}
+        // BTC/LTC tipping is fully wired this commit. XMR/WOW tipping
+        // (fresh subaddress + signTransaction) and Grin (voucher via
+        // 588ee2c primitives) ship in the next commit — hide them
+        // from the picker so the user doesn't pick one and bounce
+        // off the "ships next commit" error from dispatchSocialTip.
+        hideAssetIds={['xmr', 'wow', 'grin']}
         resolveBalance={(assetId) => {
           const b = (
             session?.balances as
@@ -1294,15 +1298,14 @@ function HomeRouter({
             hasAssetWallet: r.data.registered,
           };
         }}
-        onSubmit={async (_fields) => {
-          // Per-asset tip orchestration ships in the next commit.
-          // BTC/LTC: fresh keypair → buildPsbt → broadcast → POST /social/tip
-          // XMR/WOW: fresh subaddress → signTransaction → submit → POST
-          // Grin: createGrinVoucher → POST (already wired primitives)
-          return {
-            ok: false,
-            error: 'Tip orchestration ships next commit — UI is wired.',
-          };
+        onSubmit={async (fields) => {
+          // BTC/LTC fully wired below. XMR/WOW + Grin currently surface
+          // a "ships next commit" error inside the dispatcher.
+          return dispatchSocialTip({
+            wallet,
+            senderUserId: grinUserId,
+            fields,
+          });
         }}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
