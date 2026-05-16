@@ -47,6 +47,60 @@ import type {
 // Helpers
 // ============================================================================
 
+/**
+ * Derive the canonical (grin-wallet/Grim-compatible) slatepack address
+ * from a mnemonic, via wasm. This is the ONLY correct address for Grin
+ * signing/encryption — `wallet.addresses.grin` (computed at unlock
+ * time by `@smirk/core`'s `deriveGrinKey`) uses a Smirk-custom
+ * `SHA256(master || "smirk:grin:v1")` derivation that does NOT match
+ * what `slatepack_address_secret` produces. Mixing them means the
+ * sender encrypts to one pubkey and the receiver decrypts with a
+ * different one — age throws "No matching keys found".
+ *
+ * Requires wasm to already be initialized (call `ensureWasmInit()`
+ * upstream).
+ */
+export function canonicalGrinSlatepackAddress(mnemonic: string): string {
+  return wasmGrin.slatepackAddress(mnemonic, 0, 'mainnet');
+}
+
+/**
+ * Wrap a dearmor failure so the resulting Error.message carries enough
+ * information to debug in the UI (without forcing the user to open
+ * DevTools). Also fires a structured console.error.
+ *
+ * Triggered most often by:
+ *  - Unicode lookalike periods (U+FF0E '．' or U+2024 '‧') in the
+ *    armored payload — input passes the eye-test but no ASCII 0x2E byte
+ *    is present.
+ *  - Silently empty / wrong-typed `armored` from a stale wizard slot.
+ *  - Relay-side encoding / quoting that mangled the payload in transit.
+ */
+function augmentDearmorError(e: unknown, armored: string): Error {
+  const orig = e instanceof Error ? e.message : String(e);
+  const preview = armored.slice(0, 80);
+  const bytes = new TextEncoder().encode(preview);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  const hasAsciiDot = armored.includes('.');
+  // Single concatenated string so chrome://extensions Errors panel
+  // shows something readable (it renders %O / object args as
+  // "[object Object]"). Also captured in DevTools console with full
+  // structured fields below.
+  const summary = `[grin-dearmor] failed: ${orig} | len=${armored.length} asciiDot=${hasAsciiDot} preview=${JSON.stringify(preview)} first80hex=${hex}`;
+  console.error(summary);
+  console.error('[grin-dearmor] details:', {
+    error: orig,
+    length: armored.length,
+    preview,
+    previewHex: hex,
+    hasAsciiDot,
+  });
+  return new Error(
+    `${orig} (len=${armored.length}, asciiDot=${hasAsciiDot}, first80hex=${hex.slice(0, 80)}…)`,
+  );
+}
+
+
 function bytesToHex(b: Uint8Array): string {
   return Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('');
 }
@@ -78,19 +132,22 @@ export function armorSlate(
   recipientSlatepackAddress?: string,
 ): string {
   const binHex = wasmGrin.slateV4ToBinHex(slateJson);
+  // slatepackPackEncrypted / slatepackPackPlain are one-call helpers that
+  // already return the BEGINSLATEPACK…ENDSLATEPACK armored string. Do not
+  // wrap them with `slatepackArmor` — that re-armor pass tries to
+  // hex-decode "BEGINSLATEPACK…" and dies with "invalid payload_hex:
+  // Invalid character 'G' at position 2".
   if (recipientSlatepackAddress) {
     const recipientPubkeyHex = wasmGrin.slatepackAddressToPubkeyHex(
       recipientSlatepackAddress,
     );
-    const packedHex = wasmGrin.slatepackPackEncrypted(
+    return wasmGrin.slatepackPackEncrypted(
       binHex,
       senderSlatepackAddress ?? null,
       recipientPubkeyHex,
     );
-    return wasmGrin.slatepackArmor(packedHex);
   }
-  const packedHex = wasmGrin.slatepackPackPlain(binHex, senderSlatepackAddress ?? null);
-  return wasmGrin.slatepackArmor(packedHex);
+  return wasmGrin.slatepackPackPlain(binHex, senderSlatepackAddress ?? null);
 }
 
 /**
@@ -103,16 +160,19 @@ export function armorSlate(
  * `undefined` for plain-only decode.
  */
 export function dearmorSlate(armored: string, secretKeyHex?: string): string {
-  const packedHex = wasmGrin.slatepackDearmor(armored);
-  if (secretKeyHex) {
-    // `slatepackUnpackWithSecret` handles both modes — plain payloads
-    // ignore the key, encrypted payloads age-decrypt with it. Single
-    // call site for the unified read path.
-    const unpackedJson = wasmGrin.slatepackUnpackWithSecret(packedHex, secretKeyHex);
-    const unpacked = JSON.parse(unpackedJson) as { payload_hex: string };
-    return wasmGrin.slateV4FromBinHex(unpacked.payload_hex);
+  // slatepackUnpack[WithSecret] take an ASCII-armored slatepack and do
+  // dearmor + bin-decode internally. Calling slatepackDearmor first and
+  // passing the resulting hex to them double-dearmors — the second
+  // dearmor sees the hex (no period byte) and throws "no header
+  // terminator '.' found".
+  let unpackedJson: string;
+  try {
+    unpackedJson = secretKeyHex
+      ? wasmGrin.slatepackUnpackWithSecret(armored, secretKeyHex)
+      : wasmGrin.slatepackUnpack(armored);
+  } catch (e) {
+    throw augmentDearmorError(e, armored);
   }
-  const unpackedJson = wasmGrin.slatepackUnpack(packedHex);
   const unpacked = JSON.parse(unpackedJson) as { payload_hex: string };
   return wasmGrin.slateV4FromBinHex(unpacked.payload_hex);
 }
@@ -163,10 +223,17 @@ export function dearmorSlateAndSender(
   armored: string,
   secretKeyHex?: string,
 ): { slate_json: string; sender: string | null } {
-  const packedHex = wasmGrin.slatepackDearmor(armored);
-  const unpackedJson = secretKeyHex
-    ? wasmGrin.slatepackUnpackWithSecret(packedHex, secretKeyHex)
-    : wasmGrin.slatepackUnpack(packedHex);
+  // Same as dearmorSlate — pass armored directly; slatepackUnpack*
+  // dearmors internally, so the previous pre-dearmor was a
+  // double-decode that threw "no header terminator '.' found".
+  let unpackedJson: string;
+  try {
+    unpackedJson = secretKeyHex
+      ? wasmGrin.slatepackUnpackWithSecret(armored, secretKeyHex)
+      : wasmGrin.slatepackUnpack(armored);
+  } catch (e) {
+    throw augmentDearmorError(e, armored);
+  }
   const unpacked = JSON.parse(unpackedJson) as {
     payload_hex: string;
     sender?: string | null;
@@ -256,10 +323,15 @@ export async function startGrinSend(args: {
   amount: number;
   resolver: GrinSendInputResolver;
 }): Promise<GrinSendInitResult> {
-  // 1. Derive 64-byte extended private key. JS-side; never logged.
+  // 1. Derive both v3 and legacy ext keys. JS-side; never logged.
+  // The orchestrator tries v3 first per input, falls back to legacy
+  // (PBKDF2-then-HMAC) on commitment mismatch — lets v0.3 spend
+  // outputs created by pre-2026-05 v0.2.x wallets that hadn't yet
+  // migrated derivationVersion to 3. Sunset 2026-11-15.
   const extKeyJson = wasmGrin.deriveExtendedKey(args.mnemonic);
   const extKey = JSON.parse(extKeyJson) as { extended_private_key_hex: string };
   const extKeyHex = extKey.extended_private_key_hex;
+  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(args.mnemonic);
 
   // 2. Pick inputs via greedy + fee iteration. Grin fee depends on
   //    input count, so loop until stable.
@@ -319,6 +391,7 @@ export async function startGrinSend(args: {
   // 4. Build S1 slate via wasm orchestrator.
   const sendResult: GrinCreateSendTxResult = wasmGrin.createSendTransaction({
     extended_private_key_hex: extKeyHex,
+    legacy_extended_private_key_hex: legacyExtKeyHex,
     inputs,
     amount: args.amount,
     fee,
@@ -329,6 +402,11 @@ export async function startGrinSend(args: {
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
+
+  // Plan-C diagnostic: log which derivation matched each input.
+  // Expect "v3+Regular" for post-2026-05 outputs; "legacy+Regular"
+  // (or "legacy+None") for pre-rotation v0.2.x outputs.
+  console.log('[grin-send] input derivations:', sendResult.input_derivations);
 
   // 5. Backend bookkeeping — record + lock + relay drop.
   await api.recordGrinTransaction({
@@ -591,6 +669,7 @@ export async function signGrinInvoice(args: {
   const extKey = JSON.parse(wasmGrin.deriveExtendedKey(args.mnemonic)) as {
     extended_private_key_hex: string;
   };
+  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(args.mnemonic);
   const spendable = await args.resolver.fetchSpendable();
 
   // Pick inputs covering amount + fee declared in the invoice.
@@ -616,6 +695,7 @@ export async function signGrinInvoice(args: {
 
   const signed: GrinSignInvoiceResult = wasmGrin.signInvoice({
     extended_private_key_hex: extKey.extended_private_key_hex,
+    legacy_extended_private_key_hex: legacyExtKeyHex,
     i1_slate_json,
     inputs,
     change_path: childIndexToPath(spendable.next_child_index),
@@ -623,6 +703,8 @@ export async function signGrinInvoice(args: {
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
+
+  console.log('[grin-pay-invoice] input derivations:', signed.input_derivations);
 
   // Lock + record at the payer's side.
   await api.recordGrinTransaction({
@@ -747,6 +829,21 @@ export async function signIncomingGrinSlate(args: {
   s1Armored: string;
   resolver: GrinSendInputResolver;
 }): Promise<GrinSignS1Result> {
+  // Sanity-check that the current mnemonic actually derives the
+  // slatepack address the wallet is claiming. If they disagree, the
+  // wallet has been recreated since this slatepack was sent — the
+  // sender encrypted to an address we no longer control and age
+  // decrypt is guaranteed to fail with the cryptic "No matching
+  // keys found". Surface a clear cause instead.
+  const derivedAddress = wasmGrin.slatepackAddress(args.mnemonic, 0, 'mainnet');
+  if (derivedAddress !== args.receiverSlatepackAddress) {
+    throw new Error(
+      `wallet/address mismatch — your current mnemonic derives ${derivedAddress.slice(0, 24)}… ` +
+        `but this slatepack was encrypted to ${args.receiverSlatepackAddress.slice(0, 24)}…. ` +
+        `The receiver wallet was likely recreated since the slatepack was sent. ` +
+        `Cancel this row and ask the sender to re-send to your current address.`,
+    );
+  }
   const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
   // Pull the original sender's address out of the slatepack envelope
   // so we can encrypt S2 back to them. Without `sender` (e.g. a

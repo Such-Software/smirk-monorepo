@@ -114,6 +114,11 @@ mod dto {
     #[derive(Debug, Clone, Deserialize)]
     pub struct CreateSendTxParamsDto {
         pub extended_private_key_hex: String,
+        /// LEGACY ext key for v0.2.x pre-2026-05-rotation outputs.
+        /// Optional. When the v3 derive_blind doesn't reproduce an
+        /// input's commitment, the orchestrator falls back to this key.
+        #[serde(default)]
+        pub legacy_extended_private_key_hex: Option<String>,
         pub inputs: Vec<UnspentOutputDto>,
         pub amount: u64,
         pub fee: u64,
@@ -142,6 +147,10 @@ mod dto {
         pub sender_context_json: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub change_output: Option<ChangeOutputInfoDto>,
+        /// Per-input label of which derivation candidate matched
+        /// ("v3+Regular", "legacy+Regular", "v3+None", "legacy+None").
+        /// Same length and order as the input list. Diagnostic.
+        pub input_derivations: Vec<String>,
     }
 
     #[derive(Debug, Clone, Deserialize)]
@@ -212,6 +221,9 @@ mod dto {
     #[derive(Debug, Clone, Deserialize)]
     pub struct SignInvoiceParamsDto {
         pub extended_private_key_hex: String,
+        /// LEGACY ext key — same purpose as in CreateSendTxParamsDto.
+        #[serde(default)]
+        pub legacy_extended_private_key_hex: Option<String>,
         pub i1_slate_json: String,
         pub inputs: Vec<UnspentOutputDto>,
         pub change_path: [u32; 4],
@@ -227,6 +239,8 @@ mod dto {
         pub sender_context_json: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub change_output: Option<ChangeOutputInfoDto>,
+        /// Per-input label of which derivation candidate matched. Diagnostic.
+        pub input_derivations: Vec<String>,
     }
 
     #[derive(Debug, Clone, Deserialize)]
@@ -293,8 +307,13 @@ pub fn grin_create_send_transaction(params_json: &str) -> Result<String, JsValue
     let inputs = unspent_outputs_from_dtos(&d.inputs)?;
     let kernel_features =
         kernel_features_from_str(&d.kernel_kind, d.fee, d.lock_height, d.relative_height)?;
+    let legacy_ext_key = match d.legacy_extended_private_key_hex.as_ref() {
+        Some(hex) => Some(hex_to_64(hex, "legacy_extended_private_key_hex")?),
+        None => None,
+    };
     let params = CreateSendTxParams {
         extended_private_key: hex_to_64(&d.extended_private_key_hex, "extended_private_key_hex")?,
+        legacy_extended_private_key: legacy_ext_key,
         inputs,
         amount: d.amount,
         fee: d.fee,
@@ -315,6 +334,7 @@ pub fn grin_create_send_transaction(params_json: &str) -> Result<String, JsValue
         slate_bin_hex: hex::encode(slate_bin),
         sender_context_json: serde_json::to_string(&out.context).map_err(err_string)?,
         change_output: out.change_output.as_ref().map(change_output_to_dto),
+        input_derivations: out.input_derivations.clone(),
     };
     serde_json::to_string(&result).map_err(err_string)
 }
@@ -421,8 +441,13 @@ pub fn grin_sign_invoice(params_json: &str) -> Result<String, JsValue> {
     let d: dto::SignInvoiceParamsDto = serde_json::from_str(params_json).map_err(err_string)?;
     let i1_slate = grin_ext::parse_slate_v4(&d.i1_slate_json).map_err(err_string)?;
     let inputs = unspent_outputs_from_dtos(&d.inputs)?;
+    let legacy_ext_key = match d.legacy_extended_private_key_hex.as_ref() {
+        Some(hex) => Some(hex_to_64(hex, "legacy_extended_private_key_hex")?),
+        None => None,
+    };
     let params = SignInvoiceParams {
         extended_private_key: hex_to_64(&d.extended_private_key_hex, "extended_private_key_hex")?,
+        legacy_extended_private_key: legacy_ext_key,
         i1_slate,
         inputs,
         change_path: d.change_path,
@@ -438,6 +463,7 @@ pub fn grin_sign_invoice(params_json: &str) -> Result<String, JsValue> {
         slate_bin_hex: hex::encode(slate_bin),
         sender_context_json: serde_json::to_string(&out.context).map_err(err_string)?,
         change_output: out.change_output.as_ref().map(change_output_to_dto),
+        input_derivations: out.input_derivations.clone(),
     };
     serde_json::to_string(&result).map_err(err_string)
 }

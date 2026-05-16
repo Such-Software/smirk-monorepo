@@ -61,7 +61,10 @@ pub use schnorr::{
     sign as schnorr_sign, sign_with_nonce, verify as schnorr_verify, Signature,
 };
 pub use secp256k1::{public_key_from_secret_key, random_secret_nonce};
-pub use seed::{mnemonic_to_extended_private_key, ExtendedPrivateKey};
+pub use seed::{
+    mnemonic_to_extended_private_key, mnemonic_to_extended_private_key_legacy_bip39,
+    ExtendedPrivateKey,
+};
 pub use slate::{
     add_input_commitment, add_output_commitment, parse_slate_v4, serialize_slate_v4,
     SlateStateV4, SlateV4,

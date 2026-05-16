@@ -208,6 +208,7 @@ fn create_send_transaction_produces_slate_grin_wallet_accepts() {
     let input_commitment = pedersen_commit(input_amount, &input_blind).unwrap();
 
     let params = CreateSendTxParams {
+        legacy_extended_private_key: None,
         extended_private_key: ext,
         inputs: vec![UnspentOutput {
             path: input_path,
@@ -306,6 +307,7 @@ fn full_send_round_trip_validates_against_grin_wallet() {
 
     // Sender: create S1 slate.
     let send_out = create_send_transaction(&CreateSendTxParams {
+            legacy_extended_private_key: None,
         extended_private_key: sender_ext,
         inputs: inputs.clone(),
         amount,
@@ -415,6 +417,7 @@ fn full_invoice_round_trip_validates_against_grin_wallet() {
 
     // Sender: sign the invoice → I2.
     let sign_out = sign_invoice(&SignInvoiceParams {
+        legacy_extended_private_key: None,
         extended_private_key: sender_ext,
         i1_slate: invoice_out.slate.clone(),
         inputs: sender_inputs.clone(),
@@ -468,6 +471,7 @@ fn slate_v4_bin_round_trips_through_our_deserializer() {
     let input_commit = pedersen_commit(input_amount, &input_blind).unwrap();
 
     let send_out = create_send_transaction(&CreateSendTxParams {
+            legacy_extended_private_key: None,
         extended_private_key: ext,
         inputs: vec![UnspentOutput {
             path: input_path,
@@ -490,6 +494,66 @@ fn slate_v4_bin_round_trips_through_our_deserializer() {
     let bin = serialize_slate_v4_bin(&send_out.slate).expect("serialize_slate_v4_bin");
     let back = deserialize_slate_v4_bin(&bin).expect("deserialize_slate_v4_bin");
     assert_eq!(send_out.slate, back, "binary round-trip lost field data");
+}
+
+/// Regression test that pins the depth-3-vs-depth-4 derivation
+/// discrepancy that left pre-2026-05 wallets' Grin outputs
+/// unspendable in v0.3 (see commit `fe5d3aa` diagnostic output for
+/// jwinterm's 195.944 GRIN).
+///
+/// grin_keychain serializes an Identifier as `[depth_u8, u32; 4]`
+/// (17 bytes). The wallet's standard outputs use **depth=3**: path
+/// `[0, 0, n_child]` with a trailing 0 padding the 4th slot. When
+/// `derive_key` walks the BIP32 chain it iterates only
+/// `0..p.depth` — so a stored path of `[0, 0, 26, 0]` derives
+/// `m/0/0/26` (three CKD steps), NOT `m/0/0/26/0`.
+///
+/// Our `derive_blind` walks all 4 path elements unconditionally. For
+/// internally-created outputs that's self-consistent. For outputs
+/// created by pre-2026-05 Smirk (which still leaned on grin-wallet's
+/// depth=3 convention) and for any output created by grin-wallet /
+/// Grim with the same seed, our 4-step derivation produces a
+/// different key — and the on-chain commitment doesn't match.
+///
+/// This test asserts the mismatch exists so the depth-3 fallback in
+/// `derive_input_blind_with_fallback` is mandatory. When we eventually
+/// retire depth=3 (sunset 2026-11-15 with Plan-C) this test should
+/// flip to assert equality and prove the convention shift.
+#[test]
+fn depth_3_and_depth_4_derivations_diverge() {
+    let seed: [u8; 32] = [0x42u8; 32];
+    let ext = master_ext_from_seed(&seed);
+    let keychain = ExtKeychain::from_seed(&seed, /* is_test */ false).unwrap();
+
+    let path = [0u32, 0, 26, 0];
+    let amount = 195_944_000_000u64; // jwinterm's stuck output
+
+    // Reference: depth=3, walks only m/0/0/26.
+    let id_depth3 =
+        ExtKeychainPath::new(3, path[0], path[1], path[2], path[3]).to_identifier();
+    let ref_depth3 = keychain
+        .derive_key(amount, &id_depth3, RefSwitch::Regular)
+        .unwrap();
+
+    // Our derive_blind walks all 4 → m/0/0/26/0.
+    let ours_depth4 =
+        derive_blind(&ext, &path, amount, SwitchCommitmentType::Regular).unwrap();
+
+    assert_ne!(
+        ref_depth3.0, ours_depth4,
+        "depth=3 (grin-wallet convention) and depth=4 (our convention) MUST diverge — \
+         if this ever starts matching by accident the depth-3 fallback's diagnostic label \
+         becomes meaningless. Update the test if you intentionally unify the conventions."
+    );
+
+    // And: derive_blind on path[..3] (3 elements) should match depth=3.
+    let ours_depth3 =
+        derive_blind(&ext, &path[..3], amount, SwitchCommitmentType::Regular).unwrap();
+    assert_eq!(
+        ref_depth3.0, ours_depth3,
+        "derive_blind on the 3-element prefix MUST match grin_keychain depth=3 — \
+         this is the fallback the wallet uses to spend pre-2026-05 outputs."
+    );
 }
 
 /// Sanity: random_secret_nonce produces non-zero, never-equal scalars.

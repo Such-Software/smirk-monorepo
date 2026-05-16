@@ -152,19 +152,17 @@ export async function bootstrapAuth(
   // so the relay's address-match join (`recipient_address IN (SELECT
   // address FROM wallets WHERE user_id = $1 AND asset = 'grin')`)
   // finds them. XMR/WOW get their `wallets` row inserted during
-  // `registerLws` from the balance fetch; Grin had no equivalent
-  // until this call.
+  // NOTE 2026-05-17: Grin re-registration moved out of bootstrap.
+  // `wallet.addresses.grin` here comes from @smirk/core's deriveGrinKey
+  // (custom `SHA256(master || "smirk:grin:v1")`), which does NOT match
+  // the canonical grin-wallet/Grim derivation that `@smirk/wasm`'s
+  // `slatepack_address` produces. Registering the legacy address
+  // meant senders encrypted to a pubkey the receiver's wasm-derived
+  // secret couldn't decrypt — every Smirk→Smirk Grin send failed
+  // with "age decrypt: No matching keys found".
   //
-  // Idempotent UPSERT server-side — safe to fire on every bootstrap.
-  // Best-effort: if the backend is older than this endpoint or
-  // returns an error, we still complete the bootstrap. The user
-  // loses by-address relay routing for that session; clipboard
-  // paste flows in Inbox still work.
-  await api
-    .registerGrinAddress(wallet.addresses.grin)
-    .catch((e: unknown) => {
-      console.warn('[smirk-bootstrap] registerGrinAddress failed:', e);
-    });
+  // The popup now re-registers via `canonicalGrinSlatepackAddress`
+  // after wasm init. See [popup/index.tsx] mount effect.
 
   return {
     userId: result.data.user.id,

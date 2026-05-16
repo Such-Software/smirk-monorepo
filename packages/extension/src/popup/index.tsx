@@ -78,6 +78,7 @@ import {
   processGrinI2,
   signIncomingGrinSlate,
   inspectSlatepack,
+  canonicalGrinSlatepackAddress,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
 import {
@@ -473,6 +474,14 @@ function App() {
 
   useEffect(() => {
     void refresh();
+    // Kick off WASM load in the background. Grin inbox actions (sign /
+    // pay / finalize) all call into wasmGrin synchronously — if the
+    // user clicks an Inbox row before this resolves they get
+    // "Cannot read properties of undefined (reading '__wbindgen_free')"
+    // from the wasm-bindgen shim. Each Grin handler also awaits
+    // ensureWasmInit() before any wasm call, so this is purely a
+    // warmup; correctness is upheld at the call sites.
+    void ensureWasmInit();
     // Sweep stale Grin wizard state on mount. 7 days matches the
     // backend relay's row TTL (`expires_at` in `grin_slatepacks`); once
     // the relay drops a row, the local wizard slot it was tracking has
@@ -482,6 +491,45 @@ function App() {
     // 7-day floor wipes local state, in lockstep with the backend.
     void sweepStaleGrinWizards();
   }, []);
+
+  // Re-register the wallet's CANONICAL grin slatepack address
+  // (grin-wallet/Grim-compatible derivation, via wasm) once the wallet
+  // is unlocked AND wasm is up. The bootstrap registered
+  // `wallet.addresses.grin` which comes from @smirk/core's
+  // `deriveGrinKey` — a custom SHA256 path that doesn't match what
+  // wasm's `slatepack_address_secret` produces, so senders encrypted
+  // to one pubkey and receivers decrypted with another. Every
+  // Smirk→Smirk encrypted Grin send was failing at age decrypt with
+  // "No matching keys found" because of this mismatch.
+  //
+  // Idempotent on the backend (UPSERT) — runs once per unlocked
+  // session as a cheap fixup. Address compatibility for existing
+  // pending slatepacks is not preserved; users with rows pending
+  // against the LEGACY address must cancel + re-send.
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked' || !walletState.wallet.mnemonic) return;
+    // Wait until bootstrap auth has set the API token. Firing before
+    // that means the register POST goes out unauthenticated, the
+    // backend returns 401, and the wallets row is never updated to
+    // the canonical address — leaving senders encrypting to the
+    // legacy address and receivers unable to decrypt.
+    if (!session?.bootstrap?.userId) return;
+    const mnemonic = walletState.wallet.mnemonic;
+    void (async () => {
+      await ensureWasmInit();
+      try {
+        const canonical = canonicalGrinSlatepackAddress(mnemonic);
+        const res = await api.registerGrinAddress(canonical);
+        if (res.error) {
+          console.warn('[smirk-popup] register canonical grin address rejected:', res.error);
+        } else {
+          console.info('[smirk-popup] registered canonical grin address:', canonical);
+        }
+      } catch (e) {
+        console.warn('[smirk-popup] register canonical grin address threw:', e);
+      }
+    })();
+  }, [walletState, session?.bootstrap?.userId]);
 
   // Apply persisted theme on boot and whenever it changes. Subscribing
   // here (not inside a deep child) means the theme swaps cleanly even
@@ -829,6 +877,7 @@ function HomeRouter({
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
+          await ensureWasmInit();
           // Smirk-to-Smirk auto-detect (look up recipient address →
           // user_id, drop slatepack at relay) lands in Phase 3.3 when
           // the address-to-user endpoint is wired through the API
@@ -840,7 +889,7 @@ function HomeRouter({
             const result = await startGrinSend({
               userId: grinUserId,
               mnemonic: wallet.mnemonic,
-              senderSlatepackAddress: wallet.addresses.grin,
+              senderSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
               recipientSlatepackAddress: toAddress,
               ...(recipientUserId ? { recipientUserId } : {}),
               amount: Number(amountAtomic),
@@ -945,11 +994,12 @@ function HomeRouter({
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
+          await ensureWasmInit();
           try {
             const result = await startGrinInvoice({
               userId: grinUserId,
               mnemonic: wallet.mnemonic,
-              receiverSlatepackAddress: wallet.addresses.grin,
+              receiverSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
               amount: Number(amountAtomic),
               fee: Number(feeAtomic),
               resolver: {
@@ -989,6 +1039,7 @@ function HomeRouter({
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
+          await ensureWasmInit();
           try {
             const result = await processGrinI2({
               userId: grinUserId,
@@ -1033,11 +1084,12 @@ function HomeRouter({
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
+          await ensureWasmInit();
           try {
             const signed = await signIncomingGrinSlate({
               userId: grinUserId,
               mnemonic: wallet.mnemonic,
-              receiverSlatepackAddress: wallet.addresses.grin,
+              receiverSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
               s1Armored,
               resolver: {
                 fetchSpendable: async () => {
@@ -1102,6 +1154,7 @@ function HomeRouter({
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
+          await ensureWasmInit();
           // Derive the slatepack secret upfront so we can decrypt
           // encrypted slatepacks. Plain slatepacks work too — wasm's
           // unpackWithSecret handles both modes.
@@ -1208,11 +1261,12 @@ function HomeRouter({
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
+          await ensureWasmInit();
           try {
             const signed = await signGrinInvoice({
               userId: grinUserId,
               mnemonic: wallet.mnemonic,
-              payerSlatepackAddress: wallet.addresses.grin,
+              payerSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
               i1Armored,
               resolver: {
                 fetchSpendable: async () => {
@@ -1297,6 +1351,7 @@ function HomeRouter({
           };
         }}
         onSubmit={async (fields) => {
+          await ensureWasmInit();
           // BTC/LTC fully wired below. XMR/WOW + Grin currently surface
           // a "ships next commit" error inside the dispatcher.
           return dispatchSocialTip({
@@ -1615,10 +1670,23 @@ function validateAddress(assetId: string, addr: string): string | null {
 
 /**
  * Resolve the receive address for a given asset from the unlocked wallet.
- * Reads from `wallet.addresses` which is populated at unlock time by
- * `deriveAddresses` in `@smirk/core/keystore`.
+ *
+ * Special-cased for Grin: `wallet.addresses.grin` is the legacy Smirk
+ * SHA256-custom derivation (see grin-flows.ts comment on
+ * `canonicalGrinSlatepackAddress`). Displaying that and letting the
+ * user share it means senders encrypt to a pubkey the receiver's
+ * wasm-derived secret can't decrypt — every Smirk→Smirk send fails
+ * with "age decrypt: No matching keys found". Override with the wasm
+ * canonical derivation so the displayed/shared address is the same
+ * one used for encryption + decryption end-to-end.
+ *
+ * Requires wasm to be initialized (warmed up on popup mount; user
+ * reaches the Receive screen long after that resolves).
  */
 function resolveAddressForAsset(wallet: UnlockedWallet, assetId: string): string {
+  if (assetId === 'grin' && wallet.mnemonic) {
+    return canonicalGrinSlatepackAddress(wallet.mnemonic);
+  }
   const addr = (wallet.addresses as unknown as Record<string, string | undefined>)[assetId];
   if (!addr) throw new Error(`No receive address for asset "${assetId}"`);
   return addr;
@@ -1878,9 +1946,18 @@ function InboxRouter({
   // reserved outputs and mark the local tx record cancelled so the
   // wallet's pendingOutgoing tristate clears.
   const handleCancel = async (item: InboxItem) => {
-    await api
-      .cancelGrinSlatepack({ relayId: item.relayId, userId })
-      .catch(() => undefined);
+    // Don't silently swallow — if the backend says we can't cancel this
+    // relay row (e.g. ownership check fails) the user sees nothing
+    // happen and the row sticks around forever. Surface the failure so
+    // they can act on it instead of poking the X repeatedly.
+    const cancelRes = await api.cancelGrinSlatepack({
+      relayId: item.relayId,
+      userId,
+    });
+    if (cancelRes.error) {
+      window.alert(`Couldn't cancel: ${cancelRes.error}`);
+      return;
+    }
     if (item.kind === 'pending_to_finalize') {
       await api
         .unlockGrinOutputs({ userId, txSlateId: item.slateId })

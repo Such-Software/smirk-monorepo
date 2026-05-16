@@ -117,6 +117,12 @@ export type GrinKernelKind = 'plain' | 'coinbase' | 'height_locked' | 'nrd';
 export const grin = {
   // ---- Seed / keys / addresses
   deriveExtendedKey: (mnemonic: string): string => wasm.grin_derive_extended_key(mnemonic),
+  /** LEGACY: derive the v1/v2-style ext key (PBKDF2-then-HMAC) for the
+   *  pre-2026-05 derivation. Used as a fallback in the orchestrators
+   *  when the v3 derivation can't reproduce a stored input
+   *  commitment. Returns 64-byte ext key as hex (128 chars). */
+  deriveExtendedKeyLegacyBip39: (mnemonic: string): string =>
+    wasm.grin_derive_extended_key_legacy_bip39(mnemonic),
   secp256k1PublicKey: (secretKeyHex: string): string =>
     wasm.grin_secp256k1_public_key(secretKeyHex),
   slatepackAddress: (mnemonic: string, index: number, network: GrinNetwork): string =>
@@ -542,6 +548,11 @@ export interface GrinReceiverOutputInfo {
 
 export interface GrinCreateSendTxParams {
   extended_private_key_hex: string;
+  /** LEGACY: optional v1/v2 ext key (PBKDF2-then-HMAC). When set,
+   *  the orchestrator falls back to this key if v3 derivation can't
+   *  reproduce an input commitment. Lets v0.3 spend pre-2026-05
+   *  outputs whose blinds were derived legacy-style. Sunset 2026-11-15. */
+  legacy_extended_private_key_hex?: string;
   inputs: GrinUnspentOutput[];
   amount: number;
   fee: number;
@@ -566,6 +577,10 @@ export interface GrinCreateSendTxResult {
   /** Opaque JSON. Persist; pass back to `finalize_send_slate`. */
   sender_context_json: string;
   change_output?: GrinChangeOutputInfo;
+  /** Per-input label of which derivation candidate matched
+   *  ("v3+Regular", "legacy+Regular", "v3+None", "legacy+None").
+   *  Same length and order as the input list. Diagnostic. */
+  input_derivations: string[];
 }
 
 export interface GrinSignIncomingSendParams {
@@ -630,6 +645,8 @@ export interface GrinCreateInvoiceResult {
 
 export interface GrinSignInvoiceParams {
   extended_private_key_hex: string;
+  /** LEGACY: see GrinCreateSendTxParams.legacy_extended_private_key_hex. */
+  legacy_extended_private_key_hex?: string;
   i1_slate_json: string;
   inputs: GrinUnspentOutput[];
   change_path: [number, number, number, number];
@@ -643,6 +660,8 @@ export interface GrinSignInvoiceResult {
   slate_bin_hex: string;
   sender_context_json: string;
   change_output?: GrinChangeOutputInfo;
+  /** Per-input label of which derivation candidate matched. Diagnostic. */
+  input_derivations: string[];
 }
 
 export interface GrinFinalizeInvoiceParams {

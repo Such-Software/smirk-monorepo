@@ -22,6 +22,19 @@ pub fn grin_derive_extended_key(mnemonic: &str) -> Result<String, JsValue> {
     Ok(json)
 }
 
+/// LEGACY: derive the v1/v2-style ext key (`useBip39=true` —
+/// PBKDF2-then-HMAC). Used to compute the fallback ext-key the
+/// orchestrators try when the v3 derivation can't reproduce a
+/// stored input commitment. Sunset 2026-11-15.
+///
+/// Returns hex of the 64-byte ext key (no JSON wrapper — single-purpose).
+#[wasm_bindgen]
+pub fn grin_derive_extended_key_legacy_bip39(mnemonic: &str) -> Result<String, JsValue> {
+    let xkey = grin_ext::mnemonic_to_extended_private_key_legacy_bip39(mnemonic)
+        .map_err(|e| JsValue::from_str(&e))?;
+    Ok(xkey.to_hex())
+}
+
 /// Derive the compressed secp256k1 public key (33 bytes) from a 32-byte
 /// secret key. Both arguments and return value are hex-encoded strings.
 ///

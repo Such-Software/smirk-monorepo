@@ -66,7 +66,17 @@ pub struct ChangeOutputInfo {
 #[derive(Debug, Clone)]
 pub struct CreateSendTxParams {
     /// Wallet's 64-byte BIP32 root (secret_key || chain_code).
+    /// Derived via the v3 / `useBip39=false` path (raw entropy →
+    /// HMAC-SHA512 with `"IamVoldemort"`) — grin-wallet compatible.
     pub extended_private_key: [u8; 64],
+    /// LEGACY: optional v1/v2 ext key (`useBip39=true` —
+    /// PBKDF2-then-HMAC). When set, the orchestrator falls back to
+    /// this key if v3 derivation produces an input commitment that
+    /// doesn't match the on-chain value. Lets v0.3 spend outputs
+    /// created by pre-2026-05 v0.2.x wallets that hadn't yet
+    /// migrated to v3 derivation. Sunset 2026-11-15. See
+    /// `seed::mnemonic_to_extended_private_key_legacy_bip39`.
+    pub legacy_extended_private_key: Option<[u8; 64]>,
     /// All inputs we're spending. Already selected by the caller —
     /// orchestrator does not pick UTXOs (the caller has wallet-level
     /// context about which UTXOs to use, see legacy notes on greedy
@@ -109,6 +119,12 @@ pub struct CreateSendTxOutput {
     pub slate: SlateV4,
     pub context: SenderContext,
     pub change_output: Option<ChangeOutputInfo>,
+    /// Per-input label of the derivation that successfully reproduced
+    /// each input's commitment ("v3+Regular" / "legacy+Regular" /
+    /// "v3+None" / "legacy+None"). Useful for diagnostics + telling
+    /// users when their wallet is using the legacy fallback. Sunset
+    /// 2026-11-15 alongside `mnemonic_to_extended_private_key_legacy_bip39`.
+    pub input_derivations: Vec<String>,
 }
 
 /// Build the sender's S1 slate from wallet-level inputs.
@@ -135,28 +151,22 @@ pub fn create_send_transaction(
     }
 
     // 1. Derive input blinds and verify commitments.
+    //    Tries v3 first; on commitment mismatch, falls back through
+    //    a series of candidate derivations (legacy useBip39=true
+    //    ext-key, switch=None, etc.) before giving up. Lets v0.3
+    //    spend outputs created by pre-2026-05 wallets that used the
+    //    legacy derivation, plus catches stale-DB n_child mismatches
+    //    via diagnostic output. See `derive_input_blind_with_fallback`.
     let mut input_blinds = Vec::with_capacity(params.inputs.len());
+    let mut input_derivations: Vec<String> = Vec::with_capacity(params.inputs.len());
     for input in &params.inputs {
-        let blind = derive_blind(
+        let (blind, label) = derive_input_blind_with_fallback(
             &params.extended_private_key,
-            &input.path,
-            input.amount,
-            SwitchCommitmentType::Regular,
+            params.legacy_extended_private_key.as_ref(),
+            input,
         )?;
-        // Sanity check: re-deriving the commitment from blind + amount
-        // must produce the on-chain commitment. Catches stored-path /
-        // stored-commitment mismatches before the slate is built (an
-        // input reference that doesn't actually correspond to the
-        // wallet's UTXO is unspendable + would cause kernel-sum
-        // verification to fail at the receiver).
-        let derived = pedersen_commit(input.amount, &blind)?;
-        if derived != input.commitment {
-            return Err(format!(
-                "input commitment mismatch at path {:?}: re-derived commitment does not match stored value",
-                input.path
-            ));
-        }
         input_blinds.push(blind);
+        input_derivations.push(label.to_string());
     }
 
     let inputs_total: u64 = params.inputs.iter().map(|i| i.amount).sum();
@@ -233,6 +243,7 @@ pub fn create_send_transaction(
         slate,
         context: init_out.context,
         change_output,
+        input_derivations,
     })
 }
 
@@ -608,8 +619,11 @@ pub fn create_invoice(params: &CreateInvoiceParams) -> Result<CreateInvoiceOutpu
 /// Inputs to [`sign_invoice`].
 #[derive(Debug, Clone)]
 pub struct SignInvoiceParams {
-    /// Sender's 64-byte BIP32 root.
+    /// Sender's 64-byte BIP32 root (v3 / `useBip39=false`).
     pub extended_private_key: [u8; 64],
+    /// LEGACY: optional v1/v2 ext key, same try-fallback semantics
+    /// as `CreateSendTxParams::legacy_extended_private_key`.
+    pub legacy_extended_private_key: Option<[u8; 64]>,
     /// I1 slate from the recipient.
     pub i1_slate: SlateV4,
     /// Sender's chosen UTXOs to fund the invoice.
@@ -632,6 +646,8 @@ pub struct SignInvoiceOutput {
     pub context: SenderContext,
     /// Info about the change output the sender created (if any).
     pub change_output: Option<ChangeOutputInfo>,
+    /// Per-input derivation labels — see CreateSendTxOutput.
+    pub input_derivations: Vec<String>,
 }
 
 /// Sign an invoice (I1 → I2) as the payer.
@@ -662,23 +678,19 @@ pub fn sign_invoice(params: &SignInvoiceParams) -> Result<SignInvoiceOutput, Str
     let fee = params.i1_slate.fee;
     let target = amount.checked_add(fee).ok_or("amount + fee overflows u64")?;
 
-    // Derive input blinds + verify commitments.
+    // Derive input blinds + verify commitments. Same try-fallback
+    // wrapper as create_send_transaction — covers v3 → legacy ext-key
+    // → switch=None and surfaces a diagnostic on total mismatch.
     let mut input_blinds = Vec::with_capacity(params.inputs.len());
+    let mut input_derivations: Vec<String> = Vec::with_capacity(params.inputs.len());
     for input in &params.inputs {
-        let blind = derive_blind(
+        let (blind, label) = derive_input_blind_with_fallback(
             &params.extended_private_key,
-            &input.path,
-            input.amount,
-            SwitchCommitmentType::Regular,
+            params.legacy_extended_private_key.as_ref(),
+            input,
         )?;
-        let derived = pedersen_commit(input.amount, &blind)?;
-        if derived != input.commitment {
-            return Err(format!(
-                "input commitment mismatch at path {:?}: re-derived commitment does not match stored value",
-                input.path
-            ));
-        }
         input_blinds.push(blind);
+        input_derivations.push(label.to_string());
     }
 
     let inputs_total: u64 = params.inputs.iter().map(|i| i.amount).sum();
@@ -746,6 +758,7 @@ pub fn sign_invoice(params: &SignInvoiceParams) -> Result<SignInvoiceOutput, Str
         slate: i2_slate,
         context: round_out.context,
         change_output,
+        input_derivations,
     })
 }
 
@@ -834,4 +847,119 @@ pub fn finalize_invoice(
         kernel_excess,
         tx_bytes,
     })
+}
+
+// ============================================================================
+// Input-blind derivation with cross-derivation fallback
+// ============================================================================
+
+/// Try multiple derivation candidates to find one whose
+/// `pedersen_commit(amount, blind)` matches the input's stored
+/// commitment.
+///
+/// The candidate matrix is (ext_key) × (switch) × (depth):
+///   - ext_key: v3 (modern), legacy v1/v2 (if `legacy_ext_key.is_some()`)
+///   - switch: Regular (HF2 default), None (raw BIP32 child)
+///   - depth: 4 (walk all path elements, our internal convention),
+///            3 (walk first 3 elements — grin-wallet's `ExtKeychainPath`
+///               default for standard outputs; the 4th u32 is just
+///               serialization padding). Only enabled when path[3] == 0;
+///               otherwise depth-3 would silently drop a meaningful step.
+///
+/// Without the depth-3 candidates, outputs created by external
+/// grin-wallet / Grim (which always serialize the default account at
+/// depth=3) appear at the right path in our DB but derive to the wrong
+/// blind — see `depth_3_and_depth_4_derivations_diverge` regression
+/// test. jwinterm's pre-2026-05 195.944 GRIN was the first user-visible
+/// case (2026-05-15).
+///
+/// On total miss: returns a diagnostic listing each attempted blind's
+/// computed commitment alongside the on-chain target so the surfaced
+/// label points at the failure mode (key vs switch vs depth).
+fn derive_input_blind_with_fallback(
+    v3_ext_key: &[u8; 64],
+    legacy_ext_key: Option<&[u8; 64]>,
+    input: &UnspentOutput,
+) -> Result<(/* blind */ [u8; 32], /* derivation_label */ &'static str), String> {
+    // (label, ext_key, switch, path_slice).
+    // path_slice is borrowed from input.path so we don't need to allocate
+    // intermediate Vecs.
+    let depth4_path = &input.path[..];
+    let depth3_path = &input.path[..3];
+    // Only consider the depth-3 candidates when the 4th element is the
+    // expected zero padding. A non-zero 4th element implies the path
+    // genuinely encodes 4 levels of derivation and shortening it would
+    // produce nonsense.
+    let allow_depth3 = input.path[3] == 0;
+
+    let mut candidates: Vec<(&'static str, &[u8; 64], SwitchCommitmentType, &[u32])> =
+        Vec::with_capacity(8);
+    candidates.push(("v3+Regular+d4", v3_ext_key, SwitchCommitmentType::Regular, depth4_path));
+    if let Some(legacy) = legacy_ext_key {
+        candidates.push(("legacy+Regular+d4", legacy, SwitchCommitmentType::Regular, depth4_path));
+    }
+    if allow_depth3 {
+        candidates.push(("v3+Regular+d3", v3_ext_key, SwitchCommitmentType::Regular, depth3_path));
+        if let Some(legacy) = legacy_ext_key {
+            candidates.push((
+                "legacy+Regular+d3",
+                legacy,
+                SwitchCommitmentType::Regular,
+                depth3_path,
+            ));
+        }
+    }
+    candidates.push(("v3+None+d4", v3_ext_key, SwitchCommitmentType::None, depth4_path));
+    if let Some(legacy) = legacy_ext_key {
+        candidates.push(("legacy+None+d4", legacy, SwitchCommitmentType::None, depth4_path));
+    }
+    if allow_depth3 {
+        candidates.push(("v3+None+d3", v3_ext_key, SwitchCommitmentType::None, depth3_path));
+        if let Some(legacy) = legacy_ext_key {
+            candidates.push((
+                "legacy+None+d3",
+                legacy,
+                SwitchCommitmentType::None,
+                depth3_path,
+            ));
+        }
+    }
+
+    let mut diagnostics: Vec<String> = Vec::with_capacity(candidates.len());
+    for (label, ext_key, switch, path) in &candidates {
+        let blind = match derive_blind(ext_key, path, input.amount, *switch) {
+            Ok(b) => b,
+            Err(e) => {
+                diagnostics.push(format!("  {} → derive_blind error: {}", label, e));
+                continue;
+            }
+        };
+        let commit = match pedersen_commit(input.amount, &blind) {
+            Ok(c) => c,
+            Err(e) => {
+                diagnostics.push(format!("  {} → pedersen_commit error: {}", label, e));
+                continue;
+            }
+        };
+        if commit == input.commitment {
+            return Ok((blind, *label));
+        }
+        diagnostics.push(format!("  {} → {}", label, hex::encode(commit)));
+    }
+
+    Err(format!(
+        "input commitment mismatch at path {:?}, amount={}: \
+         no candidate derivation reproduced the on-chain commit {}.\n\
+         Tried:\n{}\n\
+         If your wallet was previously used in v0.2.x at derivationVersion < 3 \
+         (pre-2026-05 rotation), pass `legacy_extended_private_key` from \
+         `mnemonic_to_extended_private_key_legacy_bip39`. If you've already \
+         done that, the stored n_child / amount may not match what was \
+         actually used at output creation — consider sweeping via grin-wallet \
+         CLI / Grim with the same seed.",
+        input.path,
+        input.amount,
+        hex::encode(input.commitment),
+        diagnostics.join("\n"),
+    ))
 }

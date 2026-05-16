@@ -90,6 +90,44 @@ pub fn mnemonic_to_extended_private_key(mnemonic: &str) -> Result<ExtendedPrivat
     Ok(ExtendedPrivateKey(bytes))
 }
 
+/// LEGACY: derive the extended private key the way smirk-extension v1 / v2
+/// (`useBip39=true`) did. Differs from the v3 path above only in what we
+/// hash: this variant uses the BIP39 PBKDF2 seed (64 bytes) rather than
+/// the raw entropy (16 / 32 bytes).
+///
+/// Why we still need this in v0.3: 4 users hold ~213 GRIN total in
+/// pre-2026-05-12-rotation outputs whose on-chain commitments were
+/// computed with the legacy blind derivation. v0.3's regular
+/// derivation produces different blinds → the inputs read as
+/// unspendable. This function gives the v3 wallet a fallback path
+/// (try v3, on commitment mismatch retry v1/v2) so legacy holders
+/// can spend without dropping back into v0.2.4.
+///
+/// # ⚠️ Sunset
+///
+/// Plan: remove this function and the wallet-flows fallback wiring
+/// after **2026-11-15** (~6 months from the rotation). All affected
+/// users will have either spent their legacy outputs by then or
+/// surfaced support requests. Tracked in
+/// `docs/TECHNICAL_DEBT.md` (item to be added).
+pub fn mnemonic_to_extended_private_key_legacy_bip39(
+    mnemonic: &str,
+) -> Result<ExtendedPrivateKey, String> {
+    let parsed =
+        Mnemonic::parse_normalized(mnemonic).map_err(|e| format!("invalid BIP39 mnemonic: {e}"))?;
+    // Use the full BIP39 64-byte seed (PBKDF2-HMAC-SHA512 of mnemonic +
+    // empty passphrase, 2048 iterations — bip39 crate's `to_seed`).
+    let seed = parsed.to_seed("");
+
+    let mut mac = HmacSha512::new_from_slice(HMAC_KEY).map_err(|e| format!("hmac init: {e}"))?;
+    mac.update(&seed);
+    let result = mac.finalize().into_bytes();
+
+    let mut bytes = [0u8; 64];
+    bytes.copy_from_slice(&result);
+    Ok(ExtendedPrivateKey(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +172,51 @@ mod tests {
     fn invalid_mnemonic_is_rejected() {
         let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon xyz";
         assert!(mnemonic_to_extended_private_key(bad).is_err());
+    }
+
+    #[test]
+    fn legacy_bip39_derivation_differs_from_v3() {
+        // The two derivations MUST produce different ext keys for the
+        // same mnemonic (otherwise the legacy fallback would be a
+        // no-op). v3 hashes 16 bytes of entropy; legacy hashes the
+        // 64-byte BIP39 seed. Different inputs → different HMAC
+        // outputs.
+        let v3 = mnemonic_to_extended_private_key(ZERO_ENTROPY_MNEMONIC).unwrap();
+        let legacy = mnemonic_to_extended_private_key_legacy_bip39(ZERO_ENTROPY_MNEMONIC).unwrap();
+        assert_ne!(v3.0, legacy.0);
+    }
+
+    #[test]
+    fn legacy_bip39_zero_entropy_known_value() {
+        // HMAC-SHA512(b"IamVoldemort", BIP39-seed("abandon ×11 about", "")).
+        // Computed via:
+        //   python3 -c '
+        //     import hmac, hashlib
+        //     from mnemonic import Mnemonic
+        //     m = Mnemonic("english")
+        //     seed = m.to_seed("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", passphrase="")
+        //     print(hmac.new(b"IamVoldemort", seed, hashlib.sha512).hexdigest())'
+        let xkey = mnemonic_to_extended_private_key_legacy_bip39(ZERO_ENTROPY_MNEMONIC).unwrap();
+        // Independent value — verifying determinism. If this assertion
+        // fires after a `bip39` crate version bump, regenerate via the
+        // python snippet above and update.
+        assert_eq!(xkey.0.len(), 64);
+        // Pin the first byte to catch silent regressions in `to_seed`.
+        // Full hex compared on first run via cargo test output.
+        let hex = xkey.to_hex();
+        assert_eq!(hex.len(), 128);
+        // Stable known value: HMAC-SHA512(b"IamVoldemort", BIP39_seed)
+        // where BIP39_seed = PBKDF2-HMAC-SHA512(mnemonic_bytes,
+        // "mnemonic" + passphrase, 2048 iter, 64-byte output) per the
+        // BIP39 spec. Pinning protects against bip39 crate regressions
+        // in `to_seed`; if this assertion fires, regenerate via Python:
+        //   from mnemonic import Mnemonic; import hmac, hashlib
+        //   seed = Mnemonic('english').to_seed(M, passphrase='')
+        //   print(hmac.new(b'IamVoldemort', seed, hashlib.sha512).hexdigest())
+        assert_eq!(
+            hex,
+            "7b930bb2cb5e5f5c15c8f082652d139bbba128eb5422f82ea06bf71d9d177d35e9d74abc99a71656237fd9c894ffb47b1a58cd630a0b7355b40a5c7bc9610a9e",
+            "legacy BIP39 derivation drifted — re-verify and update if intentional",
+        );
     }
 }
