@@ -458,9 +458,19 @@ async function fetchGrinBalance(api: SmirkApi, userId: string): Promise<AssetBal
   if (result.error || !result.data) {
     return { confirmed: 0n, pending: 0n, error: result.error ?? 'Network error' };
   }
+  // Map the backend's three-bucket model onto the shared AssetBalance
+  // shape:
+  //   unspent (≥10 confs)                    → confirmed (spendable now)
+  //   on-chain but <10 confs / 'locked' DB   → locked   (in chain, maturing)
+  //   no block_height yet ('unconfirmed')    → pending  (in mempool only)
+  // Matches XMR/WOW semantics so the asset row reads the same way
+  // across chains. Earlier this lumped `locked + pending` together and
+  // displayed everything in-flight as "pending", confusing on a chain
+  // where most of the wait time is post-broadcast confirmation depth.
   return {
     confirmed: BigInt(result.data.confirmed),
-    pending: BigInt(result.data.locked) + BigInt(result.data.pending),
+    locked: BigInt(result.data.locked),
+    pending: BigInt(result.data.pending),
   };
 }
 
