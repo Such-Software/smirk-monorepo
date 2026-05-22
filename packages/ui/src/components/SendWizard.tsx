@@ -1490,6 +1490,27 @@ function GrinExchange(props: GrinExchangeProps) {
     );
   }
 
+  // ----- Broadcasting phase -----
+  // Same full-page treatment as the build phase so the UI is
+  // unambiguously busy. Without this the only feedback during the
+  // ~5s push_transaction → JSON-RPC roundtrip was the button text
+  // flipping to "Broadcasting…" — easy to miss, leading to second-
+  // click confusion (the synchronous `finalizingRef` swallows the
+  // second click but the user has no idea why it "didn't do
+  // anything").
+  if (finalizing) {
+    return (
+      <div>
+        <StepTitle>Broadcasting…</StepTitle>
+        <FullPageStatus>
+          Pushing the signed kernel to the Grin node. This usually
+          completes in a few seconds; closing the popup is fine — the
+          wizard resumes on reopen.
+        </FullPageStatus>
+      </div>
+    );
+  }
+
   // ----- Build-failed (no slatepack to show, with error) -----
   if (!props.armoredOutgoing && props.error) {
     return (
@@ -1571,12 +1592,22 @@ function GrinExchange(props: GrinExchangeProps) {
       {props.relayId && (
         <div
           style={{
-            fontSize: 11,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            marginTop: 8,
+            padding: '3px 8px',
+            fontSize: 10,
             color: 'var(--smirk-positive)',
-            marginTop: 6,
+            background: 'var(--smirk-bg-sunken)',
+            border: '1px solid var(--smirk-positive)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            fontFamily: 'var(--smirk-font-family-mono)',
+            letterSpacing: '0.04em',
           }}
+          title="If the recipient is a Smirk user, the slatepack appears in their Inbox automatically."
         >
-          Posted to Smirk relay — if the recipient is a Smirk user, it'll appear in their Inbox.
+          ● relay posted
         </div>
       )}
 

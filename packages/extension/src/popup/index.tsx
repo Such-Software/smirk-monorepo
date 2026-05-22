@@ -1208,7 +1208,7 @@ function HomeRouter({
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
           }
         }}
-        onExit={() => void navigate('home/receive')}
+        onExit={() => void navigate('home')}
       />
     );
   }
