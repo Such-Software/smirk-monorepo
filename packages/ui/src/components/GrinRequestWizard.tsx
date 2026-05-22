@@ -309,11 +309,12 @@ function Exchange({
     if (amountAtomic === null || amountAtomic <= 0n) return;
     let alive = true;
     setBuilding(true);
-    // Grin fee = BASE_FEE × max(1, 4 × outputs − inputs + kernels) =
-    // 1_000_000 × max(1, 4 × 2 − 1 + 1) = 8_000_000 (typical 1-in 2-out).
-    // The payer's actual fee depends on their input count; this is just
-    // what we declare in the invoice as our expectation.
-    const feeAtomic = 8_000_000n;
+    // Grin fee = (inputs * 1 + outputs * 21 + kernels * 3) * 500_000
+    // per grin_core::core::transaction::TransactionBody::weight.
+    // Typical 1-input 2-output 1-kernel: 46 weight units * 500k = 23M
+    // nanogrin (0.023 GRIN). The payer's actual fee depends on their
+    // input count; this is what we declare as expectation in the invoice.
+    const feeAtomic = 23_000_000n;
     onBuild({ amountAtomic, feeAtomic }).finally(() => {
       if (alive) setBuilding(false);
     });
@@ -415,9 +416,12 @@ function Done({
   onClose: () => void | Promise<void>;
 }) {
   const [copied, setCopied] = useState(false);
-  const explorerUrl = kernelExcess
-    ? `https://grinexplorer.net/kernel/${kernelExcess}`
-    : null;
+  // `kernelExcess` is the canonical commitment form (08/09 prefix) emitted
+  // by WASM `finalize_*` — same form grincoin.org indexes by.
+  const explorerUrl =
+    kernelExcess && kernelExcess.length === 66
+      ? `https://grincoin.org/kernel/${kernelExcess}`
+      : null;
   return (
     <div style={{ textAlign: 'center', padding: '24px 16px' }}>
       <div style={{ fontSize: 40 }}>✓</div>

@@ -615,9 +615,14 @@ export interface GrinFinalizeSendResult {
   slate_json: string;
   final_signature_hex: string;
   kernel_excess_hex: string;
-  /** Broadcastable transaction bytes, hex — POST to backend
-   *  `/wallet/grin/broadcast`. */
+  /** Binary wire format transaction bytes, hex. */
   tx_bytes_hex: string;
+  /** JSON-shaped Transaction object — the format the Grin node's
+   *  `/v2/foreign push_transaction` JSON-RPC expects. Pass this
+   *  through to the backend broadcast endpoint as the `tx` field
+   *  unchanged. Sending `{tx_bytes_hex}` instead fails with
+   *  `InvalidArgStructure "tx" at position 0`. */
+  tx_json: unknown;
 }
 
 export interface GrinCreateInvoiceParams {
@@ -675,6 +680,8 @@ export interface GrinFinalizeInvoiceResult {
   final_signature_hex: string;
   kernel_excess_hex: string;
   tx_bytes_hex: string;
+  /** JSON-shaped Transaction — see GrinFinalizeSendResult.tx_json. */
+  tx_json: unknown;
 }
 
 // ---- Voucher tx (social-tipping primitive) --------------------------------

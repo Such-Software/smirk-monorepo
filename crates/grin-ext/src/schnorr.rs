@@ -36,12 +36,40 @@
 //! aggsig docs describe, but exact byte format details (esp. R encoding)
 //! need cross-validation with libsecp256k1-zkp.
 
-use blake2::{digest::{Update, VariableOutput}, Blake2bVar};
 use k256::elliptic_curve::group::GroupEncoding;
 use k256::elliptic_curve::ops::Reduce;
-use k256::{NonZeroScalar, ProjectivePoint, PublicKey, Scalar, SecretKey, U256};
+use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::{FieldElement, NonZeroScalar, ProjectivePoint, PublicKey, Scalar, SecretKey, U256};
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroize;
+
+/// True iff the Y coordinate of the compressed-form pubkey is a
+/// quadratic residue mod p (secp256k1 field prime). Grin's aggsig
+/// verifier reconstructs R from its X coordinate by picking the QR
+/// branch (`secp256k1_ge_set_xquad` in the C lib), then requires
+/// `sG - eP` to have Y QR. So signers must use a nonce whose R has
+/// Y QR — if not, negate the nonce.
+fn pubkey_y_is_qr(compressed: &[u8]) -> bool {
+    let Ok(pk) = PublicKey::from_sec1_bytes(compressed) else {
+        return false;
+    };
+    let encoded = pk.to_encoded_point(false); // uncompressed: 04 || X || Y
+    let bytes = encoded.as_bytes();
+    if bytes.len() != 65 {
+        return false;
+    }
+    let mut y_bytes = [0u8; 32];
+    y_bytes.copy_from_slice(&bytes[33..65]);
+    // FieldElement::from_bytes is constant-time-conditional; for our
+    // purposes Y is always a valid field element (it came from a
+    // valid curve point).
+    let y_opt = FieldElement::from_bytes(&y_bytes.into());
+    let Some(y) = Option::<FieldElement>::from(y_opt) else {
+        return false;
+    };
+    // Y is a quadratic residue iff `sqrt(Y)` exists.
+    Option::<FieldElement>::from(y.sqrt()).is_some()
+}
 
 /// Length of a Grin-style compact Schnorr signature: 32-byte R x-coord + 32-byte s.
 pub const SIG_LEN: usize = 64;
@@ -88,16 +116,37 @@ pub fn sign_with_nonce(
     let nonce_point = PublicKey::from_secret_scalar(&nonce_scalar);
 
     let p_compressed = public_key.to_sec1_bytes();
-    let r_compressed = nonce_point.to_sec1_bytes();
+    let r_compressed_original = nonce_point.to_sec1_bytes();
 
-    let e = challenge_hash(&r_compressed, &p_compressed, msg)?;
+    // Grin's aggsig verifier reconstructs R from R.X by picking the Y
+    // that's a quadratic residue. The CHALLENGE `e` is computed from
+    // that QR-form R, so the signer must use the QR-form encoding for
+    // its own hashing AND negate the nonce when the original R was
+    // non-QR.
+    let nonce_is_qr = pubkey_y_is_qr(&r_compressed_original);
+    let qr_prefix = if (r_compressed_original[0] == 0x02) == nonce_is_qr {
+        0x02
+    } else {
+        0x03
+    };
+    let mut r_compressed_qr = [0u8; 33];
+    r_compressed_qr[0] = qr_prefix;
+    r_compressed_qr[1..].copy_from_slice(&r_compressed_original[1..]);
 
-    // s = (k + e * sk) mod n
-    let s_scalar = nonce_scalar.as_ref() + e * sk_scalar.as_ref();
+    let e = challenge_hash(&r_compressed_qr, &p_compressed, msg)?;
+
+    let effective_nonce: Scalar = if nonce_is_qr {
+        *nonce_scalar.as_ref()
+    } else {
+        -*nonce_scalar.as_ref()
+    };
+
+    // s = (k_effective + e * sk) mod n
+    let s_scalar = effective_nonce + e * sk_scalar.as_ref();
 
     // Encode signature: R x-coord (drop parity byte) || s.
     let mut sig = [0u8; SIG_LEN];
-    sig[..32].copy_from_slice(&r_compressed[1..33]);
+    sig[..32].copy_from_slice(&r_compressed_qr[1..33]);
     sig[32..].copy_from_slice(&s_scalar.to_bytes());
 
     Ok(Signature(sig))
@@ -135,28 +184,23 @@ pub fn verify(
         .map_err(|e| format!("invalid public key: {e}"))?;
     let p_compressed = public_key.to_sec1_bytes();
 
-    // Reconstruct R from x-only encoding by trying both parity values.
-    // Try even Y first (standard convention); if that fails, try odd.
-    let mut r_compressed_even = [0u8; 33];
-    r_compressed_even[0] = 0x02;
-    r_compressed_even[1..].copy_from_slice(&sig.0[..32]);
-
-    let mut r_compressed_odd = [0u8; 33];
-    r_compressed_odd[0] = 0x03;
-    r_compressed_odd[1..].copy_from_slice(&sig.0[..32]);
+    // Grin aggsig convention: reconstruct R with Y QR (not even-Y).
+    // Try Y=02 first; if that's QR keep it, else use Y=03.
+    let mut r_even = [0u8; 33];
+    r_even[0] = 0x02;
+    r_even[1..].copy_from_slice(&sig.0[..32]);
+    let mut r_odd = [0u8; 33];
+    r_odd[0] = 0x03;
+    r_odd[1..].copy_from_slice(&sig.0[..32]);
+    let r_qr = if pubkey_y_is_qr(&r_even) { r_even } else { r_odd };
 
     let mut s_bytes = [0u8; 32];
     s_bytes.copy_from_slice(&sig.0[32..]);
     let s_scalar = scalar_from_bytes(&s_bytes).ok_or("invalid s scalar")?;
 
-    // s·G
     let lhs = ProjectivePoint::GENERATOR * s_scalar;
 
-    // Try even-Y R first.
-    if let Ok(()) = check_with_r(&r_compressed_even, &p_compressed, msg, &public_key, &lhs, &s_scalar) {
-        return Ok(true);
-    }
-    if let Ok(()) = check_with_r(&r_compressed_odd, &p_compressed, msg, &public_key, &lhs, &s_scalar) {
+    if let Ok(()) = check_with_r(&r_qr, &p_compressed, msg, &public_key, &lhs, &s_scalar) {
         return Ok(true);
     }
 
@@ -190,25 +234,39 @@ fn check_with_r(
     }
 }
 
-/// Compute the challenge hash `e = BLAKE2b-256(R_compressed || P_compressed || msg)`,
+/// Compute the challenge hash `e = SHA256(R.X || P_compressed || msg)`,
 /// reduced to a secp256k1 scalar.
+///
+/// Caller MUST pass `r_compressed` as 33-byte SEC1 form; we drop the
+/// parity byte and feed only the 32-byte X-coordinate, matching Grin's
+/// `secp256k1_compute_sighash_single` (see
+/// `secp256k1-zkp/src/modules/aggsig/main_impl.h:42-58`):
+/// - hash = SHA256 (NOT Blake2b — we had this wrong before, which is
+///   why local self-verify passed but grin's aggsig verifier always
+///   rejected with "IncorrectSignature" / "some kind of keychain
+///   error" on broadcast)
+/// - nonce contribution = 32 bytes (`buf+1`, X only, no parity prefix)
+/// - pubkey contribution = full 33 bytes (compressed, WITH prefix)
 fn challenge_hash(
     r_compressed: &[u8],
     p_compressed: &[u8],
     msg: &[u8; MSG_LEN],
 ) -> Result<Scalar, String> {
-    let mut hasher = Blake2bVar::new(32).map_err(|e| format!("blake2b init: {e}"))?;
-    hasher.update(r_compressed);
-    hasher.update(p_compressed);
+    use sha2::{Digest, Sha256};
+    if r_compressed.len() != 33 {
+        return Err(format!(
+            "r_compressed must be 33-byte SEC1; got {}",
+            r_compressed.len()
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(&r_compressed[1..]); // X only — strip parity byte
+    hasher.update(p_compressed); // full compressed (with prefix)
     hasher.update(msg);
-
-    let mut out = [0u8; 32];
-    hasher
-        .finalize_variable(&mut out)
-        .map_err(|e| format!("blake2b finalize: {e}"))?;
-
-    // Reduce hash to a scalar modulo curve order.
-    Ok(<Scalar as Reduce<U256>>::reduce_bytes(&out.into()))
+    let out = hasher.finalize();
+    let mut buf = [0u8; 32];
+    buf.copy_from_slice(&out);
+    Ok(<Scalar as Reduce<U256>>::reduce_bytes(&buf.into()))
 }
 
 /// Convert raw 32 bytes to a secp256k1 scalar, returning `None` if invalid.
@@ -296,11 +354,45 @@ pub fn partial_sign(
     let nonce = NonZeroScalar::try_from(secret_nonce.as_slice())
         .map_err(|e| format!("invalid nonce: {e}"))?;
 
-    // Shared challenge using the sums.
-    let e = challenge_hash(public_nonce_total, public_key_total, msg)?;
+    // MuSig with Grin's QR-Y convention: if R_total has Y that's not
+    // a QR, all participants negate their local nonce so the
+    // aggregated R lands on the QR branch the verifier picks. The
+    // challenge is computed from the QR-form R_total (matching what
+    // the verifier reconstructs).
+    let r_total_is_qr = pubkey_y_is_qr(public_nonce_total);
+    let qr_prefix = if (public_nonce_total[0] == 0x02) == r_total_is_qr {
+        0x02
+    } else {
+        0x03
+    };
+    let mut r_total_qr = [0u8; 33];
+    r_total_qr[0] = qr_prefix;
+    r_total_qr[1..].copy_from_slice(&public_nonce_total[1..]);
 
-    // s_i = k_i + e · x_i
-    let s = nonce.as_ref() + e * sk.as_ref();
+    let nonce_scalar: Scalar = if r_total_is_qr {
+        *nonce.as_ref()
+    } else {
+        -*nonce.as_ref()
+    };
+
+    // Shared challenge using the QR-form R_total.
+    let e = challenge_hash(&r_total_qr, public_key_total, msg)?;
+    eprintln!("[partial_sign] r_total_qr (33B) = {:02x?}", r_total_qr);
+    eprintln!("[partial_sign] public_key_total (33B) = {:02x?}", public_key_total);
+    eprintln!("[partial_sign] r_total_is_qr = {}", r_total_is_qr);
+    eprintln!("[partial_sign] e (scalar BE) = {:02x?}", &e.to_bytes()[..]);
+    eprintln!("[partial_sign] nonce_bytes IN = {:02x?}", secret_nonce);
+    eprintln!("[partial_sign] sk_bytes IN = {:02x?}", secret_key);
+
+    // s_i = k_i_effective + e · x_i
+    let s = nonce_scalar + e * sk.as_ref();
+
+    // DEBUG: print bytes raw vs converted
+    let raw = s.to_bytes();
+    let raw_slice: &[u8] = &raw;
+    eprintln!("[partial_sign] s.to_bytes() raw = {:02x?}", raw_slice);
+    let arr: [u8; 32] = raw.into();
+    eprintln!("[partial_sign] s.to_bytes().into() = {:02x?}", arr);
 
     Ok(s.to_bytes().into())
 }
@@ -323,10 +415,28 @@ pub fn partial_verify(
     let p_i = PublicKey::from_sec1_bytes(public_key_i)
         .map_err(|e| format!("invalid P_i: {e}"))?;
 
-    let e = challenge_hash(public_nonce_total, public_key_total, msg)?;
+    // Use the QR-form R_total for both the challenge and the per-
+    // participant nonce flip (matches partial_sign).
+    let r_total_is_qr = pubkey_y_is_qr(public_nonce_total);
+    let qr_prefix = if (public_nonce_total[0] == 0x02) == r_total_is_qr {
+        0x02
+    } else {
+        0x03
+    };
+    let mut r_total_qr = [0u8; 33];
+    r_total_qr[0] = qr_prefix;
+    r_total_qr[1..].copy_from_slice(&public_nonce_total[1..]);
+
+    let e = challenge_hash(&r_total_qr, public_key_total, msg)?;
+
+    let r_i_point = if r_total_is_qr {
+        r_i.to_projective()
+    } else {
+        -r_i.to_projective()
+    };
 
     let lhs = ProjectivePoint::GENERATOR * s;
-    let rhs = r_i.to_projective() + p_i.to_projective() * e;
+    let rhs = r_i_point + p_i.to_projective() * e;
 
     Ok(lhs.to_bytes() == rhs.to_bytes())
 }
@@ -353,6 +463,12 @@ pub fn aggregate_partials(partials: &[[u8; 32]]) -> Result<[u8; 32], String> {
 /// aggregate public key `P_total` — pass it to [`verify`] with `P_total` as
 /// `public_key_compressed`.
 pub fn final_signature(public_nonce_total: &[u8; 33], aggregate_s: &[u8; 32]) -> Signature {
+    // No parity adjustment needed here. The MuSig convention handles
+    // R-parity at PARTIAL SIGN time: when R_total has odd Y, each
+    // participant negates their local nonce k_i (so R_i_used = -R_i_committed)
+    // before computing s_i = k_i_used + e·x_i. The aggregated s then
+    // already corresponds to the canonical (X, even_Y) encoding the
+    // verifier reconstructs. See `partial_sign` for the negation.
     let mut sig = [0u8; SIG_LEN];
     sig[..32].copy_from_slice(&public_nonce_total[1..33]); // drop parity prefix, keep X
     sig[32..].copy_from_slice(aggregate_s);

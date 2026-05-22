@@ -162,29 +162,243 @@ pub fn slate_to_transaction_bytes(params: &BuildTransactionParams) -> Result<Vec
     Ok(out)
 }
 
+/// Same as [`slate_to_transaction_bytes`] but emits the JSON object
+/// shape that Grin's node `/v2/foreign push_transaction` JSON-RPC
+/// endpoint expects as its `tx` parameter.
+///
+/// The binary wire format and the JSON-RPC format carry identical
+/// data — the difference is just encoding. push_transaction does NOT
+/// accept the raw binary form; it deserializes a `Transaction` struct
+/// from JSON, which means we have to emit the exact shape Grin's
+/// `#[derive(Serialize)]` for `Transaction` produces.
+///
+/// The shape (mirrors `grin/core/src/core/transaction.rs`):
+///
+/// ```text
+/// {
+///   "offset": "<32-byte hex>",
+///   "body": {
+///     "inputs":  [ {"features": "Plain"|"Coinbase", "commit": "<33-byte hex>"} ],
+///     "outputs": [ {"features": "Plain"|"Coinbase", "commit": "<33-byte hex>", "proof": "<bp hex>"} ],
+///     "kernels": [ {"features": "Plain"|..., "fee": "<u64-string>", "lock_height": "<u64-string>"?, "excess": "<33-byte hex>", "excess_sig": "<64-byte hex>"} ]
+///   }
+/// }
+/// ```
+///
+/// `fee` and `lock_height` serialize as JSON STRINGS (grin uses a
+/// stringified-u64 helper for these), not numbers. `features` on
+/// kernels flattens to the top level of the kernel object (Grin's
+/// TxKernel uses `#[serde(flatten)]` on the features field).
+pub fn slate_to_transaction_json(
+    params: &BuildTransactionParams,
+) -> Result<serde_json::Value, String> {
+    let slate = &params.s3_slate;
+
+    if slate.sta != SlateStateV4::Standard3 {
+        return Err(format!(
+            "slate_to_transaction_json expects S3, got {:?}",
+            slate.sta
+        ));
+    }
+    if slate.sigs.is_empty() {
+        return Err("S3 slate must contain at least one participant".to_string());
+    }
+
+    let mut all_outputs: Vec<TxOutput> = Vec::new();
+    if let Some(coms) = &slate.coms {
+        for c in coms {
+            let proof = c.p.clone().ok_or_else(|| {
+                "output in slate.coms is missing its rangeproof — cannot build TX".to_string()
+            })?;
+            all_outputs.push(TxOutput {
+                features: c.f,
+                commitment: c.c,
+                rangeproof: proof,
+            });
+        }
+    }
+    all_outputs.extend(params.sender_change_outputs.iter().cloned());
+
+    let mut p_total = slate.sigs[0].xs;
+    for sig in &slate.sigs[1..] {
+        p_total = point_add(&p_total, &sig.xs)?;
+    }
+    let kernel_excess = pubkey_to_commitment(&p_total)?;
+
+    let kernel_features = KernelFeatures::from_slate_fields(
+        slate.feat,
+        slate.fee,
+        slate.feat_args.as_ref().map(|a| a.lock_hgt),
+    )?;
+
+    let feature_str = |f: u8| -> &'static str {
+        match f {
+            1 => "Coinbase",
+            _ => "Plain",
+        }
+    };
+
+    // Sort inputs + outputs in grin_core's canonical order:
+    // `Blake2b256(wire_serialize(item))`. The `hashable_ord!` macro on
+    // grin_core::core::transaction::{Input, Output} implements Ord as
+    // `self.hash().cmp(&other.hash())`, and Transaction::validate runs
+    // `verify_sorted_and_unique`. Unsorted inputs/outputs fail with
+    // `Serialization(SortError)`, which surfaces at the node as
+    // "Invalid Tx some kind of keychain error".
+    //
+    // Wire serialization (per grin_core/src/core/transaction.rs):
+    //   Input:  features (u8) || commit (33 bytes)
+    //   Output: features (u8) || commit (33 bytes) || proof_len (u64 BE) || proof bytes
+    //
+    // The hash function is Blake2b-256 (BLAKE2b output truncated to
+    // 32 bytes — same primitive we use for sig_msg).
+    use blake2::digest::{Update, VariableOutput};
+    use blake2::Blake2bVar;
+    let hash_bytes = |bytes: &[u8]| -> [u8; 32] {
+        let mut h = Blake2bVar::new(32).expect("blake2b 32");
+        h.update(bytes);
+        let mut out = [0u8; 32];
+        h.finalize_variable(&mut out).expect("blake2b finalize");
+        out
+    };
+    let input_hash = |i: &TxInput| -> [u8; 32] {
+        let mut buf = Vec::with_capacity(34);
+        buf.push(i.features);
+        buf.extend_from_slice(&i.commitment);
+        hash_bytes(&buf)
+    };
+    // Output sorts by its OutputIdentifier hash (features + commit
+    // ONLY — proof is NOT hashed for the Ord impl; see grin_core
+    // transaction.rs line 2017 `impl Ord for Output { ... cmp via
+    // self.identifier }` and line 2160 `hashable_ord!(OutputIdentifier)`
+    // where OutputIdentifier::Writeable is just features + commit).
+    let output_hash = |o: &TxOutput| -> [u8; 32] {
+        let mut buf = Vec::with_capacity(34);
+        buf.push(o.features);
+        buf.extend_from_slice(&o.commitment);
+        hash_bytes(&buf)
+    };
+
+    let mut sorted_inputs: Vec<&TxInput> = params.sender_inputs.iter().collect();
+    sorted_inputs.sort_by_key(|i| input_hash(i));
+    let inputs_json: Vec<serde_json::Value> = sorted_inputs
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "features": feature_str(i.features),
+                "commit": hex::encode(i.commitment),
+            })
+        })
+        .collect();
+
+    let mut sorted_outputs: Vec<&TxOutput> = all_outputs.iter().collect();
+    sorted_outputs.sort_by_key(|o| output_hash(o));
+    let outputs_json: Vec<serde_json::Value> = sorted_outputs
+        .iter()
+        .map(|o| {
+            serde_json::json!({
+                "features": feature_str(o.features),
+                "commit": hex::encode(o.commitment),
+                "proof": hex::encode(&o.rangeproof),
+            })
+        })
+        .collect();
+
+    // Kernel: `TxKernel { features: KernelFeatures, excess, excess_sig }`
+    // — KernelFeatures is a nested struct, not flattened. KernelFeatures
+    // uses default external tagging:
+    //   Plain        → {"Plain": {"fee": <u64-int>}}
+    //   Coinbase     → "Coinbase"
+    //   HeightLocked → {"HeightLocked": {"fee": <u64-int>, "lock_height": <u64-int>}}
+    //   NRD          → {"NoRecentDuplicate": {"fee": ..., "relative_height": <u16-int>}}
+    // `fee` serializes via `fee_fields_as_int` — packed-u64 INT (not a
+    // stringified one). lock_height / relative_height likewise are bare
+    // numbers. Empirically verified against
+    // grin_core::core::transaction::{KernelFeatures, TxKernel} in
+    // grin_core 5.4.
+    let features_json = match kernel_features {
+        KernelFeatures::Plain { fee } => serde_json::json!({"Plain": {"fee": fee}}),
+        KernelFeatures::Coinbase => serde_json::json!("Coinbase"),
+        KernelFeatures::HeightLocked { fee, lock_height } => serde_json::json!({
+            "HeightLocked": {"fee": fee, "lock_height": lock_height}
+        }),
+        KernelFeatures::Nrd { fee, relative_height } => serde_json::json!({
+            "NoRecentDuplicate": {"fee": fee, "relative_height": relative_height}
+        }),
+    };
+    // CRITICAL: grin's `sig_serde::deserialize` (in grin_core/libtx/secp_ser.rs)
+    // calls `secp256k1zkp::Signature::from_compact`, which routes through
+    // `secp256k1_ecdsa_signature_parse_compact` + `_save`. Internally that
+    // parses the 64 BE input bytes as two scalars via `scalar_set_b32`, then
+    // `memcpy`s the scalar limbs back into `Signature::data`. On x86_64 the
+    // scalar limbs (`uint64_t d[4]`) are little-endian, so the memcpy result
+    // is the original 32-byte BE half **byte-reversed**.
+    //
+    // grin's aggsig verifier (`secp256k1_aggsig_verify_single`) then reads
+    // `sig.data[0..32]` directly as BE for the field element R.x and as BE
+    // for the scalar s — i.e., it expects the post-from_compact storage to
+    // already be in BE form. For grin-wallet's own kernels this works
+    // because they round-trip a sig through `serialize_compact` (which is
+    // the inverse of `from_compact`) before hex-encoding, and the two
+    // operations cancel out.
+    //
+    // We never run `serialize_compact`, so we pre-apply its byte-reversal
+    // here. After grin's `from_compact` undoes the reversal, sig.data
+    // contains the canonical BE (R.x || s) bytes that aggsig_verify_single
+    // expects. Empirically verified against `kernel.excess_sig.to_raw_data()`
+    // in `full_send_round_trip_validates_against_grin_wallet`.
+    let mut kernel_sig_for_json = [0u8; 64];
+    let sig = &params.aggregated_kernel_signature;
+    for i in 0..32 {
+        kernel_sig_for_json[i] = sig[31 - i];
+        kernel_sig_for_json[32 + i] = sig[63 - i];
+    }
+    let kernel_obj = serde_json::json!({
+        "features": features_json,
+        "excess": hex::encode(kernel_excess),
+        "excess_sig": hex::encode(kernel_sig_for_json),
+    });
+
+    Ok(serde_json::json!({
+        "offset": hex::encode(slate.off),
+        "body": {
+            "inputs": inputs_json,
+            "outputs": outputs_json,
+            "kernels": [kernel_obj],
+        },
+    }))
+}
+
 /// Convert a 33-byte compressed secp256k1 public key into a 33-byte Grin
 /// Pedersen commitment.
 ///
-/// The X coordinate stays the same; only the parity prefix changes:
-/// - `0x02` (even Y, pubkey) → `0x08` (even Y, commitment)
-/// - `0x03` (odd Y, pubkey)  → `0x09` (odd Y, commitment)
+/// **NOT** a simple `02↔08 / 03↔09` prefix swap. libsecp256k1-zkp's
+/// `secp256k1_pubkey_to_pedersen_commitment` does a Y-coordinate flip
+/// (the commit form negates the pubkey internally), so an odd-Y pubkey
+/// maps to an even-Y commitment and vice versa. We were doing the
+/// naive prefix swap — every kernel.excess we wrote to chain since the
+/// monorepo migration was for the wrong point, which the node would
+/// reject with "Invalid Tx some kind of keychain error" (incorrect
+/// signature, because the verifier's pubkey-derived-from-commit
+/// didn't match the pubkey our sig was generated against).
 ///
-/// This matches the encoding `libsecp256k1-zkp` uses for Pedersen
-/// commitments and is what Grin's `Commitment::write` produces on the
-/// wire.
+/// Delegate to libsecp256k1-zkp's canonical implementation so we
+/// always agree with grin-wallet's `Slate::calc_excess` which uses
+/// `Commitment::from_pubkey(secp, &pub_blind_sum)`.
+///
+/// Verified against this canonical fn by
+/// `pubkey_to_commitment_matches_secp_from_pubkey` in
+/// `crates/grin-ext/tests/grin_wallet_compat.rs`.
 pub fn pubkey_to_commitment(pubkey_compressed: &[u8; 33]) -> Result<[u8; 33], String> {
-    let mut commit = [0u8; 33];
-    commit.copy_from_slice(pubkey_compressed);
-    commit[0] = match pubkey_compressed[0] {
-        0x02 => 0x08,
-        0x03 => 0x09,
-        other => {
-            return Err(format!(
-                "unexpected pubkey parity prefix 0x{other:02x}; expected 0x02 or 0x03"
-            ))
-        }
-    };
-    Ok(commit)
+    use secp256k1zkp::key::PublicKey;
+    use secp256k1zkp::pedersen::Commitment;
+    use secp256k1zkp::{ContextFlag, Secp256k1};
+    let secp = Secp256k1::with_caps(ContextFlag::Commit);
+    let pk = PublicKey::from_slice(&secp, pubkey_compressed)
+        .map_err(|e| format!("invalid 33-byte compressed pubkey: {e}"))?;
+    let commit: Commitment = Commitment::from_pubkey(&secp, &pk)
+        .map_err(|e| format!("Commitment::from_pubkey failed: {e}"))?;
+    Ok(commit.0)
 }
 
 #[cfg(test)]
@@ -203,17 +417,38 @@ mod tests {
     }
 
     #[test]
-    fn pubkey_to_commitment_swaps_prefix() {
-        let mut pk = [0u8; 33];
-        pk[0] = 0x02;
-        pk[1] = 0xab;
-        let c = pubkey_to_commitment(&pk).unwrap();
-        assert_eq!(c[0], 0x08);
-        assert_eq!(c[1..], pk[1..]);
+    fn pubkey_to_commitment_returns_valid_commit() {
+        // The old "naive prefix swap" assertion is gone — the canonical
+        // conversion done by libsecp256k1-zkp internally negates the
+        // pubkey, so prefix may flip parity. Just check the conversion
+        // round-trips through Commitment::to_pubkey for a known valid
+        // pubkey constructed from a small secret key.
+        use secp256k1zkp::key::{PublicKey, SecretKey};
+        use secp256k1zkp::pedersen::Commitment;
+        use secp256k1zkp::{ContextFlag, Secp256k1};
+        let secp = Secp256k1::with_caps(ContextFlag::Commit);
+        let mut sk_bytes = [0u8; 32];
+        sk_bytes[31] = 0x42;
+        let sk = SecretKey::from_slice(&secp, &sk_bytes).unwrap();
+        let pk = PublicKey::from_secret_key(&secp, &sk).unwrap();
+        let pk_ser = pk.serialize_vec(&secp, true);
+        let mut pk_arr = [0u8; 33];
+        pk_arr.copy_from_slice(&pk_ser);
 
-        pk[0] = 0x03;
-        let c = pubkey_to_commitment(&pk).unwrap();
-        assert_eq!(c[0], 0x09);
+        let commit_bytes = pubkey_to_commitment(&pk_arr).unwrap();
+        // Commit prefix must be 0x08 or 0x09.
+        assert!(matches!(commit_bytes[0], 0x08 | 0x09));
+
+        // Round-trip: the resulting commitment's to_pubkey must equal
+        // the original pubkey (this is the property the node will use
+        // when verifying our kernel signature).
+        let commit = Commitment(commit_bytes);
+        let recovered = commit.to_pubkey(&secp).unwrap();
+        assert_eq!(
+            recovered.serialize_vec(&secp, true)[..],
+            pk_ser[..],
+            "Commit→Pubkey round-trip must recover the original pubkey"
+        );
     }
 
     #[test]
@@ -333,6 +568,33 @@ mod tests {
         //   + (1 + 8 for plain features) + 33 (excess) + 64 (sig)
         // Bullet proofs are ~676 bytes typically.
         assert!(tx_bytes.len() > 1000, "expected substantial TX bytes, got {}", tx_bytes.len());
+
+        // Verify the JSON shape matches what grin_core::Transaction
+        // serde would produce. Print + assert key fields so a curl at
+        // the node can validate against this output before doing
+        // another popup roundtrip.
+        let tx_json = slate_to_transaction_json(&params).expect("build TX json");
+        eprintln!("--- slate_to_transaction_json output ---");
+        eprintln!("{}", serde_json::to_string_pretty(&tx_json).unwrap());
+        eprintln!("--- end ---");
+        assert!(tx_json["offset"].is_string(), "offset must be a hex string");
+        assert!(tx_json["body"]["inputs"].is_array());
+        let kernel = &tx_json["body"]["kernels"][0];
+        // KernelFeatures must be the nested-object tagged shape (NOT
+        // a flat "features": "Plain"). This is the bug that caused
+        // grin to reject every broadcast with -32602 InvalidArgStructure.
+        assert!(
+            kernel["features"].is_object(),
+            "kernel.features must be an object like {{\"Plain\":{{\"fee\":N}}}}, got {:?}",
+            kernel["features"]
+        );
+        assert!(
+            kernel["features"]["Plain"]["fee"].is_number(),
+            "kernel.features.Plain.fee must be a JSON number (int), got {:?}",
+            kernel["features"]["Plain"]["fee"]
+        );
+        assert!(kernel["excess"].is_string());
+        assert!(kernel["excess_sig"].is_string());
     }
 
     #[test]

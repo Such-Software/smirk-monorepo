@@ -364,6 +364,75 @@ fn full_send_round_trip_validates_against_grin_wallet() {
         2,
         "S3 carries both sender + receiver participant data"
     );
+
+    // Crucially: validate the FULL Transaction the same way the Grin
+    // node would. tx_json from `slate_to_transaction_json` deserializes
+    // into grin_core::Transaction; we then call Transaction::validate
+    // which runs every check the node does: bulletproof verify, kernel
+    // signature verify, kernel sum balance against offset + commitments.
+    // If any of these fails the node returns "Invalid Tx some kind of
+    // keychain error" — this test would catch the same bug without
+    // needing a network roundtrip.
+    let tx_json_value = finalize_out.tx_json.clone();
+    let tx_json_str = serde_json::to_string(&tx_json_value).unwrap();
+    // Dump what's in the JSON for the kernel sig
+    eprintln!("[tx_json kernel.excess_sig string] = {}",
+        tx_json_value["body"]["kernels"][0]["excess_sig"]);
+    let tx: grin_core::core::Transaction = serde_json::from_str(&tx_json_str)
+        .expect("our tx_json must deserialize as grin_core::Transaction");
+    use grin_core::core::transaction::Weighting;
+    grin_core::global::set_local_chain_type(grin_core::global::ChainTypes::Mainnet);
+
+    let kernel = &tx.body.kernels[0];
+    eprintln!("[final tx] kernel.excess = {:02x?}", &kernel.excess.0);
+    eprintln!("[final tx] kernel.features (debug) = {:?}", kernel.features);
+    eprintln!("[final tx] our finalize.kernel_excess = {:02x?}", &finalize_out.kernel_excess);
+    eprintln!("[final tx] our finalize.final_signature = {:02x?}", &finalize_out.final_signature);
+
+    // Our slate participants' xs sums to what?
+    let our_p_total = grin_ext::point_add(
+        &finalize_out.slate.sigs[0].xs,
+        &finalize_out.slate.sigs[1].xs,
+    ).unwrap();
+    eprintln!("[final tx] our p_total (sum of slate.sigs[].xs) (33B) = {:02x?}", our_p_total);
+
+    let msg = kernel.msg_to_sign().unwrap();
+    eprintln!("[final tx] msg = {:02x?}", &msg[..]);
+
+    // Independent math check: s·G - e·P should be R, and our R was
+    // computed before sig was emitted. Use our own verify function
+    // with the SAME bytes that get stored on chain. Bisects: if our
+    // verify also rejects → bug is in sig construction; if it accepts
+    // → bug is in how grin recovers the pubkey from kernel.excess.
+    let our_sig = grin_ext::Signature(finalize_out.final_signature);
+    let mut msg32 = [0u8; 32];
+    msg32.copy_from_slice(&msg[..]);
+    eprintln!("[final tx] our local schnorr_verify(sig, msg, p_total) = {:?}",
+        grin_ext::schnorr_verify(&our_sig, &msg32, &our_p_total));
+
+    // Diagnose storage-format mismatch between aggsig (R.x BE || s BE)
+    // and grin's ECDSA-storage Signature (after from_compact, stores as
+    // scalar limbs). Compare what kernel.excess_sig bytes look like
+    // (after JSON round-trip via from_compact) vs. our final_signature.
+    let kernel_sig_raw = kernel.excess_sig.to_raw_data();
+    eprintln!("[final tx] kernel.excess_sig.to_raw_data() = {:02x?}", &kernel_sig_raw[..]);
+    eprintln!("[final tx] our final_signature             = {:02x?}", &finalize_out.final_signature[..]);
+    let matches = kernel_sig_raw == finalize_out.final_signature;
+    eprintln!("[final tx] kernel.excess_sig RAW bytes match our final_signature? {}", matches);
+    // Try the reverse-bytes hypothesis: each 32-byte half reversed.
+    let mut reversed = [0u8; 64];
+    for i in 0..32 { reversed[i] = finalize_out.final_signature[31 - i]; }
+    for i in 0..32 { reversed[32 + i] = finalize_out.final_signature[63 - i]; }
+    eprintln!("[final tx] reverse(final_signature halves)  = {:02x?}", &reversed[..]);
+    eprintln!("[final tx] kernel.excess_sig RAW bytes == reversed-halves? {}",
+        kernel_sig_raw == reversed);
+
+    let kernel_verify_result = kernel.verify();
+    eprintln!("[final tx] kernel.verify() = {:?}", kernel_verify_result);
+
+    tx.validate(Weighting::AsTransaction)
+        .expect("grin_core::Transaction::validate must pass — \
+                 every node will reject if not");
 }
 
 /// Full invoice ceremony round-trip: I1 → I2 → I3.
@@ -496,6 +565,44 @@ fn slate_v4_bin_round_trips_through_our_deserializer() {
     assert_eq!(send_out.slate, back, "binary round-trip lost field data");
 }
 
+/// Cross-validate our `pubkey_to_commitment` (which swaps prefix
+/// 02/03 → 08/09) against the canonical conversion in
+/// `secp256k1zkp::Commitment::from_pubkey`. grin-wallet uses
+/// `Commitment::from_pubkey(secp, pub_blind_sum)` when building the
+/// final kernel excess; if our shortcut diverges, every broadcast
+/// fails at `kernel.verify()` with a vague "keychain error".
+#[test]
+fn pubkey_to_commitment_matches_secp_from_pubkey() {
+    use secp256k1zkp::key::{PublicKey, SecretKey};
+    use secp256k1zkp::pedersen::Commitment;
+    use secp256k1zkp::{ContextFlag, Secp256k1};
+
+    let secp = Secp256k1::with_caps(ContextFlag::Commit);
+    // Try a handful of secret keys to cover both Y parities.
+    for byte in [0x01u8, 0x42, 0x77, 0xaa, 0xff] {
+        let mut sk_bytes = [0u8; 32];
+        sk_bytes[31] = byte;
+        let sk = SecretKey::from_slice(&secp, &sk_bytes).unwrap();
+        let pk = PublicKey::from_secret_key(&secp, &sk).unwrap();
+        let pk_compressed = pk.serialize_vec(&secp, true);
+        assert_eq!(pk_compressed.len(), 33);
+        let mut pk_arr = [0u8; 33];
+        pk_arr.copy_from_slice(&pk_compressed);
+
+        // Canonical conversion (what grin-wallet uses).
+        let canonical: Commitment = Commitment::from_pubkey(&secp, &pk).unwrap();
+
+        // Our shortcut conversion.
+        let ours = grin_ext::pubkey_to_commitment(&pk_arr).unwrap();
+
+        assert_eq!(
+            canonical.0, ours,
+            "pubkey_to_commitment diverges from Commitment::from_pubkey for sk byte 0x{:02x}:\n  canonical: {:02x?}\n  ours: {:02x?}",
+            byte, canonical.0, ours
+        );
+    }
+}
+
 /// Regression test that pins the depth-3-vs-depth-4 derivation
 /// discrepancy that left pre-2026-05 wallets' Grin outputs
 /// unspendable in v0.3 (see commit `fe5d3aa` diagnostic output for
@@ -553,6 +660,160 @@ fn depth_3_and_depth_4_derivations_diverge() {
         ref_depth3.0, ours_depth3,
         "derive_blind on the 3-element prefix MUST match grin_keychain depth=3 — \
          this is the fallback the wallet uses to spend pre-2026-05 outputs."
+    );
+}
+
+/// Compare OUR `partial_sign` byte-for-byte against grin's reference
+/// `aggsig::sign_single` (which is the C lib's
+/// `secp256k1_aggsig_sign_single`). Same inputs → same partial.
+/// If they diverge we know exactly which primitive (challenge hash,
+/// nonce parity, secret-flip) is off without having to trace through
+/// the on-chain rejection.
+#[test]
+fn partial_sign_matches_grin_aggsig_sign_single() {
+    use secp256k1zkp::aggsig as grin_aggsig;
+    use secp256k1zkp::key::{PublicKey, SecretKey};
+    use secp256k1zkp::{ContextFlag, Message, Secp256k1};
+
+    let secp = Secp256k1::with_caps(ContextFlag::Full);
+
+    // Deterministic two-party setup so the test is reproducible.
+    let mut sender_sk_bytes = [0u8; 32];
+    sender_sk_bytes[31] = 0x11;
+    let mut sender_nonce_bytes = [0u8; 32];
+    sender_nonce_bytes[31] = 0x22;
+    let mut receiver_sk_bytes = [0u8; 32];
+    receiver_sk_bytes[31] = 0x33;
+    let mut receiver_nonce_bytes = [0u8; 32];
+    receiver_nonce_bytes[31] = 0x44;
+    let msg_bytes = [0xAAu8; 32];
+
+    // Build reference pubkeys via grin's secp256k1zkp.
+    let sender_sk = SecretKey::from_slice(&secp, &sender_sk_bytes).unwrap();
+    let sender_nonce = SecretKey::from_slice(&secp, &sender_nonce_bytes).unwrap();
+    let receiver_sk = SecretKey::from_slice(&secp, &receiver_sk_bytes).unwrap();
+    let receiver_nonce = SecretKey::from_slice(&secp, &receiver_nonce_bytes).unwrap();
+
+    let sender_pk = PublicKey::from_secret_key(&secp, &sender_sk).unwrap();
+    let sender_pubnonce = PublicKey::from_secret_key(&secp, &sender_nonce).unwrap();
+    let receiver_pk = PublicKey::from_secret_key(&secp, &receiver_sk).unwrap();
+    let receiver_pubnonce = PublicKey::from_secret_key(&secp, &receiver_nonce).unwrap();
+
+    let pubkey_sum =
+        PublicKey::from_combination(&secp, vec![&sender_pk, &receiver_pk]).unwrap();
+    let nonce_sum =
+        PublicKey::from_combination(&secp, vec![&sender_pubnonce, &receiver_pubnonce])
+            .unwrap();
+
+    let msg = Message::from_slice(&msg_bytes).unwrap();
+
+    // Reference partial sig from grin's C aggsig.
+    let ref_sig = grin_aggsig::sign_single(
+        &secp,
+        &msg,
+        &sender_sk,
+        Some(&sender_nonce),
+        None,
+        Some(&nonce_sum),
+        Some(&pubkey_sum),
+        Some(&nonce_sum),
+    )
+    .expect("grin sign_single");
+    let ref_bytes = ref_sig.to_raw_data();
+    let ref_s: [u8; 32] = ref_bytes[32..64].try_into().unwrap();
+
+    // Our partial_sign — needs compressed 33-byte pubkey representations.
+    let nonce_sum_compressed = nonce_sum.serialize_vec(&secp, true);
+    let pubkey_sum_compressed = pubkey_sum.serialize_vec(&secp, true);
+    let mut nonce_arr = [0u8; 33];
+    nonce_arr.copy_from_slice(&nonce_sum_compressed);
+    let mut pub_arr = [0u8; 33];
+    pub_arr.copy_from_slice(&pubkey_sum_compressed);
+
+    // Print what grin sees for these inputs
+    eprintln!("[ref] nonce_sum (33B) = {:02x?}", nonce_sum_compressed.as_ref() as &[u8]);
+    eprintln!("[ref] pubkey_sum (33B) = {:02x?}", pubkey_sum_compressed.as_ref() as &[u8]);
+    // Compute ref's challenge: SHA256(R.X || P_compressed_33 || msg)
+    {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&nonce_sum_compressed[1..]);
+        h.update(&pubkey_sum_compressed[..]);
+        h.update(&msg_bytes);
+        let out = h.finalize();
+        eprintln!("[ref] expected challenge e = {:02x?}", &out[..]);
+    }
+    eprintln!("[ref] full sig (64B) = {:02x?}", &ref_bytes[..]);
+
+    // ALSO sanity: call grin's sign_single in single-signer mode
+    // (no pubnonce_total) to see what s it produces if no neg happens.
+    let ref_sig_no_neg = grin_aggsig::sign_single(
+        &secp,
+        &msg,
+        &sender_sk,
+        Some(&sender_nonce),
+        None,
+        Some(&nonce_sum),
+        Some(&pubkey_sum),
+        None,  // pubnonce_total = None → no QR check / negation
+    )
+    .expect("grin sign_single (no neg)");
+    let ref_no_neg_bytes = ref_sig_no_neg.to_raw_data();
+    eprintln!("[ref no-neg] s (32B) = {:02x?}", &ref_no_neg_bytes[32..64]);
+
+    let our_partial_s = grin_ext::partial_sign(
+        &sender_sk_bytes,
+        &sender_nonce_bytes,
+        &nonce_arr,
+        &pub_arr,
+        &msg_bytes,
+    )
+    .expect("our partial_sign");
+
+    assert_eq!(
+        our_partial_s, ref_s,
+        "our partial_sign s scalar must match grin aggsig::sign_single's s scalar.\n  ref: {:02x?}\n  ours: {:02x?}",
+        ref_s, our_partial_s
+    );
+
+    // Compare full aggregated sig (our final_signature vs grin's add_signatures).
+    let receiver_partial_s = grin_ext::partial_sign(
+        &receiver_sk_bytes,
+        &receiver_nonce_bytes,
+        &nonce_arr,
+        &pub_arr,
+        &msg_bytes,
+    )
+    .expect("our partial_sign receiver");
+
+    let receiver_ref_sig = grin_aggsig::sign_single(
+        &secp, &msg, &receiver_sk, Some(&receiver_nonce), None,
+        Some(&nonce_sum), Some(&pubkey_sum), Some(&nonce_sum),
+    )
+    .expect("ref receiver sign");
+
+    // Grin's add_signatures aggregates.
+    let final_ref = secp256k1zkp::aggsig::add_signatures_single(
+        &secp,
+        vec![&ref_sig, &receiver_ref_sig],
+        &nonce_sum,
+    )
+    .expect("ref aggregate");
+    let final_ref_bytes = final_ref.to_raw_data();
+    eprintln!("[ref final sig] = {:02x?}", &final_ref_bytes[..]);
+
+    // Our aggregation.
+    let our_agg_s = grin_ext::aggregate_partials(&[our_partial_s, receiver_partial_s])
+        .expect("our aggregate");
+    let mut nonce_arr_full = [0u8; 33];
+    nonce_arr_full.copy_from_slice(&nonce_sum_compressed);
+    let our_final = grin_ext::final_signature(&nonce_arr_full, &our_agg_s);
+    let our_final_bytes = our_final.0;
+    eprintln!("[our final sig] = {:02x?}", &our_final_bytes[..]);
+
+    assert_eq!(
+        our_final_bytes, final_ref_bytes,
+        "our final aggregated sig must match grin's add_signatures output"
     );
 }
 

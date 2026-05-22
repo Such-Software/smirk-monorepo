@@ -470,9 +470,12 @@ async function createGrinTip(
   const sortedDesc = [...spendable].sort((a, b) => b.amount - a.amount);
 
   const voucherAmount = Number(fields.amountAtomic);
-  const GRIN_BASE_FEE = 1_000_000;
+  // Mirrors grin-flows.ts calcGrinFee — `weight × DEFAULT_ACCEPT_FEE_BASE`
+  // per `grin_core::core::transaction::TransactionBody::weight`. The
+  // previous `BASE × max(1, 4·out − in + kern)` formula produced ~8M
+  // nanogrin which the node rejects as "Low fee transaction".
   const calcFee = (numIn: number, numOut: number, numKern: number) =>
-    GRIN_BASE_FEE * Math.max(1, 4 * numOut - numIn + numKern);
+    (numIn * 1 + numOut * 21 + Math.max(1, numKern) * 3) * 500_000;
 
   let selected: typeof sortedDesc = [];
   let totalSelected = 0;
@@ -558,7 +561,7 @@ async function createGrinTip(
   });
   await api.lockGrinOutputs({
     userId: senderUserId,
-    outputIds: selected.map((o) => o.key_id),
+    outputIds: selected.map((o) => o.id),
     txSlateId: slateId,
   });
 
@@ -574,7 +577,10 @@ async function createGrinTip(
       ? {
           changeOutput: {
             keyId: pathToKeyId(voucherResult.change.path),
-            nChild: voucherResult.change.path[3],
+            // path[2] is the real BIP32 child index; path[3] is the
+            // trailing-0 padding. Mismatch bricks the wallet on the
+            // next spend (see grin-flows.ts companion comment).
+            nChild: voucherResult.change.path[2],
             amount: voucherResult.change.amount,
             commitment: voucherResult.change.commitment_hex,
           },
@@ -597,7 +603,8 @@ async function createGrinTip(
     blindingFactor: voucherResult.voucher.blinding_factor_hex,
     commitment: voucherResult.voucher.commitment_hex,
     proof: voucherResult.voucher.proof_hex,
-    nChild: voucherResult.voucher.path[3],
+    // path[2] = real BIP32 child; path[3] = padding 0 (see above).
+    nChild: voucherResult.voucher.path[2],
     amount: voucherResult.voucher.amount,
     features: 0,
   };

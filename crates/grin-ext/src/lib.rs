@@ -41,7 +41,8 @@ pub use slate_builder::{
     SenderRoundI2Output, SenderRoundI2Params,
 };
 pub use transaction::{
-    pubkey_to_commitment, slate_to_transaction_bytes, BuildTransactionParams, TxInput, TxOutput,
+    pubkey_to_commitment, slate_to_transaction_bytes, slate_to_transaction_json,
+    BuildTransactionParams, TxInput, TxOutput,
 };
 pub use wallet_flows::{
     create_invoice, create_send_transaction, finalize_invoice, finalize_send_slate, sign_invoice,

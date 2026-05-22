@@ -79,6 +79,7 @@ import {
   signIncomingGrinSlate,
   inspectSlatepack,
   canonicalGrinSlatepackAddress,
+  calcGrinFee,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
 import {
@@ -803,6 +804,15 @@ function HomeRouter({
           return { fast: r.data.fast, normal: r.data.normal, slow: r.data.slow };
         }}
         resolveSendFeeEstimate={async (assetId, options) => {
+          // Grin: static formula (weight × DEFAULT_ACCEPT_FEE_BASE).
+          // Typical send is 1 input + 2 outputs + 1 kernel → 23M
+          // nanogrin. Sweep mode would need the actual input count, but
+          // the Send wizard doesn't expose a Max-button for Grin yet,
+          // so 1-in 2-out covers every current path.
+          if (assetId === 'grin') {
+            const numIn = options?.sweep ? 2 : 1; // heuristic for now
+            return BigInt(calcGrinFee(numIn, 2, 1));
+          }
           // Live fee preview for assets without a sat/vB tier picker.
           // Pulls per_byte_fee + fee_mask from LWS unspent_outs (the
           // same numbers the send-handler uses at sign time). Input
@@ -903,6 +913,7 @@ function HomeRouter({
                     outputs: r.data.outputs
                       .filter((o) => o.status === 'unspent')
                       .map((o) => ({
+                        id: o.id,
                         key_id: o.key_id,
                         n_child: o.n_child,
                         amount: o.amount,
@@ -1012,6 +1023,7 @@ function HomeRouter({
                     outputs: r.data.outputs
                       .filter((o) => o.status === 'unspent')
                       .map((o) => ({
+                        id: o.id,
                         key_id: o.key_id,
                         n_child: o.n_child,
                         amount: o.amount,
@@ -1101,6 +1113,7 @@ function HomeRouter({
                     outputs: r.data.outputs
                       .filter((o) => o.status === 'unspent')
                       .map((o) => ({
+                        id: o.id,
                         key_id: o.key_id,
                         n_child: o.n_child,
                         amount: o.amount,
@@ -1278,6 +1291,7 @@ function HomeRouter({
                     outputs: r.data.outputs
                       .filter((o) => o.status === 'unspent')
                       .map((o) => ({
+                        id: o.id,
                         key_id: o.key_id,
                         n_child: o.n_child,
                         amount: o.amount,

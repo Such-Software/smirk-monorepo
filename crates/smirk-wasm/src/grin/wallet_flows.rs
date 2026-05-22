@@ -186,8 +186,16 @@ mod dto {
         pub slate_json: String,
         pub final_signature_hex: String,
         pub kernel_excess_hex: String,
-        /// Broadcastable transaction bytes, hex.
+        /// Binary wire format transaction bytes, hex. Used for the
+        /// P2P / gossip path or local round-trip testing.
         pub tx_bytes_hex: String,
+        /// JSON-shaped Transaction object — pass this to the backend
+        /// broadcast endpoint's `tx` field unchanged. Grin's
+        /// `/v2/foreign push_transaction` deserializes this as a
+        /// `grin_core::Transaction`. Sending the hex bytes instead
+        /// (the old shape) fails with
+        /// `InvalidArgStructure "tx" at position 0`.
+        pub tx_json: serde_json::Value,
     }
 
     #[derive(Debug, Clone, Deserialize)]
@@ -256,6 +264,8 @@ mod dto {
         pub final_signature_hex: String,
         pub kernel_excess_hex: String,
         pub tx_bytes_hex: String,
+        /// JSON-shaped Transaction — see FinalizeSendResultDto.tx_json.
+        pub tx_json: serde_json::Value,
     }
 }
 
@@ -396,6 +406,7 @@ pub fn grin_finalize_send_slate(params_json: &str) -> Result<String, JsValue> {
         final_signature_hex: hex::encode(out.final_signature),
         kernel_excess_hex: hex::encode(out.kernel_excess),
         tx_bytes_hex: hex::encode(&out.tx_bytes),
+        tx_json: out.tx_json,
     };
     serde_json::to_string(&result).map_err(err_string)
 }
@@ -488,6 +499,7 @@ pub fn grin_finalize_invoice(params_json: &str) -> Result<String, JsValue> {
         final_signature_hex: hex::encode(out.final_signature),
         kernel_excess_hex: hex::encode(out.kernel_excess),
         tx_bytes_hex: hex::encode(&out.tx_bytes),
+        tx_json: out.tx_json,
     };
     serde_json::to_string(&result).map_err(err_string)
 }

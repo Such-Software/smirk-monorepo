@@ -27,7 +27,8 @@ use crate::slate_builder::{
     SenderInitParams, SenderRoundI2Params,
 };
 use crate::transaction::{
-    slate_to_transaction_bytes, BuildTransactionParams, TxInput, TxOutput,
+    pubkey_to_commitment, slate_to_transaction_bytes, slate_to_transaction_json,
+    BuildTransactionParams, TxInput, TxOutput,
 };
 
 /// A single unspent output the wallet is about to spend.
@@ -349,11 +350,14 @@ pub fn sign_incoming_send_slate(
     //    slates the offset stays zero through both rounds, so the
     //    kernel public key is the simple point sum of the two xs.
     //    Sender's xs is sigs[0]; receiver's (ours) was just appended
-    //    to sigs[1] by receiver_round_s2.
-    let kernel_excess = point_add(
+    //    to sigs[1] by receiver_round_s2. Converted to commit form
+    //    (08/09) so receiver's history shows the same kernel id that
+    //    grincoin.org indexes and that sender's broadcast surfaces.
+    let kernel_excess_pubkey = point_add(
         &s2_slate.sigs[0].xs,
         &s2_slate.sigs[1].xs,
     )?;
+    let kernel_excess = pubkey_to_commitment(&kernel_excess_pubkey)?;
 
     // 5. Pull the receiver's output (we know it's the LAST entry in
     //    coms because receiver_round_s2 just pushed it).
@@ -414,10 +418,13 @@ pub struct FinalizeSendOutput {
     pub final_signature: [u8; 64],
     /// Kernel-excess 33-byte commitment for sender's history record.
     pub kernel_excess: [u8; 33],
-    /// Binary transaction bytes ready to POST to the Grin daemon's
-    /// `/v2/foreign push_transaction` endpoint (wrapped in JSON by the
-    /// backend layer).
+    /// Binary transaction bytes — wire format used by Grin P2P.
     pub tx_bytes: Vec<u8>,
+    /// JSON-shaped transaction object — the format Grin's
+    /// `/v2/foreign push_transaction` JSON-RPC endpoint expects as its
+    /// `tx` parameter. Pass this through to the backend broadcast
+    /// handler verbatim (don't wrap it in another object).
+    pub tx_json: serde_json::Value,
 }
 
 /// Finalize a Grin send: verify the receiver's S2 partial signature,
@@ -444,8 +451,15 @@ pub fn finalize_send_slate(
     // 2. Kernel-excess commitment — point sum of xs across all
     //    participants. Same value the receiver wrote into receive
     //    history at S2; sender uses it to correlate the on-chain
-    //    kernel to this tx in their own history.
-    let kernel_excess = point_add(&s3_slate.sigs[0].xs, &s3_slate.sigs[1].xs)?;
+    //    kernel to this tx in their own history. Converted to the
+    //    Pedersen commitment form (08/09 prefix) that grin-wallet,
+    //    block explorers, and the on-chain `kernel.excess` use as the
+    //    canonical "kernel id". The raw pubkey form (02/03) is what
+    //    the schnorr math produces and is identical mod prefix — but
+    //    consumers compare against grincoin.org which indexes by the
+    //    commit form, so we expose that and only that.
+    let kernel_excess_pubkey = point_add(&s3_slate.sigs[0].xs, &s3_slate.sigs[1].xs)?;
+    let kernel_excess = pubkey_to_commitment(&kernel_excess_pubkey)?;
 
     // 3. Lift inputs / change into the transaction-builder shapes.
     let sender_inputs: Vec<TxInput> = params
@@ -505,18 +519,21 @@ pub fn finalize_send_slate(
         None => Vec::new(),
     };
 
-    let tx_bytes = slate_to_transaction_bytes(&BuildTransactionParams {
+    let build_params = BuildTransactionParams {
         s3_slate: s3_outputs_only,
         sender_inputs,
         sender_change_outputs,
         aggregated_kernel_signature: final_signature,
-    })?;
+    };
+    let tx_bytes = slate_to_transaction_bytes(&build_params)?;
+    let tx_json = slate_to_transaction_json(&build_params)?;
 
     Ok(FinalizeSendOutput {
         slate: s3_slate,
         final_signature,
         kernel_excess,
         tx_bytes,
+        tx_json,
     })
 }
 
@@ -784,6 +801,7 @@ pub struct FinalizeInvoiceOutput {
     pub final_signature: [u8; 64],
     pub kernel_excess: [u8; 33],
     pub tx_bytes: Vec<u8>,
+    pub tx_json: serde_json::Value,
 }
 
 /// Finalize an invoice (I2 → I3) as the recipient: verify sender's
@@ -800,8 +818,11 @@ pub fn finalize_invoice(
     let i3_slate = final_out.slate;
     let final_signature = final_out.final_signature;
 
-    // Kernel excess commitment — same point sum as the send flow.
-    let kernel_excess = point_add(&i3_slate.sigs[0].xs, &i3_slate.sigs[1].xs)?;
+    // Kernel excess commitment — same point sum as the send flow,
+    // converted to canonical commitment form (08/09 prefix). See note
+    // on the send-flow equivalent above.
+    let kernel_excess_pubkey = point_add(&i3_slate.sigs[0].xs, &i3_slate.sigs[1].xs)?;
+    let kernel_excess = pubkey_to_commitment(&kernel_excess_pubkey)?;
 
     // Build the transaction. Lift sender's inputs to TxInput; the
     // slate's coms list already holds receiver's output + sender's
@@ -834,18 +855,21 @@ pub fn finalize_invoice(
     // Patch the state so the transaction builder accepts it.
     i3_outputs_only.sta = SlateStateV4::Standard3;
 
-    let tx_bytes = slate_to_transaction_bytes(&BuildTransactionParams {
+    let build_params = BuildTransactionParams {
         s3_slate: i3_outputs_only,
         sender_inputs,
         sender_change_outputs: Vec::new(),
         aggregated_kernel_signature: final_signature,
-    })?;
+    };
+    let tx_bytes = slate_to_transaction_bytes(&build_params)?;
+    let tx_json = slate_to_transaction_json(&build_params)?;
 
     Ok(FinalizeInvoiceOutput {
         slate: i3_slate,
         final_signature,
         kernel_excess,
         tx_bytes,
+        tx_json,
     })
 }
 

@@ -1659,10 +1659,11 @@ function explorerTxUrl(assetId: string, txid: string): string | null {
     case 'wow':
       return `https://explore.wownero.com/tx/${txid}`;
     case 'grin':
-      // Grin block explorers index by kernel excess commitment, not
-      // by a "txid" the way UTXO/CryptoNote chains do. Done step
-      // surfaces kernel_excess_hex in the txid slot for this asset.
-      return `https://grinexplorer.net/kernel/${txid}`;
+      // `kernel_excess_hex` from WASM `finalize_send_slate`/`finalize_invoice`
+      // is already in canonical Pedersen commitment form (08/09 prefix),
+      // matching what grincoin.org indexes by and what's on-chain in
+      // `kernel.excess`. No prefix swap needed.
+      return `https://grincoin.org/kernel/${txid}`;
     default:
       return null;
   }

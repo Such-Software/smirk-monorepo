@@ -21,7 +21,7 @@ sha2 = { version = "0.10", default-features = false }
 # secp256k1 — pure-Rust implementation. Used for Schnorr signing on inputs/
 # outputs/kernels and for deriving public keys from secret keys.
 # Pure Rust (no FFI) so it compiles cleanly to wasm32 with no extra setup.
-k256 = { version = "0.13", default-features = false, features = ["alloc", "arithmetic", "ecdsa"] }
+k256 = { version = "0.13", default-features = false, features = ["alloc", "arithmetic", "ecdsa", "expose-field"] }
 
 # BLAKE2b — used in slatepack address derivation (hashes the secp256k1
 # child key bytes before they become an ed25519 secret key) and in
@@ -86,6 +86,11 @@ grin_wallet_libwallet = { path = "../../../grin-wallet/libwallet" }
 # version libwallet pulls in transitively — we just want to type it
 # directly in our tests.
 grin_keychain = "5.3.3"
+# grin_core for full Transaction-level validation in tests — lets us
+# deserialize our tx_json output and call Transaction::validate to see
+# exactly where consensus rejects (kernel sig vs sum vs bulletproof
+# vs feature shape). Same version libwallet uses.
+grin_core = "5.3.3"
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 

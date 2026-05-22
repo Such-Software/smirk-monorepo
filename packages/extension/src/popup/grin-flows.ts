@@ -249,17 +249,39 @@ export function dearmorSlateAndSender(
 // ============================================================================
 
 /**
- * Grin fee = `BASE_FEE × max(1, num_outputs - num_inputs + num_kernels)`.
- * (See `grin-wallet/libwallet/src/internal/tx.rs::calc_fee`.)
+ * Grin minimum acceptable fee.
  *
- * Used for greedy input selection — we iterate, recompute fee per
+ * Matches `grin_core::global::DEFAULT_ACCEPT_FEE_BASE` (= 500_000
+ * nanogrin per weight unit) × the per-component weight formula in
+ * `grin_core::core::transaction::TransactionBody::weight`:
+ *
+ * ```
+ * weight = inputs * 1 + outputs * 21 + kernels * 3
+ * fee    = weight * 500_000
+ * ```
+ *
+ * For a typical 1-input 2-output 1-kernel send: weight = 46, fee = 23_000_000
+ * nanogrin (0.023 GRIN). v0.2.4 used these same numbers (see
+ * `/home/jw/src/smirk-extension/src/lib/grin/constants.ts`); the
+ * monorepo briefly shipped a wrong `BASE_FEE × max(1, 4·out − in + kern)`
+ * formula that produced 8M nanogrin — accepted by every test broadcast
+ * since 2026-04-28 was rejected by the node with
+ * `Failed to update pool: Low fee transaction 8000000`.
+ *
+ * Used for greedy input selection — iterate, recompute fee per
  * candidate input set, stop when sum(inputs) ≥ amount + fee.
  */
-const GRIN_BASE_FEE = 1_000_000; // 0.001 GRIN, the network default
+const GRIN_FEE_BASE = 500_000;
+const GRIN_INPUT_WEIGHT = 1;
+const GRIN_OUTPUT_WEIGHT = 21;
+const GRIN_KERNEL_WEIGHT = 3;
 
 export function calcGrinFee(numInputs: number, numOutputs: number, numKernels: number): number {
-  const txWeight = Math.max(1, 4 * numOutputs - numInputs + numKernels);
-  return GRIN_BASE_FEE * txWeight;
+  const weight =
+    numInputs * GRIN_INPUT_WEIGHT +
+    numOutputs * GRIN_OUTPUT_WEIGHT +
+    Math.max(1, numKernels) * GRIN_KERNEL_WEIGHT;
+  return weight * GRIN_FEE_BASE;
 }
 
 // ============================================================================
@@ -274,6 +296,13 @@ export interface GrinSendInputResolver {
    */
   fetchSpendable: () => Promise<{
     outputs: Array<{
+      /** Backend grin_outputs.id (UUID). Required for lock/spend RPCs —
+       *  the backend's `lock_grin_outputs` and `spend_grin_outputs`
+       *  match by row UUID, NOT by `key_id`. Passing `key_id` here
+       *  silently no-ops (the UUID parse 400s) and leaves the input
+       *  unlocked → input never marked spent → balance double-counts
+       *  the spent UTXO. */
+      id: string;
       key_id: string;
       n_child: number;
       amount: number;
@@ -397,6 +426,12 @@ export async function startGrinSend(args: {
     fee,
     kernel_kind: 'plain',
     change_path: childIndexToPath(spendable.next_child_index),
+    // TEMP DIAGNOSTIC 2026-05-17: revert to zero offset. The
+    // randomized offset change introduced a "keychain error" at the
+    // node — local sig self-verify passes but on-chain check fails.
+    // Zero offset is documented as the compact-slate default; we'll
+    // re-introduce per-slate random offsets after confirming the
+    // wasm offset path balances correctly with the on-chain equation.
     kernel_offset_hex: '00'.repeat(32),
     kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
@@ -419,7 +454,7 @@ export async function startGrinSend(args: {
   });
   await api.lockGrinOutputs({
     userId: args.userId,
-    outputIds: selected.map((o) => o.key_id),
+    outputIds: selected.map((o) => o.id),
     txSlateId: sendResult.slate_id,
   });
   // NOTE: change_output is NOT recorded here in v0.3. We forward it
@@ -512,25 +547,50 @@ export async function processGrinS2(args: {
     ...(args.change_output ? { change_output: args.change_output } : {}),
   });
 
-  // Broadcast the binary tx_bytes via the backend. Pass change_output
-  // through so the backend atomically records the change row alongside
-  // the broadcast — replaces the v0.2.4 pre-record pattern that
-  // leaked orphans on cancel.
-  await api.broadcastGrinTransaction({
+  // Broadcast the tx_json via the backend. Pass change_output through
+  // so the backend atomically records the change row alongside the
+  // broadcast — replaces the v0.2.4 pre-record pattern that leaked
+  // orphans on cancel.
+  const broadcastRes = await api.broadcastGrinTransaction({
     userId: args.userId,
     slateId: JSON.parse(finalize.slate_json).id,
-    tx: { tx_bytes_hex: finalize.tx_bytes_hex },
+    // Grin's /v2/foreign push_transaction expects a JSON Transaction
+    // object ({offset, body:{inputs,outputs,kernels}}), NOT the binary
+    // wire-format hex. Sending the hex blob (the old shape) yielded
+    // JSON-RPC error -32602 InvalidArgStructure "tx" at position 0,
+    // which our backend parser silently treated as success — every
+    // broadcast since 2026-04-28 was a no-op. tx_json comes from
+    // grin-ext's slate_to_transaction_json and matches grin_core's
+    // Transaction serde shape verbatim.
+    tx: finalize.tx_json,
     ...(args.change_output
       ? {
           changeOutput: {
             keyId: pathToKeyId(args.change_output.path),
-            nChild: args.change_output.path[3],
+            // The real BIP32 child index sits at path[2]; path[3] is the
+            // trailing padding `0` per Grin's depth-3-+-1 convention.
+            // Storing path[3] left every change output's n_child=0,
+            // so derive_blind on the NEXT send walked m/0/0/0/0 instead
+            // of m/0/0/<actual>/0 and reported "no candidate derivation
+            // reproduced the on-chain commit" — full wallet bricking
+            // after one spend.
+            nChild: args.change_output.path[2],
             amount: args.change_output.amount,
             commitment: args.change_output.commitment_hex,
           },
         }
       : {}),
   });
+  // CRITICAL: bail on broadcast failure. Previously we await'd the
+  // response and continued blindly to spendGrinOutputs +
+  // updateGrinTransaction(status='finalized'), so a node rejection
+  // (low fee, bad kernel, etc.) silently became a "finalized" row in
+  // our DB while no kernel ever hit the chain. That's the source of
+  // every "+X pending" ghost row on receivers — sender's tx looks
+  // finalized so the receive output never gets cleaned up.
+  if (broadcastRes.error) {
+    throw new Error(`Broadcast failed: ${broadcastRes.error}`);
+  }
 
   // Cleanup: mark inputs spent + tx finalized + stamp kernel excess.
   const slateId = JSON.parse(finalize.slate_json).id;
@@ -542,14 +602,13 @@ export async function processGrinS2(args: {
     kernelExcess: finalize.kernel_excess_hex,
   });
 
-  // Relay completion (if Smirk-to-Smirk path).
-  if (args.relay_id) {
-    await api.finalizeGrinSlatepack({
-      relayId: args.relay_id,
-      userId: args.userId,
-      finalizedSlatepack: armorSlate(finalize.slate_json),
-    });
-  }
+  // Relay slatepack status flip now happens server-side inside
+  // `broadcast_grin_transaction` (atomic with the push_transaction
+  // call, on the same DB transaction). The old `finalize_grin_relay`
+  // endpoint goes through the grin-wallet daemon's slatepack decoder
+  // which hangs at ECDH against the wallet socket, leaving the
+  // slatepack stuck in `pending_sender` and the sender's "pending to
+  // finalize" counter stale forever. Removed the call entirely.
 
   return {
     slate_id: slateId,
@@ -611,6 +670,12 @@ export async function startGrinInvoice(args: {
     fee: args.fee,
     kernel_kind: 'plain',
     output_path: childIndexToPath(spendable.next_child_index),
+    // TEMP DIAGNOSTIC 2026-05-17: revert to zero offset. The
+    // randomized offset change introduced a "keychain error" at the
+    // node — local sig self-verify passes but on-chain check fails.
+    // Zero offset is documented as the compact-slate default; we'll
+    // re-introduce per-slate random offsets after confirming the
+    // wasm offset path balances correctly with the on-chain equation.
     kernel_offset_hex: '00'.repeat(32),
     receiver_kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
@@ -716,14 +781,14 @@ export async function signGrinInvoice(args: {
   });
   await api.lockGrinOutputs({
     userId: args.userId,
-    outputIds: selected.map((o) => o.key_id),
+    outputIds: selected.map((o) => o.id),
     txSlateId: parsed.id,
   });
   if (signed.change_output) {
     await api.recordGrinOutput({
       userId: args.userId,
       keyId: pathToKeyId(signed.change_output.path),
-      nChild: signed.change_output.path[3],
+      nChild: signed.change_output.path[2],
       amount: signed.change_output.amount,
       commitment: signed.change_output.commitment_hex,
       txSlateId: parsed.id,
@@ -786,11 +851,22 @@ export async function processGrinI2(args: {
     sender_inputs,
   });
   const slateId = JSON.parse(finalize.slate_json).id;
-  await api.broadcastGrinTransaction({
+  const broadcastRes = await api.broadcastGrinTransaction({
     userId: args.userId,
     slateId,
-    tx: { tx_bytes_hex: finalize.tx_bytes_hex },
+    // Grin's /v2/foreign push_transaction expects a JSON Transaction
+    // object ({offset, body:{inputs,outputs,kernels}}), NOT the binary
+    // wire-format hex. tx_json comes from grin-ext's
+    // slate_to_transaction_json and matches grin_core's Transaction
+    // serde shape verbatim.
+    tx: finalize.tx_json,
   });
+  // See parallel comment in processGrinS2 — bail on error so the tx
+  // stays "pending" / cancellable instead of getting wrongly stamped
+  // "finalized" by the next update call.
+  if (broadcastRes.error) {
+    throw new Error(`Broadcast failed: ${broadcastRes.error}`);
+  }
   await api.updateGrinTransaction({
     userId: args.userId,
     slateId,
@@ -885,7 +961,7 @@ export async function signIncomingGrinSlate(args: {
   await api.recordGrinOutput({
     userId: args.userId,
     keyId: pathToKeyId(signed.output.path),
-    nChild: signed.output.path[3],
+    nChild: signed.output.path[2],
     amount: signed.output.amount,
     commitment: signed.output.commitment_hex,
     txSlateId: parsed.id,
