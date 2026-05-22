@@ -305,6 +305,18 @@ fn full_send_round_trip_validates_against_grin_wallet() {
     let fee = 8_000_000u64;
     let kernel_features = KernelFeatures::Plain { fee };
 
+    // Use a non-zero kernel offset to exercise the offset-adjustment path.
+    // Production previously hardcoded a zero offset after a confused
+    // diagnostic in May 2026; the real bug was elsewhere (kernel.excess_sig
+    // byte format). A non-zero offset shifts the kernel-excess sum by a
+    // known scalar, so this test gates "random offset is safe to ship".
+    let kernel_offset: [u8; 32] = [
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+    ];
+
     // Sender: create S1 slate.
     let send_out = create_send_transaction(&CreateSendTxParams {
             legacy_extended_private_key: None,
@@ -314,7 +326,7 @@ fn full_send_round_trip_validates_against_grin_wallet() {
         fee,
         kernel_features,
         change_path: [0, 0, 1, 0],
-        kernel_offset: [0u8; 32],
+        kernel_offset,
         kernel_nonce: random_secret_nonce(),
         bp_rewind_nonce: [0x77u8; 32],
         bp_private_nonce: [0x88u8; 32],

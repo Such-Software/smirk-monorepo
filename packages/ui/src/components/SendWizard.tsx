@@ -26,7 +26,7 @@
  *   you commit. Back from Review preserves Compose state.
  */
 
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
 import type { AssetDefinition } from '@smirk/assets';
 import { useWizard } from '../state/hooks';
@@ -169,7 +169,7 @@ export interface SendWizardProps {
    */
   resolveSendFeeEstimate?: (
     assetId: string,
-    options?: { sweep?: boolean },
+    options?: { sweep?: boolean; amountAtomic?: bigint },
   ) => Promise<bigint | null>;
 
   /**
@@ -316,7 +316,7 @@ export function SendWizard(props: SendWizardProps) {
         />
       )}
 
-      {step === 2 && fields.fromAssetId && fields.toAddress && (
+      {step === 2 && fields.fromAssetId && fields.toAddress !== undefined && (
         <Compose
           assetId={fields.fromAssetId}
           toAddress={fields.toAddress}
@@ -355,7 +355,7 @@ export function SendWizard(props: SendWizardProps) {
 
       {step === 3 &&
         fields.fromAssetId &&
-        fields.toAddress &&
+        fields.toAddress !== undefined &&
         fields.amountText !== undefined &&
         fields.feeTier &&
         mustGetAsset(fields.fromAssetId).family.family !== 'mimblewimble' && (
@@ -395,7 +395,7 @@ export function SendWizard(props: SendWizardProps) {
           popup-close mid-flow recovers when the user comes back. */}
       {step === 3 &&
         fields.fromAssetId &&
-        fields.toAddress &&
+        fields.toAddress !== undefined &&
         fields.amountText !== undefined &&
         mustGetAsset(fields.fromAssetId).family.family === 'mimblewimble' && (
           <GrinExchange
@@ -555,8 +555,21 @@ function EnterAddress({
   const [text, setText] = useState(initial ?? '');
   const [error, setError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
+  // Grin supports a no-address "manual slatepack" mode: sender builds
+  // the S1, hands the armored blob to the receiver out-of-band (any
+  // grin-wallet / Grim user can decode + sign it). For other chains
+  // address is always required — toggle is hidden.
+  const supportsManualSlatepack = assetId === 'grin';
+  const [manualSlatepack, setManualSlatepack] = useState(false);
 
   const handleContinue = async () => {
+    if (manualSlatepack) {
+      // Skip validation — emit empty string. Downstream handler treats
+      // empty `toAddress` as "no recipient address; armor plain + skip
+      // relay drop".
+      onContinue('');
+      return;
+    }
     setValidating(true);
     setError(null);
     const result = await validateAddress(assetId, text.trim());
@@ -571,22 +584,91 @@ function EnterAddress({
   return (
     <div>
       <StepTitle>Where to?</StepTitle>
-      <textarea
-        value={text}
-        onInput={(e) => {
-          setText((e.target as HTMLTextAreaElement).value);
-          setError(null);
-        }}
-        placeholder={`${asset.displayName} address`}
-        // 5 rows so 95-char cryptonote addresses fit without scrolling
-        // even in pixel themes (DMG, Workbench) where Press Start 2P
-        // wraps to ~25 chars per row.
-        rows={5}
-        autoFocus
-        style={textareaStyle}
-      />
+      {supportsManualSlatepack && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 4,
+            marginBottom: 8,
+            background: 'var(--smirk-bg-sunken)',
+            padding: 2,
+            borderRadius: 'var(--smirk-radius, 8px)',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setManualSlatepack(false)}
+            style={{
+              flex: 1,
+              padding: '6px 8px',
+              fontSize: 11,
+              border: 'none',
+              borderRadius: 'var(--smirk-radius, 6px)',
+              cursor: 'pointer',
+              background: !manualSlatepack ? 'var(--smirk-accent)' : 'transparent',
+              color: !manualSlatepack ? 'var(--smirk-bg)' : 'var(--smirk-fg)',
+              fontFamily: 'var(--smirk-font-family-mono)',
+              fontWeight: !manualSlatepack ? 700 : 400,
+            }}
+          >
+            Address
+          </button>
+          <button
+            type="button"
+            onClick={() => setManualSlatepack(true)}
+            style={{
+              flex: 1,
+              padding: '6px 8px',
+              fontSize: 11,
+              border: 'none',
+              borderRadius: 'var(--smirk-radius, 6px)',
+              cursor: 'pointer',
+              background: manualSlatepack ? 'var(--smirk-accent)' : 'transparent',
+              color: manualSlatepack ? 'var(--smirk-bg)' : 'var(--smirk-fg)',
+              fontFamily: 'var(--smirk-font-family-mono)',
+              fontWeight: manualSlatepack ? 700 : 400,
+            }}
+          >
+            Slatepack only
+          </button>
+        </div>
+      )}
+      {manualSlatepack ? (
+        <div
+          style={{
+            padding: '8px 10px',
+            fontSize: 11,
+            background: 'var(--smirk-bg-sunken)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            color: 'var(--smirk-fg-muted)',
+            lineHeight: 1.5,
+          }}
+        >
+          You'll get an armored slatepack to copy + paste to the
+          recipient out-of-band. They'll send back a signed slatepack
+          which you'll paste on the next step to finalize.
+        </div>
+      ) : (
+        <textarea
+          value={text}
+          onInput={(e) => {
+            setText((e.target as HTMLTextAreaElement).value);
+            setError(null);
+          }}
+          placeholder={`${asset.displayName} address`}
+          // 5 rows so 95-char cryptonote addresses fit without scrolling
+          // even in pixel themes (DMG, Workbench) where Press Start 2P
+          // wraps to ~25 chars per row.
+          rows={5}
+          autoFocus
+          style={textareaStyle}
+        />
+      )}
       {error && <FieldError>{error}</FieldError>}
-      <PrimaryButton disabled={!text.trim() || validating} onClick={handleContinue}>
+      <PrimaryButton
+        disabled={(!manualSlatepack && !text.trim()) || validating}
+        onClick={handleContinue}
+      >
         {validating ? 'Validating…' : 'Continue'}
       </PrimaryButton>
     </div>
@@ -670,7 +752,7 @@ function Compose({
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
   resolveSendFeeEstimate?: (
     assetId: string,
-    options?: { sweep?: boolean },
+    options?: { sweep?: boolean; amountAtomic?: bigint },
   ) => Promise<bigint | null>;
   /**
    * Fires on every state change (amount text, fee tier, custom rate,
@@ -766,11 +848,31 @@ function Compose({
   // than what they actually receive after the per-input fee scaling.
   // Re-runs when `sweep` toggles so the displayed amount tracks the
   // actual fee that will get applied.
+  // Re-run on amount change so the resolver can size the estimate
+  // against the actual amount (Grin needs real input count, which is a
+  // function of the entered amount). Until the user has typed a parseable
+  // non-zero amount, leave the estimate null so the UI shows nothing —
+  // previously we showed a phantom 1-input estimate before the user had
+  // entered anything, which was misleading on inputs ≠ 1.
+  const parsedAmountForEstimate = useMemo(
+    () => parseAmount(assetId, amountText),
+    [assetId, amountText, parseAmount],
+  );
   useEffect(() => {
     if (usesFeePicker || !resolveSendFeeEstimate) return;
     let alive = true;
     setEstimatedFeeAtomic(null);
-    resolveSendFeeEstimate(assetId, { sweep }).then(
+    // Don't ask the resolver for an estimate when there's nothing to
+    // estimate against. Sweep is a special case — it's "pay whatever
+    // is spendable" and the resolver can size against full balance.
+    if (!sweep && (parsedAmountForEstimate === null || parsedAmountForEstimate <= 0n)) {
+      return;
+    }
+    const opts: { sweep?: boolean; amountAtomic?: bigint } = { sweep };
+    if (parsedAmountForEstimate !== null && parsedAmountForEstimate > 0n) {
+      opts.amountAtomic = parsedAmountForEstimate;
+    }
+    resolveSendFeeEstimate(assetId, opts).then(
       (fee) => {
         if (alive && fee !== null) setEstimatedFeeAtomic(fee);
       },
@@ -783,7 +885,7 @@ function Compose({
     return () => {
       alive = false;
     };
-  }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep]);
+  }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep, parsedAmountForEstimate]);
 
   // Selected rate for the standard tiers passes through `applyFloor` so
   // we never ship a rate at the protocol minimum that some nodes round
@@ -925,8 +1027,15 @@ function Compose({
 
       {validationError && <FieldError>{validationError}</FieldError>}
 
-      {/* Recipient — read-only here, tap to edit goes back */}
-      <ReviewRow label="To" value={truncateMiddle(toAddress, 24)} mono small />
+      {/* Recipient — read-only here, tap to edit goes back. Empty
+          string is the Grin "manual slatepack" sentinel; show a
+          label instead of an empty value. */}
+      <ReviewRow
+        label="To"
+        value={toAddress ? truncateMiddle(toAddress, 24) : '— slatepack only —'}
+        mono
+        small
+      />
 
       {/* Fee tier picker (UTXO chains only) */}
       {usesFeePicker && <div style={{ marginTop: 4 }}>
@@ -1010,11 +1119,13 @@ function Compose({
         )}
       </div>}
 
-      {/* Fee preview for non-picker assets. When the shell wires
-          resolveSendFeeEstimate, show the live estimate (atomic →
-          formatted); otherwise fall back to the generic copy so the
-          user at least knows where the fee comes from. */}
-      {!usesFeePicker && (
+      {/* Fee preview — only render once we have a real number. Before
+          the user has entered an amount the estimate is null (the
+          shell can't size against zero inputs); rendering a phantom
+          placeholder there is misleading on assets where input count
+          actually changes the fee (Grin: each extra input adds
+          500_000 nanogrin). */}
+      {!usesFeePicker && estimatedFeeAtomic !== null && (
         <div
           style={{
             marginTop: 4,
@@ -1029,9 +1140,7 @@ function Compose({
         >
           <span style={{ color: 'var(--smirk-fg-muted)' }}>Network fee (est.)</span>
           <strong style={{ fontFamily: 'var(--smirk-font-family-mono)' }}>
-            {estimatedFeeAtomic !== null
-              ? `${formatAmount(estimatedFeeAtomic, assetId, 8)} ${asset.ticker}`
-              : '…'}
+            {`${formatAmount(estimatedFeeAtomic, assetId, 8)} ${asset.ticker}`}
           </strong>
         </div>
       )}
@@ -1235,7 +1344,11 @@ function Review({
               : '—'
         }
       />
-      <ReviewRow label="To" value={toAddress} mono />
+      <ReviewRow
+        label="To"
+        value={toAddress || '— slatepack only —'}
+        mono
+      />
       {usesFeePicker ? (
         <ReviewRow
           label="Fee tier"
@@ -1304,6 +1417,12 @@ function GrinExchange(props: GrinExchangeProps) {
   const asset = mustGetAsset(props.assetId);
   const [building, setBuilding] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  // Synchronous re-entrancy guard. React state updates are batched —
+  // two click events on the same tick both see `finalizing === false`
+  // and both call onFinalize, producing a double-spend attempt against
+  // the same locked inputs. The ref flips atomically inside the click
+  // handler so the second click is dropped before any await fires.
+  const finalizingRef = useRef(false);
   const [s2Text, setS2Text] = useState(props.pastedS2 ?? '');
   const [copied, setCopied] = useState(false);
 
@@ -1347,9 +1466,15 @@ function GrinExchange(props: GrinExchangeProps) {
 
   const handleFinalize = async () => {
     if (!s2Text.trim()) return;
+    if (finalizingRef.current) return;
+    finalizingRef.current = true;
     setFinalizing(true);
-    await props.onFinalize({ s2: s2Text.trim() });
-    setFinalizing(false);
+    try {
+      await props.onFinalize({ s2: s2Text.trim() });
+    } finally {
+      setFinalizing(false);
+      finalizingRef.current = false;
+    }
   };
 
   // ----- Building phase -----
@@ -1384,9 +1509,13 @@ function GrinExchange(props: GrinExchangeProps) {
       <StepTitle>Share slatepack, wait for response</StepTitle>
       <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)', marginBottom: 10 }}>
         Grin sends are two-way. Copy this slatepack, send it to{' '}
-        <strong>{truncateMiddle(props.toAddress, 24)}</strong>, and wait
-        for them to send their signed response back. Closing the popup
-        is fine — your state is saved.
+        <strong>
+          {props.toAddress
+            ? truncateMiddle(props.toAddress, 24)
+            : 'the recipient (any grin-wallet / Grim)'}
+        </strong>
+        , and wait for them to send their signed response back. Closing
+        the popup is fine — your state is saved.
       </div>
 
       <div
@@ -1532,10 +1661,34 @@ function DoneStep({
   if (!txid && typeof console !== 'undefined') {
     console.warn('[smirk send] DoneStep rendered without txid', { assetId });
   }
+  // Grin-specific: the "sent" state really means "broadcast — kernel
+  // is in the node's pool". On-chain confirmation takes ~10 minutes
+  // (10 blocks at the conservative confirmation threshold). Make this
+  // explicit so the user doesn't refresh-loop expecting an instant
+  // confirmation. Other chains finalize faster and "Sent" is accurate.
+  const isGrin = assetId === 'grin';
+  const headline = isGrin ? 'Broadcast' : 'Sent';
+  const sublabel = isGrin
+    ? 'Awaiting on-chain confirmation. Refresh in a few minutes.'
+    : null;
+  const fieldLabel = isGrin ? 'Kernel ID' : 'Transaction ID';
+
   return (
     <div style={{ textAlign: 'center', padding: '24px 16px' }}>
       <div style={{ fontSize: 40 }}>✓</div>
-      <div style={{ fontSize: 16, fontWeight: 600, marginTop: 8 }}>Sent</div>
+      <div style={{ fontSize: 16, fontWeight: 600, marginTop: 8 }}>{headline}</div>
+      {sublabel && (
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 11,
+            color: 'var(--smirk-fg-muted)',
+            lineHeight: 1.4,
+          }}
+        >
+          {sublabel}
+        </div>
+      )}
       {!txid && (
         <div
           style={{
@@ -1562,7 +1715,7 @@ function DoneStep({
               letterSpacing: '0.06em',
             }}
           >
-            Transaction ID
+            {fieldLabel}
           </div>
           {/* Click to copy. The data-no-uppercase attribute is the
               opt-out hook for pixel themes (DMG/Workbench) that

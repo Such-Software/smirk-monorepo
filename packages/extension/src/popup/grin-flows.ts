@@ -345,7 +345,13 @@ export async function startGrinSend(args: {
   userId: string;
   mnemonic: string;
   senderSlatepackAddress: string;
-  recipientSlatepackAddress: string;
+  /** Recipient slatepack address. When omitted/empty the sender goes
+   *  in "manual slatepack" mode: the S1 is armored plain (no
+   *  recipient encryption), no relay row is created, and the wizard
+   *  surfaces the armored blob for the sender to deliver out-of-band
+   *  (DM, signal, paper, etc). Any grin-wallet / Grim user can decode
+   *  a plain slatepack — no address known up front needed. */
+  recipientSlatepackAddress?: string;
   /** Set if recipient is also a Smirk user; we'll drop the slatepack
    *  at the backend relay so they don't have to copy/paste manually. */
   recipientUserId?: string;
@@ -426,13 +432,14 @@ export async function startGrinSend(args: {
     fee,
     kernel_kind: 'plain',
     change_path: childIndexToPath(spendable.next_child_index),
-    // TEMP DIAGNOSTIC 2026-05-17: revert to zero offset. The
-    // randomized offset change introduced a "keychain error" at the
-    // node — local sig self-verify passes but on-chain check fails.
-    // Zero offset is documented as the compact-slate default; we'll
-    // re-introduce per-slate random offsets after confirming the
-    // wasm offset path balances correctly with the on-chain equation.
-    kernel_offset_hex: '00'.repeat(32),
+    // Per-slate random kernel offset for kernel-linkability privacy.
+    // grin-wallet's reference behaviour. The "keychain error" that
+    // showed up during the May 2026 diagnostic was actually the
+    // unrelated kernel.excess_sig byte-format bug — verified by the
+    // `full_send_round_trip_validates_against_grin_wallet` test which
+    // round-trips through `grin_core::Transaction::validate` with a
+    // non-zero offset.
+    kernel_offset_hex: wasmGrin.randomSecretNonce(),
     kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
@@ -467,33 +474,36 @@ export async function startGrinSend(args: {
   // finalize can build the broadcastable tx bytes.
 
   let relay_id: string | undefined;
-  // Encrypt the S1 to the recipient's slatepack address. Both Smirk
-  // (v0.2.4 + v0.3) and grin-wallet/Grim decrypt encrypted slatepacks
-  // via the ed25519 → X25519 + age scheme, so this is privacy-free
-  // upside: the relay backend (and any observer) sees only ciphertext.
-  // If the recipient address is malformed bech32, armorSlate falls back
-  // to plain via the exception path — but we'd rather let that throw so
-  // the user sees a clear error than silently leak the slate.
+  // Encrypt the S1 to the recipient's slatepack address when known —
+  // otherwise armor plain so the sender can hand the blob over
+  // manually. Both Smirk (v0.2.4 + v0.3) and grin-wallet/Grim decode
+  // plain slatepacks, so "no address" still produces an interoperable
+  // payload; only the relay-side hand-off is lost.
+  const hasRecipient = !!(
+    args.recipientSlatepackAddress && args.recipientSlatepackAddress.trim()
+  );
   const armored = armorSlate(
     sendResult.slate_json,
     args.senderSlatepackAddress,
-    args.recipientSlatepackAddress,
+    hasRecipient ? args.recipientSlatepackAddress : undefined,
   );
-  // Smirk-to-Smirk auto-detect: always post the S1 to the relay with the
-  // recipient's slatepack address. Backend matches that address against
-  // the `wallets` table — if the recipient is a registered Smirk user,
-  // the slatepack lands in their pending_to_sign queue. If not, the relay
-  // entry expires after 7 days unused; the sender's wizard surface stays
-  // clipboard-mode (the armored slatepack is also returned to the caller).
-  const relay = await api.createGrinRelay({
-    senderUserId: args.userId,
-    slatepack: armored,
-    slateId: sendResult.slate_id,
-    amount: args.amount,
-    ...(args.recipientUserId ? { recipientUserId: args.recipientUserId } : {}),
-    recipientAddress: args.recipientSlatepackAddress,
-  });
-  if (relay.data) relay_id = relay.data.id;
+  // Only post to the relay when we have a recipient address. The
+  // backend matches the address against `wallets` — if the recipient
+  // is a registered Smirk user, the slatepack lands in their
+  // pending_to_sign queue. Without an address we skip the relay
+  // entirely; the sender's wizard surfaces the armored blob for
+  // manual delivery.
+  if (hasRecipient) {
+    const relay = await api.createGrinRelay({
+      senderUserId: args.userId,
+      slatepack: armored,
+      slateId: sendResult.slate_id,
+      amount: args.amount,
+      ...(args.recipientUserId ? { recipientUserId: args.recipientUserId } : {}),
+      recipientAddress: args.recipientSlatepackAddress!,
+    });
+    if (relay.data) relay_id = relay.data.id;
+  }
 
   return {
     slate_id: sendResult.slate_id,
@@ -670,13 +680,14 @@ export async function startGrinInvoice(args: {
     fee: args.fee,
     kernel_kind: 'plain',
     output_path: childIndexToPath(spendable.next_child_index),
-    // TEMP DIAGNOSTIC 2026-05-17: revert to zero offset. The
-    // randomized offset change introduced a "keychain error" at the
-    // node — local sig self-verify passes but on-chain check fails.
-    // Zero offset is documented as the compact-slate default; we'll
-    // re-introduce per-slate random offsets after confirming the
-    // wasm offset path balances correctly with the on-chain equation.
-    kernel_offset_hex: '00'.repeat(32),
+    // Per-slate random kernel offset for kernel-linkability privacy.
+    // grin-wallet's reference behaviour. The "keychain error" that
+    // showed up during the May 2026 diagnostic was actually the
+    // unrelated kernel.excess_sig byte-format bug — verified by the
+    // `full_send_round_trip_validates_against_grin_wallet` test which
+    // round-trips through `grin_core::Transaction::validate` with a
+    // non-zero offset.
+    kernel_offset_hex: wasmGrin.randomSecretNonce(),
     receiver_kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),

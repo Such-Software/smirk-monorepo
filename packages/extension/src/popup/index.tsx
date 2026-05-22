@@ -511,10 +511,15 @@ function App() {
     if (walletState?.kind !== 'unlocked' || !walletState.wallet.mnemonic) return;
     // Wait until bootstrap auth has set the API token. Firing before
     // that means the register POST goes out unauthenticated, the
-    // backend returns 401, and the wallets row is never updated to
-    // the canonical address — leaving senders encrypting to the
-    // legacy address and receivers unable to decrypt.
+    // backend returns 401 with a non-JSON body, the client returns
+    // "Unknown error", and the wallets row is never updated to the
+    // canonical address — leaving senders encrypting to the legacy
+    // address and receivers unable to decrypt. `session.bootstrap.userId`
+    // is set BEFORE the token is attached to the request layer (the
+    // global token), so gate on the live token instead of just the
+    // bootstrap flag.
     if (!session?.bootstrap?.userId) return;
+    if (!api.getAccessToken()) return;
     const mnemonic = walletState.wallet.mnemonic;
     void (async () => {
       await ensureWasmInit();
@@ -664,7 +669,13 @@ function App() {
     await refresh();
   };
   const handleRefresh = () =>
-    session
+    // `session` is briefly an empty `{}` cast between the bootstrap kick-off
+    // and the bootstrapAuth resolution (see `startSession`), so a truthiness
+    // check on `session` alone is not enough. Guard on bootstrap.userId
+    // being present too — otherwise `refreshBalances` derefs
+    // `bootstrap.userId` inside `fetchAllBalances` and explodes with
+    // "Cannot read properties of undefined (reading 'userId')".
+    session?.bootstrap?.userId
       ? refreshBalances(walletState.wallet, session.bootstrap)
       : Promise.resolve();
   const refreshGrinInbox = async () => {
@@ -804,14 +815,43 @@ function HomeRouter({
           return { fast: r.data.fast, normal: r.data.normal, slow: r.data.slow };
         }}
         resolveSendFeeEstimate={async (assetId, options) => {
-          // Grin: static formula (weight × DEFAULT_ACCEPT_FEE_BASE).
-          // Typical send is 1 input + 2 outputs + 1 kernel → 23M
-          // nanogrin. Sweep mode would need the actual input count, but
-          // the Send wizard doesn't expose a Max-button for Grin yet,
-          // so 1-in 2-out covers every current path.
+          // Grin: fee = weight × DEFAULT_ACCEPT_FEE_BASE where weight
+          // depends on real input count. To produce an honest estimate
+          // we replay the same greedy largest-first selection the send
+          // handler will run, against the user's actual unspent
+          // outputs. Falls back to 1-in if amount is unknown so the
+          // hint never goes stale waiting for selection — but the UI
+          // gates display on amountAtomic > 0 anyway (see SendWizard
+          // useEffect).
           if (assetId === 'grin') {
-            const numIn = options?.sweep ? 2 : 1; // heuristic for now
-            return BigInt(calcGrinFee(numIn, 2, 1));
+            if (!options?.amountAtomic) return null;
+            const grinUserId = session?.bootstrap?.userId;
+            if (!grinUserId) return null;
+            const outs = await api.getGrinOutputs(grinUserId);
+            if (outs.error || !outs.data) return null;
+            const spendable = outs.data.outputs
+              .filter((o) => o.status === 'unspent')
+              .sort((a, b) => b.amount - a.amount);
+            const target = Number(options.amountAtomic);
+            // Iterate until input count converges (fee itself moves the
+            // target). Cap at MAX_ITER to stay fast; the count almost
+            // always stabilizes in 1-2 passes.
+            let numIn = 1;
+            let fee = calcGrinFee(numIn, 2, 1);
+            for (let iter = 0; iter < 6; iter++) {
+              let acc = 0;
+              let picked = 0;
+              for (const o of spendable) {
+                picked += 1;
+                acc += o.amount;
+                if (acc >= target + fee) break;
+              }
+              const nextFee = calcGrinFee(picked, 2, 1);
+              if (picked === numIn && nextFee === fee) break;
+              numIn = picked;
+              fee = nextFee;
+            }
+            return BigInt(fee);
           }
           // Live fee preview for assets without a sat/vB tier picker.
           // Pulls per_byte_fee + fee_mask from LWS unspent_outs (the
@@ -1131,20 +1171,38 @@ function HomeRouter({
             // pending_to_sign → pending_to_finalize on their side.
             // Manual-paste flows have no relayId — sender gets the S2
             // from the clipboard copy instead.
+            // Relay back the S2 so the sender's `pending_to_finalize`
+            // counter ticks immediately. If this fails the receiver is
+            // still in a valid state — their S2 is in `signed.s2_armored`
+            // and they can hand it to the sender out-of-band. Surface
+            // the failure so the UI can render a "copy manually" hint
+            // instead of silently lying about success.
+            let relayDeliveryFailed = false;
             if (relayId) {
-              await api
+              const relayRes = await api
                 .signGrinSlatepack({
                   relayId,
                   userId: grinUserId,
                   signedSlatepack: signed.s2_armored,
                 })
-                .catch(() => undefined);
+                .catch((err) => {
+                  console.warn('[smirk-popup] signGrinSlatepack threw:', err);
+                  return { error: err instanceof Error ? err.message : 'Relay delivery failed' };
+                });
+              if (relayRes && 'error' in relayRes && relayRes.error) {
+                console.warn(
+                  '[smirk-popup] signGrinSlatepack rejected:',
+                  relayRes.error,
+                );
+                relayDeliveryFailed = true;
+              }
             }
             return {
               ok: true,
               slate_id: signed.slate_id,
               s2_armored: signed.s2_armored,
               amount_atomic: String(signed.amount),
+              relay_delivery_failed: relayDeliveryFailed,
             };
           } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -1303,14 +1361,28 @@ function HomeRouter({
                 },
               },
             });
+            // See `signGrinSlatepack` rationale at the receiver-S2
+            // handler above — receiver is in a valid state regardless,
+            // surface a flag for the UI to render a fallback hint.
+            let relayDeliveryFailed = false;
             if (relayId) {
-              await api
+              const relayRes = await api
                 .signGrinSlatepack({
                   relayId,
                   userId: grinUserId,
                   signedSlatepack: signed.armored,
                 })
-                .catch(() => undefined);
+                .catch((err) => {
+                  console.warn('[smirk-popup] signGrinSlatepack (i2) threw:', err);
+                  return { error: err instanceof Error ? err.message : 'Relay delivery failed' };
+                });
+              if (relayRes && 'error' in relayRes && relayRes.error) {
+                console.warn(
+                  '[smirk-popup] signGrinSlatepack (i2) rejected:',
+                  relayRes.error,
+                );
+                relayDeliveryFailed = true;
+              }
             }
             return {
               ok: true,
@@ -1319,6 +1391,7 @@ function HomeRouter({
               amount_atomic: String(
                 JSON.parse(signed.slate_json).amt ?? 0,
               ),
+              relay_delivery_failed: relayDeliveryFailed,
             };
           } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
