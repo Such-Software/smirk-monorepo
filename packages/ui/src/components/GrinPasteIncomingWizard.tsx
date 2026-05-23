@@ -408,7 +408,7 @@ function Done({
           amount: {amountAtomic} nano{ticker.toLowerCase()}
         </div>
       )}
-      <Button onClick={() => void onClose()}>Back to Receive</Button>
+      <Button onClick={() => void onClose()}>Done</Button>
     </div>
   );
 }

@@ -1180,7 +1180,9 @@ function Compose({
           }
           {...(!canContinue ? { disabled: true } : {})}
         >
-          Continue to review
+          {asset.family.family === 'mimblewimble'
+            ? 'Continue to slatepack'
+            : 'Continue to review'}
         </Button>
       </div>
     </div>
@@ -1525,77 +1527,57 @@ function GrinExchange(props: GrinExchangeProps) {
   }
 
   // ----- Awaiting S2 -----
+  // Two-action layout: top half is "send the slatepack out", bottom
+  // half is "paste their response and broadcast". Previously the
+  // full slatepack hex was rendered inline (max-height scroll box +
+  // wall of paragraph text + relay sentence), which crowded the
+  // popup and buried the Paste textarea below the fold.
+  const slatepackLen = props.armoredOutgoing?.length ?? 0;
   return (
     <div>
-      <StepTitle>Share slatepack, wait for response</StepTitle>
-      <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)', marginBottom: 10 }}>
-        Grin sends are two-way. Copy this slatepack, send it to{' '}
-        <strong>
-          {props.toAddress
-            ? truncateMiddle(props.toAddress, 24)
-            : 'the recipient (any grin-wallet / Grim)'}
-        </strong>
-        , and wait for them to send their signed response back. Closing
-        the popup is fine — your state is saved.
-      </div>
+      <StepTitle>Share slatepack</StepTitle>
 
+      {/* Action 1 — copy the slatepack out. Single-row card; the full
+          hex is one click away ("Show") but doesn't dominate the
+          screen by default. */}
       <div
         style={{
-          fontSize: 10,
-          color: 'var(--smirk-fg-muted)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.06em',
-          marginBottom: 4,
-        }}
-      >
-        Slatepack to share
-      </div>
-      <button
-        onClick={() => copy(props.armoredOutgoing ?? '')}
-        data-no-uppercase
-        title="Click to copy"
-        style={{
-          fontFamily: 'var(--smirk-font-family-mono)',
-          fontSize: 10,
-          wordBreak: 'break-all',
+          display: 'flex',
+          gap: 6,
+          alignItems: 'center',
           padding: '8px 10px',
           background: 'var(--smirk-bg-sunken)',
           border: '1px solid var(--smirk-border)',
           borderRadius: 'var(--smirk-radius, 8px)',
-          color: 'inherit',
-          cursor: 'pointer',
-          width: '100%',
-          textAlign: 'left',
-          maxHeight: 110,
-          overflowY: 'auto',
-          lineHeight: 1.2,
         }}
       >
-        {props.armoredOutgoing}
-      </button>
-      <button
-        onClick={() => copy(props.armoredOutgoing ?? '')}
-        style={{
-          fontSize: 11,
-          padding: '4px 10px',
-          marginTop: 6,
-          background: 'var(--smirk-bg-elevated)',
-          border: '1px solid var(--smirk-border-strong, var(--smirk-border))',
-          borderRadius: 'var(--smirk-radius, 8px)',
-          color: 'inherit',
-          cursor: 'pointer',
-          fontFamily: 'inherit',
-        }}
-      >
-        {copied ? '✓ Copied' : '⧉ Copy slatepack'}
-      </button>
+        <div style={{ flex: 1, fontSize: 11, lineHeight: 1.3 }}>
+          <div style={{ fontWeight: 600 }}>📦 Slatepack ready</div>
+          <div
+            style={{
+              fontSize: 10,
+              color: 'var(--smirk-fg-muted)',
+              fontFamily: 'var(--smirk-font-family-mono)',
+            }}
+          >
+            {slatepackLen} chars · send to{' '}
+            {props.toAddress
+              ? truncateMiddle(props.toAddress, 16)
+              : 'recipient'}
+          </div>
+        </div>
+        <Button onClick={() => copy(props.armoredOutgoing ?? '')}>
+          {copied ? '✓' : '⧉ Copy'}
+        </Button>
+      </div>
+
       {props.relayId && (
         <div
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
-            marginTop: 8,
+            marginTop: 6,
             padding: '3px 8px',
             fontSize: 10,
             color: 'var(--smirk-positive)',
@@ -1611,23 +1593,54 @@ function GrinExchange(props: GrinExchangeProps) {
         </div>
       )}
 
+      <details style={{ marginTop: 6, fontSize: 11 }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--smirk-fg-muted)' }}>
+          Show full slatepack
+        </summary>
+        <button
+          onClick={() => copy(props.armoredOutgoing ?? '')}
+          data-no-uppercase
+          title="Click to copy"
+          style={{
+            fontFamily: 'var(--smirk-font-family-mono)',
+            fontSize: 10,
+            wordBreak: 'break-all',
+            padding: '8px 10px',
+            marginTop: 4,
+            background: 'var(--smirk-bg-sunken)',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            color: 'inherit',
+            cursor: 'pointer',
+            width: '100%',
+            textAlign: 'left',
+            maxHeight: 140,
+            overflowY: 'auto',
+            lineHeight: 1.2,
+          }}
+        >
+          {props.armoredOutgoing}
+        </button>
+      </details>
+
+      {/* Action 2 — paste their response and broadcast. */}
       <div
         style={{
           fontSize: 10,
           color: 'var(--smirk-fg-muted)',
           textTransform: 'uppercase',
           letterSpacing: '0.06em',
-          marginTop: 16,
+          marginTop: 18,
           marginBottom: 4,
         }}
       >
-        Paste recipient's response
+        Paste their signed response
       </div>
       <textarea
         value={s2Text}
         onInput={(e) => setS2Text((e.target as HTMLTextAreaElement).value)}
         placeholder="BEGINSLATEPACK…"
-        rows={5}
+        rows={4}
         style={textareaStyle}
       />
       {props.error && <FieldError>{props.error}</FieldError>}
@@ -1647,7 +1660,7 @@ function GrinExchange(props: GrinExchangeProps) {
             fontFamily: 'inherit',
           }}
         >
-          Cancel
+          Cancel send
         </button>
         <Button
           onClick={handleFinalize}
@@ -1657,9 +1670,15 @@ function GrinExchange(props: GrinExchangeProps) {
         </Button>
       </div>
 
-      <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', marginTop: 12 }}>
-        Locked: <strong>{props.amountText}</strong> {asset.ticker} +
-        outputs. Cancelling unlocks them.
+      <div
+        style={{
+          fontSize: 10,
+          color: 'var(--smirk-fg-muted)',
+          marginTop: 10,
+          textAlign: 'center',
+        }}
+      >
+        {props.amountText} {asset.ticker} locked · cancel to unlock
       </div>
     </div>
   );
