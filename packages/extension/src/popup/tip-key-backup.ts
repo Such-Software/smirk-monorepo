@@ -5,17 +5,24 @@
  * persists each tip's encrypted key on the backend BEFORE the sender
  * broadcasts on-chain (see `tip-handler.ts`). That closes the
  * atomicity hole that bit us in the May 2026 dogfooding session.
- * But it leaves one residual risk: backend DR loss. The smirk-backend
- * postgres instance currently has *no* automated backups (see
- * `ops/backup-postgres.sh` proposal). If the DB is lost, every
- * pending tip becomes unrecoverable — the funds sit at the tip
- * address forever and nobody has the key.
+ * The backend itself is also backed up — daily full + every-6-hours
+ * db-only — pulled off-host to `such-backup` via SSH forced command,
+ * 30-day retention with SHA256 checksums (see
+ * `~/src/such-backup-and-nodes/backup-jobs/smirk-backup.md`).
  *
- * This module is a third layer of defense: encrypt the raw tip
- * private key (or Grin voucher JSON) with a wallet-derived key, store
- * in `chrome.storage.local` keyed by `tipId`. If the backend is lost
- * the user can extract the key locally, derive the tip address, and
- * sweep the funds back via any standalone wallet for that asset.
+ * This module is a third layer of defense on top of those: encrypt
+ * the raw tip private key (or Grin voucher JSON) with a wallet-
+ * derived key, store in `chrome.storage.local` keyed by `tipId`.
+ * Useful in scenarios the server-side backups don't cover:
+ *   - Backend cooperative but data-corrupted between snapshots
+ *     (e.g., a buggy migration writes wrong rows that the daily
+ *     restore wouldn't notice for ~24h)
+ *   - User offline / backend unreachable when they need to recover
+ *   - Cross-device migration (export the seed → re-import → these
+ *     entries decrypt against the same BTC-derived key)
+ * If both this layer AND the backend are lost, the tip is
+ * unrecoverable. That requires losing both wallet + the prod DB
+ * + every backup snapshot.
  *
  * **Encryption key.** `sha256(wallet.keys.btc.privateKey)` — same
  * scheme v0.2.4's `storeTipKeyLocally` used (smirk-extension/src/
