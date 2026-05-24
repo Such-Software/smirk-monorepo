@@ -11,7 +11,7 @@
  * back to the shell to open). No backend access.
  */
 
-import { useMemo } from 'preact/hooks';
+import { useMemo, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
 import { formatAmount } from '../format';
 import { AssetIcon } from './AssetIcon';
@@ -58,7 +58,32 @@ export type AssetDetailTxRow =
       timestamp: string;
     }
   | {
-      kind: 'tip-sent' | 'tip-received';
+      kind: 'tip-sent';
+      tipId: string;
+      amountAtomic: bigint;
+      ticker: string;
+      /** Recipient display string: "@bob (telegram)", "public link",
+       *  etc. Shell builds this from platform + username + is_public. */
+      counterparty: string;
+      platform?: string;
+      timestamp: string;
+      /** Server-side tip status — drives the action affordance:
+       *   draft / cancelled → "Discard draft" (no funds moved)
+       *   pending / pending_confirmation / claiming → "↩ Clawback"
+       *   claimed / clawed_back → info-only badge
+       */
+      status: string;
+      /** Funding confirmation progress, for the "Confirming N/M" sub-line. */
+      fundingConfirmations?: number;
+      confirmationsRequired?: number;
+      /** True iff a local IndexedDB tip-key backup exists for this
+       *  tip — tagged with 🔐 so the user knows the recovery surface
+       *  works even if the backend has lost the row. */
+      hasLocalBackup?: boolean;
+    }
+  | {
+      kind: 'tip-received';
+      tipId: string;
       amountAtomic: bigint;
       ticker: string;
       counterparty: string;
@@ -93,6 +118,17 @@ export interface AssetDetailScreenProps {
   loading?: boolean;
   /** Tap a tx row → open the chain-appropriate explorer URL. */
   onOpenExplorer?: (row: AssetDetailTxRow) => void;
+  /** Clawback an unclaimed sent tip — recovers funds to the sender.
+   *  Surfaced as the per-row "↩ Clawback" button on tip-sent rows
+   *  in pending / pending_confirmation / claiming status. */
+  onTipClawback?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Discard a draft sent tip — no funds moved, just cleans up the
+   *  server-side draft row. Surfaced as "Discard draft" on tip-sent
+   *  rows in draft status. */
+  onTipDiscard?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Called after a successful clawback/discard so the shell can
+   *  refetch the history. */
+  onTipActionDone?: () => void;
   /** Send action — usually navigates to the send wizard pre-filled. */
   onSend?: () => void;
   /** Receive action — navigates to the receive screen. */
@@ -116,6 +152,9 @@ export function AssetDetailScreen({
   hidden,
   loading,
   onOpenExplorer,
+  onTipClawback,
+  onTipDiscard,
+  onTipActionDone,
   onSend,
   onReceive,
   onTip,
@@ -241,6 +280,9 @@ export function AssetDetailScreen({
                 {...(onOpenExplorer
                   ? { onClick: () => onOpenExplorer(row) }
                   : {})}
+                {...(onTipClawback ? { onTipClawback } : {})}
+                {...(onTipDiscard ? { onTipDiscard } : {})}
+                {...(onTipActionDone ? { onTipActionDone } : {})}
               />
             ))}
           </div>
@@ -382,13 +424,21 @@ function TxRow({
   assetId,
   hidden,
   onClick,
+  onTipClawback,
+  onTipDiscard,
+  onTipActionDone,
 }: {
   row: AssetDetailTxRow;
   assetId: string;
   hidden?: boolean;
   onClick?: () => void;
+  onTipClawback?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
+  onTipDiscard?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
+  onTipActionDone?: () => void;
 }) {
   const asset = mustGetAsset(assetId);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
 
   // Derive incoming + per-kind subline via a single switch so TS can
   // narrow `row.kind` cleanly. An IIFE with early returns trips TS's
@@ -419,12 +469,19 @@ function TxRow({
       meta = `${row.status} · ${idOrKernel}`;
       break;
     }
-    case 'tip-sent':
-    case 'tip-received': {
-      incoming = row.kind === 'tip-received';
+    case 'tip-sent': {
+      incoming = false;
       isTip = true;
       const platform = row.platform ? `${row.platform} ` : '';
-      meta = `${platform}${incoming ? 'from' : 'to'} ${row.counterparty}`;
+      const recipientLabel = `${platform}to ${row.counterparty}`;
+      meta = `${tipStatusLabel(row.status)} · ${recipientLabel}`;
+      break;
+    }
+    case 'tip-received': {
+      incoming = true;
+      isTip = true;
+      const platform = row.platform ? `${row.platform} ` : '';
+      meta = `${platform}from ${row.counterparty}`;
       break;
     }
   }
@@ -436,70 +493,216 @@ function TxRow({
     : 'var(--smirk-fg-muted)';
   const arrow = incoming ? '↙' : '↗';
 
-  const Container = onClick ? 'button' : 'div';
+  // tip-sent rows that have an action-eligible status surface inline
+  // Clawback / Discard controls. The row container becomes a non-
+  // clickable `<div>` in this case (HTML forbids nesting a button
+  // inside a button). The chain-explorer click affordance stays on
+  // non-tip rows.
+  const showTipActions =
+    row.kind === 'tip-sent' &&
+    ((onTipClawback &&
+      (row.status === 'pending' ||
+        row.status === 'pending_confirmation' ||
+        row.status === 'claiming')) ||
+      (onTipDiscard && row.status === 'draft'));
+
+  const Container = !showTipActions && onClick ? 'button' : 'div';
+
+  const handleClawback = async () => {
+    if (row.kind !== 'tip-sent' || !onTipClawback) return;
+    setBusy(true);
+    setMsg('Clawing back…');
+    const r = await onTipClawback(row.tipId);
+    setBusy(false);
+    setMsg(r.ok ? '✓ Clawed back' : `Error: ${r.error ?? 'unknown'}`);
+    if (r.ok && onTipActionDone) onTipActionDone();
+  };
+  const handleDiscard = async () => {
+    if (row.kind !== 'tip-sent' || !onTipDiscard) return;
+    setBusy(true);
+    setMsg('Discarding…');
+    const r = await onTipDiscard(row.tipId);
+    setBusy(false);
+    setMsg(r.ok ? '✓ Discarded' : `Error: ${r.error ?? 'unknown'}`);
+    if (r.ok && onTipActionDone) onTipActionDone();
+  };
+
   return (
-    <Container
-      onClick={onClick}
+    <div
       style={{
         display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '8px 10px',
-        background: 'var(--smirk-bg-sunken)',
-        border: '1px solid var(--smirk-border)',
-        borderRadius: 'var(--smirk-radius, 8px)',
-        color: 'inherit',
-        cursor: onClick ? 'pointer' : 'default',
-        fontFamily: 'inherit',
-        textAlign: 'left',
-        width: '100%',
-        // content-box default would push padding + border BEYOND the
-        // parent's 100% — triggers a horizontal scrollbar at the
-        // popup shell level. border-box makes the row fit exactly.
+        flexDirection: 'column',
+        gap: 6,
         boxSizing: 'border-box',
       }}
     >
-      <span style={{ fontSize: 16, color: arrowColor, lineHeight: 1 }}>
-        {isTip ? '🎁' : arrow}
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 12,
-            fontFamily: 'var(--smirk-font-family-mono)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {incoming ? '+' : '−'} {amount} {asset.ticker}
+      <Container
+        {...(Container === 'button' ? { onClick } : {})}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 10px',
+          background: 'var(--smirk-bg-sunken)',
+          border: '1px solid var(--smirk-border)',
+          borderRadius: 'var(--smirk-radius, 8px)',
+          color: 'inherit',
+          cursor: Container === 'button' ? 'pointer' : 'default',
+          fontFamily: 'inherit',
+          textAlign: 'left',
+          width: '100%',
+          // content-box default would push padding + border BEYOND the
+          // parent's 100% — triggers a horizontal scrollbar at the
+          // popup shell level. border-box makes the row fit exactly.
+          boxSizing: 'border-box',
+        }}
+      >
+        <span style={{ fontSize: 16, color: arrowColor, lineHeight: 1 }}>
+          {isTip ? '🎁' : arrow}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 12,
+              fontFamily: 'var(--smirk-font-family-mono)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {incoming ? '+' : '−'} {amount} {asset.ticker}
+            {row.kind === 'tip-sent' && row.hasLocalBackup && (
+              <span
+                title="Local IndexedDB backup exists — clawback works even if the backend forgets this row."
+                style={{
+                  marginLeft: 6,
+                  fontSize: 10,
+                  color: 'var(--smirk-fg-muted)',
+                }}
+              >
+                🔐
+              </span>
+            )}
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              color: 'var(--smirk-fg-muted)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              marginTop: 1,
+            }}
+          >
+            {meta}
+          </div>
+          {row.kind === 'tip-sent' &&
+            row.status === 'pending_confirmation' &&
+            row.confirmationsRequired !== undefined &&
+            row.fundingConfirmations !== undefined &&
+            row.confirmationsRequired > 0 && (
+              <div
+                style={{
+                  fontSize: 10,
+                  color: 'var(--smirk-fg-muted)',
+                  marginTop: 1,
+                }}
+              >
+                Confirming: {row.fundingConfirmations}/
+                {row.confirmationsRequired}
+              </div>
+            )}
         </div>
+        {'timestamp' in row && row.timestamp && (
+          <div
+            style={{
+              fontSize: 9,
+              color: 'var(--smirk-fg-muted)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {formatRelative(row.timestamp)}
+          </div>
+        )}
+      </Container>
+      {showTipActions && row.kind === 'tip-sent' && (
         <div
           style={{
-            fontSize: 10,
-            color: 'var(--smirk-fg-muted)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            marginTop: 1,
+            display: 'flex',
+            gap: 6,
+            paddingLeft: 32,
+            alignItems: 'center',
           }}
         >
-          {meta}
-        </div>
-      </div>
-      {'timestamp' in row && row.timestamp && (
-        <div
-          style={{
-            fontSize: 9,
-            color: 'var(--smirk-fg-muted)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {formatRelative(row.timestamp)}
+          {row.status === 'draft' && onTipDiscard && (
+            <button
+              onClick={handleDiscard}
+              disabled={busy}
+              style={tipActionBtn}
+            >
+              Discard draft
+            </button>
+          )}
+          {(row.status === 'pending' ||
+            row.status === 'pending_confirmation' ||
+            row.status === 'claiming') &&
+            onTipClawback && (
+              <button
+                onClick={handleClawback}
+                disabled={busy}
+                style={tipActionBtn}
+              >
+                ↩ Clawback
+              </button>
+            )}
+          {msg && (
+            <span
+              style={{
+                fontSize: 10,
+                color: msg.startsWith('Error')
+                  ? 'var(--smirk-negative, #ff6b6b)'
+                  : 'var(--smirk-positive)',
+              }}
+            >
+              {msg}
+            </span>
+          )}
         </div>
       )}
-    </Container>
+    </div>
   );
+}
+
+const tipActionBtn = {
+  fontSize: 11,
+  padding: '4px 10px',
+  background: 'var(--smirk-bg-elevated)',
+  border: '1px solid var(--smirk-border-strong, var(--smirk-border))',
+  borderRadius: 'var(--smirk-radius, 6px)',
+  color: 'inherit',
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+};
+
+function tipStatusLabel(status: string): string {
+  switch (status) {
+    case 'draft':
+      return 'draft';
+    case 'cancelled':
+      return 'cancelled';
+    case 'pending_confirmation':
+      return 'confirming';
+    case 'pending':
+      return 'awaiting claim';
+    case 'claiming':
+      return 'claiming';
+    case 'claimed':
+      return 'claimed';
+    case 'clawed_back':
+      return 'clawed back';
+    default:
+      return status;
+  }
 }
 
 function truncId(id: string): string {

@@ -171,9 +171,12 @@ async function createBtcLtcTip(
   const tipId = draft.data.tip_id;
 
   // 4a. Third-layer backup: encrypt the tip private key with the
-  //     wallet's BTC key and stash in chrome.storage.local. Recovery
-  //     path if the backend ever loses the row (no DB backups
-  //     configured as of 2026-05-24).
+  //     wallet's BTC key and stash in chrome.storage.local. The
+  //     backend is already backed up off-host (such-backup pulls
+  //     daily full + 6-hourly db-only via SSH forced command); this
+  //     covers the failure modes those snapshots can't (corruption
+  //     between snapshots, user offline during incident, cross-
+  //     device migration via seed re-import). See tip-key-backup.ts.
   await storeTipKeyBackup({
     tipId,
     asset,
@@ -232,7 +235,7 @@ async function createBtcLtcTip(
   //    server-side (dedupe on tip_id+funding_txid), so transient
   //    network errors here recover automatically. If it permanently
   //    fails the funds are on-chain and the key is on the backend —
-  //    user surfaces this via Sent Tips → Clawback (full recovery
+  //    user surfaces this via the asset-detail tip row → Clawback (full recovery
   //    path, no key handling needed by the user).
   const attach = await api.attachSocialTipFunding(tipId, sendResult.txid);
   if (attach.error || !attach.data) {
@@ -240,7 +243,7 @@ async function createBtcLtcTip(
       ok: false,
       error: `Funded ${asset} at ${tipAddress} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId}: ${
         attach.error ?? 'unknown'
-      }. Open Sent Tips → Clawback to recover.`,
+      }. Open this asset on Home → tap the tip to Clawback.`,
     };
   }
 
@@ -456,14 +459,14 @@ async function createXmrWowTip(
 
   // 7. Phase 2 — attach the broadcast txid. Retryable server-side; if
   //    it eventually fails the funds are on chain and the spend key is
-  //    on the backend, so Sent Tips → Clawback fully recovers.
+  //    on the backend, so the asset-detail tip row → Clawback fully recovers.
   const attach = await api.attachSocialTipFunding(tipId, sendResult.txid);
   if (attach.error || !attach.data) {
     return {
       ok: false,
       error: `Funded ${asset} at ${tipKeys.address} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId}: ${
         attach.error ?? 'unknown'
-      }. Open Sent Tips → Clawback to recover.`,
+      }. Open this asset on Home → tap the tip to Clawback.`,
     };
   }
 
@@ -695,7 +698,7 @@ async function createGrinTip(
   // 7. Phase 1 — persist the encrypted voucher data on the backend
   //    BEFORE broadcasting. If any subsequent step fails (broadcast,
   //    attach-funding), the voucher data is safe server-side and the
-  //    sender can recover via Sent Tips → Clawback once the funding
+  //    sender can recover via the asset-detail tip row → Clawback once the funding
   //    is either attached or the draft is cancelled.
   const slateId = randomBytesHexUuidLike(); // voucher txs aren't slate-shaped; backend keys by funding_txid which will be slate_id-compatible
   const draft = await api.createSocialTip({
@@ -785,7 +788,7 @@ async function createGrinTip(
       ok: false,
       error: `Voucher broadcast (slate ${slateId}) but couldn't attach funding to backend tip ${tipId}: ${
         attach.error ?? 'unknown'
-      }. Open Sent Tips → Clawback to recover.`,
+      }. Open this asset on Home → tap the tip to Clawback.`,
     };
   }
 
