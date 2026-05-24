@@ -461,7 +461,19 @@ export function TipMaker(props: TipMakerProps) {
       </div>
 
       {error && (
-        <div style={{ fontSize: 12, color: 'var(--smirk-negative, #ff6b6b)' }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: 'var(--smirk-negative, #ff6b6b)',
+            // wrap long error strings (e.g., "Funded WOW at <95-char
+            // address> but backend POST failed: …") instead of letting
+            // them blow out the popup width with a horizontal
+            // scrollbar.
+            wordBreak: 'break-word',
+            overflowWrap: 'anywhere',
+            maxWidth: '100%',
+          }}
+        >
           {error}
         </div>
       )}
