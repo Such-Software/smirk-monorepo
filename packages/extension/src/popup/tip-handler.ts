@@ -110,38 +110,21 @@ async function createBtcLtcTip(
   const tipPubkey = getPublicKey(tipPrivateKey, true);
   const tipAddress = asset === 'btc' ? btcAddress(tipPubkey) : ltcAddress(tipPubkey);
 
-  // 3. Estimate fee. We use the `normal` tier; users wanting custom
-  // fee control should use Send (not Tip).
-  const feeRates = await api.estimateFee(asset);
-  if (feeRates.error || !feeRates.data) {
-    return {
-      ok: false,
-      error: feeRates.error ?? `Failed to estimate ${asset.toUpperCase()} fee`,
-    };
-  }
-  const feeRateSatPerVb = feeRates.data.normal ?? 10;
-
-  // 4. Build + sign + broadcast funding tx via the existing
-  //    send-handler. The fresh tip_address is just any address from
-  //    the BTC/LTC PSBT builder's POV — single-recipient send.
-  const sendResult = await send(wallet, {
-    fromAssetId: asset,
-    amountAtomic: fields.amountAtomic,
-    toAddress: tipAddress,
-    feeRateSatPerVb,
-    sweep: false,
-  });
-  if (!sendResult.ok) return { ok: false, error: sendResult.error };
-
-  // 5. Encrypt tip private key.
+  // 3. Encrypt the tip private key.
   const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
     keyMaterial: tipPrivateKey,
     isPublic: fields.isPublic,
     recipientBtcPubkeyHex,
   });
 
-  // 6. POST to backend.
-  const tip = await api.createSocialTip({
+  // 4. Two-phase create — phase 1: persist the encrypted key + address
+  //    on the backend BEFORE any on-chain action. If the user closes
+  //    the popup or hits a network failure between here and broadcast
+  //    (step 6), nothing happened on-chain so there's nothing to
+  //    recover. The draft sits server-side and can be cancelled
+  //    explicitly via `api.cancelSocialTip(tip_id)` (we do that on
+  //    broadcast failure below).
+  const draft = await api.createSocialTip({
     ...(fields.isPublic ? {} : { platform: fields.platform, username: fields.username }),
     asset,
     amount: Number(fields.amountAtomic),
@@ -149,28 +132,67 @@ async function createBtcLtcTip(
     encrypted_key: encryptedKey,
     ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
     tip_address: tipAddress,
-    funding_txid: sendResult.txid,
+    // NO funding_txid — backend creates status='draft'.
     sender_anonymous: fields.senderAnonymous,
   });
-
-  if (tip.error || !tip.data) {
-    // Funds are at tipAddress + we have tipPrivateKey locally —
-    // surface this to the user; they can recover via clawback later.
+  if (draft.error || !draft.data) {
     return {
       ok: false,
-      error: `Funded ${asset} at ${tipAddress} but backend POST failed: ${
-        tip.error ?? 'unknown'
-      }. Funds recoverable via the tip private key.`,
+      error: `Failed to register tip with backend: ${draft.error ?? 'unknown'}. No on-chain action was taken.`,
+    };
+  }
+  const tipId = draft.data.tip_id;
+
+  // 5. Estimate fee. We use the `normal` tier; users wanting custom
+  //    fee control should use Send (not Tip).
+  const feeRates = await api.estimateFee(asset);
+  if (feeRates.error || !feeRates.data) {
+    await api.cancelSocialTip(tipId).catch(() => undefined);
+    return {
+      ok: false,
+      error: feeRates.error ?? `Failed to estimate ${asset.toUpperCase()} fee`,
+    };
+  }
+  const feeRateSatPerVb = feeRates.data.normal ?? 10;
+
+  // 6. Build + sign + broadcast funding tx. If broadcast fails, the
+  //    draft is wasted DB state — cancel it server-side to keep things
+  //    clean. Fund safety is intact because no funds left the sender.
+  const sendResult = await send(wallet, {
+    fromAssetId: asset,
+    amountAtomic: fields.amountAtomic,
+    toAddress: tipAddress,
+    feeRateSatPerVb,
+    sweep: false,
+  });
+  if (!sendResult.ok) {
+    await api.cancelSocialTip(tipId).catch(() => undefined);
+    return { ok: false, error: sendResult.error };
+  }
+
+  // 7. Phase 2: attach the broadcast txid to the draft. Retryable
+  //    server-side (dedupe on tip_id+funding_txid), so transient
+  //    network errors here recover automatically. If it permanently
+  //    fails the funds are on-chain and the key is on the backend —
+  //    user surfaces this via Sent Tips → Clawback (full recovery
+  //    path, no key handling needed by the user).
+  const attach = await api.attachSocialTipFunding(tipId, sendResult.txid);
+  if (attach.error || !attach.data) {
+    return {
+      ok: false,
+      error: `Funded ${asset} at ${tipAddress} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId}: ${
+        attach.error ?? 'unknown'
+      }. Open Sent Tips → Clawback to recover.`,
     };
   }
 
   return {
     ok: true,
-    tipId: tip.data.tip_id,
+    tipId,
     // BTC/LTC have 0-conf so share URL is available immediately for
     // public tips. Targeted tips don't surface a share URL (the bot
     // DMs the recipient instead).
-    shareUrl: fields.isPublic ? buildShareUrl(tip.data.tip_id, urlFragmentEncoded) : null,
+    shareUrl: fields.isPublic ? buildShareUrl(tipId, urlFragmentEncoded) : null,
     shareUrlPending: false,
   };
 }
@@ -289,45 +311,20 @@ async function createXmrWowTip(
   // 2. Generate fresh tip keypair (spend + view + addresses).
   const tipKeys = generateXmrWowTipKeys(asset);
 
-  // 3. Register the tip address with LWS so its scanner picks up the
-  //    funding tx and the backend can publish confirmation status.
-  //    Backend's LWS-register endpoint is idempotent.
-  const reg = await api.registerLws(
-    senderUserId,
-    asset,
-    tipKeys.address,
-    bytesToHex(tipKeys.viewKey),
-  );
-  if (reg.error) {
-    return {
-      ok: false,
-      error: `Failed to register tip address with LWS: ${reg.error}`,
-    };
-  }
-
-  // 4. Send funds to the tip address using the existing send-handler.
-  //    XMR/WOW path ignores feeRateSatPerVb (the wasm tx-builder pulls
-  //    per_byte_fee + fee_mask from LWS at sign time), and doesn't
-  //    need excludeInputs in tipping context.
-  const sendResult = await send(wallet, {
-    fromAssetId: asset,
-    amountAtomic: fields.amountAtomic,
-    toAddress: tipKeys.address,
-    feeRateSatPerVb: 0, // ignored for xmr/wow
-    sweep: false,
-  });
-  if (!sendResult.ok) return { ok: false, error: sendResult.error };
-
-  // 5. Encrypt the spend key.
+  // 3. Encrypt the spend key.
   const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
     keyMaterial: tipKeys.spendKey,
     isPublic: fields.isPublic,
     recipientBtcPubkeyHex,
   });
 
-  // 6. POST to backend with tip_view_key so LWS can keep tracking
-  //    the tip address across confirmation count + claim.
-  const tip = await api.createSocialTip({
+  // 4. Phase 1 — persist the encrypted key + tip_address + view_key on
+  //    the backend BEFORE we broadcast. If the popup closes or the
+  //    network fails between here and broadcast (step 6), no on-chain
+  //    action has happened — funds are intact. Backend registers LWS
+  //    only when we call attach-funding in step 7, so we don't waste
+  //    LWS quota on never-funded drafts.
+  const draft = await api.createSocialTip({
     ...(fields.isPublic ? {} : { platform: fields.platform, username: fields.username }),
     asset,
     amount: Number(fields.amountAtomic),
@@ -335,16 +332,48 @@ async function createXmrWowTip(
     encrypted_key: encryptedKey,
     ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
     tip_address: tipKeys.address,
-    funding_txid: sendResult.txid,
     tip_view_key: bytesToHex(tipKeys.viewKey),
+    // NO funding_txid — backend creates status='draft'.
     sender_anonymous: fields.senderAnonymous,
   });
-  if (tip.error || !tip.data) {
+  if (draft.error || !draft.data) {
     return {
       ok: false,
-      error: `Funded ${asset} at ${tipKeys.address} but backend POST failed: ${
-        tip.error ?? 'unknown'
-      }. Spend key for recovery is held locally; not surfaced in this v0.3 cut — file a bug if you hit this.`,
+      error: `Failed to register tip with backend: ${draft.error ?? 'unknown'}. No on-chain action was taken.`,
+    };
+  }
+  const tipId = draft.data.tip_id;
+
+  // 5. (Skipped — `senderUserId` previously used for `api.registerLws`
+  //    here; backend now registers LWS as part of the attach-funding
+  //    side-effects so we don't double-register. Discard unused arg.)
+  void senderUserId;
+
+  // 6. Broadcast funding tx. XMR/WOW path ignores feeRateSatPerVb
+  //    (the wasm tx-builder pulls per_byte_fee + fee_mask from LWS
+  //    at sign time).
+  const sendResult = await send(wallet, {
+    fromAssetId: asset,
+    amountAtomic: fields.amountAtomic,
+    toAddress: tipKeys.address,
+    feeRateSatPerVb: 0, // ignored for xmr/wow
+    sweep: false,
+  });
+  if (!sendResult.ok) {
+    await api.cancelSocialTip(tipId).catch(() => undefined);
+    return { ok: false, error: sendResult.error };
+  }
+
+  // 7. Phase 2 — attach the broadcast txid. Retryable server-side; if
+  //    it eventually fails the funds are on chain and the spend key is
+  //    on the backend, so Sent Tips → Clawback fully recovers.
+  const attach = await api.attachSocialTipFunding(tipId, sendResult.txid);
+  if (attach.error || !attach.data) {
+    return {
+      ok: false,
+      error: `Funded ${asset} at ${tipKeys.address} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId}: ${
+        attach.error ?? 'unknown'
+      }. Open Sent Tips → Clawback to recover.`,
     };
   }
 
@@ -353,8 +382,8 @@ async function createXmrWowTip(
   // share URL once funding_confirmations ≥ confirmations_required.
   return {
     ok: true,
-    tipId: tip.data.tip_id,
-    shareUrl: fields.isPublic ? buildShareUrl(tip.data.tip_id, urlFragmentEncoded) : null,
+    tipId,
+    shareUrl: fields.isPublic ? buildShareUrl(tipId, urlFragmentEncoded) : null,
     // Public tips need to wait for confirmations before the URL is
     // usable from the recipient side (claim flow reads on-chain
     // commitment). Surface as pending so the success screen reads
@@ -550,8 +579,58 @@ async function createGrinTip(
     change_bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
 
-  // 6. Record the tx + lock inputs + record change atomically.
+  // 6. Encrypt voucher data (JSON) BEFORE broadcast so the encrypted
+  //    payload is durable on the backend before any on-chain action.
+  //    The recipient needs ALL of: blinding_factor, commitment, proof,
+  //    n_child, amount, features. Without this blob the funds are
+  //    unsweepable even by the sender (the blinding factor is the
+  //    "spend key" for a Pedersen commitment).
+  const voucherData: GrinVoucherEncryptionData = {
+    blindingFactor: voucherResult.voucher.blinding_factor_hex,
+    commitment: voucherResult.voucher.commitment_hex,
+    proof: voucherResult.voucher.proof_hex,
+    // path[2] = real BIP32 child; path[3] = padding 0 (see
+    // grin-flows.ts companion comment about the bricking bug).
+    nChild: voucherResult.voucher.path[2],
+    amount: voucherResult.voucher.amount,
+    features: 0,
+  };
+  const voucherDataBytes = new TextEncoder().encode(JSON.stringify(voucherData));
+  const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
+    keyMaterial: voucherDataBytes,
+    isPublic: fields.isPublic,
+    recipientBtcPubkeyHex,
+  });
+
+  // 7. Phase 1 — persist the encrypted voucher data on the backend
+  //    BEFORE broadcasting. If any subsequent step fails (broadcast,
+  //    attach-funding), the voucher data is safe server-side and the
+  //    sender can recover via Sent Tips → Clawback once the funding
+  //    is either attached or the draft is cancelled.
   const slateId = randomBytesHexUuidLike(); // voucher txs aren't slate-shaped; backend keys by funding_txid which will be slate_id-compatible
+  const draft = await api.createSocialTip({
+    ...(fields.isPublic ? {} : { platform: fields.platform, username: fields.username }),
+    asset: 'grin',
+    amount: voucherAmount,
+    is_public: fields.isPublic,
+    encrypted_key: encryptedKey,
+    ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
+    tip_address: voucherResult.voucher.commitment_hex,
+    // NO funding_txid — backend creates status='draft'.
+    grin_commitment: voucherResult.voucher.commitment_hex,
+    sender_anonymous: fields.senderAnonymous,
+  });
+  if (draft.error || !draft.data) {
+    return {
+      ok: false,
+      error: `Failed to register voucher with backend: ${draft.error ?? 'unknown'}. No on-chain action was taken.`,
+    };
+  }
+  const tipId = draft.data.tip_id;
+
+  // 8. Record the on-chain tx + lock inputs (Grin-side bookkeeping).
+  //    Different from the broader two-phase tip flow — this is the
+  //    grin-specific output-locking we already do in regular sends.
   await api.recordGrinTransaction({
     userId: senderUserId,
     slateId,
@@ -565,10 +644,9 @@ async function createGrinTip(
     txSlateId: slateId,
   });
 
-  // 7. Broadcast the voucher tx via the backend's broadcast endpoint.
-  //    Includes change_output for atomic record-on-broadcast (the
-  //    dddb025 fix); backend INSERTs the change row alongside the
-  //    network broadcast.
+  // 9. Broadcast the voucher tx via the backend's broadcast endpoint.
+  //    Includes change_output for atomic record-on-broadcast (per
+  //    dddb025).
   const broadcast = await api.broadcastGrinTransaction({
     userId: senderUserId,
     slateId,
@@ -577,9 +655,6 @@ async function createGrinTip(
       ? {
           changeOutput: {
             keyId: pathToKeyId(voucherResult.change.path),
-            // path[2] is the real BIP32 child index; path[3] is the
-            // trailing-0 padding. Mismatch bricks the wallet on the
-            // next spend (see grin-flows.ts companion comment).
             nChild: voucherResult.change.path[2],
             amount: voucherResult.change.amount,
             commitment: voucherResult.change.commitment_hex,
@@ -588,65 +663,32 @@ async function createGrinTip(
       : {}),
   });
   if (broadcast.error) {
-    // Rollback: unlock the inputs we locked optimistically. The
-    // backend's unlock_grin_outputs also sweeps any orphan unconfirmed
-    // change rows for this slate (per dddb025).
+    // Rollback Grin output lock + cancel the draft tip.
     await api
       .unlockGrinOutputs({ userId: senderUserId, txSlateId: slateId })
       .catch(() => undefined);
+    await api.cancelSocialTip(tipId).catch(() => undefined);
     return { ok: false, error: `Grin broadcast failed: ${broadcast.error}` };
   }
 
-  // 8. Encrypt voucher data (JSON) — recipient needs ALL of it to
-  //    construct the sweep tx.
-  const voucherData: GrinVoucherEncryptionData = {
-    blindingFactor: voucherResult.voucher.blinding_factor_hex,
-    commitment: voucherResult.voucher.commitment_hex,
-    proof: voucherResult.voucher.proof_hex,
-    // path[2] = real BIP32 child; path[3] = padding 0 (see above).
-    nChild: voucherResult.voucher.path[2],
-    amount: voucherResult.voucher.amount,
-    features: 0,
-  };
-  const voucherDataBytes = new TextEncoder().encode(JSON.stringify(voucherData));
-  const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
-    keyMaterial: voucherDataBytes,
-    isPublic: fields.isPublic,
-    recipientBtcPubkeyHex,
-  });
-
-  // 9. POST to backend. `tip_address` for Grin is the commitment hex
-  //    (no human-readable address — the commitment IS the spend
-  //    target). The kernel_excess from voucherResult goes into
-  //    `funding_txid` since grin txs don't have a network-level
-  //    txid distinct from the kernel.
-  const tip = await api.createSocialTip({
-    ...(fields.isPublic ? {} : { platform: fields.platform, username: fields.username }),
-    asset: 'grin',
-    amount: voucherAmount,
-    is_public: fields.isPublic,
-    encrypted_key: encryptedKey,
-    ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
-    tip_address: voucherResult.voucher.commitment_hex,
-    funding_txid: slateId,
-    grin_commitment: voucherResult.voucher.commitment_hex,
-    sender_anonymous: fields.senderAnonymous,
-  });
-
-  if (tip.error || !tip.data) {
+  // 10. Phase 2 — attach the slate_id (acts as the funding identifier
+  //     for Grin since the kernel commit IS the on-chain identity).
+  //     Retryable server-side.
+  const attach = await api.attachSocialTipFunding(tipId, slateId);
+  if (attach.error || !attach.data) {
     return {
       ok: false,
-      error: `Voucher broadcast but backend POST failed: ${
-        tip.error ?? 'unknown'
-      }. Voucher recoverable via stored slate_id ${slateId}.`,
+      error: `Voucher broadcast (slate ${slateId}) but couldn't attach funding to backend tip ${tipId}: ${
+        attach.error ?? 'unknown'
+      }. Open Sent Tips → Clawback to recover.`,
     };
   }
 
   // Grin needs ~10 confirmations before share URL is live.
   return {
     ok: true,
-    tipId: tip.data.tip_id,
-    shareUrl: fields.isPublic ? buildShareUrl(tip.data.tip_id, urlFragmentEncoded) : null,
+    tipId,
+    shareUrl: fields.isPublic ? buildShareUrl(tipId, urlFragmentEncoded) : null,
     shareUrlPending: fields.isPublic,
   };
 }

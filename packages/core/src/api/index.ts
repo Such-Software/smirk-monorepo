@@ -84,6 +84,8 @@ export class SmirkApi
   lookupSocial: SocialMethods['lookupSocial'];
   lookupSmirkName: SocialMethods['lookupSmirkName'];
   createSocialTip: SocialMethods['createSocialTip'];
+  attachSocialTipFunding: SocialMethods['attachSocialTipFunding'];
+  cancelSocialTip: SocialMethods['cancelSocialTip'];
   getClaimableTips: SocialMethods['getClaimableTips'];
   getReceivedSocialTips: SocialMethods['getReceivedTips'];
   getSentSocialTips: SocialMethods['getSentSocialTips'];
@@ -156,6 +158,8 @@ export class SmirkApi
     this.lookupSocial = social.lookupSocial;
     this.lookupSmirkName = social.lookupSmirkName;
     this.createSocialTip = social.createSocialTip;
+    this.attachSocialTipFunding = social.attachSocialTipFunding;
+    this.cancelSocialTip = social.cancelSocialTip;
     this.getClaimableTips = social.getClaimableTips;
     this.getReceivedSocialTips = social.getReceivedTips;
     this.getSentSocialTips = social.getSentSocialTips;

@@ -120,10 +120,46 @@ export interface SocialMethods {
   /** Look up a Smirk-registered username (no platform). */
   lookupSmirkName(username: string): Promise<ApiResponse<SocialLookupResponse>>;
 
-  /** Create a social tip (targeted or public). */
+  /**
+   * Create a social tip. Two modes:
+   *
+   * - **Draft** (v0.3+, recommended): omit `funding_txid`. Backend
+   *   persists the encrypted key + tip_address BEFORE the sender
+   *   broadcasts. Returns `tip_id` immediately; the sender then
+   *   broadcasts on-chain and calls `attachSocialTipFunding(tip_id,
+   *   txid)` to commit. Closes the v0.2.x atomicity gap where a
+   *   failed POST after broadcast stranded funds + key forever.
+   * - **Single-call legacy** (v0.2.x): pass `funding_txid` — backend
+   *   creates the tip in `pending_confirmation` / `pending` directly.
+   *   Still works for backwards compatibility; new code should
+   *   prefer the draft flow.
+   */
   createSocialTip(
     request: CreateSocialTipRequest,
   ): Promise<ApiResponse<CreateSocialTipResponse>>;
+
+  /**
+   * Attach a broadcast txid to a draft tip created via
+   * `createSocialTip` without funding_txid. Transitions the tip into
+   * the normal lifecycle (`pending_confirmation` for XMR/WOW/Grin,
+   * `pending` for BTC/LTC) and fires the LWS-register +
+   * recipient-DM side-effects.
+   *
+   * Idempotent on (tip_id, funding_txid). Retrying with the same
+   * pair is a no-op; retrying with a different txid is an error.
+   */
+  attachSocialTipFunding(
+    tipId: string,
+    fundingTxid: string,
+  ): Promise<ApiResponse<CreateSocialTipResponse>>;
+
+  /**
+   * Cancel a draft tip — sender abandons before broadcast (or after
+   * a failed broadcast). Only valid from the 'draft' state. Tips
+   * with funding already attached use `clawbackSocialTip` instead
+   * because the funds are on-chain.
+   */
+  cancelSocialTip(tipId: string): Promise<ApiResponse<{ ok: boolean }>>;
 
   /** Get tips the current user can claim (only confirmed tips). */
   getClaimableTips(): Promise<ApiResponse<{ tips: ClaimableTip[] }>>;
@@ -183,11 +219,37 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async createSocialTip(req) {
-      // POST — no retry. Could create duplicate tips.
+      // POST — no retry. Could create duplicate tips for the legacy
+      // single-call path. For the v0.3 draft path, the create POST is
+      // idempotent at the wallet level (the sender's tip private key
+      // is regenerated per submit attempt, so a duplicate would have
+      // a different tip_address anyway), but we still don't retry —
+      // a duplicate draft is wasted DB space, not a fund-loss risk.
       return client.request<CreateSocialTipResponse>('/tips/social', {
         method: 'POST',
         body: JSON.stringify(req),
       });
+    },
+
+    async attachSocialTipFunding(tipId, fundingTxid) {
+      // Retryable: backend dedupes on (tip_id, funding_txid) — same
+      // pair is a no-op. Retrying a flaky network is exactly what we
+      // want here because the sender already broadcast on-chain and
+      // we MUST get the txid attached.
+      return client.retryableRequest<CreateSocialTipResponse>(
+        `/tips/social/${tipId}/attach-funding`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ funding_txid: fundingTxid }),
+        },
+      );
+    },
+
+    async cancelSocialTip(tipId) {
+      return client.request<{ ok: boolean }>(
+        `/tips/social/${tipId}/cancel`,
+        { method: 'POST' },
+      );
     },
 
     async getClaimableTips() {
