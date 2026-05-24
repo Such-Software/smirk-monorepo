@@ -57,6 +57,7 @@ import {
   OnboardingWizard,
   ReceiveScreen,
   SendWizard,
+  SentTipsScreen,
   StateProvider,
   TipMaker,
   applyTheme,
@@ -68,6 +69,7 @@ import {
   type AssetDetailTxRow,
   type InboxItem,
   type RecentRecipient,
+  type SentTipRow,
   type SparklinePoint,
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
@@ -85,6 +87,7 @@ import {
   calcGrinFee,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
+import { listTipKeyBackups, removeTipKeyBackup } from './tip-key-backup';
 import {
   initialize as initSmirkWasm,
   monero as wasmMonero,
@@ -1039,6 +1042,19 @@ function HomeRouter({
     );
   }
 
+  // Sent Tips — list of tips the user has sent + per-row clawback /
+  // discard actions. Entry point referenced from tip-handler error
+  // messages ("Open Sent Tips → Clawback to recover") and from the
+  // Inbox tab's "Sent" subview.
+  if (route.current === 'home/sent-tips') {
+    return (
+      <SentTipsRoute
+        wallet={wallet}
+        onBack={() => void navigate('home')}
+      />
+    );
+  }
+
   // Asset detail drill-down — tapping a coin row on Home lands here.
   // Pulls per-chain history + sparkline; renders BalanceCard + sparkline
   // + action row + activity list. Per-chain shape adapters live in
@@ -1468,6 +1484,30 @@ function HomeRouter({
             wallet,
             senderUserId: grinUserId,
             fields,
+            // Record pendingOutgoing on tip broadcast so the sender's
+            // balance reflects the deduction immediately — matches the
+            // SendWizard onSubmit flow above. Without this, XMR/WOW
+            // tips look like nothing happened for ~1-2 minutes (until
+            // LWS reflects the spend), which is what made the failed
+            // 3 WOW tip look like a no-op to the user.
+            onBroadcast: async (e) => {
+              await store.update((s) => {
+                s.pendingOutgoing.push({
+                  asset: e.assetId,
+                  txHash: e.txid,
+                  amount: e.amountAtomic.toString(),
+                  fee: e.feeAtomic.toString(),
+                  recipient: e.recipient,
+                  submittedAt: Date.now(),
+                  ...(e.inputs && e.inputs.length > 0
+                    ? { inputs: e.inputs }
+                    : {}),
+                  ...(e.inputsTotalAtomic !== undefined
+                    ? { inputsTotal: e.inputsTotalAtomic.toString() }
+                    : {}),
+                });
+              });
+            },
           });
         }}
         onExit={() => void navigate('home')}
@@ -1999,6 +2039,125 @@ function SwapStub() {
  * into AssetDetailTxRow, hands off to the @smirk/ui presentational
  * component. Per-chain adapters live in `loadAssetHistory` below.
  */
+/**
+ * Sent Tips route — list of the user's tips with status + per-row
+ * clawback/discard actions. Reconciles backend `/tips/social/sent`
+ * against local IndexedDB tip-key backups so the user sees both:
+ *   - tips the backend knows about (normal case)
+ *   - drafts the backend lost (DR scenario) — those show with a
+ *     "🔐 local backup" badge so the user knows they can recover
+ *     manually even without the backend
+ *
+ * Clawback calls `api.clawbackSocialTip` which marks the row
+ * `clawed_back` server-side; the sender then receives a separate
+ * sweep-style tx from the tip address. The actual sweep is
+ * backend-driven for XMR/WOW/Grin (LWS / kernel-aware) and a
+ * client-side sweep for BTC/LTC.
+ */
+function SentTipsRoute({
+  wallet,
+  onBack,
+}: {
+  wallet: UnlockedWallet;
+  onBack: () => void;
+}) {
+  const [rows, setRows] = useState<SentTipRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  const load = async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const [serverResp, backups] = await Promise.all([
+        api.getSentSocialTips(),
+        listTipKeyBackups(),
+      ]);
+      const backupIds = new Set(backups.map((b) => b.tipId));
+      const serverRows: SentTipRow[] = serverResp.data?.tips
+        ? serverResp.data.tips.map((t) => ({
+            id: t.id,
+            asset: t.asset,
+            amount: t.amount,
+            recipientPlatform: t.recipient_platform,
+            recipientUsername: t.recipient_username,
+            isPublic: t.is_public,
+            status: t.status,
+            createdAt: t.created_at,
+            fundingConfirmations: t.funding_confirmations,
+            confirmationsRequired: t.confirmations_required,
+            hasLocalBackup: backupIds.has(t.id),
+          }))
+        : [];
+
+      // Backups that exist locally but NOT on the server are the
+      // "backend lost the row" scenario. Surface them as synthetic
+      // rows so the user can still see the funds need recovery.
+      const serverIds = new Set(serverRows.map((r) => r.id));
+      const orphanRows: SentTipRow[] = backups
+        .filter((b) => !serverIds.has(b.tipId))
+        .map((b) => ({
+          id: b.tipId,
+          asset: b.asset,
+          amount: b.amount,
+          recipientPlatform: null,
+          recipientUsername: null,
+          isPublic: b.isPublic,
+          status: 'pending', // closest match; user can clawback
+          createdAt: new Date(b.createdAt).toISOString(),
+          fundingConfirmations: 0,
+          confirmationsRequired: 0,
+          hasLocalBackup: true,
+        }));
+
+      setRows([...serverRows, ...orphanRows]);
+      if (serverResp.error) setError(serverResp.error);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <SentTipsScreen
+      rows={rows}
+      loading={loading}
+      {...(error ? { error } : {})}
+      onBack={onBack}
+      onRefresh={load}
+      onClawback={async (tipId) => {
+        const r = await api.clawbackSocialTip(tipId);
+        if (r.error || !r.data) {
+          return { ok: false, error: r.error ?? 'Clawback failed' };
+        }
+        // Local backup is no longer needed after a successful clawback.
+        await removeTipKeyBackup(tipId);
+        return { ok: true };
+      }}
+      onDiscardDraft={async (tipId) => {
+        const r = await api.cancelSocialTip(tipId);
+        if (r.error || !r.data) {
+          return { ok: false, error: r.error ?? 'Discard failed' };
+        }
+        await removeTipKeyBackup(tipId);
+        return { ok: true };
+      }}
+      resolveIcon={resolveIcon}
+    />
+  );
+  // Wallet ref is currently unused at the route level — the backend
+  // owns clawback execution per-chain (LWS for XMR/WOW, Electrum for
+  // BTC/LTC, grin node for Grin). Reserved for future client-side
+  // sweep flows that need the spend key.
+  void wallet;
+}
+
 function AssetDetailRoute({
   assetId,
   wallet,

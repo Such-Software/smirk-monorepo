@@ -46,6 +46,22 @@ import {
 import type { TipPlatform, TipSubmitFields, TipSubmitOutcome } from '@smirk/ui';
 import { grin as wasmGrin } from '@smirk/wasm';
 import { send } from './send-handler';
+import { storeTipKeyBackup } from './tip-key-backup';
+
+/** Broadcast metadata the shell needs to record a `pendingOutgoing`
+ *  entry for instant balance feedback. Shape matches
+ *  `PendingOutgoingTx` in @smirk/core. Fired immediately after a
+ *  successful on-chain broadcast, BEFORE the backend attach-funding
+ *  call — so even if attach fails the sender sees the deduction. */
+export interface TipBroadcastEvent {
+  assetId: string;
+  txid: string;
+  amountAtomic: bigint;
+  feeAtomic: bigint;
+  recipient: string;
+  inputs?: string[];
+  inputsTotalAtomic?: bigint;
+}
 
 /**
  * Top-level dispatcher. Branches by asset, delegates to per-asset
@@ -58,17 +74,27 @@ export async function dispatchSocialTip(args: {
    *  endpoint that ties tips to the authenticated user. */
   senderUserId: string;
   fields: TipSubmitFields;
+  /** Shell-provided sink for broadcast metadata. Called once per
+   *  successful on-chain broadcast so the popup can write a
+   *  `pendingOutgoing` entry — sender's balance reflects the
+   *  deduction immediately instead of waiting for LWS / Electrum to
+   *  reflect. Matches v0.2.4 `addPendingTx` behavior for XMR/WOW
+   *  (which the v0.3 port silently dropped). */
+  onBroadcast?: (e: TipBroadcastEvent) => void | Promise<void>;
 }): Promise<TipSubmitOutcome> {
-  const { wallet, fields } = args;
+  const { wallet, fields, onBroadcast } = args;
 
   try {
     if (fields.assetId === 'btc' || fields.assetId === 'ltc') {
-      return await createBtcLtcTip(wallet, fields);
+      return await createBtcLtcTip(wallet, fields, onBroadcast);
     }
     if (fields.assetId === 'xmr' || fields.assetId === 'wow') {
-      return await createXmrWowTip(wallet, args.senderUserId, fields);
+      return await createXmrWowTip(wallet, args.senderUserId, fields, onBroadcast);
     }
     if (fields.assetId === 'grin') {
+      // Grin tracks pending balance via `lockGrinOutputs` (called
+      // inside createGrinTip), not via pendingOutgoing. No onBroadcast
+      // wiring needed.
       return await createGrinTip(wallet, args.senderUserId, fields);
     }
     return {
@@ -90,6 +116,7 @@ export async function dispatchSocialTip(args: {
 async function createBtcLtcTip(
   wallet: UnlockedWallet,
   fields: TipSubmitFields,
+  onBroadcast?: (e: TipBroadcastEvent) => void | Promise<void>,
 ): Promise<TipSubmitOutcome> {
   const asset = fields.assetId as 'btc' | 'ltc';
 
@@ -143,6 +170,20 @@ async function createBtcLtcTip(
   }
   const tipId = draft.data.tip_id;
 
+  // 4a. Third-layer backup: encrypt the tip private key with the
+  //     wallet's BTC key and stash in chrome.storage.local. Recovery
+  //     path if the backend ever loses the row (no DB backups
+  //     configured as of 2026-05-24).
+  await storeTipKeyBackup({
+    tipId,
+    asset,
+    tipAddress,
+    amount: Number(fields.amountAtomic),
+    isPublic: fields.isPublic,
+    keyMaterial: tipPrivateKey,
+    btcPrivateKey: wallet.keys.btc.privateKey,
+  });
+
   // 5. Estimate fee. We use the `normal` tier; users wanting custom
   //    fee control should use Send (not Tip).
   const feeRates = await api.estimateFee(asset);
@@ -168,6 +209,23 @@ async function createBtcLtcTip(
   if (!sendResult.ok) {
     await api.cancelSocialTip(tipId).catch(() => undefined);
     return { ok: false, error: sendResult.error };
+  }
+
+  // 6a. Fire onBroadcast so the shell records a pendingOutgoing entry
+  //     BEFORE we try to attach-funding. Even if attach-funding fails,
+  //     the sender's balance reflects the deduction immediately.
+  if (onBroadcast) {
+    await onBroadcast({
+      assetId: asset,
+      txid: sendResult.txid,
+      amountAtomic: fields.amountAtomic,
+      feeAtomic: sendResult.feeAtomic ?? 0n,
+      recipient: tipAddress,
+      ...(sendResult.inputs ? { inputs: sendResult.inputs } : {}),
+      ...(sendResult.inputsTotalAtomic !== undefined
+        ? { inputsTotalAtomic: sendResult.inputsTotalAtomic }
+        : {}),
+    });
   }
 
   // 7. Phase 2: attach the broadcast txid to the draft. Retryable
@@ -297,6 +355,7 @@ async function createXmrWowTip(
   wallet: UnlockedWallet,
   senderUserId: string,
   fields: TipSubmitFields,
+  onBroadcast?: (e: TipBroadcastEvent) => void | Promise<void>,
 ): Promise<TipSubmitOutcome> {
   const asset = fields.assetId as 'xmr' | 'wow';
 
@@ -344,6 +403,18 @@ async function createXmrWowTip(
   }
   const tipId = draft.data.tip_id;
 
+  // 4a. Third-layer backup of the spend key (encrypted with
+  //     wallet.keys.btc.privateKey). See tip-key-backup.ts header.
+  await storeTipKeyBackup({
+    tipId,
+    asset,
+    tipAddress: tipKeys.address,
+    amount: Number(fields.amountAtomic),
+    isPublic: fields.isPublic,
+    keyMaterial: tipKeys.spendKey,
+    btcPrivateKey: wallet.keys.btc.privateKey,
+  });
+
   // 5. (Skipped — `senderUserId` previously used for `api.registerLws`
   //    here; backend now registers LWS as part of the attach-funding
   //    side-effects so we don't double-register. Discard unused arg.)
@@ -362,6 +433,25 @@ async function createXmrWowTip(
   if (!sendResult.ok) {
     await api.cancelSocialTip(tipId).catch(() => undefined);
     return { ok: false, error: sendResult.error };
+  }
+
+  // 6a. Fire onBroadcast for instant balance feedback. Mirrors v0.2.4's
+  //     `addPendingTx` for XMR/WOW — the v0.3 port dropped this and
+  //     senders saw zero deduction until LWS reflected the spend
+  //     (~1-2 minutes). Fires BEFORE attach-funding so even an
+  //     attach-funding failure surfaces the correct sender balance.
+  if (onBroadcast) {
+    await onBroadcast({
+      assetId: asset,
+      txid: sendResult.txid,
+      amountAtomic: fields.amountAtomic,
+      feeAtomic: sendResult.feeAtomic ?? 0n,
+      recipient: tipKeys.address,
+      ...(sendResult.inputs ? { inputs: sendResult.inputs } : {}),
+      ...(sendResult.inputsTotalAtomic !== undefined
+        ? { inputsTotalAtomic: sendResult.inputsTotalAtomic }
+        : {}),
+    });
   }
 
   // 7. Phase 2 — attach the broadcast txid. Retryable server-side; if
@@ -627,6 +717,21 @@ async function createGrinTip(
     };
   }
   const tipId = draft.data.tip_id;
+
+  // 7a. Third-layer backup: encrypt the full voucher JSON bundle
+  //     (blind + commitment + proof + n_child + amount + features)
+  //     with the wallet's BTC key and stash locally. For Grin the
+  //     "spend key" is the blinding factor; without all of these
+  //     fields the recipient can't sweep, so we store the whole bundle.
+  await storeTipKeyBackup({
+    tipId,
+    asset: 'grin',
+    tipAddress: voucherResult.voucher.commitment_hex,
+    amount: voucherAmount,
+    isPublic: fields.isPublic,
+    keyMaterial: voucherDataBytes,
+    btcPrivateKey: wallet.keys.btc.privateKey,
+  });
 
   // 8. Record the on-chain tx + lock inputs (Grin-side bookkeeping).
   //    Different from the broader two-phase tip flow — this is the

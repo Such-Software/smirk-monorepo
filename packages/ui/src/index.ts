@@ -55,6 +55,8 @@ export type {
   AssetDetailTxRow,
   SparklinePoint,
 } from './components/AssetDetailScreen';
+export { SentTipsScreen } from './components/SentTipsScreen';
+export type { SentTipRow, SentTipsScreenProps } from './components/SentTipsScreen';
 
 export { UnifiedBalance, HomeActionRow } from './components/UnifiedBalance';
 export type {
