@@ -49,6 +49,12 @@ export type { AssetIconProps } from './components/AssetIcon';
 
 export { BalanceCard } from './components/BalanceCard';
 export type { BalanceCardProps } from './components/BalanceCard';
+export { AssetDetailScreen } from './components/AssetDetailScreen';
+export type {
+  AssetDetailScreenProps,
+  AssetDetailTxRow,
+  SparklinePoint,
+} from './components/AssetDetailScreen';
 
 export { UnifiedBalance, HomeActionRow } from './components/UnifiedBalance';
 export type {

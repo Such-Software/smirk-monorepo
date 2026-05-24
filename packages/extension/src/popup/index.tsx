@@ -47,6 +47,7 @@ import {
 } from '@smirk/core';
 import {
   AppShell,
+  AssetDetailScreen,
   GrinPasteIncomingWizard,
   GrinPayInvoiceWizard,
   GrinRequestWizard,
@@ -64,8 +65,10 @@ import {
   listThemes,
   useRoute,
   useSessionState,
+  type AssetDetailTxRow,
   type InboxItem,
   type RecentRecipient,
+  type SparklinePoint,
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { send } from './send-handler';
@@ -1036,6 +1039,26 @@ function HomeRouter({
     );
   }
 
+  // Asset detail drill-down — tapping a coin row on Home lands here.
+  // Pulls per-chain history + sparkline; renders BalanceCard + sparkline
+  // + action row + activity list. Per-chain shape adapters live in
+  // `loadAssetHistory` below.
+  if (route.current.startsWith('home/asset/')) {
+    const drilldownAssetId = route.current.substring('home/asset/'.length);
+    return (
+      <AssetDetailRoute
+        assetId={drilldownAssetId}
+        wallet={wallet}
+        session={session}
+        onBack={() => void navigate('home')}
+        onSend={() => void navigate('home/send')}
+        onReceive={() => void navigate('home/receive')}
+        onTip={() => void navigate('home/tip')}
+        resolveIcon={resolveIcon}
+      />
+    );
+  }
+
   if (route.current === 'home/receive/grin-request') {
     return (
       <GrinRequestWizard
@@ -1963,11 +1986,204 @@ function SwapStub() {
     <div>
       <h2 style={{ fontSize: 16, marginTop: 0 }}>Swap</h2>
       <p class="muted" style={{ fontSize: 12 }}>
-        Aggregator (THORChain) vs Native (P2P) sub-toggle lands when the THORChain
-        prototype work begins. `@smirk/swap` interface is scaffolded.
+        CEX (Trocador aggregator) launches in v0.3.0. DEX (native atomic
+        swaps via adaptor signatures) lights up in v0.4. See V0_3_PLAN.md
+        Decision 2.
       </p>
     </div>
   );
+}
+
+/**
+ * Asset-detail route. Pulls per-chain history + sparkline, normalizes
+ * into AssetDetailTxRow, hands off to the @smirk/ui presentational
+ * component. Per-chain adapters live in `loadAssetHistory` below.
+ */
+function AssetDetailRoute({
+  assetId,
+  wallet,
+  session,
+  onBack,
+  onSend,
+  onReceive,
+  onTip,
+  resolveIcon,
+}: {
+  assetId: string;
+  wallet: UnlockedWallet;
+  session: WalletSession | null;
+  onBack: () => void;
+  onSend: () => void;
+  onReceive: () => void;
+  onTip: () => void;
+  resolveIcon: (key: string) => string | undefined;
+}) {
+  const [history, setHistory] = useState<AssetDetailTxRow[]>([]);
+  const [sparkline, setSparkline] = useState<SparklinePoint | undefined>(
+    undefined,
+  );
+  const [loading, setLoading] = useState(true);
+  const balance = session?.balances?.[assetId];
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setHistory([]);
+    setSparkline(undefined);
+    void (async () => {
+      const [rows, spark] = await Promise.all([
+        loadAssetHistory(assetId, wallet, session?.bootstrap?.userId).catch(
+          (e) => {
+            console.warn('[asset-detail] history failed:', e);
+            return [] as AssetDetailTxRow[];
+          },
+        ),
+        api.getSparkline(assetId).then(
+          (r) =>
+            r.data
+              ? ({
+                  prices: r.data.prices,
+                  min: r.data.min,
+                  max: r.data.max,
+                  changePct: r.data.change_pct,
+                } as SparklinePoint)
+              : undefined,
+          () => undefined,
+        ),
+      ]);
+      if (!alive) return;
+      setHistory(rows);
+      setSparkline(spark);
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [assetId, wallet, session?.bootstrap?.userId]);
+
+  return (
+    <AssetDetailScreen
+      assetId={assetId}
+      balanceAtomic={balance?.confirmed ?? 0n}
+      {...(balance?.pending !== undefined && balance.pending > 0n
+        ? { pendingAtomic: balance.pending }
+        : {})}
+      {...(balance?.locked !== undefined && balance.locked > 0n
+        ? { lockedAtomic: balance.locked }
+        : {})}
+      {...(sparkline ? { sparkline } : {})}
+      history={history}
+      loading={loading}
+      onBack={onBack}
+      onSend={onSend}
+      onReceive={onReceive}
+      onTip={onTip}
+      onOpenExplorer={(row) => {
+        const url = explorerUrlForRow(assetId, row);
+        if (url) window.open(url, '_blank', 'noopener,noreferrer');
+      }}
+      resolveIcon={resolveIcon}
+    />
+  );
+}
+
+/**
+ * Per-chain adapter. Pulls from whichever history endpoint the asset's
+ * family supports, normalizes to the AssetDetailTxRow shape the UI
+ * component renders.
+ */
+async function loadAssetHistory(
+  assetId: string,
+  wallet: UnlockedWallet,
+  userId: string | undefined,
+): Promise<AssetDetailTxRow[]> {
+  if (assetId === 'btc' || assetId === 'ltc') {
+    const addr = wallet.addresses[assetId];
+    if (!addr) return [];
+    const r = await api.getHistory(assetId, addr);
+    if (r.error || !r.data) return [];
+    return r.data.transactions.map(
+      (t): AssetDetailTxRow => ({
+        kind: 'utxo',
+        // Electrum returns total_received / total_sent in atomic units.
+        // direction is whichever is non-zero; amount is the absolute value.
+        direction: (t.total_received ?? 0) > 0 ? 'in' : 'out',
+        amountAtomic: BigInt(
+          (t.total_received ?? 0) > 0
+            ? (t.total_received ?? 0)
+            : (t.total_sent ?? 0),
+        ),
+        txid: t.txid,
+        heightOrPending: t.height > 0 ? t.height : 'pending',
+        ...(t.fee !== undefined ? { feeAtomic: BigInt(t.fee) } : {}),
+      }),
+    );
+  }
+  if (assetId === 'xmr' || assetId === 'wow') {
+    const addr = wallet.addresses[assetId];
+    const viewKeyHex = bytesToHex(wallet.keys[assetId].privateViewKey);
+    if (!addr) return [];
+    const r = await api.getLwsHistory(assetId, addr, viewKeyHex);
+    if (r.error || !r.data) return [];
+    return r.data.transactions.map(
+      (t): AssetDetailTxRow => ({
+        kind: 'cryptonote',
+        // total_received > 0 means we received; spent_outputs presence
+        // means we sent. LWS rows can be both (change), in which case
+        // direction = 'in' if net is positive, else 'out'.
+        direction: t.total_received > 0 ? 'in' : 'out',
+        amountAtomic: BigInt(
+          t.total_received > 0
+            ? t.total_received
+            : t.spent_outputs.reduce((s, o) => s + o.amount, 0),
+        ),
+        txid: t.txid,
+        heightOrPending: t.is_pending ? 'pending' : t.height,
+        timestamp: t.timestamp,
+      }),
+    );
+  }
+  if (assetId === 'grin') {
+    if (!userId) return [];
+    const r = await api.getGrinUserHistory(userId);
+    if (r.error || !r.data) return [];
+    return r.data.transactions.map(
+      (t): AssetDetailTxRow => ({
+        kind: 'grin',
+        direction: t.direction === 'receive' ? 'in' : 'out',
+        amountAtomic: BigInt(t.amount),
+        feeAtomic: BigInt(t.fee),
+        kernelExcess: t.kernel_excess,
+        slateId: t.slate_id,
+        status: t.status,
+        timestamp: t.created_at,
+      }),
+    );
+  }
+  return [];
+}
+
+/**
+ * Build the explorer URL for a tap on a tx row. Mirrors the explorer
+ * lookup in `SendWizard.tsx` — duplicated here because the row union
+ * is shaped differently from the Done-step txid string.
+ */
+function explorerUrlForRow(
+  assetId: string,
+  row: AssetDetailTxRow,
+): string | null {
+  if (row.kind === 'utxo') {
+    if (assetId === 'btc') return `https://mempool.space/tx/${row.txid}`;
+    if (assetId === 'ltc') return `https://litecoinspace.org/tx/${row.txid}`;
+  }
+  if (row.kind === 'cryptonote') {
+    if (assetId === 'xmr') return `https://xmrchain.net/tx/${row.txid}`;
+    if (assetId === 'wow') return `https://explore.wownero.com/tx/${row.txid}`;
+  }
+  if (row.kind === 'grin' && row.kernelExcess) {
+    return `https://grincoin.org/kernel/${row.kernelExcess}`;
+  }
+  return null;
 }
 
 function InboxRouter({
