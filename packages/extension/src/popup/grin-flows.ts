@@ -457,7 +457,9 @@ export async function startGrinSend(args: {
     amount: args.amount,
     fee,
     direction: 'send',
-    counterpartyAddress: args.recipientSlatepackAddress,
+    ...(args.recipientSlatepackAddress
+      ? { counterpartyAddress: args.recipientSlatepackAddress }
+      : {}),
   });
   await api.lockGrinOutputs({
     userId: args.userId,
@@ -572,7 +574,11 @@ export async function processGrinS2(args: {
     // broadcast since 2026-04-28 was a no-op. tx_json comes from
     // grin-ext's slate_to_transaction_json and matches grin_core's
     // Transaction serde shape verbatim.
-    tx: finalize.tx_json,
+    // wasm types this as `unknown` (parsed via JSON.parse without a
+    // schema); the wasm Rust side always emits a JSON object literal,
+    // so the narrowing here is safe — `tx_json` is the Grin
+    // Transaction body in serde shape, never a primitive.
+    tx: finalize.tx_json as object,
     ...(args.change_output
       ? {
           changeOutput: {
@@ -870,7 +876,11 @@ export async function processGrinI2(args: {
     // wire-format hex. tx_json comes from grin-ext's
     // slate_to_transaction_json and matches grin_core's Transaction
     // serde shape verbatim.
-    tx: finalize.tx_json,
+    // wasm types this as `unknown` (parsed via JSON.parse without a
+    // schema); the wasm Rust side always emits a JSON object literal,
+    // so the narrowing here is safe — `tx_json` is the Grin
+    // Transaction body in serde shape, never a primitive.
+    tx: finalize.tx_json as object,
   });
   // See parallel comment in processGrinS2 — bail on error so the tx
   // stays "pending" / cancellable instead of getting wrongly stamped
