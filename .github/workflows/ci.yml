@@ -123,6 +123,11 @@ jobs:
           npm run build -w @smirk/assets
           npm run build -w @smirk/core
           npm run build -w @smirk/ui
+          # dapp-api: transport-agnostic types + wallet-handler. No
+          # deps on the other packages; only @smirk/extension imports
+          # it. Must build before @smirk/extension so the workspace
+          # symlink has a populated dist/.
+          npm run build -w @smirk/dapp-api
           npm run build -w @smirk/extension
 
       - name: Typecheck workspace

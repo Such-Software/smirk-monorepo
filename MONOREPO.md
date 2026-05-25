@@ -120,20 +120,23 @@ See [docs/UI_DESIGN.md](docs/UI_DESIGN.md) Principle 6 for the design rationale 
 
 ### `packages/extension/` — `@smirk/extension`
 
-Browser extension shell (Chrome MV3 + Firefox), Vite + Preact. Currently a **skeleton** — proves the build pipeline (Vite → `@smirk/core` + `@smirk/wasm` → loadable extension) works, with the substantive popup/background/content code migrating in from [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) over multiple commits.
+Browser extension (Chrome MV3 + Firefox), Vite + Preact. The canonical v0.3 Smirk wallet on browsers — full wallet flows (create/import/unlock, per-asset send/receive for BTC/LTC/XMR/WOW/Grin, social tipping with two-phase create + client-side backup, per-asset detail screens, dapp `window.smirk` injection with a privacy-toggle in Settings). See [packages/extension/README.md](packages/extension/README.md) for the current scope table and architecture notes.
 
 ```bash
 make ext-chrome   # builds packages/extension/dist/  (load as unpacked Chrome extension)
 make ext-firefox  # same dist/, but with Firefox manifest
 ```
 
-The vite config at `packages/extension/vite.config.ts` copies the WASM bundle from `crates/smirk-wasm/pkg/` into `dist/wasm/` so the MV3 service worker can `fetch()` it at runtime. Run `make wasm` first if you haven't built the WASM bundle yet.
+The vite config at `packages/extension/vite.config.ts` copies the WASM bundle from `crates/smirk-wasm/pkg/` into `dist/wasm/` so the MV3 service worker can `fetch()` it at runtime, and bundles `src/content/index.ts` + `src/inject/index.ts` as standalone IIFEs (Chrome content/page scripts can't import ES modules). Run `make wasm` first if you haven't built the WASM bundle yet.
+
+### `packages/dapp-api/` — `@smirk/dapp-api`
+
+Transport-agnostic dapp injection layer. Wire protocol (JSON-RPC-shaped envelope), `WalletHandler` dispatcher, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. The extension wires platform-specific adapters (`chrome.runtime.sendMessage`, `chrome.windows.create` for approvals, `chrome.storage.local` for permissions); future Capacitor mobile + Tauri desktop builds will swap in their own adapters around the same handler.
 
 ### Planned (not yet populated)
 
-- `packages/ui/` — shared Preact components used by extension + mobile + desktop
-- `packages/mobile/` — Capacitor app (iOS + Android)
-- `packages/desktop/` — Tauri app (Win/Mac/Linux)
+- `packages/mobile/` — Capacitor app (iOS + Android), v0.4
+- `packages/desktop/` — Tauri app (Win/Mac/Linux), v0.5+
 
 ## Git subtree workflow
 

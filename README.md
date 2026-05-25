@@ -15,9 +15,10 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `packages/wasm/` | Working — `@smirk/wasm` TS bindings around the WASM crypto bundle (BTC PSBT, XMR/WOW signing, full Grin surface incl. wallet orchestrators) |
 | `packages/core/` | Working — shared TS lib (API client, crypto, BIP-137 signing, address codecs, HD derivation, session-state + wizard scaffold, pendingOutgoing reconciliation, wallet-flow composition) |
 | `packages/assets/` | Working — `@smirk/assets` registry: pure-data definitions (decimals, family, capabilities, networks) for every chain Smirk supports. 44 unit tests. |
-| `packages/ui/` | Working — `@smirk/ui` shared Preact components: Home (UnifiedBalance, BalanceCard, ActionRow), SendWizard (5 assets incl. Grin interactive Exchange step), GrinRequestWizard, ReceiveScreen, OnboardingWizard, LockScreen, AppShell + BottomNav, theme registry (7 themes incl. retro themes) |
-| `packages/extension/` | Working — Chrome MV3 + Firefox MV3 shell. Keystore, wallet-flow, lockscreen, send (real BTC/LTC/XMR/WOW/Grin), receive, settings, tri-state balance (confirmed/pending/locked) with pendingOutgoing reconciliation |
-| `packages/mobile/` `packages/desktop/` | Not yet populated — Capacitor + Tauri shells planned v0.3 / v0.4+ |
+| `packages/ui/` | Working — `@smirk/ui` shared Preact components: Home (UnifiedBalance, BalanceCard, ActionRow), SendWizard (5 assets incl. Grin interactive Exchange step), GrinRequestWizard, ReceiveScreen, OnboardingWizard, LockScreen, AppShell + BottomNav, ApprovalScreen (dapp prompt UI), theme registry (7 themes incl. retro themes) |
+| `packages/dapp-api/` | Working — `@smirk/dapp-api` transport-agnostic dapp injection: wire protocol, `WalletHandler` dispatcher, page-context `window.smirk` factory, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. Platform adapters live in `packages/extension/` (and eventually mobile / desktop). |
+| `packages/extension/` | Working — Chrome MV3 + Firefox MV3. Keystore + wallet-flow + lockscreen, send (BTC/LTC/XMR/WOW/Grin), receive, social tipping (two-phase create), per-asset detail screen, tri-state balance (confirmed/pending/locked), pendingOutgoing reconciliation. `window.smirk` dapp injection (connect, signMessage for BTC+LTC, isConnected, disconnect, getPublicKeys, getAddresses) with per-origin permissions + standalone approval-window flow + global privacy toggle in Settings. |
+| `packages/mobile/` `packages/desktop/` | Not yet populated — Capacitor planned v0.4, Tauri v0.5+ |
 
 The legacy browser extension at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) is frozen at v0.2.x; `packages/extension/` here is the canonical v0.3+ client.
 
@@ -37,8 +38,9 @@ smirk-monorepo/
 │   ├── wasm/                 # @smirk/wasm — TS bindings around crates/smirk-wasm/pkg/
 │   ├── core/                 # @smirk/core — API client, crypto, HD derivation, codecs
 │   ├── assets/               # @smirk/assets — pure-data registry of every supported chain
-│   ├── ui/                   # @smirk/ui — shared Preact components (BalanceCard, ActionButton, ...)
-│   └── extension/            # @smirk/extension — Chrome MV3 + Firefox shell (skeleton)
+│   ├── ui/                   # @smirk/ui — shared Preact components (BalanceCard, ActionButton, ApprovalScreen, ...)
+│   ├── dapp-api/             # @smirk/dapp-api — transport-agnostic window.smirk wire protocol + WalletHandler
+│   └── extension/            # @smirk/extension — Chrome MV3 + Firefox
 ├── docs/                     # design notes per crate
 ├── Cargo.toml                # flat Rust workspace, all crates listed at root
 ├── package.json              # npm workspace root
@@ -82,7 +84,7 @@ For reviewers (Mozilla AMO, App Store, security audits) the goal is `git clone �
 
 | Repo | Role |
 |---|---|
-| [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) | Browser extension (active production target until the TS migration lands here) |
+| [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) | Legacy v0.2.x browser extension. Frozen — `packages/extension/` here is the canonical v0.3+ client. |
 | [Such-Software/monero-oxide](https://github.com/Such-Software/monero-oxide) | Standalone fork retained for `wownero-*` crates.io publishing; kept in sync with this monorepo via `git subtree` |
 | [monero-oxide/monero-oxide](https://github.com/monero-oxide/monero-oxide) | Upstream — Monero only |
 

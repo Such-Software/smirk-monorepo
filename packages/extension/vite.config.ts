@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import { copyFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'fs';
+import { buildSync } from 'esbuild';
 
 /**
  * Recursively copy a directory.
@@ -16,6 +17,61 @@ function copyDirRecursive(src: string, dest: string) {
       copyFileSync(srcPath, destPath);
     }
   }
+}
+
+/**
+ * Bundle content.ts and inject.ts as standalone IIFE scripts.
+ *
+ * Chrome MV3 content scripts and `<script src=...>`-injected page
+ * scripts are classic scripts — they CAN'T import ES modules. The
+ * popup + background can use the regular Vite/Rollup ES-module
+ * pipeline, but these two entries need a separate single-file IIFE
+ * bundle each. We invoke esbuild directly (already a Vite transitive
+ * dep) from a Vite plugin hook so the whole extension build is still
+ * one `vite build` invocation.
+ *
+ * **Why not just add them to rollupOptions.input?** Vite/Rollup
+ * support per-output formats but not per-entry formats in a single
+ * build — adding them would either force the whole bundle to IIFE
+ * (breaks popup chunking) or leak ES-module syntax into content.js.
+ * A side esbuild call is the path of least breakage.
+ */
+function bundleClassicScripts() {
+  return {
+    name: 'bundle-classic-scripts',
+    writeBundle() {
+      const targets: Array<{ entry: string; outfile: string }> = [
+        { entry: 'src/content/index.ts', outfile: 'dist/content.js' },
+        { entry: 'src/inject/index.ts', outfile: 'dist/inject.js' },
+      ];
+      for (const t of targets) {
+        try {
+          buildSync({
+            entryPoints: [t.entry],
+            outfile: t.outfile,
+            bundle: true,
+            format: 'iife',
+            platform: 'browser',
+            target: 'chrome100',
+            // Inject.js may end up in a CSP-restricted page — keep it
+            // small and dependency-free. Same for content.js (runs in
+            // every page's content-script world). Minify mostly for
+            // size, not obfuscation.
+            minify: true,
+            // Resolve workspace imports (`@smirk/dapp-api`) via Node
+            // resolution from the extension package root.
+            absWorkingDir: resolve(__dirname),
+          });
+        } catch (e) {
+          console.error(
+            `[bundle-classic-scripts] failed to bundle ${t.entry}:`,
+            e,
+          );
+          throw e;
+        }
+      }
+    },
+  };
 }
 
 /**
@@ -85,7 +141,7 @@ export default defineConfig({
       },
     },
   },
-  plugins: [copyMonorepoAssets()],
+  plugins: [bundleClassicScripts(), copyMonorepoAssets()],
   esbuild: {
     jsx: 'automatic',
     jsxImportSource: 'preact',

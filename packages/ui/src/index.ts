@@ -113,6 +113,15 @@ export type { OnboardingWizardProps } from './components/OnboardingWizard';
 export { LockScreen } from './components/LockScreen';
 export type { LockScreenProps } from './components/LockScreen';
 
+export { ApprovalScreen } from './components/ApprovalScreen';
+export type {
+  ApprovalScreenProps,
+  ApprovalRequest,
+  ApprovalApproval,
+  ApprovalOrigin,
+  ApprovalAsset,
+} from './components/ApprovalScreen';
+
 export { TipMaker } from './components/TipMaker';
 export type {
   TipMakerProps,

@@ -47,6 +47,7 @@ import {
 } from '@smirk/core';
 import {
   AppShell,
+  ApprovalScreen,
   AssetDetailScreen,
   GrinPasteIncomingWizard,
   GrinPayInvoiceWizard,
@@ -65,6 +66,8 @@ import {
   listThemes,
   useRoute,
   useSessionState,
+  type ApprovalRequest as UiApprovalRequest,
+  type ApprovalApproval,
   type AssetDetailTxRow,
   type InboxItem,
   type RecentRecipient,
@@ -86,6 +89,20 @@ import {
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
 import { listTipKeyBackups, removeTipKeyBackup } from './tip-key-backup';
+import {
+  writeDappPublicCache,
+  clearDappPublicCache,
+  type DappPublicCache,
+} from '../background/dapp/provider';
+import { approvalPopupBridge, type PendingApproval } from '../background/dapp/approval';
+import { isInjectDisabled, setInjectDisabled } from '../background/dapp/inject-policy';
+import type {
+  ApprovalResult as DappApprovalResult,
+  SmirkAddresses,
+  SmirkPublicKeys,
+  SmirkSignResult,
+} from '@smirk/dapp-api';
+import { signBitcoinMessage, signEd25519WithScalar } from '@smirk/core';
 import {
   initialize as initSmirkWasm,
   monero as wasmMonero,
@@ -225,6 +242,40 @@ function bytesToHex(b: Uint8Array): string {
   return Array.from(b)
     .map((x) => x.toString(16).padStart(2, '0'))
     .join('');
+}
+
+/**
+ * Project an `UnlockedWallet` into the public-material shape the
+ * background SW reads when servicing dapp `getPublicKeys` /
+ * `getAddresses` calls. Public material only — no private bytes
+ * leave this function. Written into `chrome.storage.local` on every
+ * unlock transition; cleared on lock / destroy.
+ */
+function dappPublicCacheFor(wallet: UnlockedWallet): DappPublicCache {
+  const publicKeys: SmirkPublicKeys = {
+    btc: bytesToHex(wallet.keys.btc.publicKey),
+    ltc: bytesToHex(wallet.keys.ltc.publicKey),
+    // CryptoNote: dapps that need to verify "this address corresponds
+    // to that pubkey" use the public *spend* key, the same field
+    // bootstrapAuth sends to the backend's key-list (see
+    // `wallet-flow.ts buildKeysList`).
+    xmr: bytesToHex(wallet.keys.xmr.publicSpendKey),
+    wow: bytesToHex(wallet.keys.wow.publicSpendKey),
+    grin: bytesToHex(wallet.keys.grin.publicKey),
+  };
+  const addresses: SmirkAddresses = {
+    btc: wallet.addresses.btc,
+    ltc: wallet.addresses.ltc,
+    xmr: wallet.addresses.xmr,
+    wow: wallet.addresses.wow,
+    grin: wallet.addresses.grin,
+  };
+  return {
+    fingerprint: wallet.fingerprint,
+    addresses,
+    publicKeys,
+    unlockedAt: Date.now(),
+  };
 }
 
 /**
@@ -626,6 +677,18 @@ function App() {
     }
   }, [walletState, session]);
 
+  // Mirror the unlocked wallet's public material into a shared
+  // `chrome.storage.local` cache so the background SW can answer
+  // dapp `getPublicKeys` / `getAddresses` calls without holding
+  // any secret state. Cleared on every transition out of unlocked.
+  useEffect(() => {
+    if (walletState?.kind === 'unlocked') {
+      void writeDappPublicCache(dappPublicCacheFor(walletState.wallet));
+    } else if (walletState) {
+      void clearDappPublicCache();
+    }
+  }, [walletState]);
+
   if (!walletState) {
     return (
       <div style={{ padding: '40px 16px', textAlign: 'center', opacity: 0.6 }}>
@@ -669,6 +732,7 @@ function App() {
   // walletState.kind === 'unlocked'
   const lockHandler = async () => {
     await sessionStorage.remove(SESSION_CACHE_KEY);
+    await clearDappPublicCache();
     await walletKeystore.lock();
     await refresh();
   };
@@ -729,6 +793,7 @@ function App() {
               onLock={lockHandler}
               onForgetComplete={async () => {
                 await sessionStorage.remove(SESSION_CACHE_KEY);
+                await clearDappPublicCache();
                 await walletKeystore.destroy();
                 await refresh();
               }}
@@ -2049,7 +2114,12 @@ function AssetDetailRoute({
   );
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
-  const balance = session?.balances?.[assetId];
+  // assetId arrives as a freeform string from the `home/asset/<id>`
+  // route segment. The router only ever navigates here with a valid
+  // SmirkAsset id (see `home/asset/${a.id}` in the asset list), but
+  // TS can't prove that across the route boundary. Narrow at the
+  // indexing site.
+  const balance = session?.balances?.[assetId as keyof typeof session.balances];
 
   useEffect(() => {
     let alive = true;
@@ -2476,6 +2546,19 @@ function SettingsStub({ onLock, onForgetComplete }: {
   const autoLockMinutes = sessionState.ui.autoLockMinutes ?? 0;
   const themeId = sessionState.ui.theme ?? 'default';
   const [forgetOpen, setForgetOpen] = useState(false);
+  // window.smirk injection toggle — closes the short-term ask in
+  // Such-Software/smirk-extension#1. Lives in chrome.storage.local
+  // (read directly by the content script at document_start) rather
+  // than the session-state store, so the toggle isn't gated on a
+  // JSON-blob parse on the hot path.
+  const [injectDisabled, setInjectDisabledState] = useState<boolean | null>(null);
+  useEffect(() => {
+    void isInjectDisabled().then(setInjectDisabledState);
+  }, []);
+  const toggleInjectDisabled = async (next: boolean) => {
+    await setInjectDisabled(next);
+    setInjectDisabledState(next);
+  };
 
   const setThemeId = async (next: string) => {
     await store.update((s) => {
@@ -2586,6 +2669,44 @@ function SettingsStub({ onLock, onForgetComplete }: {
             </option>
           ))}
         </select>
+      </section>
+
+      <section style={{ marginTop: 20 }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            fontSize: 13,
+            cursor: injectDisabled === null ? 'default' : 'pointer',
+            lineHeight: 1.35,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={injectDisabled === true}
+            disabled={injectDisabled === null}
+            onChange={(e) =>
+              void toggleInjectDisabled((e.target as HTMLInputElement).checked)
+            }
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            Disable <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>window.smirk</code> on websites
+          </span>
+        </label>
+        <p
+          style={{
+            fontSize: 11,
+            opacity: 0.55,
+            margin: '6px 0 0 24px',
+            lineHeight: 1.4,
+          }}
+        >
+          Prevents websites from detecting Smirk is installed. Breaks
+          dapp integrations (smirk.cash login, tip claims, etc.).
+          Takes effect on next page load for each tab.
+        </p>
       </section>
 
       <button
@@ -2793,5 +2914,262 @@ function ForgetWalletFlow({
   );
 }
 
+// ============================================================================
+// Approval mode — the SW opens us as a standalone popup window with URL
+// `popup.html#approval/<id>` when a dapp asks for user consent. We mount
+// `<ApprovalApp />` instead of the normal `<App />` in that case. Same
+// build, same wallet singletons, different UI.
+// ============================================================================
+
+/** Parse the approval id from `window.location.hash`, or null. */
+function parseApprovalId(): string | null {
+  const h = window.location.hash || '';
+  const m = h.match(/^#approval\/([A-Za-z0-9_-]+)/);
+  return m && m[1] ? m[1] : null;
+}
+
+interface ApprovalAppProps {
+  approvalId: string;
+}
+
+function ApprovalApp({ approvalId }: ApprovalAppProps) {
+  const [walletState, setWalletState] = useState<WalletState | null>(null);
+  const [pending, setPending] = useState<PendingApproval | null>(null);
+  const [missing, setMissing] = useState(false);
+
+  // Mirror the main App's theme bootstrap — without this the
+  // approval popup renders with NO `--smirk-*` CSS variables set,
+  // so ApprovalScreen's themed colors (asset-chip background,
+  // origin text contrast, etc.) all fall back to "undefined" and
+  // the popup looks like an unstyled white-on-black mess (the
+  // exact bug shown in the connect-prompt screenshot).
+  useEffect(() => {
+    const apply = (themeId: string) => {
+      applyTheme(getTheme(themeId) ?? defaultTheme);
+    };
+    void store.load().then((s) => apply(s.ui.theme ?? 'default'));
+    return store.subscribe((s) => apply(s.ui.theme ?? 'default'));
+  }, []);
+
+  const refresh = async () => {
+    await tryRestoreSessionCache();
+    const ks = await walletKeystore.getState();
+    setWalletState(ks);
+    const p = await approvalPopupBridge.readPending(approvalId);
+    if (!p) {
+      // SW already cleaned it up (race), or never wrote it. Show
+      // "no longer valid" and close shortly.
+      setMissing(true);
+      return;
+    }
+    setPending(p);
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  // Cache public material on unlock just like the main app does, so
+  // the SW provider stays consistent even if the user first unlocked
+  // inside an approval flow.
+  useEffect(() => {
+    if (walletState?.kind === 'unlocked') {
+      void writeDappPublicCache(dappPublicCacheFor(walletState.wallet));
+    }
+  }, [walletState]);
+
+  if (missing) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center', opacity: 0.7 }}>
+        This approval is no longer valid.
+        <div style={{ marginTop: 12 }}>
+          <button onClick={() => window.close()} style={{ padding: '6px 12px' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!walletState || !pending) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center', opacity: 0.6 }}>Loading…</div>
+    );
+  }
+
+  if (walletState.kind === 'empty') {
+    return (
+      <div style={{ padding: 24, textAlign: 'center', opacity: 0.7 }}>
+        No wallet — open Smirk to create one, then approve again.
+        <div style={{ marginTop: 12 }}>
+          <button onClick={() => window.close()} style={{ padding: '6px 12px' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (walletState.kind === 'locked') {
+    return (
+      <LockScreen
+        iconUrl={chrome.runtime.getURL('icons/icon-128.png')}
+        onUnlock={async (password) => {
+          const wallet = await walletKeystore.unlock(password);
+          const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
+          await writeSessionCache(wallet, minutes);
+          await refresh();
+        }}
+      />
+    );
+  }
+
+  const wallet = walletState.wallet;
+
+  const finish = async (result: DappApprovalResult) => {
+    await approvalPopupBridge.writeResult(approvalId, result);
+    // Give the SW a tick to pick up the storage change before the
+    // window disappears — chrome.storage.onChanged fires async.
+    setTimeout(() => window.close(), 50);
+  };
+
+  const handleApprove = async (approval: ApprovalApproval) => {
+    switch (approval.kind) {
+      case 'connect': {
+        await finish({
+          kind: 'connect',
+          approved: true,
+          approvedAssets: approval.approvedAssets,
+        });
+        return;
+      }
+      case 'signMessage': {
+        if (pending.request.kind !== 'signMessage') {
+          throw new Error('Pending request kind mismatch');
+        }
+        const result = signMessageInPopup(wallet, pending.request.message, pending.request.assets);
+        await finish({ kind: 'signMessage', approved: true, result });
+        return;
+      }
+      case 'requestPayment': {
+        // PHASE-2: wire to existing send-handler. For v0.3 dapp-api
+        // launch we only need connect + signMessage to unblock
+        // smirk.cash registration. Surface a clear error so a
+        // misconfigured dapp doesn't think the user denied.
+        throw new Error('requestPayment is not yet implemented in v0.3 dapp adapter');
+      }
+      case 'claimPublicTip': {
+        // PHASE-2: wire to tip-handler claim path.
+        throw new Error('claimPublicTip is not yet implemented in v0.3 dapp adapter');
+      }
+    }
+  };
+
+  // Translate the dapp-api ApprovalRequest into the UI's shape. They
+  // line up 1:1 by design — this is just a name-spaced cast that
+  // keeps the UI package decoupled from the protocol package.
+  const uiRequest = pending.request as unknown as UiApprovalRequest;
+
+  return (
+    <ApprovalScreen
+      request={uiRequest}
+      onApprove={handleApprove}
+      onDeny={() => void finish({ approved: false })}
+    />
+  );
+}
+
+/**
+ * Compute one signature per authorized asset. BTC/LTC use the
+ * canonical Bitcoin-message format (`signBitcoinMessage`); XMR/WOW
+ * sign the raw UTF-8 message bytes with their ed25519 private
+ * spend-key scalar; Grin signs with its slatepack ed25519 scalar.
+ * All ed25519 signatures go through `signEd25519WithScalar` because
+ * our keys are stored as raw scalars, not RFC-8032 seeds — passing
+ * them to `ed25519.sign` would re-clamp into a different scalar and
+ * yield signatures that don't verify against the public keys we
+ * actually publish.
+ *
+ * Per-asset failures are captured per-asset (empty signature string)
+ * rather than aborting the whole result — smirk.cash and similar
+ * dapps pick the signature for the asset the user chose, so one
+ * failing asset shouldn't kill the others.
+ */
+function signMessageInPopup(
+  wallet: UnlockedWallet,
+  message: string,
+  assets: Array<'btc' | 'ltc' | 'xmr' | 'wow' | 'grin'>,
+): SmirkSignResult {
+  const msgBytes = new TextEncoder().encode(message);
+  const signatures: SmirkSignResult['signatures'] = [];
+  for (const asset of assets) {
+    try {
+      switch (asset) {
+        case 'btc':
+          signatures.push({
+            asset: 'btc',
+            signature: signBitcoinMessage(message, wallet.keys.btc.privateKey),
+            publicKey: bytesToHex(wallet.keys.btc.publicKey),
+          });
+          break;
+        case 'ltc':
+          signatures.push({
+            asset: 'ltc',
+            signature: signBitcoinMessage(message, wallet.keys.ltc.privateKey),
+            publicKey: bytesToHex(wallet.keys.ltc.publicKey),
+          });
+          break;
+        case 'xmr': {
+          const pub = wallet.keys.xmr.publicSpendKey;
+          signatures.push({
+            asset: 'xmr',
+            signature: bytesToHex(
+              signEd25519WithScalar(msgBytes, wallet.keys.xmr.privateSpendKey, pub),
+            ),
+            publicKey: bytesToHex(pub),
+          });
+          break;
+        }
+        case 'wow': {
+          const pub = wallet.keys.wow.publicSpendKey;
+          signatures.push({
+            asset: 'wow',
+            signature: bytesToHex(
+              signEd25519WithScalar(msgBytes, wallet.keys.wow.privateSpendKey, pub),
+            ),
+            publicKey: bytesToHex(pub),
+          });
+          break;
+        }
+        case 'grin': {
+          const pub = wallet.keys.grin.publicKey;
+          signatures.push({
+            asset: 'grin',
+            signature: bytesToHex(
+              signEd25519WithScalar(msgBytes, wallet.keys.grin.privateKey, pub),
+            ),
+            publicKey: bytesToHex(pub),
+          });
+          break;
+        }
+      }
+    } catch (e) {
+      console.error(`[signMessage] ${asset} signing failed:`, e);
+      // Emit an empty-signature entry so the dapp gets a clear "we
+      // know about this asset, we just couldn't sign" signal rather
+      // than silently dropping the asset. smirk.cash surfaces this
+      // as "No signature found for <asset>" downstream.
+    }
+  }
+  return { message, signatures };
+}
+
 const root = document.getElementById('root');
-if (root) render(<App />, root);
+if (root) {
+  const approvalId = parseApprovalId();
+  if (approvalId) {
+    render(<ApprovalApp approvalId={approvalId} />, root);
+  } else {
+    render(<App />, root);
+  }
+}

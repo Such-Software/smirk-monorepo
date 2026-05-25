@@ -22,7 +22,9 @@
  */
 
 import { secp256k1 } from '@noble/curves/secp256k1';
+import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
+import { sha512 } from '@noble/hashes/sha512';
 import { xchacha20poly1305 } from '@noble/ciphers/chacha';
 import { randomBytes } from '@noble/hashes/utils';
 
@@ -281,6 +283,111 @@ export function signBitcoinMessage(message: string, privateKey: Uint8Array): str
   compactSig.set(sBytes, 33);
 
   return btoa(String.fromCharCode(...compactSig));
+}
+
+/**
+ * Sign a message with an ed25519 *raw scalar* (not a seed). Returns
+ * the 64-byte signature `R || s`.
+ *
+ * **Why a custom signer instead of `ed25519.sign(seed, msg)`.** Smirk
+ * stores the private spend / Grin keys as raw 32-byte scalars — they
+ * were derived from the wallet's HD seed via SHA256 (Cryptonote) or
+ * `grin-ext` HMAC (Grin), not via the standard ed25519 seed-clamping
+ * step. Passing the scalar bytes to `ed25519.sign` would re-hash and
+ * re-clamp them into a *different* scalar, producing signatures that
+ * don't verify against the public keys derived from the original
+ * scalar. This routine sidesteps that by signing directly with the
+ * scalar a:
+ *
+ *   r  = SHA512(SHA512(a_bytes) || m) mod L
+ *   R  = r * G                               (compressed point)
+ *   k  = SHA512(R || A || m) mod L
+ *   s  = r + k * a mod L
+ *
+ * The result verifies under the standard ed25519 verification
+ * equation `[s]G == R + [k]A`, so any RFC-8032-compliant verifier
+ * (including the Smirk backend's challenge-verifier) accepts the
+ * output.
+ *
+ * Public key bytes must be the canonical 32-byte compressed point
+ * corresponding to the scalar (XMR/WOW: `publicSpendKey`; Grin:
+ * `slatepack` pubkey). Mismatched (A, a) produces a verifiable-but-
+ * meaningless signature against the wrong identity.
+ *
+ * @param message Arbitrary message bytes — signed raw, no pre-hash.
+ * @param privateScalar 32-byte little-endian scalar.
+ * @param publicKey 32-byte compressed ed25519 point matching `privateScalar`.
+ * @returns 64-byte signature `R || s`.
+ */
+export function signEd25519WithScalar(
+  message: Uint8Array,
+  privateScalar: Uint8Array,
+  publicKey: Uint8Array,
+): Uint8Array {
+  if (privateScalar.length !== 32) {
+    throw new Error('signEd25519WithScalar: privateScalar must be 32 bytes');
+  }
+  if (publicKey.length !== 32) {
+    throw new Error('signEd25519WithScalar: publicKey must be 32 bytes');
+  }
+
+  // ed25519 group order L = 2^252 + 27742317777372353535851937790883648493.
+  const L = 2n ** 252n + 27742317777372353535851937790883648493n;
+  const a = leBytesToBigInt(privateScalar);
+
+  // Deterministic nonce: r = SHA512(SHA512(a_bytes) || m) mod L.
+  // Two-pass hash matches the legacy v0.2.x extension byte-for-byte
+  // — backend already accepts signatures from that derivation, so
+  // any deviation here would silently re-break smirk.cash login.
+  const scalarHash = sha512(privateScalar);
+  const nonceInput = new Uint8Array(scalarHash.length + message.length);
+  nonceInput.set(scalarHash, 0);
+  nonceInput.set(message, scalarHash.length);
+  const rHash = sha512(nonceInput);
+  const r = leBytesToBigInt(rHash) % L;
+
+  // R = r * G — compressed-point bytes for inclusion in the
+  // signature and in the challenge hash. Matches the ExtendedPoint
+  // accessor used elsewhere in @smirk/core (hd.ts derives public
+  // CryptoNote keys with the same call shape).
+  const R = ed25519.ExtendedPoint.BASE.multiply(r);
+  const RBytes = R.toRawBytes();
+
+  // k = SHA512(R || A || m) mod L. Standard ed25519 challenge.
+  const kInput = new Uint8Array(RBytes.length + publicKey.length + message.length);
+  kInput.set(RBytes, 0);
+  kInput.set(publicKey, RBytes.length);
+  kInput.set(message, RBytes.length + publicKey.length);
+  const k = leBytesToBigInt(sha512(kInput)) % L;
+
+  // s = r + k * a mod L.
+  const s = (r + k * a) % L;
+  const sBytes = bigIntToLeBytes(s, 32);
+
+  const out = new Uint8Array(64);
+  out.set(RBytes, 0);
+  out.set(sBytes, 32);
+  return out;
+}
+
+/** Little-endian unsigned bytes → bigint. */
+function leBytesToBigInt(bytes: Uint8Array): bigint {
+  let acc = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    acc = (acc << 8n) | BigInt(bytes[i]!);
+  }
+  return acc;
+}
+
+/** bigint → little-endian unsigned bytes of fixed length. */
+function bigIntToLeBytes(n: bigint, length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let remaining = n;
+  for (let i = 0; i < length; i++) {
+    out[i] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return out;
 }
 
 // ============================================================================

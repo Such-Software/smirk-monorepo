@@ -1,0 +1,23 @@
+{
+  "name": "@smirk/dapp-api",
+  "version": "0.3.0",
+  "description": "Smirk dapp-injection layer (window.smirk). Transport-agnostic protocol + page-side + wallet-side handlers. Platform adapters (extension MV3, Capacitor in-app browser, Tauri WebView) implement the small transport / approval / permission-store interfaces.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  }
+}
