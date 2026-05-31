@@ -724,6 +724,11 @@ export interface GrinCreateVoucherResult {
   change: GrinChangeOutputInfo | null;
   kernel_excess_hex: string;
   tx_bytes_hex: string;
+  /** JSON-shaped Transaction body for `/v2/foreign push_transaction`.
+   *  Hand to backend broadcast as the `tx` field unchanged. Same
+   *  contract as `GrinFinalizeSendResult.tx_json` /
+   *  `GrinSweepVoucherResult.tx_json`. */
+  tx_json: unknown;
 }
 
 export interface GrinSweepVoucherParams {
@@ -747,6 +752,11 @@ export interface GrinSweepVoucherResult {
   output: GrinChangeOutputInfo;
   kernel_excess_hex: string;
   tx_bytes_hex: string;
+  /** JSON-shaped Transaction body — the format the Grin node's
+   *  `/v2/foreign push_transaction` JSON-RPC expects. Hand to the
+   *  backend broadcast endpoint as `tx` unchanged. Same contract as
+   *  GrinFinalizeSendResult.tx_json. */
+  tx_json: unknown;
 }
 
 // =============================================================================

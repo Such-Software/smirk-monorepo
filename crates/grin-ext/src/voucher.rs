@@ -118,6 +118,11 @@ pub struct CreateVoucherResult {
     /// 33-byte kernel excess (commitment form). Goes on chain;
     /// recipient does NOT need this to claim.
     pub kernel_excess: [u8; 33],
+    /// JSON-shaped Transaction body — the format the Grin node's
+    /// `/v2/foreign push_transaction` JSON-RPC expects. Hand to the
+    /// backend broadcast endpoint as the `tx` field unchanged. Same
+    /// contract as `SweepVoucherResult.tx_json`.
+    pub tx_json: serde_json::Value,
     /// Broadcastable Grin transaction bytes.
     pub tx_bytes: Vec<u8>,
 }
@@ -155,6 +160,14 @@ pub struct SweepVoucherResult {
     pub output: ChangeOutputInfo,
     pub kernel_excess: [u8; 33],
     pub tx_bytes: Vec<u8>,
+    /// JSON-shaped `Transaction` body — the format Grin's
+    /// `/v2/foreign push_transaction` JSON-RPC accepts. Same data
+    /// as `tx_bytes`, different encoding. Provided here so wasm
+    /// callers can hand it straight to the backend broadcast
+    /// endpoint without re-deriving from binary. See
+    /// `serialize_voucher_tx_json` for the shape contract; mirrors
+    /// `slate_to_transaction_json` in `transaction.rs`.
+    pub tx_json: serde_json::Value,
 }
 
 /// Build a single-party voucher transaction.
@@ -269,11 +282,20 @@ pub fn create_grin_voucher(
         &kernel_excess,
         &signature.0,
     );
+    let tx_json = serialize_voucher_tx_json(
+        &params.kernel_offset,
+        &params.inputs,
+        &all_outputs,
+        &kernel_features,
+        &kernel_excess,
+        &signature.0,
+    );
 
     Ok(CreateVoucherResult {
         voucher: voucher_output,
         change: change_info,
         kernel_excess,
+        tx_json,
         tx_bytes,
     })
 }
@@ -336,9 +358,17 @@ pub fn sweep_grin_voucher(
 
     let tx_bytes = serialize_voucher_tx(
         &params.kernel_offset,
-        &[voucher_input],
+        &[voucher_input.clone()],
         &outputs,
         &kernel_features.to_v2_bytes()?,
+        &kernel_excess,
+        &signature.0,
+    );
+    let tx_json = serialize_voucher_tx_json(
+        &params.kernel_offset,
+        &[voucher_input],
+        &outputs,
+        &kernel_features,
         &kernel_excess,
         &signature.0,
     );
@@ -352,6 +382,129 @@ pub fn sweep_grin_voucher(
         },
         kernel_excess,
         tx_bytes,
+        tx_json,
+    })
+}
+
+/// Build the same single-kernel transaction as `serialize_voucher_tx`
+/// but in the JSON shape Grin's `/v2/foreign push_transaction` JSON-RPC
+/// accepts. Identical contract to `slate_to_transaction_json` in
+/// `transaction.rs` — see that fn's docstring for the rationale on
+/// every field encoding (in particular the kernel signature byte
+/// reversal that pre-cancels grin's `from_compact` parser quirk).
+///
+/// Inputs and outputs are canonically Blake2b256-sorted (same as
+/// `slate_to_transaction_json`) before serialization. The Grin node's
+/// `Transaction::validate` runs `verify_sorted_and_unique` and
+/// rejects unsorted bodies with `Serialization(SortError)` — which
+/// surfaces at the node as "Invalid Tx some kind of keychain error".
+/// Sweep vouchers are 1-in/1-out (sort is a no-op) but create
+/// vouchers can be N-in/2-out, so the sort is required.
+fn serialize_voucher_tx_json(
+    offset: &[u8; 32],
+    inputs: &[UnspentOutput],
+    outputs: &[(u8, [u8; 33], Vec<u8>)],
+    kernel_features: &KernelFeatures,
+    kernel_excess: &[u8; 33],
+    aggregated_kernel_signature: &[u8; 64],
+) -> serde_json::Value {
+    let feature_str = |is_coinbase: bool| -> &'static str {
+        if is_coinbase {
+            "Coinbase"
+        } else {
+            "Plain"
+        }
+    };
+
+    // Blake2b-256 helper — same one transaction.rs uses for slate
+    // serialization. Wire bytes for hashing are exactly what the
+    // network sees: 1 byte features + 33 byte commit (Input), and for
+    // Output the hash is over the OutputIdentifier (features + commit
+    // ONLY, the proof is NOT hashed for the Ord impl).
+    use blake2::digest::{Update, VariableOutput};
+    use blake2::Blake2bVar;
+    let hash_bytes = |bytes: &[u8]| -> [u8; 32] {
+        let mut h = Blake2bVar::new(32).expect("blake2b 32");
+        h.update(bytes);
+        let mut out = [0u8; 32];
+        h.finalize_variable(&mut out).expect("blake2b finalize");
+        out
+    };
+    let input_hash = |i: &UnspentOutput| -> [u8; 32] {
+        let mut buf = Vec::with_capacity(34);
+        buf.push(if i.is_coinbase { 1u8 } else { 0u8 });
+        buf.extend_from_slice(&i.commitment);
+        hash_bytes(&buf)
+    };
+    let output_hash = |o: &(u8, [u8; 33], Vec<u8>)| -> [u8; 32] {
+        let mut buf = Vec::with_capacity(34);
+        buf.push(o.0);
+        buf.extend_from_slice(&o.1);
+        hash_bytes(&buf)
+    };
+
+    let mut sorted_inputs: Vec<&UnspentOutput> = inputs.iter().collect();
+    sorted_inputs.sort_by_key(|i| input_hash(i));
+    let inputs_json: Vec<serde_json::Value> = sorted_inputs
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "features": feature_str(i.is_coinbase),
+                "commit": hex::encode(i.commitment),
+            })
+        })
+        .collect();
+
+    let mut sorted_outputs: Vec<&(u8, [u8; 33], Vec<u8>)> = outputs.iter().collect();
+    sorted_outputs.sort_by_key(|o| output_hash(o));
+    let outputs_json: Vec<serde_json::Value> = sorted_outputs
+        .iter()
+        .map(|(features, commit, proof)| {
+            serde_json::json!({
+                "features": feature_str(*features == 1),
+                "commit": hex::encode(commit),
+                "proof": hex::encode(proof),
+            })
+        })
+        .collect();
+
+    let features_json = match *kernel_features {
+        KernelFeatures::Plain { fee } => serde_json::json!({"Plain": {"fee": fee}}),
+        KernelFeatures::Coinbase => serde_json::json!("Coinbase"),
+        KernelFeatures::HeightLocked { fee, lock_height } => serde_json::json!({
+            "HeightLocked": {"fee": fee, "lock_height": lock_height}
+        }),
+        KernelFeatures::Nrd {
+            fee,
+            relative_height,
+        } => serde_json::json!({
+            "NoRecentDuplicate": {"fee": fee, "relative_height": relative_height}
+        }),
+    };
+
+    // Byte-reverse each 32-byte half of the 64-byte sig — pre-cancels
+    // the `secp256k1_ecdsa_signature_parse_compact` byte reversal grin's
+    // sig deserializer applies. See `slate_to_transaction_json` for the
+    // full reasoning; the same constraint applies here verbatim.
+    let mut kernel_sig_for_json = [0u8; 64];
+    for i in 0..32 {
+        kernel_sig_for_json[i] = aggregated_kernel_signature[31 - i];
+        kernel_sig_for_json[32 + i] = aggregated_kernel_signature[63 - i];
+    }
+
+    let kernel_obj = serde_json::json!({
+        "features": features_json,
+        "excess": hex::encode(kernel_excess),
+        "excess_sig": hex::encode(kernel_sig_for_json),
+    });
+
+    serde_json::json!({
+        "offset": hex::encode(offset),
+        "body": {
+            "inputs": inputs_json,
+            "outputs": outputs_json,
+            "kernels": [kernel_obj],
+        },
     })
 }
 

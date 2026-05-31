@@ -99,12 +99,19 @@ mod dto {
         pub proof_hex: String,
     }
 
+    /// Mirror of `grin_ext::voucher::CreateVoucherResult` on the wire.
+    /// `tx_json` carries the same data as `tx_bytes_hex` but in the
+    /// JSON shape Grin's `/v2/foreign push_transaction` accepts —
+    /// hand to backend broadcast unchanged. Sending
+    /// `{tx_bytes_hex}` instead fails with
+    /// `InvalidArgStructure "tx"` at the node.
     #[derive(Debug, Serialize)]
     pub struct CreateVoucherResultDto {
         pub voucher: VoucherOutputDto,
         pub change: Option<ChangeOutputInfoDto>,
         pub kernel_excess_hex: String,
         pub tx_bytes_hex: String,
+        pub tx_json: serde_json::Value,
     }
 
     #[derive(Debug, Deserialize)]
@@ -128,6 +135,13 @@ mod dto {
         pub output: ChangeOutputInfoDto,
         pub kernel_excess_hex: String,
         pub tx_bytes_hex: String,
+        /// JSON-shaped Transaction body. Hand straight to the
+        /// backend's broadcast endpoint as the `tx` field — same
+        /// contract as `FinalizeSendResultDto.tx_json` for the
+        /// slate-ceremony flow. Without this the caller would have
+        /// to re-deserialize tx_bytes_hex from the custom wire
+        /// format, which the JS side has no decoder for.
+        pub tx_json: serde_json::Value,
     }
 }
 
@@ -194,6 +208,7 @@ pub fn grin_create_grin_voucher(params_json: &str) -> Result<String, JsValue> {
         }),
         kernel_excess_hex: hex::encode(out.kernel_excess),
         tx_bytes_hex: hex::encode(out.tx_bytes),
+        tx_json: out.tx_json,
     };
     serde_json::to_string(&result).map_err(err_string)
 }
@@ -225,6 +240,7 @@ pub fn grin_sweep_grin_voucher(params_json: &str) -> Result<String, JsValue> {
         },
         kernel_excess_hex: hex::encode(out.kernel_excess),
         tx_bytes_hex: hex::encode(out.tx_bytes),
+        tx_json: out.tx_json,
     };
     serde_json::to_string(&result).map_err(err_string)
 }
