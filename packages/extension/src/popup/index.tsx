@@ -70,6 +70,7 @@ import {
   type ApprovalApproval,
   type AssetDetailTxRow,
   type InboxItem,
+  type InboxTipItem,
   type RecentRecipient,
   type SparklinePoint,
 } from '@smirk/ui';
@@ -88,6 +89,7 @@ import {
   calcGrinFee,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
+import { claimSocialTip } from './tip-claim-handler';
 import { listTipKeyBackups, removeTipKeyBackup } from './tip-key-backup';
 import {
   writeDappPublicCache,
@@ -177,6 +179,92 @@ function recentTipRecipients(
   // when we wire api.getSentSocialTips on bootstrap.
   void session;
   return [];
+}
+
+/**
+ * Pull incoming social tips for the current user. Bucketed and
+ * passed straight to InboxTab as `tips`.
+ *
+ * Backend `getReceivedTips` returns the full history (any status);
+ * we filter to ones that are still actionable for the recipient —
+ * status='pending' (funding-waiting OR ready-to-claim, distinguished
+ * inside the component by `fundingConfirmations >= confirmationsRequired`).
+ *
+ * Anything in 'claimed' / 'cancelled' / 'clawed_back' is already
+ * settled and doesn't belong in the Inbox.
+ */
+async function fetchTipInbox(): Promise<{
+  tips: InboxTipItem[];
+  error: string | null;
+}> {
+  // `getReceivedSocialTips` is the social-tip flow (named recipient
+  // tips with two-phase create); `getReceivedTips` on the same client
+  // is the legacy LINK-tip flow and is shaped completely differently.
+  // See api/index.ts for the disambiguation.
+  const r = await api.getReceivedSocialTips();
+  if (r.error || !r.data) {
+    return { tips: [], error: r.error ?? 'Failed to load received tips' };
+  }
+  const tips: InboxTipItem[] = r.data.tips
+    // `claiming` status = the user already hit Claim once but the
+    // sweep failed client-side (LWS 500, wallet locked, etc.). The
+    // backend's `claim_social_tip` is idempotent for the same user,
+    // so re-rendering the row + letting them tap Claim again is the
+    // recovery path. Without this filter widening, stuck-claiming
+    // tips disappear from the Inbox forever and the on-chain funds
+    // become invisible to the recipient.
+    .filter(
+      (t) =>
+        t.status === 'pending' ||
+        t.status === 'pending_confirmation' ||
+        t.status === 'claiming',
+    )
+    // Stale-tip filter: hide pending tips that are still at zero
+    // confirmations more than 24h after creation. Every supported
+    // chain produces a first confirmation well inside an hour under
+    // normal mempool conditions (BTC ~10m, LTC ~2.5m, XMR/WOW ~2m,
+    // Grin ~1m), so a 24h zero-conf row is the sender's funding tx
+    // having died in the mempool — the tip will never be claimable.
+    // We hide rather than rendering "0/X stale" rows to keep the
+    // Inbox actionable.
+    //
+    // TODO(backend): add a server-side autocancel job that moves
+    // these from `pending` to a terminal `expired` status after
+    // ~48h with no funding progress, so the server-of-truth matches
+    // the client view. Until then, the row still exists in the
+    // database — hidden but not deleted.
+    .filter((t) => !isTipStale(t.funding_confirmations ?? 0, t.created_at))
+    .map((t) => {
+      // `recipient_username` here is the user who got tipped (us);
+      // the API doesn't return the sender's display name yet.
+      // Render "anonymous" for now — `null` triggers the
+      // "from anonymous" copy in the InboxTipItem row.
+      const senderDisplay: string | null = null;
+      return {
+        tipId: t.id,
+        assetId: t.asset as InboxTipItem['assetId'],
+        amountAtomic: BigInt(t.amount),
+        senderDisplay,
+        fundingConfirmations: t.funding_confirmations ?? 0,
+        confirmationsRequired: t.confirmations_required ?? 1,
+        createdAt: t.created_at,
+      };
+    });
+  return { tips, error: null };
+}
+
+/** Returns true iff a `pending` tip's funding has stalled — zero
+ *  confirmations beyond a generous wall-clock cutoff. Used to drop
+ *  abandoned tips from the Inbox and per-asset history. */
+const STALE_TIP_NO_CONF_MS = 24 * 60 * 60 * 1000;
+function isTipStale(
+  fundingConfirmations: number,
+  createdAtIso: string,
+): boolean {
+  if (fundingConfirmations > 0) return false;
+  const created = Date.parse(createdAtIso);
+  if (Number.isNaN(created)) return false;
+  return Date.now() - created > STALE_TIP_NO_CONF_MS;
 }
 
 async function fetchGrinInbox(userId: string): Promise<{
@@ -423,6 +511,74 @@ async function writeSessionCache(wallet: UnlockedWallet, minutes: number): Promi
   await sessionStorage.set(SESSION_CACHE_KEY, entry);
 }
 
+// ============================================================================
+// Bootstrap (JWT + userId + LWS heights) cache — chrome.storage.session
+// scoped, ~5 min TTL. Skipping the auth round-trip on every popup open
+// shaves 1-2s off the warm-open feel; the cache dies on browser restart
+// AND on wallet fingerprint change (defensive: a re-imported wallet
+// must NOT inherit the previous wallet's JWT).
+//
+// Threat model: the access token is short-lived (server-controlled, ~1h),
+// the storage tier is non-persistent (browser-session lifetime), and a
+// stale-cache hit either succeeds (fast path) or surfaces an auth error
+// which we recover from by clearing the cache and re-bootstrapping. No
+// regression vs. the in-memory-only baseline that auditors signed off on
+// for v0.2.x — the access token never touches chrome.storage.local
+// (which IS persistent and IS the legacy anti-pattern).
+// ============================================================================
+
+const BOOTSTRAP_CACHE_KEY = 'smirk_bootstrap_cache_v1';
+const BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface BootstrapCacheEntry {
+  fingerprint: string;
+  accessToken: string;
+  bootstrap: BootstrapAuthResult;
+  cachedAt: number;
+}
+
+async function readBootstrapCache(
+  walletFingerprint: string,
+): Promise<{ accessToken: string; bootstrap: BootstrapAuthResult } | null> {
+  try {
+    const raw = await sessionStorage.get(BOOTSTRAP_CACHE_KEY);
+    if (!raw || typeof raw !== 'object') return null;
+    const entry = raw as BootstrapCacheEntry;
+    if (entry.fingerprint !== walletFingerprint) return null;
+    if (Date.now() - entry.cachedAt > BOOTSTRAP_CACHE_TTL_MS) return null;
+    if (!entry.accessToken || !entry.bootstrap?.userId) return null;
+    return { accessToken: entry.accessToken, bootstrap: entry.bootstrap };
+  } catch {
+    return null;
+  }
+}
+
+async function writeBootstrapCache(
+  walletFingerprint: string,
+  accessToken: string,
+  bootstrap: BootstrapAuthResult,
+): Promise<void> {
+  const entry: BootstrapCacheEntry = {
+    fingerprint: walletFingerprint,
+    accessToken,
+    bootstrap,
+    cachedAt: Date.now(),
+  };
+  try {
+    await sessionStorage.set(BOOTSTRAP_CACHE_KEY, entry);
+  } catch (e) {
+    console.warn('[smirk] bootstrap cache write failed', e);
+  }
+}
+
+async function clearBootstrapCache(): Promise<void> {
+  try {
+    await sessionStorage.remove(BOOTSTRAP_CACHE_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
@@ -431,6 +587,10 @@ function App() {
     loading: boolean;
     error: string | null;
   }>({ items: [], loading: false, error: null });
+  const [tipInbox, setTipInbox] = useState<{
+    tips: InboxTipItem[];
+    error: string | null;
+  }>({ tips: [], error: null });
 
   // Refresh from the keystore. Called on mount and after every state
   // transition (create / unlock / lock / destroy) so the gate re-renders.
@@ -448,7 +608,24 @@ function App() {
   const startSession = async (wallet: UnlockedWallet) => {
     setSession((prev) => prev ?? ({} as WalletSession));
     try {
-      const bootstrap = await bootstrapAuth(api, wallet);
+      // Try the warm path first: if we have a cached bootstrap from
+      // a recent popup open this browser session, reuse it and skip
+      // the auth round-trip (challenge + signature + extensionRegister
+      // = ~1-2s on a slow backend). Falls back to a full bootstrap if
+      // the cached token gets rejected by the first balance call, so
+      // a server-side rotation can't strand us.
+      let bootstrap: BootstrapAuthResult;
+      const warm = await readBootstrapCache(wallet.fingerprint);
+      if (warm) {
+        api.setAccessToken(warm.accessToken);
+        bootstrap = warm.bootstrap;
+      } else {
+        bootstrap = await bootstrapAuth(api, wallet);
+        const tok = api.getAccessToken();
+        if (tok) {
+          await writeBootstrapCache(wallet.fingerprint, tok, bootstrap);
+        }
+      }
       const [balances, prices] = await Promise.all([
         fetchAllBalances(api, wallet, bootstrap, { verifyKeyImage }),
         fetchPrices(api),
@@ -462,6 +639,11 @@ function App() {
         refreshedAt: new Date(),
       });
     } catch (e) {
+      // If a warm-path balance call rejected (auth error), drop the
+      // cache and force a fresh bootstrap on the next render. Surface
+      // the error so the user sees something rather than a silent
+      // empty state.
+      await clearBootstrapCache();
       setSession({
         bootstrap: { userId: '', isNew: false },
         balances: null,
@@ -626,9 +808,21 @@ function App() {
     let alive = true;
     const tick = async () => {
       setGrinInbox((s) => ({ ...s, loading: true }));
-      const next = await fetchGrinInbox(userId);
+      // Fetch Grin slatepacks + received tips in parallel — both go
+      // to the same Inbox surface so a single 30s tick refreshes
+      // everything. Tip poll failure is silent (kept null in state
+      // so InboxTab still renders Grin sections normally); slatepack
+      // failure surfaces as before.
+      const [nextGrin, nextTips] = await Promise.all([
+        fetchGrinInbox(userId),
+        fetchTipInbox().catch((e) => ({
+          tips: [],
+          error: e instanceof Error ? e.message : 'Tip fetch failed',
+        })),
+      ]);
       if (!alive) return;
-      setGrinInbox(next);
+      setGrinInbox(nextGrin);
+      setTipInbox(nextTips);
     };
     void tick();
     const handle = setInterval(() => void tick(), 30000);
@@ -709,8 +903,28 @@ function App() {
           // default `0` (immediate), so no session cache is written.
           const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
           await writeSessionCache(wallet, minutes);
-          await refresh();
+          // Bootstrap NOW so the wizard's setup step has a valid JWT
+          // for handle-reservation. We don't `refresh()` here yet —
+          // walletState stays `empty` so the wizard keeps owning the
+          // screen through its setup step. `onFullyDone` below flips
+          // it to `unlocked` after the user is done.
+          //
+          // The standard `startSession` effect (fires when walletState
+          // becomes unlocked) will re-bootstrap once that happens;
+          // idempotent on the backend, costs one extra round-trip we
+          // can pay once at onboarding.
+          await bootstrapAuth(api, wallet);
         }}
+        reserveSmirkName={async (handle) => {
+          const res = await api.setMySmirkUsername(handle);
+          if (res.error) {
+            throw new Error(res.error);
+          }
+        }}
+        setInjectEnabled={async (enabled) => {
+          await setInjectDisabled(!enabled);
+        }}
+        onFullyDone={refresh}
       />
     );
   }
@@ -732,6 +946,7 @@ function App() {
   // walletState.kind === 'unlocked'
   const lockHandler = async () => {
     await sessionStorage.remove(SESSION_CACHE_KEY);
+    await clearBootstrapCache();
     await clearDappPublicCache();
     await walletKeystore.lock();
     await refresh();
@@ -751,7 +966,41 @@ function App() {
     const userId = session?.bootstrap?.userId;
     if (!userId) return;
     setGrinInbox((s) => ({ ...s, loading: true }));
-    setGrinInbox(await fetchGrinInbox(userId));
+    const [nextGrin, nextTips] = await Promise.all([
+      fetchGrinInbox(userId),
+      fetchTipInbox().catch((e) => ({
+        tips: [],
+        error: e instanceof Error ? e.message : 'Tip fetch failed',
+      })),
+    ]);
+    setGrinInbox(nextGrin);
+    setTipInbox(nextTips);
+  };
+
+  const onClaimTipHandler = async (item: InboxTipItem) => {
+    if (walletState.kind !== 'unlocked') {
+      throw new Error('Wallet must be unlocked to claim');
+    }
+    const userId = session?.bootstrap?.userId;
+    if (!userId) throw new Error('No active session — wallet not bootstrapped');
+    const outcome = await claimSocialTip(
+      walletState.wallet,
+      userId,
+      item.tipId,
+      item.assetId,
+    );
+    if (!outcome.ok) throw new Error(outcome.error);
+    // Optimistically drop the row from the local cache so the user
+    // gets immediate feedback that the tip is gone. Next 30s tick
+    // will re-fetch authoritatively.
+    setTipInbox((s) => ({
+      ...s,
+      tips: s.tips.filter((t) => t.tipId !== item.tipId),
+    }));
+    // Refresh balances so the swept funds appear in the asset row.
+    if (session?.bootstrap) {
+      void refreshBalances(walletState.wallet, session.bootstrap);
+    }
   };
 
   return (
@@ -762,7 +1011,7 @@ function App() {
           label: 'Smirk Wallet',
           iconUrl: chrome.runtime.getURL('icons/favicon-16.png'),
         }}
-        tabBadges={{ inbox: grinInbox.items.length }}
+        tabBadges={{ inbox: grinInbox.items.length + tipInbox.tips.length }}
         headerActions={
           session && !session.error ? (
             <RefreshIconButton
@@ -777,6 +1026,27 @@ function App() {
               wallet={walletState.wallet}
               session={session}
               onRefresh={handleRefresh}
+              onTipClaim={async (tipId, assetId) => {
+                try {
+                  await onClaimTipHandler({
+                    tipId,
+                    assetId,
+                    // Fields below aren't read by the handler — supply
+                    // benign defaults so the InboxTipItem cast holds.
+                    amountAtomic: 0n,
+                    senderDisplay: null,
+                    fundingConfirmations: 0,
+                    confirmationsRequired: 0,
+                    createdAt: new Date().toISOString(),
+                  });
+                  return { ok: true };
+                } catch (e) {
+                  return {
+                    ok: false,
+                    error: e instanceof Error ? e.message : 'Claim failed',
+                  };
+                }
+              }}
             />
           ),
           swap: <SwapStub />,
@@ -785,7 +1055,9 @@ function App() {
               wallet={walletState.wallet}
               userId={session?.bootstrap?.userId ?? ''}
               inbox={grinInbox}
+              tips={tipInbox.tips}
               onRefresh={refreshGrinInbox}
+              onClaimTip={onClaimTipHandler}
             />
           ),
           settings: (
@@ -793,6 +1065,7 @@ function App() {
               onLock={lockHandler}
               onForgetComplete={async () => {
                 await sessionStorage.remove(SESSION_CACHE_KEY);
+                await clearBootstrapCache();
                 await clearDappPublicCache();
                 await walletKeystore.destroy();
                 await refresh();
@@ -836,11 +1109,19 @@ function HomeRouter({
   wallet,
   session,
   onRefresh: _onRefresh,
+  onTipClaim,
 }: {
   wallet: UnlockedWallet;
   session: WalletSession | null;
   /** Reserved — pull-to-refresh on Home will call this. Header refresh button uses it directly. */
   onRefresh: () => Promise<void>;
+  /** Claim a tip from an asset-detail row. Threaded through to
+   *  `AssetDetailRoute` so the per-row Claim button fires the same
+   *  sweep logic as the InboxTab "Claim" affordance. */
+  onTipClaim?: (
+    tipId: string,
+    assetId: InboxTipItem['assetId'],
+  ) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const { route, navigate, switchTab } = useRoute();
   const sessionState = useSessionState();
@@ -1119,7 +1400,11 @@ function HomeRouter({
         onBack={() => void navigate('home')}
         onSend={() => void navigate('home/send')}
         onReceive={() => void navigate('home/receive')}
-        onTip={() => void navigate('home/tip')}
+        // Carry the asset id forward as a route segment so the Tip
+        // composer pre-selects this coin instead of defaulting to
+        // whatever has the largest balance.
+        onTip={() => void navigate(`home/tip/${drilldownAssetId}`)}
+        {...(onTipClaim ? { onTipClaim } : {})}
         resolveIcon={resolveIcon}
       />
     );
@@ -1491,10 +1776,18 @@ function HomeRouter({
     );
   }
 
-  if (route.current === 'home/tip') {
+  // `home/tip` opens the Tip composer with the default-asset heuristic.
+  // `home/tip/<assetId>` arrives from a per-asset detail screen's Tip
+  // button and pre-selects that asset — much less surprising than
+  // landing on whatever asset has the biggest balance.
+  if (route.current === 'home/tip' || route.current.startsWith('home/tip/')) {
+    const tipPrefilledAsset = route.current.startsWith('home/tip/')
+      ? route.current.substring('home/tip/'.length)
+      : undefined;
     return (
       <TipMaker
         assetIds={listAssets().map((a) => a.id)}
+        {...(tipPrefilledAsset ? { prefilledAssetId: tipPrefilledAsset } : {})}
         // All 5 assets wired: BTC/LTC fresh-keypair, XMR/WOW
         // fresh-primary-keypair + LWS registration, Grin
         // voucher-pattern via createGrinVoucher (primitives in
@@ -2097,6 +2390,7 @@ function AssetDetailRoute({
   onSend,
   onReceive,
   onTip,
+  onTipClaim,
   resolveIcon,
 }: {
   assetId: string;
@@ -2106,6 +2400,13 @@ function AssetDetailRoute({
   onSend: () => void;
   onReceive: () => void;
   onTip: () => void;
+  /** Claim a received tip from this asset's history. Reuses the
+   *  popup-shell-level tip-claim handler; the AssetDetailScreen
+   *  renders the per-row Claim button when this is wired. */
+  onTipClaim?: (
+    tipId: string,
+    assetId: InboxTipItem['assetId'],
+  ) => Promise<{ ok: boolean; error?: string }>;
   resolveIcon: (key: string) => string | undefined;
 }) {
   const [history, setHistory] = useState<AssetDetailTxRow[]>([]);
@@ -2213,6 +2514,12 @@ function AssetDetailRoute({
         await removeTipKeyBackup(tipId);
         return { ok: true };
       }}
+      {...(onTipClaim
+        ? {
+            onTipClaim: (tipId: string) =>
+              onTipClaim(tipId, assetId as InboxTipItem['assetId']),
+          }
+        : {})}
       onTipActionDone={() => setReloadKey((k) => k + 1)}
       resolveIcon={resolveIcon}
     />
@@ -2280,6 +2587,19 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
   if (recvResp.data?.tips) {
     for (const t of recvResp.data.tips) {
       if (t.asset !== assetId) continue;
+      // Mirror the InboxTab stale filter: abandoned 0-conf tips
+      // older than the cutoff don't belong in the per-asset history
+      // either. Claimed / clawed-back / claiming tips are NOT
+      // subject to this — `claiming` rows are retry-eligible (see
+      // InboxTab fetcher comment) and need to stay visible so the
+      // user can take the retry action; terminal states stay so the
+      // user sees full history.
+      if (
+        (t.status === 'pending' || t.status === 'pending_confirmation') &&
+        isTipStale(t.funding_confirmations ?? 0, t.created_at)
+      ) {
+        continue;
+      }
       const counterparty = t.is_public ? 'public link' : '@?';
       const row: Extract<AssetDetailTxRow, { kind: 'tip-received' }> = {
         kind: 'tip-received',
@@ -2289,6 +2609,12 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
         counterparty,
         ...(t.recipient_platform ? { platform: t.recipient_platform } : {}),
         timestamp: t.created_at,
+        // Surface status + confs so the row can render the
+        // confirmation progress + the Claim button on ready tips.
+        // Matches the InboxTab plumbing.
+        status: t.status,
+        fundingConfirmations: t.funding_confirmations ?? 0,
+        confirmationsRequired: t.confirmations_required ?? 1,
       };
       out.push(row);
     }
@@ -2408,7 +2734,9 @@ function InboxRouter({
   wallet,
   userId,
   inbox,
+  tips,
   onRefresh,
+  onClaimTip,
 }: {
   wallet: UnlockedWallet;
   /** Backend user UUID from `bootstrap.userId`. Required for Grin API
@@ -2416,7 +2744,9 @@ function InboxRouter({
    *  server-side. */
   userId: string;
   inbox: { items: InboxItem[]; loading: boolean; error: string | null };
+  tips: InboxTipItem[];
   onRefresh: () => Promise<void>;
+  onClaimTip: (item: InboxTipItem) => Promise<void>;
 }) {
   const { navigate } = useRoute();
   // Tapping a pending_to_sign row seeds the GrinPasteIncomingWizard
@@ -2496,9 +2826,11 @@ function InboxRouter({
   return (
     <InboxTab
       items={inbox.items}
+      tips={tips}
       loading={inbox.loading}
       error={inbox.error}
       onRefresh={() => void onRefresh()}
+      onClaimTip={(item) => onClaimTip(item)}
       onPasteSlatepack={() => {
         // Reset prior paste-router state so the user starts fresh.
         void store

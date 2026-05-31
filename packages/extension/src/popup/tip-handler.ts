@@ -755,10 +755,18 @@ async function createGrinTip(
   // 9. Broadcast the voucher tx via the backend's broadcast endpoint.
   //    Includes change_output for atomic record-on-broadcast (per
   //    dddb025).
+  // Grin node's `/v2/foreign push_transaction` accepts the JSON
+  // Transaction body (offset + body{inputs, outputs, kernels}) —
+  // NOT a hex-encoded wire blob. Earlier this passed
+  // `{ tx_bytes_hex }`, which the node rejected with
+  // `InvalidArgStructure "tx" at position 0` — same class of bug
+  // that bit the regular Grin send + the voucher claim path.
+  // `voucherResult.tx_json` is the canonical shape, emitted by
+  // `crates/grin-ext/src/voucher.rs::serialize_voucher_tx_json`.
   const broadcast = await api.broadcastGrinTransaction({
     userId: senderUserId,
     slateId,
-    tx: { tx_bytes_hex: voucherResult.tx_bytes_hex },
+    tx: voucherResult.tx_json as object,
     ...(voucherResult.change
       ? {
           changeOutput: {

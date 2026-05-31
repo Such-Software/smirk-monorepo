@@ -138,6 +138,7 @@ export type {
   InboxItemBase,
   InboxItemPendingToSign,
   InboxItemPendingToFinalize,
+  InboxTipItem,
 } from './components/InboxTab';
 
 // ----- Shell -----

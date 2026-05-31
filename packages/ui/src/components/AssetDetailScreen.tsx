@@ -13,9 +13,8 @@
 
 import { useMemo, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
-import { formatAmount } from '../format';
+import { formatAmount, formatAmountWithAsset } from '../format';
 import { AssetIcon } from './AssetIcon';
-import { BalanceCard } from './BalanceCard';
 
 /**
  * Single transaction row, agnostic of chain. The shell normalizes
@@ -89,6 +88,18 @@ export type AssetDetailTxRow =
       counterparty: string;
       platform?: string;
       timestamp: string;
+      /** Server-side tip status — drives the row's affordance:
+       *   pending / pending_confirmation → progress strip (X/Y confs)
+       *   pending + confs ready          → primary "Claim" button
+       *   claiming                       → "Claiming…" pill (no action)
+       *   claimed                        → quiet info-only row
+       *   clawed_back                    → quiet "reclaimed by sender" row
+       */
+      status?: string;
+      /** Funding confirmation progress, for the "X/Y confs" sub-line
+       *  on pending tips. */
+      fundingConfirmations?: number;
+      confirmationsRequired?: number;
     };
 
 export interface SparklinePoint {
@@ -122,6 +133,10 @@ export interface AssetDetailScreenProps {
    *  Surfaced as the per-row "↩ Clawback" button on tip-sent rows
    *  in pending / pending_confirmation / claiming status. */
   onTipClawback?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Claim a received tip — sweeps the tip address into the user's
+   *  wallet. Surfaced as the primary "Claim" button on tip-received
+   *  rows whose `fundingConfirmations >= confirmationsRequired`. */
+  onTipClaim?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
   /** Discard a draft sent tip — no funds moved, just cleans up the
    *  server-side draft row. Surfaced as "Discard draft" on tip-sent
    *  rows in draft status. */
@@ -154,6 +169,7 @@ export function AssetDetailScreen({
   onOpenExplorer,
   onTipClawback,
   onTipDiscard,
+  onTipClaim,
   onTipActionDone,
   onSend,
   onReceive,
@@ -203,15 +219,20 @@ export function AssetDetailScreen({
         <strong style={{ fontSize: 13 }}>{asset.displayName}</strong>
       </div>
 
-      {/* Balance card — re-use the Home variant so styling stays in sync */}
-      <BalanceCard
+      {/* Dedicated balance header. We DON'T reuse BalanceCard here
+          because that variant runs a 3-column row (icon + name + amount)
+          where the asset name competes with the amount on narrow popups
+          + pixel-font themes — long balances like XMR 8-decimal values
+          got clipped with an ellipsis. On the asset-detail screen the
+          asset name is already in the page header above, so the balance
+          block can use the FULL width for the number + fiat. */}
+      <AssetDetailBalance
         assetId={assetId}
         balanceAtomic={balanceAtomic}
         {...(pendingAtomic !== undefined ? { pendingAtomic } : {})}
         {...(lockedAtomic !== undefined ? { lockedAtomic } : {})}
         {...(fiatDisplay ? { fiatDisplay } : {})}
         {...(hidden ? { hidden } : {})}
-        {...(resolveIcon ? { resolveIcon } : {})}
       />
 
       {/* Sparkline strip — inline SVG, no chart-lib dep. */}
@@ -282,6 +303,7 @@ export function AssetDetailScreen({
                   : {})}
                 {...(onTipClawback ? { onTipClawback } : {})}
                 {...(onTipDiscard ? { onTipDiscard } : {})}
+                {...(onTipClaim ? { onTipClaim } : {})}
                 {...(onTipActionDone ? { onTipActionDone } : {})}
               />
             ))}
@@ -320,6 +342,12 @@ function Sparkline({ data }: { data: SparklinePoint }) {
   const changeColor =
     data.changePct >= 0 ? 'var(--smirk-positive)' : 'var(--smirk-negative)';
   const changeSign = data.changePct >= 0 ? '+' : '';
+  // Last sample = current spot. Without this the "-1.88%" reads as
+  // a percentage with no anchor — user had no idea what currency or
+  // base price the change was against. Format with sensible
+  // significant figures for both micro-cap (sub-cent) and majors.
+  const currentPrice = data.prices[data.prices.length - 1] ?? 0;
+  const priceLabel = formatPrice(currentPrice);
 
   return (
     <div
@@ -345,24 +373,51 @@ function Sparkline({ data }: { data: SparklinePoint }) {
       >
         2W
       </div>
+      {/* Current spot + 2w change. Stacked so they both fit on
+          narrow popups; price is the anchor, % is the comparative. */}
       <div
         style={{
           position: 'absolute',
-          top: 6,
+          top: 4,
           right: 8,
-          fontSize: 11,
-          color: changeColor,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          gap: 1,
           fontFamily: 'var(--smirk-font-family-mono)',
-          fontWeight: 600,
         }}
       >
-        {changeSign}
-        {data.changePct.toFixed(2)}%
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: 'var(--smirk-fg)',
+          }}
+        >
+          {priceLabel}
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 600,
+            color: changeColor,
+          }}
+        >
+          {changeSign}
+          {data.changePct.toFixed(2)}%
+        </span>
       </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
-        style={{ width: '100%', height: H, marginTop: 14, display: 'block' }}
+        style={{
+          width: '100%',
+          height: H,
+          // 28px clears the stacked price + change-pct labels in
+          // the absolute-positioned top-right block.
+          marginTop: 28,
+          display: 'block',
+        }}
       >
         <path
           d={path}
@@ -373,6 +428,123 @@ function Sparkline({ data }: { data: SparklinePoint }) {
           strokeLinecap="round"
         />
       </svg>
+    </div>
+  );
+}
+
+// ============================================================================
+// Asset-detail balance — wide, full-width balance line + fiat subline.
+// Replaces the 3-col BalanceCard for this screen because the asset name
+// is already in the page header, so the balance gets all the horizontal
+// space + can't be clipped by pixel-theme font widths.
+// ============================================================================
+
+function AssetDetailBalance({
+  assetId,
+  balanceAtomic,
+  pendingAtomic,
+  lockedAtomic,
+  fiatDisplay,
+  hidden,
+}: {
+  assetId: string;
+  balanceAtomic: bigint;
+  pendingAtomic?: bigint;
+  lockedAtomic?: bigint;
+  fiatDisplay?: string;
+  hidden?: boolean;
+}) {
+  const asset = mustGetAsset(assetId);
+  // Format with the asset's default max-decimals so we never clip
+  // significant digits, but trim trailing zeros so common balances
+  // ("0.1 XMR") read cleanly instead of "0.10000000".
+  const formatted = hidden
+    ? '••••'
+    : formatAmountWithAsset(balanceAtomic, asset, 8, { trimZeros: true });
+  const extras: Array<{ label: string; value: bigint; color?: string }> = [];
+  if (pendingAtomic && pendingAtomic > 0n) {
+    extras.push({
+      label: 'Pending',
+      value: pendingAtomic,
+      color: 'var(--smirk-warning, #d8a14d)',
+    });
+  }
+  if (lockedAtomic && lockedAtomic > 0n) {
+    extras.push({
+      label: 'Locked',
+      value: lockedAtomic,
+      color: 'var(--smirk-fg-muted)',
+    });
+  }
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '8px 4px',
+        boxSizing: 'border-box',
+      }}
+    >
+      {/* Primary balance: full row, mono, auto-shrinks via the
+          containing column. word-break:break-all is a last-resort
+          for pathological retro themes where one character is wider
+          than the whole popup; for normal renders the number fits. */}
+      <div
+        style={{
+          fontSize: 18,
+          fontWeight: 600,
+          fontFamily: 'var(--smirk-font-family-mono, monospace)',
+          wordBreak: 'break-all',
+          lineHeight: 1.2,
+        }}
+      >
+        {formatted}{' '}
+        <span
+          style={{
+            fontSize: 13,
+            color: 'var(--smirk-fg-muted)',
+            fontWeight: 500,
+          }}
+        >
+          {asset.ticker}
+        </span>
+      </div>
+      {fiatDisplay && !hidden && (
+        <div
+          style={{
+            fontSize: 13,
+            color: 'var(--smirk-fg-muted)',
+            fontFamily: 'var(--smirk-font-family-mono, monospace)',
+          }}
+        >
+          {fiatDisplay}
+        </div>
+      )}
+      {extras.length > 0 && !hidden && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            marginTop: 4,
+          }}
+        >
+          {extras.map((e) => (
+            <span
+              key={e.label}
+              style={{
+                fontSize: 11,
+                color: e.color ?? 'var(--smirk-fg-muted)',
+                fontFamily: 'var(--smirk-font-family-mono, monospace)',
+              }}
+            >
+              {e.label}: {formatAmountWithAsset(e.value, asset, 8, { trimZeros: true })}{' '}
+              {asset.ticker}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -426,6 +598,7 @@ function TxRow({
   onClick,
   onTipClawback,
   onTipDiscard,
+  onTipClaim,
   onTipActionDone,
 }: {
   row: AssetDetailTxRow;
@@ -434,6 +607,7 @@ function TxRow({
   onClick?: () => void;
   onTipClawback?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
   onTipDiscard?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
+  onTipClaim?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
   onTipActionDone?: () => void;
 }) {
   const asset = mustGetAsset(assetId);
@@ -481,7 +655,13 @@ function TxRow({
       incoming = true;
       isTip = true;
       const platform = row.platform ? `${row.platform} ` : '';
-      meta = `${platform}from ${row.counterparty}`;
+      const sender = `${platform}from ${row.counterparty}`;
+      // Status prefix gives the user a quick "is this real money I
+      // can spend yet" read without having to know the chain's
+      // confirmation policy.
+      meta = row.status
+        ? `${tipStatusLabel(row.status)} · ${sender}`
+        : sender;
       break;
     }
   }
@@ -493,18 +673,35 @@ function TxRow({
     : 'var(--smirk-fg-muted)';
   const arrow = incoming ? '↙' : '↗';
 
-  // tip-sent rows that have an action-eligible status surface inline
-  // Clawback / Discard controls. The row container becomes a non-
-  // clickable `<div>` in this case (HTML forbids nesting a button
-  // inside a button). The chain-explorer click affordance stays on
-  // non-tip rows.
-  const showTipActions =
+  // A received tip is "ready to claim" once funding has buried.
+  // Mirrors the InboxTab logic — caller decides whether to wire
+  // `onTipClaim`; we only render the button if it's wired AND the
+  // tip is in the right shape. Includes 'claiming' status because
+  // the backend's claim endpoint is idempotent for the same user —
+  // when a previous sweep attempt failed client-side (LWS 500,
+  // wallet locked, etc.) the tip stays in 'claiming' and the only
+  // recovery path is retry. tip-received rows with a `claimed`
+  // status fall through as quiet info rows.
+  const tipReadyToClaim =
+    row.kind === 'tip-received' &&
+    (row.status === 'pending' || row.status === 'claiming') &&
+    row.fundingConfirmations !== undefined &&
+    row.confirmationsRequired !== undefined &&
+    row.fundingConfirmations >= row.confirmationsRequired;
+
+  // Inline action rows replace the chain-explorer click affordance —
+  // tip-sent rows get Clawback / Discard, tip-received rows get Claim.
+  // The row container becomes a non-clickable `<div>` whenever an
+  // inline action is showing (HTML forbids nested buttons).
+  const showTipSentActions =
     row.kind === 'tip-sent' &&
     ((onTipClawback &&
       (row.status === 'pending' ||
         row.status === 'pending_confirmation' ||
         row.status === 'claiming')) ||
       (onTipDiscard && row.status === 'draft'));
+  const showTipReceivedActions = tipReadyToClaim && onTipClaim !== undefined;
+  const showTipActions = showTipSentActions || showTipReceivedActions;
 
   const Container = !showTipActions && onClick ? 'button' : 'div';
 
@@ -524,6 +721,15 @@ function TxRow({
     const r = await onTipDiscard(row.tipId);
     setBusy(false);
     setMsg(r.ok ? '✓ Discarded' : `Error: ${r.error ?? 'unknown'}`);
+    if (r.ok && onTipActionDone) onTipActionDone();
+  };
+  const handleClaim = async () => {
+    if (row.kind !== 'tip-received' || !onTipClaim) return;
+    setBusy(true);
+    setMsg('Claiming…');
+    const r = await onTipClaim(row.tipId);
+    setBusy(false);
+    setMsg(r.ok ? '✓ Claimed' : `Error: ${r.error ?? 'unknown'}`);
     if (r.ok && onTipActionDone) onTipActionDone();
   };
 
@@ -557,8 +763,32 @@ function TxRow({
           boxSizing: 'border-box',
         }}
       >
-        <span style={{ fontSize: 16, color: arrowColor, lineHeight: 1 }}>
-          {isTip ? '🎁' : arrow}
+        {/* Unified leading icon block: every row gets a direction
+            arrow (↙ in / ↗ out); tips additionally get a 🎁 badge
+            so they thread through the asset history visually while
+            still standing out. Earlier the giftbox REPLACED the
+            arrow on tips, hiding the direction signal — split them
+            so users see both at a glance. */}
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 2,
+            color: arrowColor,
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ fontSize: 16 }}>{arrow}</span>
+          {isTip && (
+            <span
+              aria-label="tip"
+              title="Social tip"
+              style={{ fontSize: 12 }}
+            >
+              🎁
+            </span>
+          )}
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -612,6 +842,22 @@ function TxRow({
                 {row.confirmationsRequired}
               </div>
             )}
+          {row.kind === 'tip-received' &&
+            (row.status === 'pending' || row.status === 'pending_confirmation') &&
+            row.confirmationsRequired !== undefined &&
+            row.fundingConfirmations !== undefined &&
+            row.fundingConfirmations < row.confirmationsRequired && (
+              <div
+                style={{
+                  fontSize: 10,
+                  color: 'var(--smirk-fg-muted)',
+                  marginTop: 1,
+                }}
+              >
+                Confirming: {row.fundingConfirmations}/
+                {row.confirmationsRequired}
+              </div>
+            )}
         </div>
         {'timestamp' in row && row.timestamp && (
           <div
@@ -625,7 +871,7 @@ function TxRow({
           </div>
         )}
       </Container>
-      {showTipActions && row.kind === 'tip-sent' && (
+      {showTipActions && (
         <div
           style={{
             display: 'flex',
@@ -634,7 +880,7 @@ function TxRow({
             alignItems: 'center',
           }}
         >
-          {row.status === 'draft' && onTipDiscard && (
+          {row.kind === 'tip-sent' && row.status === 'draft' && onTipDiscard && (
             <button
               onClick={handleDiscard}
               disabled={busy}
@@ -643,9 +889,10 @@ function TxRow({
               Discard draft
             </button>
           )}
-          {(row.status === 'pending' ||
-            row.status === 'pending_confirmation' ||
-            row.status === 'claiming') &&
+          {row.kind === 'tip-sent' &&
+            (row.status === 'pending' ||
+              row.status === 'pending_confirmation' ||
+              row.status === 'claiming') &&
             onTipClawback && (
               <button
                 onClick={handleClawback}
@@ -655,6 +902,24 @@ function TxRow({
                 ↩ Clawback
               </button>
             )}
+          {row.kind === 'tip-received' && tipReadyToClaim && onTipClaim && (
+            <button
+              onClick={handleClaim}
+              disabled={busy}
+              style={{
+                ...tipActionBtn,
+                // Primary-styled because Claim is the user's reason
+                // to be on this screen. Visually distinct from the
+                // muted Clawback / Discard.
+                background: 'var(--smirk-accent)',
+                color: 'var(--smirk-accent-fg)',
+                borderColor: 'var(--smirk-accent)',
+                fontWeight: 600,
+              }}
+            >
+              {busy ? 'Claiming…' : '🎁 Claim'}
+            </button>
+          )}
           {msg && (
             <span
               style={{
@@ -703,6 +968,26 @@ function tipStatusLabel(status: string): string {
     default:
       return status;
   }
+}
+
+/**
+ * Format a USD price for the sparkline label. Picks significant-
+ * figure precision dynamically so micro-cap assets (WOW at $0.0003)
+ * read meaningfully and majors (BTC at $103,847.21) stay compact.
+ *
+ *   ≥ 1000:  no decimals          ("$103,847")
+ *   ≥ 1:     2 decimals           ("$167.34")
+ *   ≥ 0.01:  4 decimals           ("$0.0184")
+ *   < 0.01:  6 decimals           ("$0.000341")
+ */
+function formatPrice(usd: number): string {
+  if (!Number.isFinite(usd) || usd <= 0) return '—';
+  if (usd >= 1000) {
+    return `$${Math.round(usd).toLocaleString('en-US')}`;
+  }
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  if (usd >= 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(6)}`;
 }
 
 function truncId(id: string): string {

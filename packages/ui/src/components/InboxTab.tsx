@@ -2,27 +2,32 @@
  * InboxTab — unified surface for everything that needs the user's
  * attention (UI_DESIGN.md Principle 3).
  *
- * v0.3 ships with **pending Grin exchanges** only: incoming S1s
- * awaiting our receiver-side sign (`pending_to_sign`), and outgoing
- * S2s ready for our finalize (`pending_to_finalize`). The
- * relay-side data structures are described in
- * `packages/core/src/api/grin.ts` (createGrinRelay / getGrinPendingSlatepacks).
+ * Two row families today:
+ *   - **Grin slatepacks**: incoming S1s awaiting our receiver-side
+ *     sign (`pending_to_sign`), outgoing S2s ready for our finalize
+ *     (`pending_to_finalize`). Relay-backed (Smirk-to-Smirk traffic).
+ *   - **Incoming social tips**: tips someone sent to our handle.
+ *     Bucketed into "Waiting for confirmations" (still maturing
+ *     on-chain) and "Ready to claim" (the sender's broadcast has
+ *     enough confirmations; one tap sweeps funds to our wallet).
  *
- * v0.4+ adds atomic-swap rounds, tip notes, and e2ee DMs — each ride
- * the same envelope pattern, just different `kind` tags.
+ * v0.4+ adds atomic-swap rounds and e2ee DMs — each ride the same
+ * envelope pattern, just different `kind` tags or a new prop array.
  *
  * Presentation-only: data + handlers are injected by the shell. The
- * shell is responsible for the 30s poll cadence and for routing each
- * row's "Sign" / "Finalize" actions into the appropriate wizard.
+ * shell owns the 30s poll cadence (Grin relay + claimable/received
+ * tips), routes Grin actions into the appropriate wizard, and runs
+ * the per-asset sweep when the user taps Claim on a ready tip.
  */
 
 import type { ComponentChildren } from 'preact';
+import { useState } from 'preact/hooks';
 import { ActionButton } from './ActionButton';
 import { formatAmountWithTicker } from '../format';
 
-// Grin's asset id in the registry. Used to format amounts for the v0.3
-// Inbox (only Grin slatepacks today). When v0.4 adds swap rounds + tip
-// notes, the row component will look up the asset per-item instead.
+// Grin's asset id in the registry. Used for the Grin-relay rows
+// (always Grin). Tip rows look up their own asset per-item since
+// they can be any of the five.
 const GRIN_ASSET_ID = 'grin';
 
 export interface InboxItemBase {
@@ -51,9 +56,40 @@ export interface InboxItemPendingToFinalize extends InboxItemBase {
 }
 export type InboxItem = InboxItemPendingToSign | InboxItemPendingToFinalize;
 
+/**
+ * A social tip the user has received and may need to act on.
+ *
+ * Two surfaces, distinguished by whether `fundingConfirmations`
+ * has reached `confirmationsRequired`:
+ *
+ *   - **Pending** — sender broadcast funding, chain is still
+ *     maturing. Renders with a confirmation progress strip.
+ *   - **Claimable** — funding is buried, primary "Claim" action.
+ *
+ * `senderDisplay` is best-effort cosmetic — backend hides it if the
+ * sender opted into anonymity. `assetId` is the canonical Smirk
+ * asset id (`btc` / `ltc` / `xmr` / `wow` / `grin`), used to look
+ * up display formatting + icons.
+ */
+export interface InboxTipItem {
+  /** Backend tip id (UUID). Used by Claim handler. */
+  tipId: string;
+  assetId: 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
+  amountAtomic: bigint;
+  /** "@bob (Telegram)" / "@alice (Discord)" / "smirker" / null. */
+  senderDisplay: string | null;
+  fundingConfirmations: number;
+  confirmationsRequired: number;
+  createdAt: string;
+}
+
 export interface InboxTabProps {
   /** Items the shell pulled from the slatepack relay. */
   items: InboxItem[];
+  /** Incoming social tips. Shell pulls via api.getReceivedTips on the
+   *  same 30s poll cadence as the Grin relay. Optional so platform
+   *  shells that don't speak the social tips API can omit. */
+  tips?: InboxTipItem[];
   /** True while a fetch is in flight. Renders a subtle loading hint. */
   loading?: boolean;
   /** Error string from the last fetch — surfaced if `items` is empty. */
@@ -74,6 +110,14 @@ export interface InboxTabProps {
    */
   onCancel?: (item: InboxItem) => void | Promise<void>;
   /**
+   * Tapping Claim on a ready tip: shell runs the per-asset sweep
+   * (decrypt encrypted_key with the wallet's BTC private key, then
+   * sweep tip_address → user's receive address, then
+   * confirmTipSweep). Optional — omitted shells render tips as
+   * informational rows with no claim button.
+   */
+  onClaimTip?: (item: InboxTipItem) => Promise<void> | void;
+  /**
    * "+ Paste a slatepack" affordance at the top of the Inbox. The shell
    * routes to a paste screen which inspects the slate's `sta` field and
    * dispatches to the appropriate wizard (S1 → sign-as-receiver,
@@ -91,6 +135,20 @@ export function InboxTab(props: InboxTabProps) {
   const toFinalize = props.items.filter(
     (i): i is InboxItemPendingToFinalize => i.kind === 'pending_to_finalize',
   );
+
+  const tips = props.tips ?? [];
+  const tipsPending = tips.filter(
+    (t) => t.fundingConfirmations < t.confirmationsRequired,
+  );
+  const tipsClaimable = tips.filter(
+    (t) => t.fundingConfirmations >= t.confirmationsRequired,
+  );
+
+  const allEmpty =
+    toSign.length === 0 &&
+    toFinalize.length === 0 &&
+    tipsPending.length === 0 &&
+    tipsClaimable.length === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -122,7 +180,7 @@ export function InboxTab(props: InboxTabProps) {
         </button>
       )}
 
-      {props.error && toSign.length === 0 && toFinalize.length === 0 && (
+      {props.error && allEmpty && (
         <div
           style={{
             padding: 12,
@@ -135,6 +193,40 @@ export function InboxTab(props: InboxTabProps) {
         >
           {props.error}
         </div>
+      )}
+
+      {/* Tip sections render only when there's something to show OR
+          the prop is wired but the lists are empty AND there's no
+          Grin activity. Avoids showing two empty stubs to users who
+          only ever do Grin and never receive tips. */}
+      {(tipsClaimable.length > 0 ||
+        (props.tips !== undefined && tipsClaimable.length === 0 && tipsPending.length === 0 && toSign.length === 0 && toFinalize.length === 0)) &&
+        tipsClaimable.length > 0 && (
+        <Section
+          title="Tips ready to claim"
+          subtitle="Confirmed on-chain — one tap to sweep into your wallet."
+          count={tipsClaimable.length}
+        >
+          {tipsClaimable.map((tip) => (
+            <TipClaimableRow
+              key={tip.tipId}
+              tip={tip}
+              {...(props.onClaimTip ? { onClaim: () => props.onClaimTip!(tip) } : {})}
+            />
+          ))}
+        </Section>
+      )}
+
+      {tipsPending.length > 0 && (
+        <Section
+          title="Tips waiting for confirmations"
+          subtitle="Sender broadcast — funds appear once the chain matures."
+          count={tipsPending.length}
+        >
+          {tipsPending.map((tip) => (
+            <TipPendingRow key={tip.tipId} tip={tip} />
+          ))}
+        </Section>
       )}
 
       <Section
@@ -362,6 +454,141 @@ function InboxRow({
             ✕
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function TipClaimableRow({
+  tip,
+  onClaim,
+}: {
+  tip: InboxTipItem;
+  onClaim?: () => Promise<void> | void;
+}) {
+  // Track in-flight claim per-row so the user gets feedback while
+  // the sweep + broadcast + confirm round-trip is happening (often
+  // 1-3 seconds for UTXO, longer for CryptoNote). Independent per
+  // tip so multiple claims can be queued without UI confusion.
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const handleClaim = async () => {
+    if (!onClaim || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onClaim();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Claim failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        padding: '10px 12px',
+        background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+        border: '1px solid var(--smirk-accent)',
+        borderRadius: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {formatAmountWithTicker(tip.amountAtomic, tip.assetId)}
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              color: 'var(--smirk-fg-muted)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {tip.senderDisplay ? `from ${tip.senderDisplay}` : 'from anonymous'} ·{' '}
+            {timeAgo(tip.createdAt)}
+          </div>
+        </div>
+        <ActionButton
+          label={busy ? 'Claiming…' : 'Claim'}
+          icon={busy ? '⋯' : '✓'}
+          onClick={() => void handleClaim()}
+          disabled={busy || !onClaim}
+        />
+      </div>
+      {error && (
+        <div
+          style={{
+            fontSize: 11,
+            color: 'var(--smirk-negative, #ff6b6b)',
+            marginTop: 2,
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TipPendingRow({ tip }: { tip: InboxTipItem }) {
+  const progress = Math.min(
+    1,
+    tip.fundingConfirmations / Math.max(1, tip.confirmationsRequired),
+  );
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        padding: '10px 12px',
+        background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+        border: '1px solid var(--smirk-border)',
+        borderRadius: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>
+          {formatAmountWithTicker(tip.amountAtomic, tip.assetId)}
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)' }}>
+          {tip.fundingConfirmations} / {tip.confirmationsRequired} confs
+        </span>
+      </div>
+      <div
+        style={{
+          fontSize: 10,
+          color: 'var(--smirk-fg-muted)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {tip.senderDisplay ? `from ${tip.senderDisplay}` : 'from anonymous'} ·{' '}
+        {timeAgo(tip.createdAt)}
+      </div>
+      <div
+        style={{
+          height: 4,
+          background: 'var(--smirk-bg-sunken, rgba(255,255,255,0.06))',
+          borderRadius: 2,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: `${Math.round(progress * 100)}%`,
+            height: '100%',
+            background: 'var(--smirk-accent)',
+            transition: 'width 0.3s ease',
+          }}
+        />
       </div>
     </div>
   );
