@@ -2,12 +2,19 @@
  * OnboardingWizard — first-run flow: create or import a wallet.
  *
  * Steps:
- *   0. Welcome:   Create new | Import existing
- *   1a (create). Show generated mnemonic — user writes it down
- *   1b (import). 12 / 24 numbered word boxes — paste-fills all at once
- *   2 (create only). Verify by re-entering N random words
- *   3. Set password (twice)
- *   4. Done — calls `onComplete(mnemonic, password)` to seal the keystore
+ *   0. Welcome:    Create new | Import existing
+ *   1a (create).   Show generated mnemonic — user writes it down
+ *   1b (import).   Warning screen — Smirk only restores Smirk-created seeds
+ *   1b'.           12 numbered word boxes — paste-fills all at once
+ *   2 (create).    Verify by re-entering N random words
+ *   3.             Set password (twice)
+ *   4.             onComplete(mnemonic, password) seals the keystore
+ *   5 (optional).  Set up Smirk — handle reservation + privacy toggle
+ *   6.             onFullyDone — caller refreshes wallet state, shows Home
+ *
+ * The setup step (5) only renders if the caller wires `reserveSmirkName`
+ * AND/OR `setInjectEnabled`. Existing callers that don't pass these
+ * skip straight from 4 to 6 with no behavior change.
  *
  * In-progress mnemonic state lives in `useState` only. NOT persisted via
  * `useWizard` — that would write the unencrypted mnemonic to
@@ -26,11 +33,33 @@ export interface OnboardingWizardProps {
   /** Validate a user-supplied mnemonic. Caller wires `isValidMnemonic` from `@smirk/core`. */
   isValidMnemonic: (mnemonic: string) => boolean;
   /**
-   * Persist the wallet. Caller wires this to
-   * `walletKeystore.createWallet({ mnemonic, password })`. May throw —
+   * Persist the wallet AND bootstrap (auth + token) so the optional
+   * setup step has a JWT for backend calls. Caller wires this to
+   * `walletKeystore.createWallet` + `bootstrapAuth`. May throw —
    * the wizard surfaces the error and lets the user retry the password.
    */
   onComplete: (mnemonic: string, password: string) => Promise<void>;
+  /**
+   * Called once the user finishes (or skips) the post-create setup
+   * step. Caller refreshes wallet state here to unmount the wizard
+   * and reveal the main app. If omitted, the wizard renders the
+   * "Wallet ready." status until the parent un-renders it.
+   */
+  onFullyDone?: () => Promise<void> | void;
+  /**
+   * Reserve a Smirk @handle. If omitted, the handle row in the
+   * setup step doesn't render. The caller is expected to have a
+   * valid auth token before the setup step runs (i.e., onComplete
+   * also bootstraps). Should throw with a user-friendly message
+   * — the wizard surfaces it inline and keeps the field editable.
+   */
+  reserveSmirkName?: (handle: string) => Promise<void>;
+  /**
+   * Persist the user's choice for `window.smirk` injection on
+   * websites. If omitted, the privacy toggle in the setup step
+   * doesn't render. Defaults to enabled when shown.
+   */
+  setInjectEnabled?: (enabled: boolean) => Promise<void>;
   /** Number of words to require during the verification step (create flow). Default 3. */
   verifyCount?: number;
   class?: string;
@@ -40,9 +69,11 @@ type Step =
   | { kind: 'welcome' }
   | { kind: 'show'; mnemonic: string }
   | { kind: 'verify'; mnemonic: string; indices: number[] }
+  | { kind: 'import-warning' }
   | { kind: 'import' }
   | { kind: 'password'; mnemonic: string }
   | { kind: 'submitting' }
+  | { kind: 'setup' }
   | { kind: 'done' };
 
 export function OnboardingWizard(props: OnboardingWizardProps) {
@@ -50,7 +81,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const [error, setError] = useState<string | null>(null);
 
   const startCreate = () => setStep({ kind: 'show', mnemonic: props.generateMnemonic() });
-  const startImport = () => setStep({ kind: 'import' });
+  const startImport = () => setStep({ kind: 'import-warning' });
   const proceedToVerify = (mnemonic: string) => {
     const wordCount = mnemonic.trim().split(/\s+/).length;
     const indices = pickRandomIndices(wordCount, props.verifyCount ?? 3);
@@ -58,12 +89,31 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   };
   const proceedToPassword = (mnemonic: string) => setStep({ kind: 'password', mnemonic });
 
+  // The setup step renders only when the caller wired at least one
+  // post-create action. Old callers that didn't pass either callback
+  // skip straight to 'done' — no UI change for them.
+  const hasSetupStep = Boolean(props.reserveSmirkName ?? props.setInjectEnabled);
+
+  const finishSetup = async () => {
+    setStep({ kind: 'done' });
+    // Defer to the next tick so the "Wallet ready." status renders
+    // briefly before the parent un-renders us — avoids a flash of
+    // empty space if the parent refresh is synchronous.
+    setTimeout(() => {
+      void props.onFullyDone?.();
+    }, 250);
+  };
+
   const handleSubmit = async (mnemonic: string, password: string) => {
     setStep({ kind: 'submitting' });
     setError(null);
     try {
       await props.onComplete(mnemonic, password);
-      setStep({ kind: 'done' });
+      if (hasSetupStep) {
+        setStep({ kind: 'setup' });
+      } else {
+        await finishSetup();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create wallet');
       setStep({ kind: 'password', mnemonic });
@@ -100,11 +150,18 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         />
       )}
 
+      {step.kind === 'import-warning' && (
+        <ImportWarning
+          onContinue={() => setStep({ kind: 'import' })}
+          onBack={() => setStep({ kind: 'welcome' })}
+        />
+      )}
+
       {step.kind === 'import' && (
         <ImportMnemonic
           isValidMnemonic={props.isValidMnemonic}
           onContinue={proceedToPassword}
-          onBack={() => setStep({ kind: 'welcome' })}
+          onBack={() => setStep({ kind: 'import-warning' })}
         />
       )}
 
@@ -117,6 +174,14 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       )}
 
       {step.kind === 'submitting' && <FullPageStatus>Encrypting wallet…</FullPageStatus>}
+
+      {step.kind === 'setup' && (
+        <SmirkSetup
+          {...(props.reserveSmirkName ? { reserveSmirkName: props.reserveSmirkName } : {})}
+          {...(props.setInjectEnabled ? { setInjectEnabled: props.setInjectEnabled } : {})}
+          onContinue={finishSetup}
+        />
+      )}
 
       {step.kind === 'done' && <FullPageStatus>Wallet ready.</FullPageStatus>}
     </div>
@@ -145,7 +210,7 @@ function Welcome({ onCreate, onImport }: { onCreate: () => void; onImport: () =>
           Welcome to Smirk
         </h1>
         <p style={{ fontSize: 13, opacity: 0.65, margin: 0, lineHeight: 1.45 }}>
-          Multi-currency tip wallet.
+          Five chains. Tip by username.
           <br />
           Non-custodial — you hold the keys.
         </p>
@@ -178,6 +243,11 @@ function ShowMnemonic({
       <p style={bodyTextStyle}>
         Write these {words.length} words down in order. Anyone with this phrase
         can spend your funds. Smirk does not store it.
+      </p>
+      <p style={{ ...bodyTextStyle, margin: '0 0 16px', opacity: 0.55 }}>
+        This is a standard BIP39 seed. It also restores in Cake Wallet (XMR /
+        WOW), grin-wallet (Grin), and any BIP84 wallet like Sparrow or
+        Electrum (BTC / LTC) — you're not locked in to Smirk.
       </p>
       <ol
         style={{
@@ -517,6 +587,260 @@ function SetPassword({
       </div>
       {(localError || error) && <FieldError>{localError ?? error}</FieldError>}
       <Button onClick={handleSubmit}>Create wallet</Button>
+    </div>
+  );
+}
+
+function ImportWarning({
+  onContinue,
+  onBack,
+}: {
+  onContinue: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <div>
+      <ScreenHeader title="Before you import" onBack={onBack} />
+      <p style={bodyTextStyle}>
+        Smirk only restores wallets that were originally created in
+        Smirk. Pasting a seed from another wallet (MetaMask, Cake,
+        Electrum, Trezor, etc.) will show empty balances — not
+        because your funds are lost, but because Smirk uses its own
+        derivation paths for some chains.
+      </p>
+      <p style={{ ...bodyTextStyle, margin: '0 0 16px' }}>
+        If your seed was generated elsewhere, restore it in that
+        wallet instead. To move funds into Smirk, send them from that
+        wallet to a Smirk receive address after onboarding.
+      </p>
+      <Button onClick={onContinue}>Continue with Smirk seed</Button>
+    </div>
+  );
+}
+
+function SmirkSetup({
+  reserveSmirkName,
+  setInjectEnabled,
+  onContinue,
+}: {
+  reserveSmirkName?: (handle: string) => Promise<void>;
+  setInjectEnabled?: (enabled: boolean) => Promise<void>;
+  onContinue: () => Promise<void> | void;
+}) {
+  const [handle, setHandle] = useState('');
+  const [handleStatus, setHandleStatus] = useState<
+    | { kind: 'idle' }
+    | { kind: 'submitting' }
+    | { kind: 'reserved'; handle: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+  // Default ON to match the inject-policy default (closes the
+  // fingerprinting issue's short-term ask while preserving dapp
+  // interop out of the box — see background/dapp/inject-policy.ts).
+  const [injectEnabled, setInjectEnabledState] = useState(true);
+
+  // Client-side handle validation mirrors the backend rules
+  // (3-32 chars, lowercase alphanumerics + underscores) so the user
+  // gets immediate feedback before the network round-trip.
+  const handleNormalized = handle.trim().toLowerCase().replace(/^@/, '');
+  const handleValid =
+    handleNormalized.length >= 3 &&
+    handleNormalized.length <= 32 &&
+    /^[a-z0-9_]+$/.test(handleNormalized);
+  const showHandleHint =
+    handle.length > 0 && !handleValid && handleStatus.kind !== 'submitting';
+
+  const submitHandle = async () => {
+    if (!reserveSmirkName || !handleValid) return;
+    setHandleStatus({ kind: 'submitting' });
+    try {
+      await reserveSmirkName(handleNormalized);
+      setHandleStatus({ kind: 'reserved', handle: handleNormalized });
+    } catch (e) {
+      setHandleStatus({
+        kind: 'error',
+        message: e instanceof Error ? e.message : 'Could not reserve that name',
+      });
+    }
+  };
+
+  const submitAndContinue = async () => {
+    // Always persist the inject choice (default ON unchanged is
+    // still a write — keeps the storage value in sync with what
+    // the user just saw).
+    if (setInjectEnabled) {
+      try {
+        await setInjectEnabled(injectEnabled);
+      } catch (e) {
+        console.warn('[onboarding] setInjectEnabled failed', e);
+      }
+    }
+    await onContinue();
+  };
+
+  return (
+    <div>
+      <h2 style={{ fontSize: 18, fontWeight: 700, margin: '4px 0 6px' }}>
+        Set up Smirk
+      </h2>
+      <p style={bodyTextStyle}>
+        Two quick choices. Both are optional and changeable in
+        Settings later.
+      </p>
+
+      {reserveSmirkName && (
+        <section
+          style={{
+            background: 'var(--smirk-bg-sunken, rgba(255,255,255,0.03))',
+            border: '1px solid var(--smirk-border, rgba(255,255,255,0.08))',
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 12,
+          }}
+        >
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>
+            Reserve your @handle
+          </h3>
+          <p style={{ ...bodyTextStyle, margin: '0 0 10px', fontSize: 12 }}>
+            Let people tip you by name from smirk.cash and (soon)
+            Telegram + Discord. Skip and pick one later if you're
+            not ready.
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                flex: 1,
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.10)',
+                borderRadius: 8,
+                padding: '0 10px',
+                minWidth: 0,
+              }}
+            >
+              <span style={{ opacity: 0.45, fontSize: 14 }}>@</span>
+              <input
+                type="text"
+                placeholder="your_handle"
+                value={handle}
+                disabled={
+                  handleStatus.kind === 'submitting' ||
+                  handleStatus.kind === 'reserved'
+                }
+                autoComplete="off"
+                autoCapitalize="off"
+                spellcheck={false}
+                onInput={(e) => {
+                  setHandle((e.target as HTMLInputElement).value);
+                  if (handleStatus.kind === 'error') {
+                    setHandleStatus({ kind: 'idle' });
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if ((e as KeyboardEvent).key === 'Enter') void submitHandle();
+                }}
+                style={{
+                  flex: 1,
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: 'inherit',
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  padding: '10px 6px',
+                  minWidth: 0,
+                }}
+              />
+            </div>
+            <Button
+              fullWidth={false}
+              disabled={
+                !handleValid ||
+                handleStatus.kind === 'submitting' ||
+                handleStatus.kind === 'reserved'
+              }
+              onClick={() => void submitHandle()}
+            >
+              {handleStatus.kind === 'submitting'
+                ? 'Reserving…'
+                : handleStatus.kind === 'reserved'
+                  ? 'Reserved'
+                  : 'Reserve'}
+            </Button>
+          </div>
+          {showHandleHint && (
+            <FieldError>
+              3-32 characters, lowercase letters / digits / underscore only.
+            </FieldError>
+          )}
+          {handleStatus.kind === 'error' && (
+            <FieldError>{handleStatus.message}</FieldError>
+          )}
+          {handleStatus.kind === 'reserved' && (
+            <p
+              style={{
+                fontSize: 12,
+                color: 'var(--smirk-positive, #4ade80)',
+                margin: '8px 0 0',
+              }}
+            >
+              ✓ @{handleStatus.handle} reserved.
+            </p>
+          )}
+        </section>
+      )}
+
+      {setInjectEnabled && (
+        <section
+          style={{
+            background: 'var(--smirk-bg-sunken, rgba(255,255,255,0.03))',
+            border: '1px solid var(--smirk-border, rgba(255,255,255,0.08))',
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 16,
+          }}
+        >
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={injectEnabled}
+              onChange={(e) =>
+                setInjectEnabledState((e.target as HTMLInputElement).checked)
+              }
+              style={{ marginTop: 2 }}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                Enable Smirk on websites
+              </div>
+              <p
+                style={{
+                  fontSize: 12,
+                  opacity: 0.65,
+                  margin: '4px 0 0',
+                  lineHeight: 1.4,
+                }}
+              >
+                Lets sites like smirk.cash detect the wallet so you
+                can connect, sign in, and tip. Trade-off: every page
+                can detect Smirk is installed. Reversible in Settings.
+              </p>
+            </div>
+          </label>
+        </section>
+      )}
+
+      <Button onClick={() => void submitAndContinue()}>
+        {handleStatus.kind === 'reserved' ? 'Continue' : 'Skip for now'}
+      </Button>
     </div>
   );
 }

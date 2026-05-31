@@ -121,6 +121,18 @@ export interface SocialMethods {
   lookupSmirkName(username: string): Promise<ApiResponse<SocialLookupResponse>>;
 
   /**
+   * Reserve / update the current user's Smirk handle. Backend
+   * enforces 3-32 chars, `[a-z0-9_]`, unique across users; rejects
+   * with `VALIDATION_ERROR` on shape, `CONFLICT` on already-taken.
+   *
+   * Auth required — caller must have already run `bootstrapAuth` so
+   * the api client has a valid JWT.
+   */
+  setMySmirkUsername(
+    username: string,
+  ): Promise<ApiResponse<{ username: string }>>;
+
+  /**
    * Create a social tip. Two modes:
    *
    * - **Draft** (v0.3+, recommended): omit `funding_txid`. Backend
@@ -216,6 +228,19 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
         `/users/by-username/${encodeURIComponent(cleanUsername)}`,
         { method: 'GET' },
       );
+    },
+
+    async setMySmirkUsername(username) {
+      // No retry: the backend's set-username endpoint mutates state
+      // and a second POST with a different value (the user typed
+      // another name in the brief retry window) would silently
+      // overwrite the first. Single shot — caller surfaces the error
+      // and lets the user retry explicitly.
+      const cleanUsername = username.startsWith('@') ? username.slice(1) : username;
+      return client.request<{ username: string }>('/users/me/username', {
+        method: 'POST',
+        body: JSON.stringify({ username: cleanUsername }),
+      });
     },
 
     async createSocialTip(req) {

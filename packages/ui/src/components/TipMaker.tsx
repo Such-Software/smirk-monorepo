@@ -97,6 +97,15 @@ export interface TipMakerProps {
   /** Optional: hide an asset id (e.g. while Grin tipping is gated on
    *  user feature flag). Pass to filter the asset chip cycle. */
   hideAssetIds?: string[];
+  /** Optional: pre-select this asset on mount, overriding the
+   *  largest-balance default. Shell wires this when the user arrives
+   *  via the per-asset detail screen's Tip button — entering the Tip
+   *  flow with the *intent* already attached to a coin is much less
+   *  surprising than landing on whatever asset has the biggest
+   *  balance. The recent-recipient lookup still overrides this once
+   *  the user types a known handle (their last-tipped asset wins
+   *  there — that's the stronger signal). */
+  prefilledAssetId?: string;
 }
 
 const PLATFORM_LABEL: Record<TipPlatform, string> = {
@@ -171,10 +180,21 @@ export function TipMaker(props: TipMakerProps) {
     [props.assetIds, props.hideAssetIds],
   );
 
-  // Pick a default asset: caller's last-tipped asset for known recipient,
-  // else the asset with the largest balance.
+  // Pick a default asset:
+  //   1. `prefilledAssetId` (shell-supplied — "I came from the Grin
+  //      screen, I want to tip Grin"). Highest-priority signal.
+  //   2. Recent recipient's `lastAssetId` — applied in the useEffect
+  //      below once a known username is typed.
+  //   3. Asset with the largest balance — final fallback when neither
+  //      hint is available.
   const defaultAssetId = useMemo(() => {
     if (visibleAssetIds.length === 0) return '';
+    if (
+      props.prefilledAssetId &&
+      visibleAssetIds.includes(props.prefilledAssetId)
+    ) {
+      return props.prefilledAssetId;
+    }
     let best = visibleAssetIds[0]!;
     let bestBal = props.resolveBalance(best);
     for (const id of visibleAssetIds.slice(1)) {
@@ -185,7 +205,7 @@ export function TipMaker(props: TipMakerProps) {
       }
     }
     return best;
-  }, [visibleAssetIds, props.resolveBalance]);
+  }, [visibleAssetIds, props.resolveBalance, props.prefilledAssetId]);
 
   const [platform, setPlatform] = useState<TipPlatform>('smirk');
   const [username, setUsername] = useState('');
