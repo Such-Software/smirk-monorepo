@@ -54,6 +54,7 @@ import {
   type SentTipRow,
   ApprovalScreen,
   AssetDetailScreen,
+  ClaimableTipsBanner,
   GrinPasteIncomingWizard,
   GrinPayInvoiceWizard,
   GrinRequestWizard,
@@ -1088,6 +1089,7 @@ function App() {
             <HomeRouter
               wallet={walletState.wallet}
               session={session}
+              tips={tipInbox.tips}
               onRefresh={handleRefresh}
               onTipClaim={async (tipId, assetId) => {
                 try {
@@ -1172,11 +1174,16 @@ function RefreshIconButton({ onClick, busy }: { onClick: () => void; busy: boole
 function HomeRouter({
   wallet,
   session,
+  tips,
   onRefresh: _onRefresh,
   onTipClaim,
 }: {
   wallet: UnlockedWallet;
   session: WalletSession | null;
+  /** All received tips, pending + claimable. Home only renders a
+   *  claim banner for the subset where funding has matured; Inbox
+   *  owns the full list + per-tip rows. */
+  tips: InboxTipItem[];
   /** Reserved — pull-to-refresh on Home will call this. Header refresh button uses it directly. */
   onRefresh: () => Promise<void>;
   /** Claim a tip from an asset-detail row. Threaded through to
@@ -2108,15 +2115,38 @@ function HomeRouter({
       onAssetClick={(id) => void navigate(`home/asset/${id}`)}
       resolveIcon={resolveIcon}
       topNotice={
-        scanningAssets.length > 0 ? (
-          <ScanProgressBanner
-            entries={scanningAssets.map(([assetId, b]) => ({
-              assetId,
-              ...b.scanProgress!,
-            }))}
-            refreshedAt={session?.refreshedAt ?? null}
-          />
-        ) : null
+        <>
+          {(() => {
+            const claimable = tips.filter(
+              (t) => t.fundingConfirmations >= t.confirmationsRequired,
+            );
+            if (claimable.length === 0) return null;
+            const single = claimable.length === 1 ? claimable[0] : undefined;
+            return (
+              <ClaimableTipsBanner
+                count={claimable.length}
+                {...(single
+                  ? {
+                      singleTip: {
+                        assetId: single.assetId,
+                        amountAtomic: single.amountAtomic,
+                      },
+                    }
+                  : {})}
+                onView={() => void switchTab('inbox')}
+              />
+            );
+          })()}
+          {scanningAssets.length > 0 ? (
+            <ScanProgressBanner
+              entries={scanningAssets.map(([assetId, b]) => ({
+                assetId,
+                ...b.scanProgress!,
+              }))}
+              refreshedAt={session?.refreshedAt ?? null}
+            />
+          ) : null}
+        </>
       }
       footer={
         session?.error ? (

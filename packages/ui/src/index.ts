@@ -67,6 +67,9 @@ export type {
 export { HomeTab } from './components/HomeTab';
 export type { HomeTabProps, HomeAssetRow } from './components/HomeTab';
 
+export { ClaimableTipsBanner } from './components/ClaimableTipsBanner';
+export type { ClaimableTipsBannerProps } from './components/ClaimableTipsBanner';
+
 export { SendWizard } from './components/SendWizard';
 export type {
   SendWizardProps,
