@@ -126,6 +126,15 @@ export interface InboxTabProps {
    * Smirk relay — i.e. external grin-wallet, Grim, or clipboard handoff.
    */
   onPasteSlatepack?: () => void;
+  /**
+   * "+ Paste tip link" affordance for public tips shared as a URL
+   * (`https://smirk.cash/tip/<id>#<fragment>`). The shell routes to a
+   * paste screen that parses the URL via `parseShareUrl`, then runs
+   * `claimPublicTip` to sweep the funds. Public tips never appear in
+   * the received-tips list (they're not addressed to a specific
+   * username), so this is the only way for the URL holder to claim.
+   */
+  onPasteTipLink?: () => void;
 }
 
 export function InboxTab(props: InboxTabProps) {
@@ -157,27 +166,53 @@ export function InboxTab(props: InboxTabProps) {
         {...(props.onRefresh ? { onRefresh: props.onRefresh } : {})}
       />
 
-      {props.onPasteSlatepack && (
-        <button
-          onClick={props.onPasteSlatepack}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            padding: '12px 14px',
-            background: 'var(--smirk-accent)',
-            color: 'var(--smirk-accent-fg, #fff)',
-            border: 'none',
-            borderRadius: 8,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-          }}
-        >
-          + Paste a slatepack
-        </button>
+      {(props.onPasteSlatepack || props.onPasteTipLink) && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {props.onPasteSlatepack && (
+            <button
+              onClick={props.onPasteSlatepack}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                padding: '12px 14px',
+                background: 'var(--smirk-accent)',
+                color: 'var(--smirk-accent-fg, #fff)',
+                border: 'none',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              + Paste a slatepack
+            </button>
+          )}
+          {props.onPasteTipLink && (
+            <button
+              onClick={props.onPasteTipLink}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                padding: '12px 14px',
+                background: 'transparent',
+                color: 'var(--smirk-accent)',
+                border: '1px solid var(--smirk-accent)',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              + Paste tip link
+            </button>
+          )}
+        </div>
       )}
 
       {props.error && allEmpty && (

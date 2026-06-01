@@ -67,6 +67,7 @@ import {
   TipMaker,
   applyTheme,
   defaultTheme,
+  formatAmountWithTicker,
   getTheme,
   listThemes,
   useRoute,
@@ -94,7 +95,7 @@ import {
   calcGrinFee,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
-import { claimSocialTip } from './tip-claim-handler';
+import { claimSocialTip, claimPublicTip, parseShareUrl } from './tip-claim-handler';
 import { listTipKeyBackups, removeTipKeyBackup } from './tip-key-backup';
 import {
   writeDappPublicCache,
@@ -1752,6 +1753,65 @@ function HomeRouter({
     );
   }
 
+  // Inbox → "+ Paste tip link" entry point for public tips shared as
+  // smirk.cash/tip/<id>#<fragment> URLs. Public tips never appear in
+  // the received-tips list (they're not addressed to a username) — this
+  // is the only path for the URL holder to claim. Parses the URL,
+  // fetches via getPublicSocialTip (unauthenticated, server doesn't
+  // know who is claiming), decrypts the spend key with the fragment,
+  // and sweeps to the user's wallet.
+  if (route.current === 'home/inbox/paste-tip') {
+    return (
+      <PasteTipLinkScreen
+        onReadClipboard={async () => navigator.clipboard.readText()}
+        onClaim={async (url) => {
+          if (!wallet.mnemonic) {
+            return { ok: false, error: 'Wallet not unlocked' };
+          }
+          const userId = session?.bootstrap?.userId;
+          if (!userId) {
+            return { ok: false, error: 'No active session — wallet not bootstrapped' };
+          }
+          const parsed = parseShareUrl(url);
+          if (!parsed) {
+            return {
+              ok: false,
+              error: 'Not a recognised Smirk tip link. Expected smirk.cash/tip/<id>#<key>.',
+            };
+          }
+          const outcome = await claimPublicTip(
+            wallet,
+            userId,
+            parsed.tipId,
+            parsed.fragmentKey,
+          );
+          if (!outcome.ok) return { ok: false, error: outcome.error };
+          const claimedAssetId = outcome.assetId;
+          const claimedAmount = outcome.amountAtomic;
+          // Auto-unhide the swept asset so the funds show up on Home,
+          // matching the received-tips flow.
+          if (claimedAssetId) {
+            await store.update((s) => {
+              if ((s.ui.hiddenAssets ?? []).includes(claimedAssetId)) {
+                s.ui.hiddenAssets = withAssetVisibility(
+                  s.ui.hiddenAssets ?? [],
+                  claimedAssetId,
+                  true,
+                );
+              }
+            });
+          }
+          void _onRefresh();
+          const success: { ok: true; assetId?: string; amountAtomic?: bigint } = { ok: true };
+          if (claimedAssetId !== undefined) success.assetId = claimedAssetId;
+          if (claimedAmount !== undefined) success.amountAtomic = claimedAmount;
+          return success;
+        }}
+        onExit={() => void navigate('inbox')}
+      />
+    );
+  }
+
   if (route.current === 'home/inbox/pay-invoice') {
     return (
       <GrinPayInvoiceWizard
@@ -2442,6 +2502,216 @@ function InboxPasteRouter({
   );
 }
 
+/**
+ * PasteTipLinkScreen — entry point for public tips shared as a URL.
+ *
+ * Public tips never land in the received-tips list because they're
+ * not addressed to a specific username; the URL fragment is the only
+ * access token. Whoever pastes the link in here can claim the funds.
+ *
+ * On success we render the swept amount + txid in a toast and bounce
+ * back to Inbox; the shell auto-unhides the asset so the funds appear
+ * on Home.
+ */
+function PasteTipLinkScreen({
+  onReadClipboard,
+  onClaim,
+  onExit,
+}: {
+  onReadClipboard?: () => Promise<string>;
+  onClaim: (
+    url: string,
+  ) => Promise<
+    | { ok: true; assetId?: string; amountAtomic?: bigint }
+    | { ok: false; error: string }
+  >;
+  onExit: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{
+    assetId?: string;
+    amountAtomic?: bigint;
+  } | null>(null);
+
+  const submit = async () => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setError('Paste a tip link first.');
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    const outcome = await onClaim(trimmed);
+    setBusy(false);
+    if (!outcome.ok) {
+      setError(outcome.error);
+      return;
+    }
+    const next: { assetId?: string; amountAtomic?: bigint } = {};
+    if (outcome.assetId !== undefined) next.assetId = outcome.assetId;
+    if (outcome.amountAtomic !== undefined) next.amountAtomic = outcome.amountAtomic;
+    setResult(next);
+  };
+
+  const pasteFromClipboard = async () => {
+    if (!onReadClipboard) return;
+    try {
+      const clip = await onReadClipboard();
+      setText(clip);
+      setError(null);
+    } catch {
+      setError('Could not read clipboard. Paste manually below.');
+    }
+  };
+
+  if (result) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+          <span style={{ width: 60 }} />
+          <span style={{ opacity: 0.5 }}>Tip claimed</span>
+          <span style={{ width: 60 }} />
+        </header>
+        <div
+          style={{
+            padding: 16,
+            background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+            border: '1px solid var(--smirk-accent)',
+            borderRadius: 8,
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            {result.assetId && result.amountAtomic !== undefined
+              ? `Received ${formatAmountWithTicker(result.amountAtomic, result.assetId)}`
+              : 'Tip claimed'}
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: 'var(--smirk-fg-muted)',
+              marginTop: 6,
+            }}
+          >
+            Funds are settling on-chain. They'll appear on Home shortly.
+          </div>
+        </div>
+        <button
+          onClick={onExit}
+          style={{
+            background: 'var(--smirk-accent)',
+            color: 'var(--smirk-accent-fg, #fff)',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '10px 16px',
+            borderRadius: 6,
+            fontFamily: 'inherit',
+          }}
+        >
+          Back to Inbox
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+        <button
+          onClick={onExit}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'inherit',
+            cursor: 'pointer',
+            fontSize: 12,
+            padding: '4px 8px',
+          }}
+        >
+          ‹ Back
+        </button>
+        <span style={{ opacity: 0.5 }}>Paste tip link</span>
+        <span style={{ width: 60 }} />
+      </header>
+
+      <h2 style={{ fontSize: 15, margin: '0 0 4px' }}>Claim a tip from a link</h2>
+      <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)', marginBottom: 4 }}>
+        Paste a Smirk public-tip URL (smirk.cash/tip/…#…). The fragment
+        after the # is the spend key — keep the full URL secret until
+        you've claimed.
+      </div>
+
+      <textarea
+        value={text}
+        onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+        placeholder="https://smirk.cash/tip/…#…"
+        rows={3}
+        autoFocus
+        style={{
+          width: '100%',
+          fontFamily: 'monospace',
+          fontSize: 11,
+          padding: '8px 10px',
+          borderRadius: 6,
+          border: '1px solid var(--smirk-border)',
+          background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+          color: 'inherit',
+          resize: 'vertical',
+          boxSizing: 'border-box',
+        }}
+      />
+
+      {error && (
+        <div style={{ fontSize: 12, color: 'var(--smirk-negative, #ff6b6b)' }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        {onReadClipboard && (
+          <button
+            onClick={pasteFromClipboard}
+            style={{
+              background: 'transparent',
+              color: 'inherit',
+              border: '1px solid var(--smirk-border)',
+              cursor: 'pointer',
+              fontSize: 12,
+              padding: '6px 12px',
+              borderRadius: 6,
+            }}
+          >
+            📋 Paste from clipboard
+          </button>
+        )}
+        <button
+          onClick={() => void submit()}
+          disabled={!text.trim() || busy}
+          style={{
+            flex: 1,
+            background: text.trim() && !busy ? 'var(--smirk-accent)' : 'rgba(255,255,255,0.06)',
+            color: 'var(--smirk-accent-fg, #fff)',
+            border: 'none',
+            cursor: text.trim() && !busy ? 'pointer' : 'not-allowed',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '8px 16px',
+            borderRadius: 6,
+            fontFamily: 'inherit',
+          }}
+        >
+          {busy ? 'Claiming…' : 'Claim'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ----- Other tabs (still stubs) -----
 
 function SwapStub() {
@@ -2931,6 +3201,7 @@ function InboxRouter({
           })
           .then(() => navigate('home/inbox/paste'));
       }}
+      onPasteTipLink={() => navigate('home/inbox/paste-tip')}
       onOpenIncomingSign={(item) =>
         void handleOpenIncomingSign(item.slatepack, item.relayId)
       }

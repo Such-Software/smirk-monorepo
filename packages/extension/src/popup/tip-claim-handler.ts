@@ -36,6 +36,8 @@ import { hex } from '@scure/base';
 import {
   api,
   decryptTipPayload,
+  decryptPublicTipPayload,
+  decodeUrlFragmentKey,
   bytesToHex,
   hexToBytes,
   randomBytes,
@@ -74,6 +76,16 @@ export type ClaimAsset = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
 export interface ClaimResult {
   ok: true;
   txid: string;
+  /** Which asset was swept. Set by `claimPublicTip` (so the public
+   *  paste-link flow can auto-unhide the asset on success) and the
+   *  per-asset sweeper helpers. Targeted claims via `claimSocialTip`
+   *  already know the asset id from the inbox item; this field is a
+   *  best-effort echo for parity. */
+  assetId?: ClaimAsset;
+  /** Atomic amount swept, in the asset's smallest unit. Optional —
+   *  set by `claimPublicTip` so the post-claim toast can show what
+   *  the user received without a second fetch. */
+  amountAtomic?: bigint;
 }
 export interface ClaimError {
   ok: false;
@@ -165,6 +177,165 @@ export async function claimSocialTip(
   }
 
   return sweep;
+}
+
+/**
+ * Claim a public (URL-shared) tip — companion to `claimSocialTip`
+ * for the targeted case. The big differences:
+ *
+ *   - **Tip discovery** is via `getPublicSocialTip(tipId)` (no auth
+ *     needed, the URL is the access token) instead of the
+ *     authenticated inbox lookup.
+ *   - **Decryption** uses the URL fragment key (symmetric AES via
+ *     `decryptPublicTipPayload`) instead of recipient-BTC-key ECIES.
+ *     The server never sees the fragment key; it lives only in the
+ *     URL after `#`.
+ *   - **Recipient is the caller**. We sweep to whichever asset the
+ *     tip is denominated in on the calling wallet — same `wallet`
+ *     argument as the targeted flow.
+ *
+ * Per-asset sweep + post-confirm steps are identical to the
+ * targeted flow (same helpers). Backend `claim_social_tip`
+ * idempotency holds for the same claimer too, so retry after a
+ * partial-failure works the same way.
+ */
+export async function claimPublicTip(
+  wallet: UnlockedWallet,
+  userId: string,
+  tipId: string,
+  fragmentKeyEncoded: string,
+): Promise<ClaimOutcome> {
+  // Step 1: fetch tip info (unauthenticated). Confirms the tip
+  // exists, exposes asset + tip_address + ciphertext + claimability.
+  const info = await api.getPublicSocialTip(tipId);
+  if (info.error || !info.data) {
+    return { ok: false, error: info.error ?? 'Public tip not found' };
+  }
+  const t = info.data;
+  if (
+    t.funding_confirmations < t.confirmations_required ||
+    !t.is_claimable
+  ) {
+    return {
+      ok: false,
+      error: `Tip not yet claimable — ${t.funding_confirmations}/${t.confirmations_required} confirmations`,
+    };
+  }
+  // The encrypted_key + tip_address on PublicTipInfo are the values
+  // a claimer needs; once claimed by the same user the backend
+  // returns them again on retries (idempotent UPDATE).
+  if (!t.encrypted_key) {
+    return { ok: false, error: 'Tip has no encrypted key — already claimed?' };
+  }
+  if (!t.tip_address) {
+    return { ok: false, error: 'Tip has no on-chain address' };
+  }
+
+  // Step 2: decrypt with the URL fragment key. Symmetric — no
+  // BTC private-key derivation, just the bytes from after the `#`.
+  let decrypted: Uint8Array;
+  try {
+    const fragmentKey = decodeUrlFragmentKey(fragmentKeyEncoded);
+    decrypted = decryptPublicTipPayload(t.encrypted_key, fragmentKey);
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Decryption failed (wrong fragment key?): ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    };
+  }
+
+  // Step 3: claim server-side to flip status pending → claiming.
+  // Returns the same encrypted_key (we already decrypted it) — we
+  // only care that the call succeeds. Same idempotency contract as
+  // the targeted flow.
+  const claim = await api.claimSocialTip(tipId);
+  if (claim.error || !claim.data) {
+    return { ok: false, error: claim.error ?? 'Backend rejected claim' };
+  }
+
+  // Step 4: per-asset sweep — identical to the targeted flow.
+  const asset = t.asset as ClaimAsset;
+  let sweep: ClaimOutcome;
+  try {
+    switch (asset) {
+      case 'btc':
+      case 'ltc':
+        sweep = await sweepUtxo(asset, decrypted, t.tip_address, wallet);
+        break;
+      case 'xmr':
+      case 'wow':
+        sweep = await sweepXmrWow(asset, decrypted, t.tip_address, wallet);
+        break;
+      case 'grin':
+        sweep = await sweepGrin(decrypted, wallet, userId);
+        break;
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Sweep failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+
+  if (!sweep.ok) return sweep;
+
+  // Step 5: confirm sweep on backend. Best-effort.
+  try {
+    const conf = await api.confirmTipSweep(tipId, sweep.txid);
+    if (conf.error) {
+      console.warn('[tip-claim public] confirmTipSweep failed:', conf.error);
+    }
+  } catch (e) {
+    console.warn('[tip-claim public] confirmTipSweep threw:', e);
+  }
+
+  // Echo asset id + amount on the success result so the calling
+  // screen can render "Claimed N BTC" without a second tip lookup.
+  return {
+    ok: true,
+    txid: sweep.txid,
+    assetId: asset,
+    amountAtomic: BigInt(t.amount),
+  } satisfies ClaimResult;
+}
+
+/**
+ * Parse a Smirk public-tip URL (`https://smirk.cash/tip/<id>#<fragment>`)
+ * into its tipId + fragmentKey components. Tolerates trailing slashes
+ * and a leading `@`/spaces from clipboard paste. Returns `null` if
+ * the input doesn't look like a Smirk tip URL.
+ *
+ * The fragment is returned as the raw base64url-encoded string; the
+ * caller passes it straight to `claimPublicTip` which decodes via
+ * `decodeUrlFragmentKey`.
+ */
+export function parseShareUrl(
+  raw: string,
+): { tipId: string; fragmentKey: string } | null {
+  const trimmed = raw.trim().replace(/^@+/, '');
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  // Match `/tip/<uuid>` or `/tip/<uuid>/` — keep the host check
+  // restrictive (smirk.cash + dev-hosted variants).
+  const host = url.hostname.toLowerCase();
+  const okHost =
+    host === 'smirk.cash' ||
+    host === 'localhost' ||
+    host.endsWith('.smirk.cash') ||
+    host.endsWith('.such.software');
+  if (!okHost) return null;
+  const match = url.pathname.match(/^\/tip\/([A-Za-z0-9-]+)\/?$/);
+  if (!match || !match[1]) return null;
+  const fragment = url.hash.replace(/^#/, '');
+  if (!fragment) return null;
+  return { tipId: match[1], fragmentKey: fragment };
 }
 
 // ============================================================================

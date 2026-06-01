@@ -111,8 +111,16 @@ export interface PublicTipInfo {
   status: string;
   created_at: string;
   is_public: boolean;
+  /** Hex-encoded AES-GCM ciphertext of the spend key. Useless without
+   *  the URL fragment key that lives only on the sharer/receiver side. */
+  encrypted_key: string | null;
+  /** Per-tip sweep destination — populated for public tips. */
+  tip_address: string | null;
   funding_confirmations: number;
   confirmations_required: number;
+  /** Convenience flag — true iff funding has enough confirmations
+   *  AND the tip is still pending/claiming. */
+  is_claimable: boolean;
 }
 
 // ============================================================================
