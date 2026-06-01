@@ -46,7 +46,14 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "{smirk-monorepo-skeleton@such-software.dev}",
-      "strict_min_version": "115.0"
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "personallyIdentifyingInfo",
+          "financialAndPaymentInfo",
+          "websiteContent"
+        ]
+      }
     }
   }
 }
