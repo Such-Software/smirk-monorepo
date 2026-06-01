@@ -38,3 +38,4 @@ export type {
 } from './types';
 
 export { ThorchainSwap, type ThorchainSwapOptions } from './thorchain';
+export { TrocadorSwap, type TrocadorSwapOptions } from './trocador';
