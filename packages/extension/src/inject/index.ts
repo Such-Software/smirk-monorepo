@@ -82,11 +82,15 @@ const transport: SmirkPageTransport = <M extends Parameters<SmirkPageTransport>[
       reject,
       timer,
     });
-    // postMessage origin '*' is fine: the content script filters by
-    // event.source === window AND by the `SMIRK_REQUEST` discriminator,
-    // and we don't include any sensitive data in the request body
-    // (everything sensitive lives in the wallet, not the request).
-    window.postMessage(req, '*');
+    // Restrict to the page's own origin (P0 audit fix). The legacy
+    // `'*'` allowed any iframe / cross-frame handler that matched
+    // our discriminator to read responses including pubkeys and
+    // signatures. The content-script handler lives on the same
+    // origin as the page (content scripts share the page's
+    // browsing context for postMessage purposes), so locking down
+    // to `location.origin` is the strictest setting that still
+    // works end-to-end.
+    window.postMessage(req, window.location.origin);
   });
 };
 

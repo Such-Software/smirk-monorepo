@@ -384,6 +384,74 @@ export class WalletKeystore {
     await this.storage.remove(KEYSTORE_KEY);
   }
 
+  /**
+   * Rotate the password protecting the keystore. Decrypts with the
+   * current password (verifying it via the AEAD tag), re-encrypts
+   * the same mnemonic under a freshly-derived key from the new
+   * password + a NEW salt, and writes the new ciphertext to storage.
+   *
+   * Throws `InvalidPasswordError` on wrong current password (same
+   * as `unlock`), so callers can render the same "wrong password"
+   * UX. Throws if no wallet exists.
+   *
+   * Atomicity: we compute the new ciphertext fully before writing,
+   * so a thrown error mid-flight leaves the old keystore untouched.
+   * If the storage write itself fails after we've computed the new
+   * bytes, the on-disk state is the OLD ciphertext + the user's
+   * OLD password — recoverable by retrying. There is no "half-
+   * rotated" state on disk.
+   *
+   * Leaves the in-memory cached wallet alone — the unlocked
+   * `UnlockedWallet` doesn't depend on the encryption key, only on
+   * the underlying mnemonic. Subsequent `unlock()` calls require
+   * the new password.
+   *
+   * Iterations default to `PBKDF2_ITERATIONS` (600_000) for the new
+   * keystore — the rotation is also the path forward for legacy
+   * v0.2.x wallets that were created at 100_000 iterations, if we
+   * ever wire an opportunistic re-encrypt on first unlock.
+   */
+  async changePassword(args: {
+    currentPassword: string;
+    newPassword: string;
+    iterations?: number;
+  }): Promise<void> {
+    const keystore = await this.loadKeystore();
+    if (!keystore) {
+      throw new Error('No wallet to change password on — create one first.');
+    }
+    if (!args.newPassword) {
+      throw new Error('New password must be non-empty');
+    }
+    // Verify current password by decrypting (throws InvalidPasswordError
+    // on AEAD mismatch). We discard the decrypted wallet — the caller
+    // doesn't need it; in-memory state stays whatever it was.
+    const unlocked = await unlockKeystore(keystore, args.currentPassword);
+    try {
+      const next = await createKeystore(
+        unlocked.mnemonic,
+        args.newPassword,
+        args.iterations ?? PBKDF2_ITERATIONS,
+      );
+      // Preserve creation timestamp + fingerprint so backend dedupe
+      // and birthday-restore behaviour don't shift just because the
+      // user rotated their password. Only the encryption envelope
+      // changes.
+      const preserved: EncryptedKeystore = {
+        ...next,
+        fingerprint: keystore.fingerprint,
+        createdAt: keystore.createdAt,
+      };
+      await this.storage.set(KEYSTORE_KEY, preserved);
+    } finally {
+      // Zero the temporarily-decrypted seed bytes even on the
+      // success path — we held a plaintext seed for the duration
+      // of the rotation, and it should not outlive this call.
+      unlocked.seed.fill(0);
+      zeroKeysIfPossible(unlocked.keys);
+    }
+  }
+
   /** Get the cached unlocked wallet, or throw `WalletLockedError`. */
   getUnlocked(): UnlockedWallet {
     if (!this.cached) throw new WalletLockedError();

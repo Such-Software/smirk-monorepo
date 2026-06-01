@@ -11,6 +11,7 @@
  */
 
 import { render } from 'preact';
+import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import {
   ChromeLocalStorage,
@@ -1121,6 +1122,7 @@ function App() {
           ),
           settings: (
             <SettingsStub
+              wallet={walletState.wallet}
               onLock={lockHandler}
               onForgetComplete={async () => {
                 await sessionStorage.remove(SESSION_CACHE_KEY);
@@ -3062,7 +3064,457 @@ function AssetsVisibilityPanel({
   );
 }
 
-function SettingsStub({ onLock, onForgetComplete }: {
+/**
+ * Settings → Security — three sub-panels:
+ *   1. Seed fingerprint display (read-only identifier).
+ *   2. Change password (in-place keystore rotation).
+ *   3. Export raw keys (with strong warning + reveal-on-confirm).
+ *
+ * Each section is collapsed by default — they're rarely used and
+ * shouldn't compete with everyday surfaces (auto-lock, theme).
+ * Clicking the section header expands. Keeps the Settings tab
+ * scrollable but not overwhelming.
+ */
+function SecurityPanel({ wallet }: { wallet: UnlockedWallet }) {
+  const [openSection, setOpenSection] = useState<
+    null | 'fingerprint' | 'password' | 'export'
+  >(null);
+  const toggle = (s: typeof openSection) =>
+    setOpenSection(openSection === s ? null : s);
+
+  return (
+    <section style={{ marginTop: 20 }}>
+      <label
+        style={{
+          display: 'block',
+          fontSize: 12,
+          opacity: 0.8,
+          marginBottom: 6,
+        }}
+      >
+        Security
+      </label>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 8,
+          padding: '6px 8px',
+        }}
+      >
+        <SecurityRow
+          label="Wallet fingerprint"
+          open={openSection === 'fingerprint'}
+          onToggle={() => toggle('fingerprint')}
+        >
+          <FingerprintPanel fingerprint={wallet.fingerprint} />
+        </SecurityRow>
+        <SecurityRow
+          label="Change password"
+          open={openSection === 'password'}
+          onToggle={() => toggle('password')}
+        >
+          <ChangePasswordPanel
+            onClose={() => setOpenSection(null)}
+          />
+        </SecurityRow>
+        <SecurityRow
+          label="Export raw keys"
+          open={openSection === 'export'}
+          onToggle={() => toggle('export')}
+        >
+          <ExportKeysPanel wallet={wallet} />
+        </SecurityRow>
+      </div>
+    </section>
+  );
+}
+
+function SecurityRow({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ComponentChildren;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <button
+        onClick={onToggle}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          width: '100%',
+          padding: '8px 4px',
+          background: 'transparent',
+          border: 'none',
+          color: 'inherit',
+          fontFamily: 'inherit',
+          fontSize: 13,
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span>{label}</span>
+        <span style={{ opacity: 0.5 }}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && <div style={{ padding: '0 4px 8px' }}>{children}</div>}
+    </div>
+  );
+}
+
+function FingerprintPanel({ fingerprint }: { fingerprint: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(fingerprint);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <p style={{ fontSize: 11, opacity: 0.65, margin: 0, lineHeight: 1.4 }}>
+        A one-way SHA-256 of your seed. Smirk uses this as your
+        wallet&apos;s anonymous identifier across devices — not
+        reversible, cannot move funds.
+      </p>
+      <div
+        style={{
+          fontFamily: 'var(--smirk-font-family-mono, monospace)',
+          fontSize: 11,
+          padding: '6px 8px',
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: 6,
+          wordBreak: 'break-all',
+        }}
+      >
+        {fingerprint}
+      </div>
+      <button
+        onClick={() => void copy()}
+        style={{
+          alignSelf: 'flex-start',
+          padding: '4px 10px',
+          background: 'rgba(255,255,255,0.05)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 6,
+          color: 'inherit',
+          fontFamily: 'inherit',
+          fontSize: 11,
+          cursor: 'pointer',
+        }}
+      >
+        {copied ? '✓ Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
+function ChangePasswordPanel({ onClose }: { onClose: () => void }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    if (next.length < 8) {
+      setError('New password must be at least 8 characters.');
+      return;
+    }
+    if (next !== confirm) {
+      setError("New passwords don't match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await walletKeystore.changePassword({
+        currentPassword: current,
+        newPassword: next,
+      });
+      setDone(true);
+      // Auto-close the panel after the success message shows briefly.
+      setTimeout(() => {
+        setCurrent('');
+        setNext('');
+        setConfirm('');
+        setDone(false);
+        onClose();
+      }, 1500);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Failed to change password',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <p
+        style={{
+          fontSize: 12,
+          color: 'var(--smirk-positive, #4ade80)',
+          margin: 0,
+        }}
+      >
+        ✓ Password changed. Use the new password next time you unlock.
+      </p>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <p style={{ fontSize: 11, opacity: 0.65, margin: 0, lineHeight: 1.4 }}>
+        Rotates the local encryption key on your keystore. Your seed
+        phrase is unchanged — this only affects how the wallet is
+        unlocked on this device.
+      </p>
+      <input
+        type="password"
+        value={current}
+        onInput={(e) => setCurrent((e.target as HTMLInputElement).value)}
+        placeholder="Current password"
+        autoComplete="current-password"
+        style={settingsInputStyle}
+      />
+      <input
+        type="password"
+        value={next}
+        onInput={(e) => setNext((e.target as HTMLInputElement).value)}
+        placeholder="New password (≥ 8 chars)"
+        autoComplete="new-password"
+        style={settingsInputStyle}
+      />
+      <input
+        type="password"
+        value={confirm}
+        onInput={(e) => setConfirm((e.target as HTMLInputElement).value)}
+        placeholder="Confirm new password"
+        autoComplete="new-password"
+        style={settingsInputStyle}
+      />
+      {error && (
+        <p
+          style={{
+            fontSize: 11,
+            color: 'var(--smirk-negative, #ff6b6b)',
+            margin: 0,
+          }}
+        >
+          {error}
+        </p>
+      )}
+      <button
+        onClick={() => void submit()}
+        disabled={busy}
+        style={{
+          alignSelf: 'flex-start',
+          padding: '6px 12px',
+          background: 'var(--smirk-accent)',
+          color: 'var(--smirk-accent-fg)',
+          border: 'none',
+          borderRadius: 6,
+          fontFamily: 'inherit',
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: busy ? 'wait' : 'pointer',
+        }}
+      >
+        {busy ? 'Changing…' : 'Change password'}
+      </button>
+    </div>
+  );
+}
+
+function ExportKeysPanel({ wallet }: { wallet: UnlockedWallet }) {
+  const [revealed, setRevealed] = useState(false);
+  const keys = wallet.keys;
+
+  if (!revealed) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <p
+          style={{
+            fontSize: 11,
+            opacity: 0.65,
+            margin: 0,
+            lineHeight: 1.4,
+          }}
+        >
+          For recovering your wallet in another tool (Monero CLI,
+          grin-wallet, Sparrow, Electrum, etc.). The same data is
+          derivable from your seed phrase — this panel just saves
+          the derivation work.
+        </p>
+        <div
+          style={{
+            padding: '8px 10px',
+            background: 'rgba(239, 68, 68, 0.10)',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            borderRadius: 6,
+            fontSize: 11,
+            color: '#ef4444',
+            lineHeight: 1.4,
+          }}
+        >
+          ⚠ <strong>Never share private keys.</strong> Anyone with
+          these can spend your funds. Smirk staff will NEVER ask
+          for these. Don&apos;t paste them into websites, chat apps,
+          or AI assistants.
+        </div>
+        <button
+          onClick={() => setRevealed(true)}
+          style={{
+            alignSelf: 'flex-start',
+            padding: '6px 12px',
+            background: 'rgba(239, 68, 68, 0.10)',
+            border: '1px solid rgba(239, 68, 68, 0.5)',
+            color: '#ef4444',
+            borderRadius: 6,
+            fontFamily: 'inherit',
+            fontSize: 12,
+            cursor: 'pointer',
+          }}
+        >
+          I understand the risk — reveal keys
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <KeyRow
+        label="BTC private key (secp256k1)"
+        sub="BIP84 path m/84'/0'/0'/0/0 — import into Sparrow/Electrum"
+        value={bytesToHex(keys.btc.privateKey)}
+      />
+      <KeyRow
+        label="LTC private key (secp256k1)"
+        sub="BIP84 path m/84'/2'/0'/0/0 — import into Electrum-LTC"
+        value={bytesToHex(keys.ltc.privateKey)}
+      />
+      <KeyRow
+        label="XMR private spend key"
+        sub="32-byte ed25519 scalar — Cake/Feather: import 'spend key' + view key below"
+        value={bytesToHex(keys.xmr.privateSpendKey)}
+      />
+      <KeyRow
+        label="XMR private view key"
+        sub="32-byte ed25519 scalar — pair with spend key above for read-only import"
+        value={bytesToHex(keys.xmr.privateViewKey)}
+      />
+      <KeyRow
+        label="WOW private spend key"
+        sub="32-byte ed25519 scalar — Cake/Feather Wownero: import 'spend key' + view key below"
+        value={bytesToHex(keys.wow.privateSpendKey)}
+      />
+      <KeyRow
+        label="WOW private view key"
+        sub="32-byte ed25519 scalar — pair with spend key above"
+        value={bytesToHex(keys.wow.privateViewKey)}
+      />
+      <KeyRow
+        label="Grin slatepack secret key"
+        sub="32-byte ed25519 scalar — grin-wallet/Grim Smirk-compat import"
+        value={bytesToHex(keys.grin.privateKey)}
+      />
+      <button
+        onClick={() => setRevealed(false)}
+        style={{
+          alignSelf: 'flex-start',
+          padding: '4px 10px',
+          background: 'transparent',
+          border: '1px solid var(--smirk-border)',
+          color: 'inherit',
+          borderRadius: 6,
+          fontFamily: 'inherit',
+          fontSize: 11,
+          cursor: 'pointer',
+        }}
+      >
+        Hide
+      </button>
+    </div>
+  );
+}
+
+function KeyRow({
+  label,
+  sub,
+  value,
+}: {
+  label: string;
+  sub: string;
+  value: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: 12, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 10, opacity: 0.5 }}>{sub}</div>
+      <div
+        style={{
+          fontFamily: 'var(--smirk-font-family-mono, monospace)',
+          fontSize: 10,
+          padding: '4px 6px',
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: 4,
+          wordBreak: 'break-all',
+        }}
+      >
+        {value}
+      </div>
+      <button
+        onClick={() => void copy()}
+        style={{
+          alignSelf: 'flex-start',
+          padding: '2px 8px',
+          background: 'rgba(255,255,255,0.05)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 4,
+          color: 'inherit',
+          fontFamily: 'inherit',
+          fontSize: 10,
+          cursor: 'pointer',
+        }}
+      >
+        {copied ? '✓ Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
+const settingsInputStyle = {
+  fontSize: 12,
+  padding: '6px 8px',
+  background: 'rgba(255,255,255,0.04)',
+  border: '1px solid rgba(255,255,255,0.10)',
+  borderRadius: 6,
+  color: 'inherit',
+  fontFamily: 'inherit',
+  outline: 'none',
+} as const;
+
+function SettingsStub({ wallet, onLock, onForgetComplete }: {
+  wallet: UnlockedWallet;
   onLock: () => Promise<void>;
   onForgetComplete: () => Promise<void>;
 }) {
@@ -3239,6 +3691,11 @@ function SettingsStub({ onLock, onForgetComplete }: {
           Takes effect on next page load for each tab.
         </p>
       </section>
+
+      {/* Security section — fingerprint display, change-password
+          flow, export-raw-keys panel. Three audit-flagged TODOs
+          rolled into one Settings group. */}
+      <SecurityPanel wallet={wallet} />
 
       <button
         onClick={() => void onLock()}

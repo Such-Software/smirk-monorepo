@@ -107,10 +107,14 @@ function installMessageRelay(): void {
             message: lastError?.message ?? 'no response from service worker',
           },
         };
-        window.postMessage(errResp, '*');
+        // Restrict to the page's own origin (P0 audit fix). Any
+        // cross-origin iframe listening for `SMIRK_RESPONSE` would
+        // otherwise see pubkeys + signatures intended for the
+        // host page. See companion comment in inject/index.ts.
+        window.postMessage(errResp, window.location.origin);
         return;
       }
-      window.postMessage(resp, '*');
+      window.postMessage(resp, window.location.origin);
     });
   });
 }
