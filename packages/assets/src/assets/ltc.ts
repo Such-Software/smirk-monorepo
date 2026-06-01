@@ -58,4 +58,8 @@ export const ltc: AssetDefinition = {
   swapRoutes: ['thorchain'],
 
   socialTipping: true,
+  sendable: true,
+  receivable: true,
+  dappBridge: true,
+  defaultVisible: true,
 };

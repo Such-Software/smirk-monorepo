@@ -31,7 +31,7 @@ import type { PendingOutgoingTx } from './pending-outgoing';
 // ============================================================================
 
 /** Bump on every breaking schema change; add a migration. */
-export const CURRENT_VERSION = 4;
+export const CURRENT_VERSION = 5;
 
 /**
  * The full session state shape. Every field is restorable on reload.
@@ -74,6 +74,21 @@ export interface SessionState {
     denomination: string;
     autoLockMinutes: number;
     theme: string;
+    /**
+     * Asset ids the user has explicitly hidden via Settings → Assets.
+     * Defaults to `[]`. UI surfaces (HomeTab, UnifiedBalance,
+     * SendWizard, TipMaker, ReceiveScreen) filter the asset list by
+     * `!hidden`; balance polling skips hidden assets to keep backend
+     * round-trips proportional to what the user actually uses. The
+     * AssetDetailScreen stays routable for hidden assets so direct
+     * links + claim-notification flows still work.
+     *
+     * "Hidden" is a UI preference. The wallet still owns the keys
+     * for hidden assets — hiding never destroys access. Claiming a
+     * tip for a hidden asset auto-unhides it (claiming money is an
+     * explicit "I want to see this" signal).
+     */
+    hiddenAssets: string[];
   };
 
   /**
@@ -117,6 +132,7 @@ export const DEFAULT_SESSION_STATE: SessionState = {
     denomination: 'USD',
     autoLockMinutes: 0, // safe default: lock immediately at session end
     theme: 'default',
+    hiddenAssets: [], // every registered asset visible by default
   },
   pendingOutgoing: [],
 };
@@ -166,6 +182,17 @@ export const MIGRATIONS: Record<number, Migration> = {
       ...prev,
       version: 4,
       pendingOutgoing: [],
+    } satisfies SessionState;
+  },
+  // v4 → v5: add `ui.hiddenAssets` (default []). Existing wallets
+  // come out the other side with every registered asset visible —
+  // the upgrade is a no-op for any user who's been using v0.3.0+.
+  4: (s) => {
+    const prev = s as SessionState;
+    return {
+      ...prev,
+      version: 5,
+      ui: { ...prev.ui, hiddenAssets: [] },
     } satisfies SessionState;
   },
 };

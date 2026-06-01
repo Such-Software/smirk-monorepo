@@ -258,4 +258,47 @@ export interface AssetDefinition {
    * registered chain can opt out without a separate code path.
    */
   socialTipping: boolean;
+
+  // ----- Capability flags (registry-driven feature inclusion) -----
+  //
+  // Used by UI surfaces to decide whether to include this asset in
+  // their chooser / list without hard-coding asset ids in inclusion
+  // tables. Stated explicitly here so a future asset definition can
+  // opt out cleanly. Example consumer:
+  //
+  //   listAssets({ canSend: true })  // → only sendable assets
+  //
+  // See `docs/MULTI_ASSET_ARCHITECTURE.md` for the rationale on
+  // capability flags as the scaling primitive vs hardcoded
+  // inclusion lists.
+
+  /** Whether the wallet can broadcast outgoing transactions for this
+   *  asset (SendWizard chooser includes it iff true). Always true for
+   *  v0.3's five built-ins. */
+  sendable: boolean;
+
+  /** Whether the wallet can render a receive address / page for this
+   *  asset (Receive screen chooser includes it iff true). Always true
+   *  for v0.3's five built-ins. */
+  receivable: boolean;
+
+  /** Whether the dapp bridge (`window.smirk`) exposes signing /
+   *  payment surfaces for this asset. v0.3 has signing wired for all
+   *  five via signEd25519WithScalar / BIP-137; future assets like ETH
+   *  will add their own EIP-191 / EIP-712 signing path before this
+   *  flips to true. */
+  dappBridge: boolean;
+
+  /**
+   * Whether new wallets should show this asset by default on the Home
+   * tab. Existing wallets respect the user's persisted
+   * `ui.hiddenAssets` choice and ignore this flag.
+   *
+   * Set to `true` for v0.3's five built-ins (BTC/LTC/XMR/WOW/Grin) so
+   * the upgrade is a no-op for existing users. Future additions (ETH,
+   * stablecoins, additional UTXO chains) should default to `false`
+   * — the user opts in via Settings → Assets rather than getting a
+   * surprise new row in their Home tab after an extension update.
+   */
+  defaultVisible: boolean;
 }

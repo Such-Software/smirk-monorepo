@@ -278,6 +278,21 @@ export interface FetchBalancesOptions {
    * is a lower bound (sometimes 0 when there are real funds present).
    */
   verifyKeyImage?: KeyImageVerifier;
+
+  /**
+   * Optional whitelist of asset ids to actually fetch. When omitted,
+   * every supported asset is fetched (legacy behavior). When set,
+   * any asset NOT in the list gets a zeroed `AssetBalance` returned
+   * and ZERO network round-trips are made for it.
+   *
+   * Used by `Show/Hide assets` to keep backend round-trips
+   * proportional to what the user wants to see — hiding 2-3 assets
+   * cuts the popup-open balance-fetch cost by 40-60%.
+   *
+   * Shape stays stable regardless: `Balances` always has all 5
+   * keys, callers that read by id never need to null-check.
+   */
+  visibleAssetIds?: ReadonlyArray<string>;
 }
 
 export async function fetchAllBalances(
@@ -291,30 +306,50 @@ export async function fetchAllBalances(
   const xmrSpendKeyHex = bytesToHex(wallet.keys.xmr.privateSpendKey);
   const wowSpendKeyHex = bytesToHex(wallet.keys.wow.privateSpendKey);
 
+  // Visibility gate: skip the network round-trip for any asset the
+  // user has hidden in Settings. We still return a zeroed
+  // AssetBalance for hidden assets so the shape is stable for
+  // consumers — totals math, asset-detail direct-nav, etc. all keep
+  // working without per-call branching. See
+  // docs/MULTI_ASSET_ARCHITECTURE.md for the long-form rationale.
+  const visible = (id: string): boolean =>
+    !(options.visibleAssetIds && !options.visibleAssetIds.includes(id));
+  const zero: AssetBalance = { confirmed: 0n, pending: 0n };
+
   const [btc, ltc, xmr, wow, grin] = await Promise.all([
-    fetchUtxoBalance(api, 'btc', wallet.addresses.btc),
-    fetchUtxoBalance(api, 'ltc', wallet.addresses.ltc),
-    fetchLwsBalance(
-      api,
-      bootstrap.userId,
-      'xmr',
-      wallet.addresses.xmr,
-      xmrViewKeyHex,
-      xmrSpendKeyHex,
-      bootstrap.xmrStartHeight,
-      options.verifyKeyImage,
-    ),
-    fetchLwsBalance(
-      api,
-      bootstrap.userId,
-      'wow',
-      wallet.addresses.wow,
-      wowViewKeyHex,
-      wowSpendKeyHex,
-      bootstrap.wowStartHeight,
-      options.verifyKeyImage,
-    ),
-    fetchGrinBalance(api, bootstrap.userId),
+    visible('btc')
+      ? fetchUtxoBalance(api, 'btc', wallet.addresses.btc)
+      : Promise.resolve(zero),
+    visible('ltc')
+      ? fetchUtxoBalance(api, 'ltc', wallet.addresses.ltc)
+      : Promise.resolve(zero),
+    visible('xmr')
+      ? fetchLwsBalance(
+          api,
+          bootstrap.userId,
+          'xmr',
+          wallet.addresses.xmr,
+          xmrViewKeyHex,
+          xmrSpendKeyHex,
+          bootstrap.xmrStartHeight,
+          options.verifyKeyImage,
+        )
+      : Promise.resolve(zero),
+    visible('wow')
+      ? fetchLwsBalance(
+          api,
+          bootstrap.userId,
+          'wow',
+          wallet.addresses.wow,
+          wowViewKeyHex,
+          wowSpendKeyHex,
+          bootstrap.wowStartHeight,
+          options.verifyKeyImage,
+        )
+      : Promise.resolve(zero),
+    visible('grin')
+      ? fetchGrinBalance(api, bootstrap.userId)
+      : Promise.resolve(zero),
   ]);
 
   return { btc, ltc, xmr, wow, grin };

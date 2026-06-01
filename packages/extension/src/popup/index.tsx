@@ -22,6 +22,8 @@ import {
   api,
   bootstrapAuth,
   fetchAllBalances,
+  visibleAssetIds,
+  withAssetVisibility,
   fetchPrices,
   generateMnemonicPhrase,
   isValidBtcAddress,
@@ -631,7 +633,19 @@ function App() {
         }
       }
       const [balances, prices] = await Promise.all([
-        fetchAllBalances(api, wallet, bootstrap, { verifyKeyImage }),
+        (async () => {
+          // Read the user's hidden-asset preference NOW so balance
+          // polling skips network round-trips for hidden assets.
+          // We re-read on every refresh so toggles in Settings take
+          // effect on the next poll without needing a popup remount.
+          const visible = visibleAssetIds(await store.load(), listAssets()).map(
+            (a) => a.id,
+          );
+          return fetchAllBalances(api, wallet, bootstrap, {
+            verifyKeyImage,
+            visibleAssetIds: visible,
+          });
+        })(),
         fetchPrices(api),
       ]);
       setSession({
@@ -664,7 +678,19 @@ function App() {
     setSession((prev) => (prev ? { ...prev, refreshing: true } : prev));
     try {
       const [balances, prices] = await Promise.all([
-        fetchAllBalances(api, wallet, bootstrap, { verifyKeyImage }),
+        (async () => {
+          // Read the user's hidden-asset preference NOW so balance
+          // polling skips network round-trips for hidden assets.
+          // We re-read on every refresh so toggles in Settings take
+          // effect on the next poll without needing a popup remount.
+          const visible = visibleAssetIds(await store.load(), listAssets()).map(
+            (a) => a.id,
+          );
+          return fetchAllBalances(api, wallet, bootstrap, {
+            verifyKeyImage,
+            visibleAssetIds: visible,
+          });
+        })(),
         fetchPrices(api),
       ]);
       // Reconcile pendingOutgoing against the freshly-fetched balances
@@ -817,8 +843,18 @@ function App() {
       // everything. Tip poll failure is silent (kept null in state
       // so InboxTab still renders Grin sections normally); slatepack
       // failure surfaces as before.
+      //
+      // Grin slatepack relay is asset-specific: skip the round-trip
+      // entirely when the user has hidden Grin. Tip poll is per-
+      // user (not per-asset) so it always runs — incoming tips for
+      // any asset, hidden or not, need to surface in the Inbox so
+      // the user can claim them.
+      const sess = await store.load();
+      const grinHidden = (sess.ui.hiddenAssets ?? []).includes('grin');
       const [nextGrin, nextTips] = await Promise.all([
-        fetchGrinInbox(userId),
+        grinHidden
+          ? Promise.resolve({ items: [], loading: false, error: null })
+          : fetchGrinInbox(userId),
         fetchTipInbox().catch((e) => ({
           tips: [],
           error: e instanceof Error ? e.message : 'Tip fetch failed',
@@ -970,8 +1006,14 @@ function App() {
     const userId = session?.bootstrap?.userId;
     if (!userId) return;
     setGrinInbox((s) => ({ ...s, loading: true }));
+    // Match the 30s poll loop: when Grin is hidden, skip the
+    // slatepack relay round-trip but still refresh tips.
+    const sess = await store.load();
+    const grinHidden = (sess.ui.hiddenAssets ?? []).includes('grin');
     const [nextGrin, nextTips] = await Promise.all([
-      fetchGrinInbox(userId),
+      grinHidden
+        ? Promise.resolve({ items: [], loading: false, error: null })
+        : fetchGrinInbox(userId),
       fetchTipInbox().catch((e) => ({
         tips: [],
         error: e instanceof Error ? e.message : 'Tip fetch failed',
@@ -1001,6 +1043,19 @@ function App() {
       ...s,
       tips: s.tips.filter((t) => t.tipId !== item.tipId),
     }));
+    // Auto-unhide the asset if the user had hidden it. Claiming money
+    // is an explicit "I want to see this" signal — leaving the swept
+    // funds invisible because the user hid the asset weeks ago would
+    // be confusing. They can re-hide from Settings if they prefer.
+    await store.update((s) => {
+      if ((s.ui.hiddenAssets ?? []).includes(item.assetId)) {
+        s.ui.hiddenAssets = withAssetVisibility(
+          s.ui.hiddenAssets ?? [],
+          item.assetId,
+          true,
+        );
+      }
+    });
     // Refresh balances so the swept funds appear in the asset row.
     if (session?.bootstrap) {
       void refreshBalances(walletState.wallet, session.bootstrap);
@@ -1146,7 +1201,13 @@ function HomeRouter({
   if (route.current === 'home/send') {
     return (
       <SendWizard
-        assetIds={listAssets().map((a) => a.id)}
+        // Filter to assets that are both (a) sendable per registry AND
+        // (b) not hidden by the user. The chooser should never list
+        // anything the user explicitly hid or the registry never
+        // intended to be sendable.
+        assetIds={visibleAssetIds(sessionState, listAssets())
+          .filter((a) => a.sendable)
+          .map((a) => a.id)}
         validateAddress={validateAddress}
         parseAmount={parseAmount}
         resolveBalance={(assetId) => {
@@ -1373,7 +1434,12 @@ function HomeRouter({
   if (route.current === 'home/receive') {
     return (
       <ReceiveScreen
-        assetIds={listAssets().map((a) => a.id)}
+        // Receivable assets only, minus any the user hid. See
+        // SendWizard for the rationale on capability + visibility
+        // double-gating.
+        assetIds={visibleAssetIds(sessionState, listAssets())
+          .filter((a) => a.receivable)
+          .map((a) => a.id)}
         resolveAddress={(assetId) => resolveAddressForAsset(wallet, assetId)}
         onCopy={(text) => void navigator.clipboard.writeText(text)}
         onExit={() => void navigate('home')}
@@ -1790,7 +1856,13 @@ function HomeRouter({
       : undefined;
     return (
       <TipMaker
-        assetIds={listAssets().map((a) => a.id)}
+        // Tip composer respects both the per-asset socialTipping
+        // capability (future assets can opt out of being tip-able)
+        // and the user's hide-list. See SendWizard for the
+        // capability + visibility double-gating pattern.
+        assetIds={visibleAssetIds(sessionState, listAssets())
+          .filter((a) => a.socialTipping)
+          .map((a) => a.id)}
         {...(tipPrefilledAsset ? { prefilledAssetId: tipPrefilledAsset } : {})}
         // All 5 assets wired: BTC/LTC fresh-keypair, XMR/WOW
         // fresh-primary-keypair + LWS registration, Grin
@@ -1921,7 +1993,7 @@ function HomeRouter({
         onReceive: () => void navigate('home/receive'),
         onSwap: () => void switchTab('swap'),
       }}
-      assets={listAssets().map((a) => {
+      assets={visibleAssetIds(sessionState, listAssets()).map((a) => {
         const b = (balances as Record<string, { confirmed: bigint; pending: bigint; locked?: bigint } | undefined> | undefined)?.[a.id];
         const hasLockedConcept =
           a.id === 'xmr' || a.id === 'wow' || a.id === 'grin';
@@ -2884,6 +2956,112 @@ const AUTO_LOCK_OPTIONS: Array<{ value: number; label: string }> = [
   { value: -1, label: 'Never (until browser closes)' },
 ];
 
+/**
+ * Settings → Assets — show/hide each registered asset.
+ *
+ * Hidden assets disappear from Home, the Send/Receive/Tip choosers,
+ * and balance-poll round-trips. They're still routable directly
+ * (claim notifications, external links) and the wallet still owns
+ * their keys — visibility is a UI preference, not a destructive
+ * action.
+ *
+ * Footer count gives at-a-glance feedback. Auto-unhide-on-claim
+ * (handled elsewhere) and onboarding hint round out the surface.
+ */
+function AssetsVisibilityPanel({
+  sessionState,
+}: {
+  sessionState: ReturnType<typeof useSessionState>;
+}) {
+  const hidden = sessionState.ui.hiddenAssets ?? [];
+  const all = listAssets();
+  const visibleCount = all.filter((a) => !hidden.includes(a.id)).length;
+  const toggle = async (assetId: string, visible: boolean) => {
+    await store.update((s) => {
+      s.ui.hiddenAssets = withAssetVisibility(
+        s.ui.hiddenAssets ?? [],
+        assetId,
+        visible,
+      );
+    });
+  };
+  return (
+    <section style={{ marginTop: 20 }}>
+      <label
+        style={{
+          display: 'block',
+          fontSize: 12,
+          opacity: 0.8,
+          marginBottom: 6,
+        }}
+      >
+        Assets
+      </label>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 8,
+          padding: '6px 8px',
+        }}
+      >
+        {all.map((a) => {
+          const isVisible = !hidden.includes(a.id);
+          return (
+            <label
+              key={a.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                fontSize: 13,
+                padding: '6px 4px',
+                cursor: 'pointer',
+                lineHeight: 1.2,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isVisible}
+                onChange={(e) =>
+                  void toggle(a.id, (e.target as HTMLInputElement).checked)
+                }
+              />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {a.displayName}{' '}
+                <span
+                  style={{
+                    opacity: 0.55,
+                    fontSize: 11,
+                    fontFamily: 'var(--smirk-font-family-mono, monospace)',
+                  }}
+                >
+                  {a.ticker}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <p
+        style={{
+          fontSize: 11,
+          opacity: 0.55,
+          margin: '6px 0 0',
+          lineHeight: 1.4,
+        }}
+      >
+        {visibleCount} visible · {hidden.length} hidden. Hidden assets stop
+        polling the backend until you re-enable them. The wallet still
+        owns the keys — hiding never destroys access.
+      </p>
+    </section>
+  );
+}
+
 function SettingsStub({ onLock, onForgetComplete }: {
   onLock: () => Promise<void>;
   onForgetComplete: () => Promise<void>;
@@ -3016,6 +3194,13 @@ function SettingsStub({ onLock, onForgetComplete }: {
           ))}
         </select>
       </section>
+
+      {/* Assets visibility — let the user curate which coins appear
+          on Home, in choosers, and in balance polling. Hiding an
+          asset never destroys access; the wallet still owns the keys.
+          See docs/MULTI_ASSET_ARCHITECTURE.md for the long-form
+          rationale + the polling cost savings. */}
+      <AssetsVisibilityPanel sessionState={sessionState} />
 
       <section style={{ marginTop: 20 }}>
         <label

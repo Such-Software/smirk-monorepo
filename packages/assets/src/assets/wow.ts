@@ -58,4 +58,8 @@ export const wow: AssetDefinition = {
   swapRoutes: [],
 
   socialTipping: true,
+  sendable: true,
+  receivable: true,
+  dappBridge: true,
+  defaultVisible: true,
 };

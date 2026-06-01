@@ -241,6 +241,45 @@ Grin "pending balance includes locked outputs" thing, the Wownero
 PSBT-signing instead of raw-tx-signing" thing) without leaking them
 into UI code.
 
+### Principle 6a — User-curated visibility, registry-driven feature inclusion
+
+Two related rules that fall out of "scales to N assets":
+
+**User-curated visibility.** Every surface that lists assets honours
+the user's `ui.hiddenAssets` preference through a single helper
+(`visibleAssetIds(state, assets)` in `@smirk/core/state/visibility`).
+*Nowhere else* in the codebase should `state.ui.hiddenAssets.includes(...)`
+appear inline — that's how visibility decisions drift apart across
+surfaces. Hiding an asset:
+
+- Removes it from Home, the Send/Receive/Tip choosers, and the
+  unified-balance total.
+- Skips balance-poll round-trips for it (cost-proportional to what
+  the user actually uses — hiding 2-3 of 5 assets saves 40-60% of
+  the popup-open backend traffic).
+- Leaves the asset routable directly (claim notifications, external
+  links) and leaves the wallet's keys intact.
+- Auto-unhides if the user claims an incoming tip for that asset
+  (explicit "I want to see this" signal).
+
+**Registry-driven feature inclusion.** Features decide whether to
+include an asset by checking a capability flag on the registry, not
+by maintaining an inclusion list. Today these flags are `sendable`,
+`receivable`, `dappBridge`, `socialTipping`, and `defaultVisible`;
+adding a flag is registry-level, no UI code changes. Consumer pattern:
+
+```ts
+const tippable = visibleAssetIds(state, listAssets())
+  .filter((a) => a.socialTipping);
+```
+
+vs the anti-pattern `['btc', 'ltc', 'xmr', 'wow', 'grin'].includes(asset.id)`
+which guarantees a regression the day someone adds ETH.
+
+See [`MULTI_ASSET_ARCHITECTURE.md`](./MULTI_ASSET_ARCHITECTURE.md)
+for the longer-form story on where capability flags + visibility +
+per-family adapters fit together as the wallet scales past 5 assets.
+
 ## Principle 7 — Granular per-asset connection grants
 
 When a site calls `window.smirk.connect()`, the approval UI shouldn't

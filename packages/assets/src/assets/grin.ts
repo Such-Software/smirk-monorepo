@@ -72,4 +72,8 @@ export const grin: AssetDefinition = {
   swapRoutes: [],
 
   socialTipping: true,
+  sendable: true,
+  receivable: true,
+  dappBridge: true,
+  defaultVisible: true,
 };

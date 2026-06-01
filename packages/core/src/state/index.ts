@@ -76,3 +76,9 @@ export {
   reconcilePendingOutgoing,
 } from './pending-outgoing';
 export type { PendingOutgoingTx } from './pending-outgoing';
+
+export {
+  visibleAssetIds,
+  isAssetVisible,
+  withAssetVisibility,
+} from './visibility';
