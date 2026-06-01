@@ -70,6 +70,15 @@ export type { HomeTabProps, HomeAssetRow } from './components/HomeTab';
 export { ClaimableTipsBanner } from './components/ClaimableTipsBanner';
 export type { ClaimableTipsBannerProps } from './components/ClaimableTipsBanner';
 
+export { SwapTab } from './components/SwapTab';
+export type {
+  SwapTabProps,
+  SwapQuoteSummary,
+  SwapInFlight,
+  SwapKindBadge,
+  SwapProviderStatus,
+} from './components/SwapTab';
+
 export { SendWizard } from './components/SendWizard';
 export type {
   SendWizardProps,

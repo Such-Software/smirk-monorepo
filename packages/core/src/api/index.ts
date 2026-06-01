@@ -22,6 +22,7 @@ import { createSocialMethods, SocialMethods } from './social';
 import { createWalletUtxoMethods, WalletUtxoMethods } from './wallet-utxo';
 import { createWalletLwsMethods, WalletLwsMethods } from './wallet-lws';
 import { createGrinMethods, GrinMethods } from './grin';
+import { createSwapMethods, SwapMethods } from './swap';
 
 export type { ApiResponse } from './client';
 export { ApiClient } from './client';
@@ -43,6 +44,7 @@ export type {
 export type { WalletUtxoMethods } from './wallet-utxo';
 export type { WalletLwsMethods } from './wallet-lws';
 export type { GrinMethods } from './grin';
+export type { SwapMethods, SwapRecord, CreateSwapPayload } from './swap';
 
 /**
  * Combined Smirk API client. Implements every domain method group;
@@ -57,7 +59,8 @@ export class SmirkApi
     Omit<SocialMethods, 'getReceivedTips'>,
     WalletUtxoMethods,
     WalletLwsMethods,
-    GrinMethods
+    GrinMethods,
+    SwapMethods
 {
   // Auth
   telegramLogin: AuthMethods['telegramLogin'];
@@ -129,6 +132,11 @@ export class SmirkApi
   broadcastGrinTransaction: GrinMethods['broadcastGrinTransaction'];
   registerGrinAddress: GrinMethods['registerGrinAddress'];
 
+  // Swap bookkeeping (Trocador)
+  createSwap: SwapMethods['createSwap'];
+  getSwap: SwapMethods['getSwap'];
+  listSwaps: SwapMethods['listSwaps'];
+
   constructor(baseUrl?: string) {
     super(baseUrl);
 
@@ -139,6 +147,7 @@ export class SmirkApi
     const utxo = createWalletUtxoMethods(this);
     const lws = createWalletLwsMethods(this);
     const grin = createGrinMethods(this);
+    const swap = createSwapMethods(this);
 
     this.telegramLogin = auth.telegramLogin;
     this.refreshToken = auth.refreshToken;
@@ -200,6 +209,10 @@ export class SmirkApi
     this.updateGrinTransaction = grin.updateGrinTransaction;
     this.broadcastGrinTransaction = grin.broadcastGrinTransaction;
     this.registerGrinAddress = grin.registerGrinAddress;
+
+    this.createSwap = swap.createSwap;
+    this.getSwap = swap.getSwap;
+    this.listSwaps = swap.listSwaps;
   }
 
   /** Current blockchain heights for all networks. */

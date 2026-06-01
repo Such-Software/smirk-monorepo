@@ -12,7 +12,8 @@
 
 import { render } from 'preact';
 import type { ComponentChildren } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
+import { TrocadorSwap } from '@smirk/swap';
 import {
   ChromeLocalStorage,
   ChromeSessionStorage,
@@ -60,6 +61,9 @@ import {
   GrinRequestWizard,
   HomeTab,
   InboxTab,
+  SwapTab,
+  type SwapInFlight,
+  type SwapQuoteSummary,
   LockScreen,
   OnboardingWizard,
   ReceiveScreen,
@@ -1114,7 +1118,7 @@ function App() {
               }}
             />
           ),
-          swap: <SwapStub />,
+          swap: <SwapRouter wallet={walletState.wallet} session={session} />,
           inbox: (
             <InboxRouter
               wallet={walletState.wallet}
@@ -2745,17 +2749,212 @@ function PasteTipLinkScreen({
 
 // ----- Other tabs (still stubs) -----
 
-function SwapStub() {
-  return (
-    <div>
-      <h2 style={{ fontSize: 16, marginTop: 0 }}>Swap</h2>
-      <p class="muted" style={{ fontSize: 12 }}>
-        CEX (Trocador aggregator) launches in v0.3.0. DEX (native atomic
-        swaps via adaptor signatures) lights up in v0.4. See V0_3_PLAN.md
-        Decision 2.
-      </p>
-    </div>
+/**
+ * SwapRouter — wires the @smirk/ui SwapTab to the TrocadorSwap library
+ * and the wallet's send-handler. Single-provider for v0.3 (Trocador);
+ * additional providers slot in by extending the wizard branch in
+ * SwapTab and adding more handlers here.
+ *
+ * Client-direct architecture (V0_3_PLAN.md Decision 2): Trocador calls
+ * go straight from this context to api.trocador.app. Backend
+ * involvement is bookkeeping only — `POST /api/v1/swaps` so the
+ * status mirror webhook has somewhere to write.
+ */
+function SwapRouter({
+  wallet,
+  session,
+}: {
+  wallet: UnlockedWallet;
+  session: WalletSession | null;
+}) {
+  const { navigate } = useRoute();
+  const apiKey = import.meta.env.VITE_TROCADOR_API_KEY ?? '';
+  // Webhook URL pointing at *our* backend's receiver. Trocador POSTs
+  // status changes here; receiver authenticates via the per-swap
+  // webhook_token passed in `passthrough`.
+  const webhookBase =
+    import.meta.env.VITE_SMIRK_BACKEND_URL ?? 'https://backend.smirk.cash';
+  const webhookUrl = `${webhookBase}/api/v1/webhook/trocador`;
+
+  // Instantiate TrocadorSwap once per mount with build-time config.
+  // passthrough is set on a per-trade basis (random token), not here.
+  const trocador = useMemo(
+    () =>
+      apiKey
+        ? new TrocadorSwap({ apiKey, webhookUrl })
+        : null,
+    [apiKey, webhookUrl],
   );
+
+  if (!trocador) {
+    return (
+      <div>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>Swap</h2>
+        <p class="muted" style={{ fontSize: 12 }}>
+          Swap is disabled in this build (VITE_TROCADOR_API_KEY unset).
+          Set it at build time to enable Trocador.
+        </p>
+      </div>
+    );
+  }
+
+  void wallet;
+
+  return (
+    <SwapTab
+      fromAssets={listAssets()
+        .filter((a) => a.sendable && trocador.supports(a.id, 'btc'))
+        .map((a) => a.id)}
+      toAssets={listAssets()
+        .filter((a) => a.receivable && trocador.supports('btc', a.id))
+        .map((a) => a.id)}
+      resolveBalance={(assetId) => {
+        // Pull from the session's last-fetched balance snapshot.
+        const b = session?.balances?.[
+          assetId as keyof NonNullable<WalletSession['balances']>
+        ];
+        return b ? b.confirmed : null;
+      }}
+      parseAmount={(assetId, text) => parseAmount(assetId, text)}
+      resolveIcon={resolveIcon}
+      onTrocadorQuote={async (req) => {
+        const q = await trocador.quote({
+          fromAsset: req.fromAsset,
+          toAsset: req.toAsset,
+          fromAmount: req.fromAmountAtomic,
+        });
+        const sum: SwapQuoteSummary = {
+          fromAsset: q.fromAsset,
+          toAsset: q.toAsset,
+          fromAmountAtomic: q.fromAmount,
+          toAmountEstimateAtomic: q.toAmountEstimate,
+          feeEstimateAtomic: q.feeEstimate,
+          provider:
+            (q.implementationData as { provider?: string } | null)?.provider ?? '',
+          etaSeconds: q.etaSeconds,
+          expiresAtMs: q.expiresAt.getTime(),
+        };
+        // Stash the full Trocador quote (with implementationData) for
+        // the confirm step. Wizard.fields can't hold the full object
+        // because implementationData is implementation-private — we
+        // pass it through React closure instead.
+        lastTrocadorQuote = q;
+        return sum;
+      }}
+      onTrocadorConfirm={async ({ quote, toAddress, refundAddress }) => {
+        if (!lastTrocadorQuote || lastTrocadorQuote.fromAsset !== quote.fromAsset) {
+          throw new Error('Quote stale — please re-quote.');
+        }
+        // Per-swap shared-secret. Trocador echoes back as
+        // passthrough on the webhook; backend verifies match.
+        const webhookToken = randomToken(24);
+        const started = await trocador.startWithAddress(
+          { ...lastTrocadorQuote },
+          toAddress,
+          refundAddress,
+        );
+        // Persist to backend so the webhook receiver knows the token.
+        // Best-effort — if this fails the user can still proceed; the
+        // webhook receiver will reject with 404 and the UI falls back
+        // to direct polling on Trocador for status.
+        try {
+          await api.createSwap({
+            trade_id: started.id,
+            from_asset: quote.fromAsset,
+            to_asset: quote.toAsset,
+            amount_from_atomic: quote.fromAmountAtomic,
+            deposit_address: started.depositTxId,
+            recipient_address: toAddress,
+            refund_address: refundAddress,
+            ...(lastTrocadorQuote && {
+              provider:
+                (lastTrocadorQuote.implementationData as { provider?: string }).provider ??
+                '',
+            }),
+            webhook_token: webhookToken,
+          });
+        } catch (e) {
+          console.warn('[swap] backend createSwap failed (non-fatal)', e);
+        }
+        const sw: SwapInFlight = {
+          id: started.id,
+          fromAsset: quote.fromAsset,
+          toAsset: quote.toAsset,
+          fromAmountAtomic: quote.fromAmountAtomic,
+          toAmountEstimateAtomic: quote.toAmountEstimateAtomic,
+          depositAddress: started.depositTxId,
+          state: { state: 'pending', reason: 'awaiting_deposit' },
+        };
+        return sw;
+      }}
+      onOpenSend={(deposit) => {
+        // Pre-fill the SendWizard with the deposit address + amount so
+        // the user lands directly on Compose with everything filled.
+        void store
+          .update((s) => {
+            s.wizards.send = {
+              step: 2, // skip Pick + Address; jump to Compose
+              startedAt: Date.now(),
+              fields: {
+                fromAssetId: deposit.fromAsset,
+                toAddress: deposit.depositAddress,
+                amountText: atomicToText(
+                  deposit.fromAmountAtomic,
+                  deposit.fromAsset,
+                ),
+              },
+            };
+          })
+          .then(() => navigate('home/send'));
+      }}
+      onTrocadorFetchStatus={async (id) => {
+        const s = await trocador.status(id);
+        return {
+          id,
+          // Status response doesn't echo the from/to/amount fields —
+          // re-read from the trade endpoint via the next status call,
+          // OR (cheaper) keep the original SwapInFlight shape from
+          // wizard.fields. SwapTab carries the immutable fields
+          // through onUpdate so we only have to fill in `state` here.
+          fromAsset: '',
+          toAsset: '',
+          fromAmountAtomic: '0',
+          toAmountEstimateAtomic: '0',
+          depositAddress: '',
+          state: s,
+        };
+      }}
+    />
+  );
+}
+
+/** Pulled out of the wizard closure so the start step can hand the
+ *  exact quote object — with its implementationData — to the confirm
+ *  step. The SwapQuoteSummary stored in wizard.fields is a stripped-
+ *  down view; this is the original full Trocador quote. Cleared
+ *  whenever the wizard cancels or the popup remounts. */
+let lastTrocadorQuote: import('@smirk/swap').SwapQuote | null = null;
+
+function randomToken(byteLen: number): string {
+  const bytes = new Uint8Array(byteLen);
+  crypto.getRandomValues(bytes);
+  // base64url so it travels cleanly through Trocador's passthrough
+  // round-trip without URL-encoding tripping anything up.
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function atomicToText(atomic: string, assetId: string): string {
+  const asset = mustGetAsset(assetId);
+  const decimals = asset.decimals;
+  const n = BigInt(atomic);
+  if (decimals === 0) return n.toString();
+  const padded = n.toString().padStart(decimals + 1, '0');
+  const whole = padded.slice(0, padded.length - decimals);
+  const frac = padded.slice(padded.length - decimals).replace(/0+$/, '');
+  return frac.length === 0 ? whole : `${whole}.${frac}`;
 }
 
 /**

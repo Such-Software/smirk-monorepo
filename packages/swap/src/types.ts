@@ -26,8 +26,14 @@ export interface QuoteRequest {
   toAsset: AssetId;
   /** Amount of `fromAsset` the user intends to send, in atomic units. */
   fromAmount: AtomicAmount;
-  /** Address on `toAsset`'s chain where output should land. */
-  toAddress: string;
+  /**
+   * Destination address. Required at `start()` time by every
+   * implementation, but optional at `quote()` — aggregator-style
+   * (CEX) swaps don't need it until the trade is finalized. Native
+   * adaptor-signature implementations may inspect it earlier to
+   * pre-validate or short-circuit invalid recipients.
+   */
+  toAddress?: string;
 }
 
 export interface SwapQuote {
