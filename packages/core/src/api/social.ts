@@ -81,6 +81,15 @@ export interface SentTip {
 export interface ReceivedTip {
   id: string;
   sender_user_id: string;
+  /** Sender's Smirk @handle, when (a) the sender has reserved one
+   *  AND (b) they did NOT send anonymously. `null` for anonymous
+   *  senders or senders with no handle set. UI should fall back to
+   *  "anonymous" when this is null. */
+  sender_username: string | null;
+  /** True iff the sender opted into anonymity at create time.
+   *  Render "anonymous" regardless of whether a handle could
+   *  otherwise be looked up. */
+  sender_anonymous: boolean;
   recipient_platform: string | null;
   recipient_username: string | null;
   asset: AssetType;

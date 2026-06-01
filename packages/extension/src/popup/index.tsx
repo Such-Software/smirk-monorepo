@@ -235,11 +235,15 @@ async function fetchTipInbox(): Promise<{
     // database — hidden but not deleted.
     .filter((t) => !isTipStale(t.funding_confirmations ?? 0, t.created_at))
     .map((t) => {
-      // `recipient_username` here is the user who got tipped (us);
-      // the API doesn't return the sender's display name yet.
-      // Render "anonymous" for now — `null` triggers the
-      // "from anonymous" copy in the InboxTipItem row.
-      const senderDisplay: string | null = null;
+      // Render sender attribution only when the sender (a) opted in
+      // (sender_anonymous=false) AND (b) actually has a Smirk @handle
+      // reserved. Either condition false ⇒ "from anonymous". Matches
+      // the per-asset history copy in `loadAssetTipRows` so the two
+      // surfaces never disagree.
+      const senderDisplay: string | null =
+        !t.sender_anonymous && t.sender_username
+          ? `@${t.sender_username}`
+          : null;
       return {
         tipId: t.id,
         assetId: t.asset as InboxTipItem['assetId'],
@@ -2600,7 +2604,17 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
       ) {
         continue;
       }
-      const counterparty = t.is_public ? 'public link' : '@?';
+      // For public tips the counterparty is the share-URL stranger,
+      // not a known sender — leave the "public link" label.
+      // For targeted tips: show the sender's @handle when they opted
+      // in AND have one set; otherwise "anonymous". Matches
+      // InboxTipItem.senderDisplay rendering so the InboxTab and
+      // asset-detail history always agree.
+      const counterparty = t.is_public
+        ? 'public link'
+        : !t.sender_anonymous && t.sender_username
+          ? `@${t.sender_username}`
+          : 'anonymous';
       const row: Extract<AssetDetailTxRow, { kind: 'tip-received' }> = {
         kind: 'tip-received',
         tipId: t.id,
