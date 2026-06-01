@@ -50,6 +50,8 @@ import {
 } from '@smirk/core';
 import {
   AppShell,
+  SentTipsScreen,
+  type SentTipRow,
   ApprovalScreen,
   AssetDetailScreen,
   GrinPasteIncomingWizard,
@@ -1121,7 +1123,7 @@ function App() {
             />
           ),
           settings: (
-            <SettingsStub
+            <SettingsRouter
               wallet={walletState.wallet}
               onLock={lockHandler}
               onForgetComplete={async () => {
@@ -3065,6 +3067,143 @@ function AssetsVisibilityPanel({
 }
 
 /**
+ * Settings tab router.
+ *
+ * Two sub-routes today:
+ *   - `settings`            — the main Settings page (SettingsStub)
+ *   - `settings/sent-tips`  — cross-asset Sent Tips list with
+ *                             inline Clawback + Discard Draft actions.
+ *
+ * Per-asset history already surfaces sent-tip rows inline in
+ * AssetDetailScreen; this is the cross-asset surface — find a
+ * forgotten clawback-eligible tip across all 5 chains in one place.
+ */
+function SettingsRouter({
+  wallet,
+  onLock,
+  onForgetComplete,
+}: {
+  wallet: UnlockedWallet;
+  onLock: () => Promise<void>;
+  onForgetComplete: () => Promise<void>;
+}) {
+  const { route, navigate } = useRoute();
+  if (route.current === 'settings/sent-tips') {
+    return (
+      <SentTipsRoute onBack={() => void navigate('settings')} />
+    );
+  }
+  return (
+    <SettingsStub
+      wallet={wallet}
+      onLock={onLock}
+      onForgetComplete={onForgetComplete}
+    />
+  );
+}
+
+/**
+ * Sent Tips cross-asset surface. Loads the user's sent tips from
+ * the backend and overlays local IndexedDB backups so rows that
+ * survived a backend incident still show up + can be clawed back
+ * via the local key material.
+ */
+function SentTipsRoute({ onBack }: { onBack: () => void }) {
+  const [rows, setRows] = useState<SentTipRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  const load = async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const [resp, backups] = await Promise.all([
+        api.getSentSocialTips(),
+        listTipKeyBackups().catch(() => []),
+      ]);
+      const backupIds = new Set(backups.map((b) => b.tipId));
+      const serverTips = resp.data?.tips ?? [];
+      const serverIds = new Set(serverTips.map((t) => t.id));
+      const out: SentTipRow[] = [];
+      for (const t of serverTips) {
+        out.push({
+          id: t.id,
+          asset: t.asset,
+          amount: t.amount,
+          recipientPlatform: t.recipient_platform ?? null,
+          recipientUsername: t.recipient_username ?? null,
+          isPublic: t.is_public,
+          status: t.status,
+          createdAt: t.created_at,
+          fundingConfirmations: t.funding_confirmations,
+          confirmationsRequired: t.confirmations_required,
+          ...(backupIds.has(t.id) ? { hasLocalBackup: true } : {}),
+        });
+      }
+      // Orphan local backups — server lost the row but we can still
+      // clawback locally via the stored key material.
+      for (const b of backups) {
+        if (serverIds.has(b.tipId)) continue;
+        out.push({
+          id: b.tipId,
+          asset: b.asset,
+          amount: b.amount,
+          recipientPlatform: null,
+          recipientUsername: null,
+          isPublic: b.isPublic,
+          status: 'pending',
+          createdAt: new Date(b.createdAt).toISOString(),
+          fundingConfirmations: 0,
+          confirmationsRequired: 0,
+          hasLocalBackup: true,
+        });
+      }
+      setRows(out);
+      if (resp.error) setError(resp.error);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load sent tips');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <SentTipsScreen
+      rows={rows}
+      loading={loading}
+      {...(error ? { error } : {})}
+      onBack={onBack}
+      onRefresh={load}
+      onClawback={async (tipId) => {
+        const r = await api.clawbackSocialTip(tipId);
+        if (r.error || !r.data) {
+          return { ok: false, error: r.error ?? 'Clawback failed' };
+        }
+        await removeTipKeyBackup(tipId);
+        // Drop the row from local state — refresh will reflect new
+        // backend state on next load.
+        setRows((rs) => rs.filter((row) => row.id !== tipId));
+        return { ok: true };
+      }}
+      onDiscardDraft={async (tipId) => {
+        const r = await api.cancelSocialTip(tipId);
+        if (r.error || !r.data) {
+          return { ok: false, error: r.error ?? 'Discard failed' };
+        }
+        await removeTipKeyBackup(tipId);
+        setRows((rs) => rs.filter((row) => row.id !== tipId));
+        return { ok: true };
+      }}
+      resolveIcon={resolveIcon}
+    />
+  );
+}
+
+/**
  * Settings → Security — three sub-panels:
  *   1. Seed fingerprint display (read-only identifier).
  *   2. Change password (in-place keystore rotation).
@@ -3502,6 +3641,57 @@ function KeyRow({
   );
 }
 
+/**
+ * Compact nav row used in Settings to deep-link into sub-screens
+ * (Sent Tips, future: per-asset RPC config, etc.). Two lines —
+ * label + hint — with a chevron at the right and a hover affordance.
+ */
+function SettingsNavRow({
+  label,
+  hint,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  onClick: () => void;
+}) {
+  return (
+    <section style={{ marginTop: 20 }}>
+      <button
+        onClick={onClick}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 12px',
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 8,
+          color: 'inherit',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          textAlign: 'left',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
+          <span
+            style={{
+              fontSize: 11,
+              color: 'var(--smirk-fg-muted)',
+              lineHeight: 1.3,
+            }}
+          >
+            {hint}
+          </span>
+        </div>
+        <span style={{ opacity: 0.5, fontSize: 14 }}>›</span>
+      </button>
+    </section>
+  );
+}
+
 const settingsInputStyle = {
   fontSize: 12,
   padding: '6px 8px',
@@ -3518,6 +3708,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
   onLock: () => Promise<void>;
   onForgetComplete: () => Promise<void>;
 }) {
+  const { navigate } = useRoute();
   const sessionState = useSessionState();
   const autoLockMinutes = sessionState.ui.autoLockMinutes ?? 0;
   const themeId = sessionState.ui.theme ?? 'default';
@@ -3696,6 +3887,17 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           flow, export-raw-keys panel. Three audit-flagged TODOs
           rolled into one Settings group. */}
       <SecurityPanel wallet={wallet} />
+
+      {/* Cross-asset Sent Tips entry point. Per-asset history covers
+          the day-to-day case (a few rows per coin); this is for
+          finding a forgotten clawback-eligible tip across all 5
+          chains in one view. Same affordances as the per-asset
+          rows — Clawback + Discard Draft — but in a single list. */}
+      <SettingsNavRow
+        label="Sent Tips"
+        hint="Cross-asset list of every tip you've sent + inline clawback"
+        onClick={() => void navigate('settings/sent-tips')}
+      />
 
       <button
         onClick={() => void onLock()}
