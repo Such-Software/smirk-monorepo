@@ -43,8 +43,14 @@ import { formatAmountWithTicker, formatAmount } from '../format';
 /** Quote returned from `onTrocadorQuote`. All non-JSON-friendly fields
  *  (no Date, no bigint) so it can sit inside wizard.fields and survive
  *  serialization to chrome.storage / IndexedDB / wherever the platform
- *  persists session state. */
+ *  persists session state.
+ *
+ *  Critically — `tradeId` (Trocador's `trade_id` from /new_rate) lives
+ *  here so the Confirm step can finalize the same draft after a
+ *  popup-close mid-wizard, without re-quoting and risking a stale rate. */
 export interface SwapQuoteSummary {
+  /** Trocador trade_id from /new_rate. Reused by /new_trade on confirm. */
+  tradeId: string;
   fromAsset: string;
   toAsset: string;
   fromAmountAtomic: string;
@@ -111,6 +117,14 @@ export interface SwapTabProps {
 // Provider list
 // ============================================================================
 
+interface SupportContact {
+  /** "support@trocador.app", "@TrocadorSupportBot", etc. */
+  label: string;
+  /** Where clicking lands the user. `mailto:`, `https:`, `tg:`, `matrix:`,
+   *  `xmpp:` — anything the platform's url handler can resolve. */
+  href: string;
+}
+
 interface ProviderCard {
   id: string;
   kind: SwapKindBadge;
@@ -119,6 +133,18 @@ interface ProviderCard {
   status: SwapProviderStatus;
   /** Reason / ETA copy when status !== 'active'. */
   statusNote?: string;
+  /** Provider's support channels, displayed in StatusStep failure
+   *  states and via the "Provider support" affordance on active cards.
+   *  Stack Wallet feedback: 95% of swap support burden comes from
+   *  swap failures the wallet can't fix — pushing those to the
+   *  provider's channels with the trade_id in hand makes the user's
+   *  next step obvious AND lets us not be in the middle of it. */
+  support?: ReadonlyArray<SupportContact>;
+  /** Pattern for the provider's public per-trade status page. `{ID}`
+   *  is replaced with the swap's trade_id. Surfaced as a clickable
+   *  link in StatusStep so the user can dig deeper without leaving
+   *  context. Omit when the provider has no per-trade UI. */
+  publicTradeUrl?: string;
 }
 
 /** Single source of truth for what the user sees on the Swap tab.
@@ -132,6 +158,19 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     name: 'Trocador',
     blurb: 'Aggregator routing across 20+ providers. BTC, LTC, XMR; WOW/GRIN best-effort.',
     status: 'active',
+    // Ordered most-responsive first. Telegram bot is real-time, email
+    // is hours-to-a-day, Matrix is a community channel (peer help),
+    // X is slow + public — try in that order when you're stuck.
+    support: [
+      { label: '@TrocadorSupportBot on Telegram', href: 'https://t.me/TrocadorSupportBot' },
+      { label: 'support@trocador.app', href: 'mailto:support@trocador.app' },
+      {
+        label: '#Trocador.app on Matrix',
+        href: 'https://matrix.to/#/%23Trocador.app:matrix.org',
+      },
+      { label: '@TrocadorApp on X', href: 'https://x.com/TrocadorApp' },
+    ],
+    publicTradeUrl: 'https://trocador.app/trade?id={ID}',
   },
   {
     id: 'moonpay',
@@ -229,8 +268,10 @@ export function SwapTab(props: SwapTabProps) {
   }
 
   // Trocador is the only provider with an active wizard in v0.3.
+  const trocadorCard = PROVIDERS.find((p) => p.id === 'trocador')!;
   return (
     <TrocadorWizard
+      provider={trocadorCard}
       fields={wizard.fields}
       step={(wizard.fields.step ?? 0) as 0 | 1 | 2 | 3}
       patchFields={wizard.patchFields}
@@ -352,6 +393,32 @@ function ProviderRow({
           {provider.statusNote}
         </div>
       )}
+      {provider.status === 'active' && provider.support && provider.support.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            marginTop: 4,
+            fontSize: 10,
+            color: 'var(--smirk-fg-muted)',
+          }}
+        >
+          <span>Support:</span>
+          {provider.support.slice(0, 2).map((c, i) => (
+            <a
+              key={i}
+              href={c.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{ color: 'var(--smirk-accent)', textDecoration: 'none' }}
+            >
+              {c.label}
+            </a>
+          ))}
+        </div>
+      )}
     </button>
   );
 }
@@ -361,6 +428,7 @@ function ProviderRow({
 // ============================================================================
 
 interface TrocadorWizardProps {
+  provider: ProviderCard;
   fields: Partial<TrocadorFields>;
   step: 0 | 1 | 2 | 3;
   patchFields: (patch: Partial<TrocadorFields>) => Promise<void>;
@@ -459,6 +527,7 @@ function TrocadorWizard(props: TrocadorWizardProps) {
       {step === 3 && fields.inFlight && (
         <StatusStep
           swap={fields.inFlight}
+          provider={props.provider}
           {...(props.onFetchStatus ? { onFetchStatus: props.onFetchStatus } : {})}
           onUpdate={(next) => void props.patchFields({ inFlight: next })}
           onReset={props.cancel}
@@ -853,11 +922,15 @@ function DepositStep({
 
 function StatusStep({
   swap,
+  provider,
   onFetchStatus,
   onUpdate,
   onReset,
 }: {
   swap: SwapInFlight;
+  /** The active provider's card — used to pull support contacts +
+   *  public trade URL into the status display. */
+  provider: ProviderCard;
   onFetchStatus?: (id: string) => Promise<SwapInFlight>;
   onUpdate: (next: SwapInFlight) => void;
   onReset: () => void;
@@ -884,13 +957,26 @@ function StatusStep({
   const from = mustGetAsset(swap.fromAsset);
   const to = mustGetAsset(swap.toAsset);
   const terminal = swap.state.state !== 'pending';
+  // "Bad outcome" — refund or failure. Stack Wallet's support data
+  // says ~95% of swap support tickets come from these states; surface
+  // the provider's channels prominently so the user's next step is
+  // obvious and we're not in the middle of it.
+  const needsProviderHelp =
+    swap.state.state === 'failed' || swap.state.state === 'refunded';
+  const tradeUrl = provider.publicTradeUrl
+    ? provider.publicTradeUrl.replace('{ID}', encodeURIComponent(swap.id))
+    : null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div
         style={{
           padding: 12,
           background: 'var(--smirk-bg-sunken)',
-          border: '1px solid var(--smirk-border)',
+          border: `1px solid ${
+            needsProviderHelp
+              ? 'var(--smirk-negative, #ff6b6b)'
+              : 'var(--smirk-border)'
+          }`,
           borderRadius: 'var(--smirk-radius, 8px)',
           fontSize: 12,
           display: 'flex',
@@ -906,9 +992,71 @@ function StatusStep({
           {formatAmountWithTicker(BigInt(swap.toAmountEstimateAtomic), to.id)}
         </Row>
         <Row label="Trade id" mono>
-          {swap.id}
+          {tradeUrl ? (
+            <a
+              href={tradeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--smirk-accent)', textDecoration: 'none' }}
+            >
+              {swap.id} ↗
+            </a>
+          ) : (
+            swap.id
+          )}
         </Row>
       </div>
+
+      {/* Provider support panel — shown prominently on failed/refunded
+          states, and as a compact footer otherwise. Reaching the
+          provider with the trade_id in hand is the single most useful
+          thing the user can do when a swap goes sideways. */}
+      {provider.support && provider.support.length > 0 && (
+        <div
+          style={{
+            padding: 12,
+            background: needsProviderHelp
+              ? 'rgba(255, 107, 107, 0.06)'
+              : 'transparent',
+            border: needsProviderHelp
+              ? '1px solid var(--smirk-negative, #ff6b6b)'
+              : '1px solid var(--smirk-border)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            fontSize: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600 }}>
+            {needsProviderHelp
+              ? `Need help? Contact ${provider.name} support with the trade id above.`
+              : `${provider.name} support`}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {provider.support.map((c, i) => (
+              <a
+                key={i}
+                href={c.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  color: 'var(--smirk-accent)',
+                  textDecoration: 'none',
+                  fontSize: 12,
+                }}
+              >
+                {c.label} ↗
+              </a>
+            ))}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)' }}>
+            Smirk publishes the wallet; the swap itself runs on{' '}
+            {provider.name}. We can't intervene in the swap once it's
+            in flight — the provider's team can.
+          </div>
+        </div>
+      )}
 
       {terminal && (
         <button onClick={onReset} style={primaryBtnStyle(false, false)}>

@@ -2823,42 +2823,63 @@ function SwapRouter({
           toAsset: req.toAsset,
           fromAmount: req.fromAmountAtomic,
         });
+        const impl = q.implementationData as
+          | { tradeId?: string; provider?: string }
+          | null;
         const sum: SwapQuoteSummary = {
+          tradeId: impl?.tradeId ?? '',
           fromAsset: q.fromAsset,
           toAsset: q.toAsset,
           fromAmountAtomic: q.fromAmount,
           toAmountEstimateAtomic: q.toAmountEstimate,
           feeEstimateAtomic: q.feeEstimate,
-          provider:
-            (q.implementationData as { provider?: string } | null)?.provider ?? '',
+          provider: impl?.provider ?? '',
           etaSeconds: q.etaSeconds,
           expiresAtMs: q.expiresAt.getTime(),
         };
-        // Stash the full Trocador quote (with implementationData) for
-        // the confirm step. Wizard.fields can't hold the full object
-        // because implementationData is implementation-private — we
-        // pass it through React closure instead.
-        lastTrocadorQuote = q;
         return sum;
       }}
       onTrocadorConfirm={async ({ quote, toAddress, refundAddress }) => {
-        if (!lastTrocadorQuote || lastTrocadorQuote.fromAsset !== quote.fromAsset) {
-          throw new Error('Quote stale — please re-quote.');
+        if (!quote.tradeId || !quote.provider) {
+          throw new Error('Quote is missing trade context — please re-quote.');
         }
         // Per-swap shared-secret. Trocador echoes back as
         // passthrough on the webhook; backend verifies match.
         const webhookToken = randomToken(24);
+        // Rebuild a SwapQuote from persisted fields. The Trocador
+        // library only reads (tradeId, provider, amountFromDecimal,
+        // amountToDecimal) from implementationData on /new_trade —
+        // we don't need to round-trip the original quote object.
+        const fromAsset = mustGetAsset(quote.fromAsset);
+        const toAsset = mustGetAsset(quote.toAsset);
+        const rebuiltQuote = {
+          fromAsset: quote.fromAsset,
+          toAsset: quote.toAsset,
+          fromAmount: quote.fromAmountAtomic,
+          toAmountEstimate: quote.toAmountEstimateAtomic,
+          feeEstimate: quote.feeEstimateAtomic,
+          etaSeconds: quote.etaSeconds,
+          expiresAt: new Date(quote.expiresAtMs),
+          kind: 'aggregator' as const,
+          implementationData: {
+            tradeId: quote.tradeId,
+            provider: quote.provider,
+            amountFromDecimal: atomicToText(quote.fromAmountAtomic, fromAsset.id),
+            amountToDecimal: atomicToText(quote.toAmountEstimateAtomic, toAsset.id),
+          },
+        };
         const started = await trocador.startWithAddress(
-          { ...lastTrocadorQuote },
+          rebuiltQuote,
           toAddress,
           refundAddress,
         );
         // Persist to backend so the webhook receiver knows the token.
-        // Best-effort — if this fails the user can still proceed; the
-        // webhook receiver will reject with 404 and the UI falls back
-        // to direct polling on Trocador for status.
+        // Best-effort — failure here means status updates from the
+        // webhook won't be authenticated (rejected as 404), but the
+        // UI's direct-poll-on-Trocador path still works.
+        let backendTrackingOk = true;
         try {
-          await api.createSwap({
+          const res = await api.createSwap({
             trade_id: started.id,
             from_asset: quote.fromAsset,
             to_asset: quote.toAsset,
@@ -2866,16 +2887,18 @@ function SwapRouter({
             deposit_address: started.depositTxId,
             recipient_address: toAddress,
             refund_address: refundAddress,
-            ...(lastTrocadorQuote && {
-              provider:
-                (lastTrocadorQuote.implementationData as { provider?: string }).provider ??
-                '',
-            }),
+            provider: quote.provider,
             webhook_token: webhookToken,
           });
+          backendTrackingOk = !res.error;
+          if (res.error) {
+            console.warn('[swap] backend createSwap returned error:', res.error);
+          }
         } catch (e) {
-          console.warn('[swap] backend createSwap failed (non-fatal)', e);
+          backendTrackingOk = false;
+          console.warn('[swap] backend createSwap threw (non-fatal)', e);
         }
+        void backendTrackingOk;
         const sw: SwapInFlight = {
           id: started.id,
           fromAsset: quote.fromAsset,
@@ -2908,14 +2931,34 @@ function SwapRouter({
           .then(() => navigate('home/send'));
       }}
       onTrocadorFetchStatus={async (id) => {
+        // Poll the backend first — it's the canonical source of
+        // truth once the webhook has fired, and it's authenticated
+        // (Trocador's public /trade endpoint isn't, so we'd be
+        // leaking the trade_id to anyone watching the network).
+        // Fall back to Trocador direct if the backend has no record
+        // (e.g. the create_swap call failed earlier — see audit
+        // comment in onTrocadorConfirm).
+        const backend = await api.getSwap(id).catch(() => null);
+        if (backend && backend.data) {
+          const r = backend.data;
+          return {
+            id,
+            fromAsset: r.from_asset,
+            toAsset: r.to_asset,
+            fromAmountAtomic: r.amount_from_atomic,
+            toAmountEstimateAtomic: r.amount_to_atomic ?? '0',
+            depositAddress: r.deposit_address,
+            state: mapBackendStatus(r.status),
+          };
+        }
+        // Backend doesn't know about this swap — go direct.
         const s = await trocador.status(id);
         return {
           id,
-          // Status response doesn't echo the from/to/amount fields —
-          // re-read from the trade endpoint via the next status call,
-          // OR (cheaper) keep the original SwapInFlight shape from
-          // wizard.fields. SwapTab carries the immutable fields
-          // through onUpdate so we only have to fill in `state` here.
+          // Identity fields aren't available from Trocador's /trade
+          // response in a stable shape; the wizard merges via
+          // onUpdate which preserves the persisted fields and only
+          // overwrites `state` with the values we return.
           fromAsset: '',
           toAsset: '',
           fromAmountAtomic: '0',
@@ -2928,12 +2971,32 @@ function SwapRouter({
   );
 }
 
-/** Pulled out of the wizard closure so the start step can hand the
- *  exact quote object — with its implementationData — to the confirm
- *  step. The SwapQuoteSummary stored in wizard.fields is a stripped-
- *  down view; this is the original full Trocador quote. Cleared
- *  whenever the wizard cancels or the popup remounts. */
-let lastTrocadorQuote: import('@smirk/swap').SwapQuote | null = null;
+/** Translate the backend's status string (a verbatim mirror of
+ *  Trocador's lifecycle) into the SwapInFlight discriminated union
+ *  the UI renders. Kept here so the popup is the only place that
+ *  knows the Trocador-string ↔ structured-state mapping. */
+function mapBackendStatus(status: string): SwapInFlight['state'] {
+  switch (status) {
+    case 'new':
+    case 'waiting':
+      return { state: 'pending', reason: 'awaiting_deposit' };
+    case 'confirming':
+      return { state: 'pending', reason: 'awaiting_confirmations' };
+    case 'exchanging':
+    case 'sending':
+      return { state: 'pending', reason: 'in_progress' };
+    case 'finished':
+      return { state: 'completed', outboundTxId: '', toAmount: '0' };
+    case 'refunded':
+      return { state: 'refunded', refundTxId: '', reason: 'Refunded by provider' };
+    case 'expired':
+      return { state: 'failed', reason: 'Quote expired before deposit' };
+    case 'error':
+      return { state: 'failed', reason: 'Provider reported error' };
+    default:
+      return { state: 'pending', reason: 'in_progress' };
+  }
+}
 
 function randomToken(byteLen: number): string {
   const bytes = new Uint8Array(byteLen);
