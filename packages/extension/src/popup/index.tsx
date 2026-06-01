@@ -4544,15 +4544,98 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
         return;
       }
       case 'requestPayment': {
-        // PHASE-2: wire to existing send-handler. For v0.3 dapp-api
-        // launch we only need connect + signMessage to unblock
-        // smirk.cash registration. Surface a clear error so a
-        // misconfigured dapp doesn't think the user denied.
-        throw new Error('requestPayment is not yet implemented in v0.3 dapp adapter');
+        if (pending.request.kind !== 'requestPayment') {
+          throw new Error('Pending request kind mismatch');
+        }
+        const req = pending.request;
+        // pendingOutgoing is the same exclude-set the main popup feeds
+        // into send(); without it the dapp tx could double-spend an
+        // input the user just spent through the wallet UI in the
+        // adjacent tab.
+        const sessionState = await store.load();
+        const excludeInputs = recentlySpentInputs(
+          sessionState.pendingOutgoing ?? [],
+          req.asset,
+        );
+        const result = await send(
+          wallet,
+          {
+            fromAssetId: req.asset,
+            amountAtomic: BigInt(req.amount),
+            toAddress: req.address,
+            // Non-UTXO assets ignore this; UTXO uses the wallet's
+            // current 'normal' tier. Dapp callers don't pick fee tiers
+            // — they just want the tx to land.
+            feeRateSatPerVb: 0,
+            sweep: false,
+          },
+          excludeInputs,
+        );
+        if (result.ok && result.amountAtomic !== undefined && result.feeAtomic !== undefined) {
+          const entry = {
+            asset: req.asset,
+            txHash: result.txid,
+            amount: result.amountAtomic.toString(),
+            fee: result.feeAtomic.toString(),
+            recipient: req.address,
+            submittedAt: Date.now(),
+            ...(result.inputs && result.inputs.length > 0
+              ? { inputs: result.inputs }
+              : {}),
+            ...(result.inputsTotalAtomic !== undefined
+              ? { inputsTotal: result.inputsTotalAtomic.toString() }
+              : {}),
+          };
+          await store.update((s) => {
+            s.pendingOutgoing.push(entry);
+          });
+        }
+        await finish({
+          kind: 'requestPayment',
+          approved: true,
+          result: result.ok
+            ? { success: true, txid: result.txid }
+            : { success: false, error: result.error },
+        });
+        return;
       }
       case 'claimPublicTip': {
-        // PHASE-2: wire to tip-handler claim path.
-        throw new Error('claimPublicTip is not yet implemented in v0.3 dapp adapter');
+        if (pending.request.kind !== 'claimPublicTip') {
+          throw new Error('Pending request kind mismatch');
+        }
+        const req = pending.request;
+        // claimPublicTip orchestrates: getPublicSocialTip
+        // (unauthenticated) → claimSocialTip (authenticated) → sweep.
+        // The middle step needs the same access token the main popup
+        // bootstrapped, otherwise the backend returns 401 and the user
+        // sees a "Backend rejected claim" generic message.
+        const cached = await readBootstrapCache(wallet.fingerprint);
+        if (!cached) {
+          await finish({
+            kind: 'claimPublicTip',
+            approved: true,
+            result: {
+              success: false,
+              error: 'Open Smirk once to sign in, then retry the claim.',
+            },
+          });
+          return;
+        }
+        api.setAccessToken(cached.accessToken);
+        const outcome = await claimPublicTip(
+          wallet,
+          cached.bootstrap.userId,
+          req.tipId,
+          req.fragmentKey,
+        );
+        await finish({
+          kind: 'claimPublicTip',
+          approved: true,
+          result: outcome.ok
+            ? { success: true, txid: outcome.txid }
+            : { success: false, error: outcome.error },
+        });
+        return;
       }
     }
   };
