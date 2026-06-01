@@ -1402,6 +1402,7 @@ function HomeRouter({
                 ? { change_output_json: JSON.stringify(result.change_output) }
                 : {}),
               ...(result.relay_id ? { relay_id: result.relay_id } : {}),
+              fee_atomic: result.fee,
             };
           } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };

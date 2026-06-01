@@ -244,6 +244,12 @@ export interface GrinBuildSlateResult {
    *  the recipient (a registered Smirk user vs. an external wallet)
    *  picks it up is independent of this id existing. */
   relay_id?: string;
+  /** Actual fee committed to in the S1 slate, in atomic units. The
+   *  Compose-step preview is an estimate; this is the real number
+   *  the receiver will see — exposed so the Share-slatepack view can
+   *  confirm "you're about to send X with fee Y" before the sender
+   *  hands the slatepack to the counterparty. */
+  fee_atomic?: number;
 }
 export type GrinBuildSlateOutcome = GrinBuildSlateResult | { ok: false; error: string };
 
@@ -411,6 +417,9 @@ export function SendWizard(props: SendWizardProps) {
             {...(fields.grinChangeOutputJson ? { changeOutputJson: fields.grinChangeOutputJson } : {})}
             {...(fields.grinExchangeError ? { error: fields.grinExchangeError } : {})}
             {...(fields.grinPastedS2 ? { pastedS2: fields.grinPastedS2 } : {})}
+            {...(typeof fields.grinFeeAtomic === 'number'
+              ? { feeAtomic: BigInt(fields.grinFeeAtomic) }
+              : {})}
             onBuild={async ({ amountAtomic, toAddress }) => {
               if (!props.onGrinBuildSlate) {
                 return {
@@ -429,6 +438,9 @@ export function SendWizard(props: SendWizardProps) {
                     ? { grinChangeOutputJson: result.change_output_json }
                     : {}),
                   ...(result.relay_id ? { grinRelayId: result.relay_id } : {}),
+                  ...(result.fee_atomic !== undefined
+                    ? { grinFeeAtomic: result.fee_atomic }
+                    : {}),
                   grinExchangeError: '',
                 });
               } else {
@@ -1409,6 +1421,10 @@ interface GrinExchangeProps {
    *  textarea opens already populated and the user just confirms the
    *  finalize. */
   pastedS2?: string;
+  /** Actual atomic fee committed to in the built S1. Renders a
+   *  read-only amount/fee/total summary on the Share-slatepack view
+   *  so the sender can verify the slate before handing it over. */
+  feeAtomic?: bigint;
 
   onBuild: (args: { amountAtomic: bigint; toAddress: string }) => Promise<GrinBuildSlateOutcome>;
   onFinalize: (args: { s2: string }) => Promise<GrinFinalizeOutcome>;
@@ -1533,9 +1549,66 @@ function GrinExchange(props: GrinExchangeProps) {
   // wall of paragraph text + relay sentence), which crowded the
   // popup and buried the Paste textarea below the fold.
   const slatepackLen = props.armoredOutgoing?.length ?? 0;
+  const parsedAmount = props.parseAmount(props.assetId, props.amountText);
+  const totalAtomic =
+    parsedAmount !== null && props.feeAtomic !== undefined
+      ? parsedAmount + props.feeAtomic
+      : null;
   return (
     <div>
       <StepTitle>Share slatepack</StepTitle>
+
+      {/* Fee/total summary — read-only confirmation that the built
+          S1 matches what the user intended. Renders only once we
+          have a real fee from the build step (compose preview was an
+          estimate; this is the real number committed to the slate). */}
+      {(parsedAmount !== null || props.feeAtomic !== undefined) && (
+        <div
+          style={{
+            padding: '8px 10px',
+            background: 'var(--smirk-bg-sunken)',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            fontSize: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 3,
+            marginBottom: 8,
+          }}
+        >
+          {parsedAmount !== null && (
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: 'var(--smirk-fg-muted)' }}>Amount</span>
+              <strong style={{ fontFamily: 'var(--smirk-font-family-mono)' }}>
+                {formatAmountWithAsset(parsedAmount, asset, 8)}
+              </strong>
+            </div>
+          )}
+          {props.feeAtomic !== undefined && (
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: 'var(--smirk-fg-muted)' }}>Network fee</span>
+              <strong style={{ fontFamily: 'var(--smirk-font-family-mono)' }}>
+                {formatAmountWithAsset(props.feeAtomic, asset, 8)}
+              </strong>
+            </div>
+          )}
+          {totalAtomic !== null && (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                paddingTop: 3,
+                borderTop: '1px solid var(--smirk-border)',
+              }}
+            >
+              <span style={{ color: 'var(--smirk-fg-muted)' }}>Total deducted</span>
+              <strong style={{ fontFamily: 'var(--smirk-font-family-mono)' }}>
+                {formatAmountWithAsset(totalAtomic, asset, 8)}
+              </strong>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Action 1 — copy the slatepack out. Single-row card; the full
           hex is one click away ("Show") but doesn't dominate the
