@@ -393,32 +393,11 @@ function ProviderRow({
           {provider.statusNote}
         </div>
       )}
-      {provider.status === 'active' && provider.support && provider.support.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginTop: 4,
-            fontSize: 10,
-            color: 'var(--smirk-fg-muted)',
-          }}
-        >
-          <span>Support:</span>
-          {provider.support.slice(0, 2).map((c, i) => (
-            <a
-              key={i}
-              href={c.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              style={{ color: 'var(--smirk-accent)', textDecoration: 'none' }}
-            >
-              {c.label}
-            </a>
-          ))}
-        </div>
-      )}
+      {/* Support contacts deliberately NOT rendered on the entry-point
+          card — pre-quote is the wrong moment to surface "where to
+          file a complaint." StatusStep does the heavy lift on
+          failed/refunded states where the contacts are actually
+          actionable, with the trade_id in hand. */}
     </button>
   );
 }
@@ -1137,7 +1116,16 @@ function Row({
         style={{
           fontFamily: mono ? 'var(--smirk-font-family-mono)' : 'inherit',
           textAlign: 'right',
-          wordBreak: 'break-all',
+          // `break-all` only when truly needed (long mono addresses
+          // / hex). For amount + ticker values it splits inside the
+          // ticker ("0.013218 X\nMR") on the narrow extension popup
+          // width. `break-word` respects ticker boundaries.
+          wordBreak: mono ? 'break-all' : 'break-word',
+          // Whitespace before the ticker shouldn't be a break point.
+          // `nowrap` would force overflow, so use the softer "keep
+          // amount + ticker on one logical token" via whiteSpace
+          // settings handled by the consumer when needed.
+          minWidth: 0,
         }}
       >
         {children}

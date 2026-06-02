@@ -37,13 +37,28 @@ import type {
   SwapStatus,
 } from './types';
 
-/** Maps a Smirk asset id to the (ticker, network) pair Trocador expects. */
+/**
+ * Smirk asset id → Trocador (ticker, network, decimals) mapping.
+ *
+ * **Why only BTC/LTC/XMR.** Probed 2026-06-02 against
+ * api.trocador.app with the live affiliate key:
+ *   - WOW: `{"error": "coin not found"}` — not in Trocador's coin
+ *     list at all (the docs called it "best-effort" but the
+ *     reality is zero coverage).
+ *   - GRIN: in the coin list but every quote at every reasonable
+ *     amount returns `{"error": "amount higher than max or lower
+ *     than min"}` — no provider has GRIN inventory.
+ *
+ * Surfacing either in the picker just funnels users into "no
+ * provider available" errors and erodes trust in the swap surface.
+ * Re-enable when Trocador's coverage actually catches up; until
+ * then native atomic swaps (Grin↔BTC v0.4, WOW↔XMR v0.6) are the
+ * real path for these assets.
+ */
 const TROCADOR_COIN: Record<string, { ticker: string; network: string; decimals: number }> = {
   btc: { ticker: 'btc', network: 'Mainnet', decimals: 8 },
   ltc: { ticker: 'ltc', network: 'Mainnet', decimals: 8 },
   xmr: { ticker: 'xmr', network: 'Mainnet', decimals: 12 },
-  wow: { ticker: 'wow', network: 'Mainnet', decimals: 11 },
-  grin: { ticker: 'grin', network: 'Mainnet', decimals: 9 },
 };
 
 /** Lifecycle states Trocador reports on `/trade` responses. Mirrored
@@ -199,6 +214,14 @@ export class TrocadorSwap implements Swap {
    *  real answer per pair. */
   supports(from: AssetId, to: AssetId): boolean {
     return from !== to && from in TROCADOR_COIN && to in TROCADOR_COIN;
+  }
+
+  /** UI filter helper: does Trocador handle this asset at all,
+   *  regardless of pair? Use when building from/to chooser lists
+   *  (`supports()` requires from !== to so it would wrongly exclude
+   *  an asset from "asset is selectable"). */
+  isKnownAsset(assetId: AssetId): boolean {
+    return assetId in TROCADOR_COIN;
   }
 
   async quote(req: QuoteRequest): Promise<SwapQuote> {

@@ -594,6 +594,76 @@ async function clearBootstrapCache(): Promise<void> {
   }
 }
 
+// ============================================================================
+// Balance snapshot cache.
+//
+// On popup reload the user previously stared at blank rows for ~10–20s
+// while we re-bootstrapped and re-fetched balances from every chain.
+// The data is *already* present — it just got dropped because the
+// popup process was killed. Cache the last successful (balances,
+// prices) tuple in chrome.storage.session so the next popup open
+// renders cached values instantly, with a "refreshing" indicator
+// while the background fetch repopulates fresh numbers. Stale-while-
+// revalidate, identical to how the bootstrap cache speeds up auth.
+//
+// Trade-offs:
+//   - Same chrome.storage.session backing as the bootstrap cache;
+//     auto-cleared on browser close. No persistent state.
+//   - Keyed by wallet fingerprint so account switching never shows
+//     the previous wallet's numbers.
+//   - 10 min TTL: long enough that a rapid reopen-after-close is
+//     instant, short enough that a user returning from lunch sees
+//     "loading" instead of trusting half-hour-old numbers.
+// ============================================================================
+
+const BALANCE_SNAPSHOT_KEY = 'smirk_balance_snapshot_v1';
+const BALANCE_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
+
+interface BalanceSnapshotEntry {
+  fingerprint: string;
+  balances: Balances;
+  prices: Prices | null;
+  cachedAt: number;
+}
+
+async function readBalanceSnapshot(
+  walletFingerprint: string,
+): Promise<{ balances: Balances; prices: Prices | null; cachedAt: number } | null> {
+  try {
+    const raw = await sessionStorage.get(BALANCE_SNAPSHOT_KEY);
+    if (!raw || typeof raw !== 'object') return null;
+    const entry = raw as BalanceSnapshotEntry;
+    if (entry.fingerprint !== walletFingerprint) return null;
+    if (Date.now() - entry.cachedAt > BALANCE_SNAPSHOT_TTL_MS) return null;
+    if (!entry.balances) return null;
+    return {
+      balances: entry.balances,
+      prices: entry.prices,
+      cachedAt: entry.cachedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeBalanceSnapshot(
+  walletFingerprint: string,
+  balances: Balances,
+  prices: Prices | null,
+): Promise<void> {
+  const entry: BalanceSnapshotEntry = {
+    fingerprint: walletFingerprint,
+    balances,
+    prices,
+    cachedAt: Date.now(),
+  };
+  try {
+    await sessionStorage.set(BALANCE_SNAPSHOT_KEY, entry);
+  } catch (e) {
+    console.warn('[smirk] balance snapshot write failed', e);
+  }
+}
+
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
@@ -621,7 +691,26 @@ function App() {
    * Balances and prices fire in parallel after auth completes.
    */
   const startSession = async (wallet: UnlockedWallet) => {
-    setSession((prev) => prev ?? ({} as WalletSession));
+    // Hydrate from the balance snapshot BEFORE awaiting anything so
+    // the user sees their last-known numbers within a paint. The
+    // refresh path below replaces these with fresh values when the
+    // network roundtrip resolves. `refreshing: true` makes the
+    // header spinner spin so users know the numbers are being
+    // re-fetched. Bootstrap-less placeholder so the existing render
+    // path doesn't blow up; the real bootstrap lands in the try below.
+    const snap = await readBalanceSnapshot(wallet.fingerprint);
+    if (snap) {
+      setSession({
+        bootstrap: { userId: '', isNew: false },
+        balances: snap.balances,
+        prices: snap.prices,
+        error: null,
+        refreshing: true,
+        refreshedAt: new Date(snap.cachedAt),
+      });
+    } else {
+      setSession((prev) => prev ?? ({} as WalletSession));
+    }
     try {
       // Try the warm path first: if we have a cached bootstrap from
       // a recent popup open this browser session, reuse it and skip
@@ -665,6 +754,8 @@ function App() {
         refreshing: false,
         refreshedAt: new Date(),
       });
+      // Persist for instant next-open. Best-effort.
+      void writeBalanceSnapshot(wallet.fingerprint, balances, prices);
     } catch (e) {
       // If a warm-path balance call rejected (auth error), drop the
       // cache and force a fresh bootstrap on the next render. Surface
@@ -736,6 +827,7 @@ function App() {
           ? { ...prev, balances, prices, error: null, refreshing: false, refreshedAt: new Date() }
           : prev,
       );
+      void writeBalanceSnapshot(wallet.fingerprint, balances, prices);
     } catch (e) {
       setSession((prev) =>
         prev
@@ -2803,10 +2895,10 @@ function SwapRouter({
   return (
     <SwapTab
       fromAssets={listAssets()
-        .filter((a) => a.sendable && trocador.supports(a.id, 'btc'))
+        .filter((a) => a.sendable && trocador.isKnownAsset(a.id))
         .map((a) => a.id)}
       toAssets={listAssets()
-        .filter((a) => a.receivable && trocador.supports('btc', a.id))
+        .filter((a) => a.receivable && trocador.isKnownAsset(a.id))
         .map((a) => a.id)}
       resolveBalance={(assetId) => {
         // Pull from the session's last-fetched balance snapshot.
