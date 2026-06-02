@@ -4819,16 +4819,29 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
           sessionState.pendingOutgoing ?? [],
           req.asset,
         );
+        // Resolve a real fee rate. send-handler doesn't fall back to
+        // a "normal" tier on its own — passing 0 makes selectUtxos
+        // compute fee = ceil(vsize * 0) = 0, then trip the
+        // `feeSat <= 0` guard and fail every dapp UTXO payment.
+        // Pull the user's normal tier from Electrum (same source the
+        // SendWizard uses) before calling send. Falls back to 1 sat/vB
+        // — relay floor for both BTC and LTC — if the API roundtrip
+        // fails, so the tx still has a chance to land.
+        let feeRateSatPerVb = 1;
+        if (req.asset === 'btc' || req.asset === 'ltc') {
+          const tiers = await api.estimateFee(req.asset).catch(() => null);
+          const normal = tiers?.data?.normal;
+          if (typeof normal === 'number' && normal > 0) {
+            feeRateSatPerVb = normal;
+          }
+        }
         const result = await send(
           wallet,
           {
             fromAssetId: req.asset,
             amountAtomic: BigInt(req.amount),
             toAddress: req.address,
-            // Non-UTXO assets ignore this; UTXO uses the wallet's
-            // current 'normal' tier. Dapp callers don't pick fee tiers
-            // — they just want the tx to land.
-            feeRateSatPerVb: 0,
+            feeRateSatPerVb,
             sweep: false,
           },
           excludeInputs,

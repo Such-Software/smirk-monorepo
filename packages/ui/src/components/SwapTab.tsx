@@ -529,7 +529,30 @@ function TrocadorWizard(props: TrocadorWizardProps) {
           swap={fields.inFlight}
           provider={props.provider}
           {...(props.onFetchStatus ? { onFetchStatus: props.onFetchStatus } : {})}
-          onUpdate={(next) => void props.patchFields({ inFlight: next })}
+          onUpdate={(next) => {
+            // Merge — `next` from the direct-Trocador fallback path
+            // carries empty fromAsset/toAsset/etc. (Trocador's /trade
+            // response doesn't echo them in a stable shape). Without
+            // merging, the empty strings overwrite the persisted
+            // values; `mustGetAsset('')` then throws on next render
+            // and the whole wizard crashes. The state field is the
+            // only thing that should change per poll; everything else
+            // is immutable post-start.
+            const prev = fields.inFlight!;
+            void props.patchFields({
+              inFlight: {
+                ...prev,
+                ...next,
+                fromAsset: next.fromAsset || prev.fromAsset,
+                toAsset: next.toAsset || prev.toAsset,
+                fromAmountAtomic: next.fromAmountAtomic || prev.fromAmountAtomic,
+                toAmountEstimateAtomic:
+                  next.toAmountEstimateAtomic || prev.toAmountEstimateAtomic,
+                depositAddress: next.depositAddress || prev.depositAddress,
+                state: next.state,
+              },
+            });
+          }}
           onReset={props.cancel}
         />
       )}
@@ -984,7 +1007,7 @@ function StatusStep({
           gap: 4,
         }}
       >
-        <Row label="Status">{statusLabel(swap.state)}</Row>
+        <Row label="Status">{statusLabel(swap.state, swap.toAsset)}</Row>
         <Row label="From">
           {formatAmountWithTicker(BigInt(swap.fromAmountAtomic), from.id)}
         </Row>
@@ -1067,7 +1090,7 @@ function StatusStep({
   );
 }
 
-function statusLabel(state: SwapInFlight['state']): string {
+function statusLabel(state: SwapInFlight['state'], toAssetId: string): string {
   switch (state.state) {
     case 'pending':
       switch (state.reason) {
@@ -1079,8 +1102,16 @@ function statusLabel(state: SwapInFlight['state']): string {
           return 'Provider exchanging — sending your output';
       }
       return 'Pending';
-    case 'completed':
-      return `Completed — ${state.toAmount} sent`;
+    case 'completed': {
+      // `state.toAmount` is an atomic-units string from the
+      // underlying Trocador response; format with the to-asset's
+      // decimals so the user sees "0.0139 LTC" instead of
+      // "139900946". Empty-string defends against missing data.
+      const formatted = state.toAmount
+        ? formatAmountWithTicker(BigInt(state.toAmount), toAssetId)
+        : 'output';
+      return `Completed — ${formatted} sent`;
+    }
     case 'refunded':
       return `Refunded — ${state.reason}`;
     case 'failed':
