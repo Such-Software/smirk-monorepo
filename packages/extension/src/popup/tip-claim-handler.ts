@@ -281,11 +281,32 @@ export async function claimPublicTip(
 
   if (!sweep.ok) return sweep;
 
-  // Step 5: confirm sweep on backend. Best-effort.
+  // Step 5: confirm sweep on backend. Best-effort with race detection.
+  // Public tips can have multiple URL-holders racing — the backend
+  // records the FIRST sweep_txid to confirm and ignores subsequent
+  // calls (first-wins idempotency). If the returned sweep_txid
+  // doesn't match ours, we lost the race: our tx is in the mempool
+  // but another claimer's sweep landed in the row first. Surface
+  // that to the caller as a distinct outcome so the UI can render
+  // "swept by someone else" instead of generic success.
   try {
     const conf = await api.confirmTipSweep(tipId, sweep.txid);
     if (conf.error) {
       console.warn('[tip-claim public] confirmTipSweep failed:', conf.error);
+    } else if (conf.data?.sweep_txid && conf.data.sweep_txid !== sweep.txid) {
+      // Race loser: backend already had a different winning sweep_txid.
+      // Our own broadcast may still confirm on-chain (mempool race
+      // could flip either way), but the backend's view is decided.
+      console.warn(
+        '[tip-claim public] race lost — backend winning sweep_txid =',
+        conf.data.sweep_txid,
+        'ours =',
+        sweep.txid,
+      );
+      return {
+        ok: false,
+        error: 'Someone else claimed this tip first. The on-chain race resolved to a different sweep.',
+      };
     }
   } catch (e) {
     console.warn('[tip-claim public] confirmTipSweep threw:', e);

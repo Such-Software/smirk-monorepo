@@ -215,12 +215,20 @@ export interface SocialMethods {
 
   /**
    * Confirm that a tip sweep was broadcast successfully.
-   * Moves tip from `claiming` to `claimed`.
+   * Moves tip from `claiming` to `claimed` (first-wins semantics).
+   *
+   * Response includes the **winning** `sweep_txid` recorded on the
+   * row — caller compares to their own broadcast txid to detect
+   * race loss (public tips: multiple URL-holders can race; whoever
+   * confirms first wins the chain race; loser sees the winner's
+   * txid here). When `sweep_txid !== yourBroadcastTxid`, the
+   * caller's sweep landed in the mempool but didn't make the
+   * winning transition; UI should render "swept by someone else".
    */
   confirmTipSweep(
     tipId: string,
     sweepTxid: string,
-  ): Promise<ApiResponse<{ success: boolean }>>;
+  ): Promise<ApiResponse<{ sweep_txid: string | null; status: string }>>;
 
   /** Get public tip info (unauthenticated). 404 for targeted tips. */
   getPublicSocialTip(tipId: string): Promise<ApiResponse<PublicTipInfo>>;
@@ -329,14 +337,14 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async confirmTipSweep(tipId, sweepTxid) {
-      // Retry OK — confirm-sweep is idempotent.
-      return client.retryableRequest<{ success: boolean }>(
-        `/tips/social/${tipId}/confirm-sweep`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ sweep_txid: sweepTxid }),
-        },
-      );
+      // Retry OK — confirm-sweep is idempotent (first-wins).
+      return client.retryableRequest<{
+        sweep_txid: string | null;
+        status: string;
+      }>(`/tips/social/${tipId}/confirm-sweep`, {
+        method: 'POST',
+        body: JSON.stringify({ sweep_txid: sweepTxid }),
+      });
     },
 
     async getPublicSocialTip(tipId) {
