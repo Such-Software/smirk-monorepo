@@ -19,8 +19,8 @@
  *     fromAmount: '100000',           // 0.001 BTC in atomic units
  *     toAddress: 'ltc1q...',
  *   });
- *   const started = await swap.start(quote);
- *   // ... wallet broadcasts started.depositTxId, polls swap.status(started.id)
+ *   const started = await swap.start({ quote, toAddress: 'ltc1q...' });
+ *   // ... wallet sends to started.depositAddress, polls swap.status(started.id)
  * }
  * ```
  */
@@ -33,6 +33,7 @@ export type {
   SwapId,
   SwapKind,
   SwapQuote,
+  SwapStartParams,
   SwapStarted,
   SwapStatus,
 } from './types';

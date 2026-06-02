@@ -2868,11 +2868,11 @@ function SwapRouter({
             amountToDecimal: atomicToText(quote.toAmountEstimateAtomic, toAsset.id),
           },
         };
-        const started = await trocador.startWithAddress(
-          rebuiltQuote,
+        const started = await trocador.start({
+          quote: rebuiltQuote,
           toAddress,
           refundAddress,
-        );
+        });
         // Persist to backend so the webhook receiver knows the token.
         // Best-effort — failure here means status updates from the
         // webhook won't be authenticated (rejected as 404), but the
@@ -2884,7 +2884,7 @@ function SwapRouter({
             from_asset: quote.fromAsset,
             to_asset: quote.toAsset,
             amount_from_atomic: quote.fromAmountAtomic,
-            deposit_address: started.depositTxId,
+            deposit_address: started.depositAddress,
             recipient_address: toAddress,
             refund_address: refundAddress,
             provider: quote.provider,
@@ -2905,7 +2905,7 @@ function SwapRouter({
           toAsset: quote.toAsset,
           fromAmountAtomic: quote.fromAmountAtomic,
           toAmountEstimateAtomic: quote.toAmountEstimateAtomic,
-          depositAddress: started.depositTxId,
+          depositAddress: started.depositAddress,
           state: { state: 'pending', reason: 'awaiting_deposit' },
         };
         return sw;

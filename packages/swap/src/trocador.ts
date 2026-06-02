@@ -32,6 +32,7 @@ import type {
   SwapId,
   SwapKind,
   SwapQuote,
+  SwapStartParams,
   SwapStarted,
   SwapStatus,
 } from './types';
@@ -83,8 +84,12 @@ interface TrocadorRateResponse {
   coin_to: string;
   network_from: string;
   network_to: string;
-  amount_from: number;
-  amount_to: number;
+  /** Trocador's JSON often serializes amounts as numbers, sometimes
+   *  as strings. Accept both — readAmount() narrows to string for
+   *  precision-safe BigInt math (avoids float drift on WOW=11 dec,
+   *  XMR=12 dec). */
+  amount_from: number | string;
+  amount_to: number | string;
   provider: string;
   fixed: boolean;
   payment: boolean;
@@ -101,6 +106,21 @@ interface TrocadorTradeResponse extends TrocadorRateResponse {
   refund_address_memo: string;
   password: string;
   id_provider: string;
+}
+
+/** Trocador can serialize amounts as either number or string. Always
+ *  read through this helper so the precision-loss vector for high-
+ *  decimal assets (WOW=11, XMR=12) is one well-marked spot. */
+function readAmount(v: number | string | undefined | null): string {
+  if (v === undefined || v === null) return '0';
+  if (typeof v === 'string') return v;
+  // Stringify with enough digits to round-trip. Number→string is
+  // lossy past 2^53; we accept that as a Trocador-server-side issue
+  // (their response will have already lost precision before it
+  // reached us). The fallback to '0' on NaN/Infinity prevents
+  // downstream BigInt() throws.
+  if (!Number.isFinite(v)) return '0';
+  return v.toString();
 }
 
 /** Stored in `SwapQuote.implementationData` between `quote()` and
@@ -245,56 +265,49 @@ export class TrocadorSwap implements Swap {
     };
   }
 
-  async start(quote: SwapQuote): Promise<SwapStarted> {
+  /**
+   * Finalize a quote into a real trade by calling `/new_trade`.
+   *
+   * Aggregator-shape contract: requires `toAddress` (where to-asset
+   * lands) and `refundAddress` (where from-asset returns on failure).
+   * Throws `SwapError` with code `not_implemented` if either is
+   * missing — better than silently sending to an empty address or
+   * forgetting the refund destination.
+   *
+   * Optional address memos can ride through `params.counterpartyData`
+   * shaped as `{ addressMemo?, refundMemo? }`. The protocol is
+   * single-shot for aggregators, so `counterpartyData` is a thin
+   * extension point rather than a multi-round channel.
+   */
+  async start(params: SwapStartParams): Promise<SwapStarted> {
+    const { quote, toAddress, refundAddress } = params;
     const impl = quote.implementationData as TrocadorImplementationData | null;
     if (!impl || !impl.tradeId || !impl.provider) {
-      throw asSwapError('network_error', 'Quote is missing Trocador implementationData');
-    }
-    if (!('toAddress' in quote) && true) {
-      // Intentional: SwapQuote doesn't carry the destination address
-      // — caller has to supply it on start. Until QuoteRequest grows
-      // a `toAddress` field, start() expects the caller to wrap the
-      // quote with the address (see `startWithAddress` below).
       throw asSwapError(
         'network_error',
-        'Use startWithAddress(quote, toAddress, refundAddress) — Trocador requires the destination on /new_trade',
+        'Quote is missing Trocador implementationData — was it produced by TrocadorSwap.quote()?',
       );
     }
-    return this.startWithAddress(quote, '', '');
-  }
-
-  /**
-   * Trocador's `/new_trade` finalizes the draft created by `/new_rate`
-   * with a real destination + refund address. The Swap interface's
-   * `start(quote)` doesn't carry an address (it predates Trocador-style
-   * aggregators), so this is the address-aware companion. The wallet
-   * UI calls this directly.
-   *
-   * `refundAddress` is required by every Trocador provider — if the
-   * swap fails the deposited funds get returned here. Use the wallet's
-   * own address for `fromAsset` if you don't have a separate refund
-   * channel.
-   */
-  async startWithAddress(
-    quote: SwapQuote,
-    toAddress: string,
-    refundAddress: string,
-    extra?: { addressMemo?: string; refundMemo?: string },
-  ): Promise<SwapStarted> {
-    const impl = quote.implementationData as TrocadorImplementationData | null;
-    if (!impl) {
-      throw asSwapError('network_error', 'Quote is missing Trocador implementationData');
-    }
     if (!toAddress) {
-      throw asSwapError('network_error', 'Destination address required');
+      throw asSwapError(
+        'not_implemented',
+        'Trocador.start requires `toAddress` — where the swap output lands.',
+      );
     }
     if (!refundAddress) {
-      throw asSwapError('network_error', 'Refund address required by Trocador providers');
+      throw asSwapError(
+        'not_implemented',
+        'Trocador.start requires `refundAddress` — provider returns funds here on failure.',
+      );
     }
+    const extra = (params.counterpartyData ?? {}) as {
+      addressMemo?: string;
+      refundMemo?: string;
+    };
     const fromCoin = TROCADOR_COIN[quote.fromAsset]!;
     const toCoin = TROCADOR_COIN[quote.toAsset]!;
 
-    const params = new URLSearchParams({
+    const tradeParams = new URLSearchParams({
       ticker_from: fromCoin.ticker,
       ticker_to: toCoin.ticker,
       network_from: fromCoin.network,
@@ -304,29 +317,32 @@ export class TrocadorSwap implements Swap {
       min_kycrating: this.minKycRating,
       address: toAddress,
       refund: refundAddress,
-      refund_memo: extra?.refundMemo ?? '0',
+      refund_memo: extra.refundMemo ?? '0',
       provider: impl.provider,
       id: impl.tradeId,
     });
-    if (extra?.addressMemo) params.set('address_memo', extra.addressMemo);
-    if (this.markup) params.set('markup', this.markup);
-    if (this.opts.webhookUrl) params.set('webhook', this.opts.webhookUrl);
-    if (this.opts.passthrough) params.set('passthrough', this.opts.passthrough);
+    if (extra.addressMemo) tradeParams.set('address_memo', extra.addressMemo);
+    if (this.markup) tradeParams.set('markup', this.markup);
+    if (this.opts.webhookUrl) tradeParams.set('webhook', this.opts.webhookUrl);
+    if (this.opts.passthrough) tradeParams.set('passthrough', this.opts.passthrough);
 
-    const res = await this.get<TrocadorTradeResponse>('/new_trade', params);
+    const res = await this.get<TrocadorTradeResponse>('/new_trade', tradeParams);
     if (!res.trade_id) {
       throw asSwapError('network_error', 'Trocador /new_trade returned no trade_id');
     }
-    if (!res.address_provider) {
-      throw asSwapError('network_error', 'Trocador /new_trade returned no deposit address');
+    // Trocador returns the literal string "0" for `address_provider`
+    // when the trade draft hasn't been fully finalized server-side
+    // (e.g. provider out of inventory at finalize time). Falling
+    // through here sends user funds to literal "0".
+    if (!res.address_provider || res.address_provider === '0') {
+      throw asSwapError(
+        'network_error',
+        'Trocador /new_trade returned no deposit address. The chosen provider may be out of inventory — re-quote.',
+      );
     }
     return {
       id: res.trade_id,
-      // For Trocador-style swaps "depositTxId" is the deposit
-      // ADDRESS — the wallet hasn't broadcast anything yet. Caller
-      // sends `quote.fromAmount` to this address via the normal Send
-      // wizard; Trocador's webhook fires once the deposit is observed.
-      depositTxId: res.address_provider,
+      depositAddress: res.address_provider,
     };
   }
 
@@ -360,7 +376,9 @@ export class TrocadorSwap implements Swap {
 }
 
 function mapStatus(t: TrocadorTradeResponse): SwapStatus {
-  switch (t.status as TrocadorStatus) {
+  // Don't cast to TrocadorStatus — that hides unknown future states
+  // from the type system. The default branch handles them at runtime.
+  switch (t.status) {
     case 'new':
     case 'waiting':
       return { state: 'pending', reason: 'awaiting_deposit' };
@@ -372,17 +390,24 @@ function mapStatus(t: TrocadorTradeResponse): SwapStatus {
     case 'finished':
       return {
         state: 'completed',
-        // Trocador's response doesn't carry the outbound chain txid
-        // in a stable field; `id_provider` is the closest analog
-        // (the underlying CEX's order id). UI should treat it as
-        // informational, not a chain explorer link.
-        outboundTxId: t.id_provider || t.trade_id,
-        toAmount: decimalToAtomicString(String(t.amount_to), TROCADOR_COIN[t.ticker_to]?.decimals ?? 8),
+        // Trocador's `id_provider` is the underlying CEX's order id —
+        // NOT a chain txid. We pass it through unchanged so the UI
+        // can render it informationally; leaving empty when absent
+        // (was previously falling back to trade_id, which would
+        // render as a broken explorer link).
+        outboundTxId: t.id_provider || '',
+        toAmount: decimalToAtomicString(
+          readAmount(t.amount_to),
+          TROCADOR_COIN[t.ticker_to]?.decimals ?? 8,
+        ),
       };
     case 'refunded':
       return {
         state: 'refunded',
-        refundTxId: t.refund_address || t.trade_id,
+        // Similarly: refund_address is a wallet address, NOT a refund
+        // txid. Leave empty; UI displays "refunded to your refund
+        // address" instead of pretending to link a tx.
+        refundTxId: '',
         reason: 'Trocador reported refunded',
       };
     case 'expired':

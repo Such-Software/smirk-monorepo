@@ -19,6 +19,7 @@ import type {
   SwapError,
   SwapId,
   SwapKind,
+  SwapStartParams,
   SwapQuote,
   SwapStarted,
   SwapStatus,
@@ -62,7 +63,7 @@ export class ThorchainSwap implements Swap {
     throw notImplemented('ThorchainSwap.quote');
   }
 
-  async start(_quote: SwapQuote): Promise<SwapStarted> {
+  async start(_params: SwapStartParams): Promise<SwapStarted> {
     throw notImplemented('ThorchainSwap.start');
   }
 

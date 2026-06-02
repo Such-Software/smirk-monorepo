@@ -27,11 +27,10 @@ export interface QuoteRequest {
   /** Amount of `fromAsset` the user intends to send, in atomic units. */
   fromAmount: AtomicAmount;
   /**
-   * Destination address. Required at `start()` time by every
-   * implementation, but optional at `quote()` — aggregator-style
-   * (CEX) swaps don't need it until the trade is finalized. Native
-   * adaptor-signature implementations may inspect it earlier to
-   * pre-validate or short-circuit invalid recipients.
+   * Destination address. Optional at `quote()` time — CEX aggregators
+   * don't need it until `start()`. Native adaptor-signature swaps may
+   * inspect it earlier to pre-validate. Always supplied later via
+   * `SwapStartParams.toAddress` regardless.
    */
   toAddress?: string;
 }
@@ -60,10 +59,54 @@ export type SwapStatus =
   | { state: 'refunded'; refundTxId: string; reason: string }
   | { state: 'failed'; reason: string };
 
+/**
+ * Params for `Swap.start()`. Field set is the union across swap
+ * families; each implementation enforces what it actually requires:
+ *
+ *   - CEX aggregator (Trocador): `toAddress` + `refundAddress` required.
+ *   - DEX (THORChain): `toAddress` required; refund derives from the
+ *     deposit chain automatically.
+ *   - Onramp (MoonPay): nothing extra; provider's hosted UI collects
+ *     destination during KYC.
+ *   - Native atomic (Grin↔BTC, WOW↔XMR): `counterpartyData` required;
+ *     the multi-round protocol replaces address routing.
+ *
+ * One shape per swap family was rejected as premature — discriminated
+ * unions add type churn before we know which fields land where. Each
+ * impl validates its own slice and throws a clear `SwapError` for
+ * missing input.
+ */
+export interface SwapStartParams {
+  quote: SwapQuote;
+  /** Where the `toAsset` output lands. Required by CEX/DEX. */
+  toAddress?: string;
+  /** Where `fromAsset` returns to if the swap fails. Required by CEX
+   *  (provider needs a return address); DEX derives it from the
+   *  deposit chain; native atomic uses a refund timelock. */
+  refundAddress?: string;
+  /** Counterparty exchange data for native atomic swaps (slate,
+   *  adaptor commitment, etc.). Untyped here; each native impl
+   *  narrows it. */
+  counterpartyData?: unknown;
+}
+
 export interface SwapStarted {
   id: SwapId;
-  /** The tx the wallet should broadcast or already broadcast to begin the swap. */
-  depositTxId: string;
+  /**
+   * Where the wallet sends `fromAmount` to begin the swap.
+   *
+   * - **CEX/DEX:** an on-chain address Trocador/THORChain/etc. returns.
+   *   The wallet routes this through SendWizard.
+   * - **Native atomic:** the wallet's *own* derived multisig address
+   *   built from the adaptor-sig setup. Wallet still sends to it,
+   *   but the protocol decides the path out.
+   *
+   * Despite the name being a chain-level term, this is **not** a
+   * broadcast txid — the wallet hasn't broadcast anything yet at
+   * start() return. Status polls reveal the eventual deposit txid
+   * via `SwapStatus.outboundTxId` once the chain catches up.
+   */
+  depositAddress: string;
 }
 
 export interface SwapError extends Error {
@@ -90,8 +133,16 @@ export interface Swap {
   /** Get a quote. Quotes have an expiry; re-call if stale. */
   quote(req: QuoteRequest): Promise<SwapQuote>;
 
-  /** Begin the swap. May produce a tx the wallet then broadcasts. */
-  start(quote: SwapQuote): Promise<SwapStarted>;
+  /**
+   * Begin the swap. Returns the address the wallet sends to, plus an
+   * id the caller polls via `status()`. May produce a tx the wallet
+   * then broadcasts depending on the swap family.
+   *
+   * Implementations validate `params` themselves and throw a
+   * `SwapError` with code `not_implemented` (or `network_error`) when
+   * required fields are missing.
+   */
+  start(params: SwapStartParams): Promise<SwapStarted>;
 
   /** Poll status. Safe to call repeatedly; UI decides cadence. */
   status(id: SwapId): Promise<SwapStatus>;

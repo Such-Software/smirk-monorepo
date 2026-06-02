@@ -33,15 +33,17 @@ describe('ThorchainSwap', () => {
         }),
       () =>
         swap.start({
-          fromAsset: 'btc',
-          toAsset: 'ltc',
-          fromAmount: '100000',
-          toAmountEstimate: '0',
-          feeEstimate: '0',
-          etaSeconds: 0,
-          expiresAt: new Date(),
-          kind: 'aggregator',
-          implementationData: null,
+          quote: {
+            fromAsset: 'btc',
+            toAsset: 'ltc',
+            fromAmount: '100000',
+            toAmountEstimate: '0',
+            feeEstimate: '0',
+            etaSeconds: 0,
+            expiresAt: new Date(),
+            kind: 'aggregator',
+            implementationData: null,
+          },
         }),
       () => swap.status('any-id'),
     ]) {
