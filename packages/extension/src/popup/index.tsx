@@ -712,6 +712,13 @@ function App() {
       setSession((prev) => prev ?? ({} as WalletSession));
     }
     try {
+      // Prices are unauthenticated — kick them off in parallel with
+      // auth so they don't sit behind the bootstrap round-trip on
+      // cold start. Saves ~500ms on every fresh popup.
+      const pricesPromise = fetchPrices(api).catch(
+        () => null as Prices | null,
+      );
+
       // Try the warm path first: if we have a cached bootstrap from
       // a recent popup open this browser session, reuse it and skip
       // the auth round-trip (challenge + signature + extensionRegister
@@ -730,22 +737,37 @@ function App() {
           await writeBootstrapCache(wallet.fingerprint, tok, bootstrap);
         }
       }
-      const [balances, prices] = await Promise.all([
-        (async () => {
-          // Read the user's hidden-asset preference NOW so balance
-          // polling skips network round-trips for hidden assets.
-          // We re-read on every refresh so toggles in Settings take
-          // effect on the next poll without needing a popup remount.
-          const visible = visibleAssetIds(await store.load(), listAssets()).map(
-            (a) => a.id,
+      // Progressive render: as each per-asset balance resolves, patch
+      // it into session.balances immediately. UI updates one row at a
+      // time, so BTC/LTC/Grin landing in 1-2s don't wait for an
+      // LWS-scan-catching-up XMR balance that might take much longer.
+      const visible = visibleAssetIds(await store.load(), listAssets()).map(
+        (a) => a.id,
+      );
+      const balances = await fetchAllBalances(api, wallet, bootstrap, {
+        verifyKeyImage,
+        visibleAssetIds: visible,
+        onAssetBalance: (assetId, balance) => {
+          setSession((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  balances: {
+                    ...(prev.balances ?? {
+                      btc: { confirmed: 0n, pending: 0n },
+                      ltc: { confirmed: 0n, pending: 0n },
+                      xmr: { confirmed: 0n, pending: 0n },
+                      wow: { confirmed: 0n, pending: 0n },
+                      grin: { confirmed: 0n, pending: 0n },
+                    }),
+                    [assetId]: balance,
+                  },
+                }
+              : prev,
           );
-          return fetchAllBalances(api, wallet, bootstrap, {
-            verifyKeyImage,
-            visibleAssetIds: visible,
-          });
-        })(),
-        fetchPrices(api),
-      ]);
+        },
+      });
+      const prices = await pricesPromise;
       setSession({
         bootstrap,
         balances,
@@ -777,22 +799,37 @@ function App() {
   const refreshBalances = async (wallet: UnlockedWallet, bootstrap: BootstrapAuthResult) => {
     setSession((prev) => (prev ? { ...prev, refreshing: true } : prev));
     try {
-      const [balances, prices] = await Promise.all([
-        (async () => {
-          // Read the user's hidden-asset preference NOW so balance
-          // polling skips network round-trips for hidden assets.
-          // We re-read on every refresh so toggles in Settings take
-          // effect on the next poll without needing a popup remount.
-          const visible = visibleAssetIds(await store.load(), listAssets()).map(
-            (a) => a.id,
+      // Same progressive-render pattern as startSession. Prices are
+      // unauth so they fly in parallel; per-asset balances patch the
+      // UI as each chain resolves rather than blocking on the
+      // slowest one (often XMR catching up its scan).
+      const pricesPromise = fetchPrices(api).catch(
+        () => null as Prices | null,
+      );
+      const visible = visibleAssetIds(await store.load(), listAssets()).map(
+        (a) => a.id,
+      );
+      const balances = await fetchAllBalances(api, wallet, bootstrap, {
+        verifyKeyImage,
+        visibleAssetIds: visible,
+        onAssetBalance: (assetId, balance) => {
+          setSession((prev) =>
+            prev && prev.balances
+              ? {
+                  ...prev,
+                  balances: { ...prev.balances, [assetId]: balance },
+                }
+              : prev,
           );
-          return fetchAllBalances(api, wallet, bootstrap, {
-            verifyKeyImage,
-            visibleAssetIds: visible,
-          });
-        })(),
-        fetchPrices(api),
-      ]);
+        },
+      });
+      const prices = (await pricesPromise) ?? {
+        btc: null,
+        ltc: null,
+        xmr: null,
+        wow: null,
+        grin: null,
+      };
       // Reconcile pendingOutgoing against the freshly-fetched balances
       // before storing. Two-pass:
       //   1. Per-asset, run reconcilePendingOutgoing against the new

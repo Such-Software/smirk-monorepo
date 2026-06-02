@@ -293,6 +293,21 @@ export interface FetchBalancesOptions {
    * keys, callers that read by id never need to null-check.
    */
   visibleAssetIds?: ReadonlyArray<string>;
+
+  /**
+   * Progressive-render callback. Fires *each time* a per-asset
+   * balance resolves, before the overall `Promise<Balances>`
+   * settles. Lets the UI paint each row as soon as its chain is
+   * back, rather than waiting for the slowest chain (often an
+   * LWS scan still catching up). Cold-start XMR can lag minutes
+   * behind blockchain tip; BTC/LTC/Grin shouldn't wait for it.
+   *
+   * Fires once per asset. May fire in any order. Failures are
+   * delivered through the same callback with the error field on
+   * the AssetBalance set (matches the all-or-nothing return path's
+   * per-asset error semantics).
+   */
+  onAssetBalance?: (assetId: keyof Balances, balance: AssetBalance) => void;
 }
 
 export async function fetchAllBalances(
@@ -316,40 +331,81 @@ export async function fetchAllBalances(
     !(options.visibleAssetIds && !options.visibleAssetIds.includes(id));
   const zero: AssetBalance = { confirmed: 0n, pending: 0n };
 
+  // Wrap each fetch so its callback fires as soon as the underlying
+  // promise resolves — independent of the slowest sibling. The
+  // outer Promise.all still waits for everything (for the return
+  // value), but the UI gets per-asset updates progressively.
+  const tap = <K extends keyof Balances>(
+    id: K,
+    p: Promise<AssetBalance>,
+  ): Promise<AssetBalance> =>
+    options.onAssetBalance
+      ? p.then(
+          (b) => {
+            options.onAssetBalance!(id, b);
+            return b;
+          },
+          (e) => {
+            const err: AssetBalance = {
+              confirmed: 0n,
+              pending: 0n,
+              error: e instanceof Error ? e.message : 'Fetch failed',
+            };
+            options.onAssetBalance!(id, err);
+            return err;
+          },
+        )
+      : p;
+
   const [btc, ltc, xmr, wow, grin] = await Promise.all([
-    visible('btc')
-      ? fetchUtxoBalance(api, 'btc', wallet.addresses.btc)
-      : Promise.resolve(zero),
-    visible('ltc')
-      ? fetchUtxoBalance(api, 'ltc', wallet.addresses.ltc)
-      : Promise.resolve(zero),
-    visible('xmr')
-      ? fetchLwsBalance(
-          api,
-          bootstrap.userId,
-          'xmr',
-          wallet.addresses.xmr,
-          xmrViewKeyHex,
-          xmrSpendKeyHex,
-          bootstrap.xmrStartHeight,
-          options.verifyKeyImage,
-        )
-      : Promise.resolve(zero),
-    visible('wow')
-      ? fetchLwsBalance(
-          api,
-          bootstrap.userId,
-          'wow',
-          wallet.addresses.wow,
-          wowViewKeyHex,
-          wowSpendKeyHex,
-          bootstrap.wowStartHeight,
-          options.verifyKeyImage,
-        )
-      : Promise.resolve(zero),
-    visible('grin')
-      ? fetchGrinBalance(api, bootstrap.userId)
-      : Promise.resolve(zero),
+    tap(
+      'btc',
+      visible('btc')
+        ? fetchUtxoBalance(api, 'btc', wallet.addresses.btc)
+        : Promise.resolve(zero),
+    ),
+    tap(
+      'ltc',
+      visible('ltc')
+        ? fetchUtxoBalance(api, 'ltc', wallet.addresses.ltc)
+        : Promise.resolve(zero),
+    ),
+    tap(
+      'xmr',
+      visible('xmr')
+        ? fetchLwsBalance(
+            api,
+            bootstrap.userId,
+            'xmr',
+            wallet.addresses.xmr,
+            xmrViewKeyHex,
+            xmrSpendKeyHex,
+            bootstrap.xmrStartHeight,
+            options.verifyKeyImage,
+          )
+        : Promise.resolve(zero),
+    ),
+    tap(
+      'wow',
+      visible('wow')
+        ? fetchLwsBalance(
+            api,
+            bootstrap.userId,
+            'wow',
+            wallet.addresses.wow,
+            wowViewKeyHex,
+            wowSpendKeyHex,
+            bootstrap.wowStartHeight,
+            options.verifyKeyImage,
+          )
+        : Promise.resolve(zero),
+    ),
+    tap(
+      'grin',
+      visible('grin')
+        ? fetchGrinBalance(api, bootstrap.userId)
+        : Promise.resolve(zero),
+    ),
   ]);
 
   return { btc, ltc, xmr, wow, grin };
@@ -384,6 +440,12 @@ async function fetchLwsBalance(
   // as no-ops; we intentionally don't fail the whole balance fetch if
   // this errors. Pass the previously-stored scan height so LWS resumes
   // from the right block on re-registration of an imported wallet.
+  //
+  // Awaited (not raced): for a first-ever XMR/WOW use the LWS account
+  // doesn't exist yet, so a racing getLwsBalance call returns "address
+  // not found" — surfacing that as a one-tick error is the kind of
+  // jank we shouldn't ship. The ~100-200 ms savings for returning
+  // wallets aren't worth the first-use UX cliff.
   await api
     .registerLws(userId, asset, address, viewKeyHex, startHeight)
     .catch(() => undefined);
