@@ -32,7 +32,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
 import { useWizard } from '../state/hooks';
-import { Button } from './Button';
 import { AssetIcon } from './AssetIcon';
 import { formatAmountWithTicker, formatAmount } from '../format';
 
@@ -434,36 +433,58 @@ interface TrocadorWizardProps {
 function TrocadorWizard(props: TrocadorWizardProps) {
   const { fields, step } = props;
   const setStep = (next: 0 | 1 | 2 | 3) => void props.patchFields({ step: next });
+  const canGoBack = step > 0 && step < 3;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span
-              style={{
-                fontSize: 9,
-                fontWeight: 700,
-                letterSpacing: '0.05em',
-                padding: '2px 6px',
-                borderRadius: 4,
-                background: 'rgba(255,255,255,0.06)',
-                color: 'var(--smirk-fg-muted)',
-              }}
-            >
-              CEX
-            </span>
-            <h2 style={{ margin: 0, fontSize: 16 }}>Trocador</h2>
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', marginTop: 2 }}>
-            Step {step + 1} of 4
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {step > 0 && step < 3 && (
-            <Button onClick={() => setStep((step - 1) as 0 | 1 | 2 | 3)}>‹ Back</Button>
-          )}
-          <Button onClick={props.cancel}>Cancel</Button>
-        </div>
+      {/* Single-row compact header: back chevron + badge + title + step
+          + close. The previous layout used full-width <Button> for
+          Back/Cancel which expanded into chunky theme-clashing blocks
+          on darker themes. Icon-only nav buttons stay visually quiet
+          across every theme and free the screen for the actual flow. */}
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          minHeight: 28,
+        }}
+      >
+        {canGoBack ? (
+          <button
+            onClick={() => setStep((step - 1) as 0 | 1 | 2 | 3)}
+            aria-label="Back"
+            style={iconHeaderBtn()}
+          >
+            ‹
+          </button>
+        ) : (
+          <span style={{ width: 28 }} />
+        )}
+        <span
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: '0.05em',
+            padding: '2px 6px',
+            borderRadius: 4,
+            background: 'rgba(255,255,255,0.06)',
+            color: 'var(--smirk-fg-muted)',
+          }}
+        >
+          CEX
+        </span>
+        <h2 style={{ margin: 0, fontSize: 16, flex: 1 }}>Trocador</h2>
+        <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)' }}>
+          {step + 1}/4
+        </span>
+        <button
+          onClick={props.cancel}
+          aria-label="Cancel swap"
+          title="Cancel swap"
+          style={iconHeaderBtn()}
+        >
+          ✕
+        </button>
       </header>
 
       {step === 0 && (
@@ -755,7 +776,18 @@ function QuoteStep({
   const to = mustGetAsset(quote.toAsset);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const expired = quote.expiresAtMs < Date.now();
+  // 1Hz tick so the "Quote valid for Ns" countdown actually ticks.
+  // The countdown was computed at render time only — nothing else
+  // triggers re-renders on this step, so it sat frozen at whatever
+  // it was when the user arrived. useState + setInterval is the
+  // minimum-overhead way to force a re-render every second.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const handle = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(handle);
+  }, []);
+  const secondsLeft = Math.max(0, Math.round((quote.expiresAtMs - now) / 1000));
+  const expired = secondsLeft === 0;
 
   const handleConfirm = async () => {
     setError(null);
@@ -809,7 +841,13 @@ function QuoteStep({
         <Row label="Provider">{quote.provider}</Row>
         <Row label="ETA">{Math.max(1, Math.round(quote.etaSeconds / 60))} min</Row>
         <Row label="Quote valid for">
-          {Math.max(0, Math.round((quote.expiresAtMs - Date.now()) / 1000))}s
+          <span
+            style={{
+              color: secondsLeft < 30 ? 'var(--smirk-negative, #ff6b6b)' : 'inherit',
+            }}
+          >
+            {secondsLeft}s
+          </span>
         </Row>
       </div>
 
@@ -1147,6 +1185,28 @@ function addrInputStyle(): preact.JSX.CSSProperties {
     fontSize: 12,
     fontFamily: 'var(--smirk-font-family-mono)',
     boxSizing: 'border-box',
+  };
+}
+
+/** Compact icon button used in the wizard header for back / close.
+ *  Stays visually quiet on every theme so the primary CTA at the
+ *  bottom of each step keeps the visual weight. */
+function iconHeaderBtn(): preact.JSX.CSSProperties {
+  return {
+    width: 28,
+    height: 28,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'transparent',
+    border: '1px solid var(--smirk-border)',
+    borderRadius: 6,
+    color: 'inherit',
+    cursor: 'pointer',
+    fontSize: 14,
+    fontFamily: 'inherit',
+    padding: 0,
+    lineHeight: 1,
   };
 }
 
