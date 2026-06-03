@@ -109,6 +109,14 @@ export interface SwapTabProps {
    *  backend's GET /api/v1/swaps/:id can omit and the user gets a
    *  static last-known-status display. */
   onTrocadorFetchStatus?: (id: string) => Promise<SwapInFlight>;
+  /** Resolve the wallet's own address for `assetId`. Used to
+   *  pre-fill the refund address (which is almost always the user's
+   *  own from-asset address) and to surface a one-click "Use my
+   *  address" affordance on the receive-address input. Return null
+   *  when the wallet doesn't have an address for that asset (e.g.
+   *  an asset that's registered but not yet derived for some
+   *  reason). */
+  resolveAddress?: (assetId: string) => string | null;
   resolveIcon?: (iconKey: string) => string | undefined;
 }
 
@@ -285,6 +293,7 @@ export function SwapTab(props: SwapTabProps) {
       {...(props.onTrocadorFetchStatus
         ? { onFetchStatus: props.onTrocadorFetchStatus }
         : {})}
+      {...(props.resolveAddress ? { resolveAddress: props.resolveAddress } : {})}
       {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
     />
   );
@@ -294,7 +303,14 @@ function SwapHeader() {
   return (
     <header>
       <h2 style={{ margin: 0, fontSize: 16 }}>Swap</h2>
-      <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', marginTop: 2 }}>
+      <div
+        style={{
+          fontSize: 11,
+          color: 'var(--smirk-fg-muted)',
+          marginTop: 2,
+          lineHeight: 1.5,
+        }}
+      >
         CEX aggregators are non-custodial-for-Smirk but custodial for
         the underlying provider. DEX routes (coming) are fully
         trust-minimized. Pick the route that fits the trust model you
@@ -377,7 +393,7 @@ function ProviderRow({
           </span>
         )}
       </div>
-      <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', lineHeight: 1.3 }}>
+      <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', lineHeight: 1.5 }}>
         {provider.blurb}
       </div>
       {provider.statusNote && (
@@ -386,7 +402,8 @@ function ProviderRow({
             fontSize: 10,
             color: 'var(--smirk-fg-muted)',
             fontStyle: 'italic',
-            marginTop: 2,
+            marginTop: 4,
+            lineHeight: 1.5,
           }}
         >
           {provider.statusNote}
@@ -427,6 +444,7 @@ interface TrocadorWizardProps {
   }) => Promise<SwapInFlight>;
   onOpenSend: (deposit: SwapInFlight) => void;
   onFetchStatus?: (id: string) => Promise<SwapInFlight>;
+  resolveAddress?: (assetId: string) => string | null;
   resolveIcon?: (iconKey: string) => string | undefined;
 }
 
@@ -508,6 +526,7 @@ function TrocadorWizard(props: TrocadorWizardProps) {
           quote={fields.quote}
           toAddress={fields.toAddress ?? ''}
           refundAddress={fields.refundAddress ?? ''}
+          {...(props.resolveAddress ? { resolveAddress: props.resolveAddress } : {})}
           onPatch={(p) => void props.patchFields(p)}
           onConfirm={async (args) => {
             const sw = await props.onConfirm(args);
@@ -759,12 +778,14 @@ function QuoteStep({
   quote,
   toAddress,
   refundAddress,
+  resolveAddress,
   onPatch,
   onConfirm,
 }: {
   quote: SwapQuoteSummary;
   toAddress: string;
   refundAddress: string;
+  resolveAddress?: (assetId: string) => string | null;
   onPatch: (p: Partial<TrocadorFields>) => void;
   onConfirm: (args: {
     quote: SwapQuoteSummary;
@@ -788,6 +809,24 @@ function QuoteStep({
   }, []);
   const secondsLeft = Math.max(0, Math.round((quote.expiresAtMs - now) / 1000));
   const expired = secondsLeft === 0;
+
+  // Wallet-owned addresses for the from / to assets. Used to
+  // pre-fill the refund (almost always the user's own address —
+  // there's rarely a separate refund channel) and to surface a
+  // one-tap "use my address" on the receive input.
+  const myFromAddress = resolveAddress?.(quote.fromAsset) ?? null;
+  const myToAddress = resolveAddress?.(quote.toAsset) ?? null;
+
+  // Auto-fill refund address with the user's own from-asset address
+  // on first mount when the field is empty. Only fires once per
+  // wizard-instance — after that the user can edit freely without
+  // having their edits stomped on each render.
+  useEffect(() => {
+    if (!refundAddress && myFromAddress) {
+      onPatch({ refundAddress: myFromAddress });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleConfirm = async () => {
     setError(null);
@@ -852,9 +891,20 @@ function QuoteStep({
       </div>
 
       <div>
-        <label style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
-          Your {to.ticker} receive address
-        </label>
+        <div style={addrLabelRowStyle()}>
+          <label style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
+            Your {to.ticker} receive address
+          </label>
+          {myToAddress && myToAddress !== toAddress && (
+            <button
+              type="button"
+              onClick={() => onPatch({ toAddress: myToAddress })}
+              style={inlineLinkBtn()}
+            >
+              Use my {to.ticker} address
+            </button>
+          )}
+        </div>
         <input
           type="text"
           value={toAddress}
@@ -865,9 +915,20 @@ function QuoteStep({
       </div>
 
       <div>
-        <label style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
-          {from.ticker} refund address (if the swap fails)
-        </label>
+        <div style={addrLabelRowStyle()}>
+          <label style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
+            {from.ticker} refund address (required)
+          </label>
+          {myFromAddress && myFromAddress !== refundAddress && (
+            <button
+              type="button"
+              onClick={() => onPatch({ refundAddress: myFromAddress })}
+              style={inlineLinkBtn()}
+            >
+              Use my {from.ticker} address
+            </button>
+          )}
+        </div>
         <input
           type="text"
           value={refundAddress}
@@ -875,10 +936,9 @@ function QuoteStep({
           placeholder={`Where to return ${from.ticker} on failure`}
           style={addrInputStyle()}
         />
-        <div
-          style={{ fontSize: 10, color: 'var(--smirk-fg-muted)', marginTop: 4 }}
-        >
-          The provider returns deposited funds here if the swap can't complete.
+        <div style={helperTextStyle()}>
+          If the swap can't complete, the provider returns deposited
+          funds here.
         </div>
       </div>
 
@@ -1090,7 +1150,13 @@ function StatusStep({
               </a>
             ))}
           </div>
-          <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)' }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: 'var(--smirk-fg-muted)',
+              lineHeight: 1.5,
+            }}
+          >
             Smirk publishes the wallet; the swap itself runs on{' '}
             {provider.name}. We can't intervene in the swap once it's
             in flight — the provider's team can.
@@ -1170,6 +1236,47 @@ function Row({
       </span>
     </div>
   );
+}
+
+/** Row that holds an address-input's label on the left and the
+ *  "Use my X address" inline button on the right when applicable. */
+function addrLabelRowStyle(): preact.JSX.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 8,
+  };
+}
+
+/** Subtle accent-colored text button — used for "Use my address"
+ *  affordances. Quiet enough not to fight the primary CTA but
+ *  obvious enough that the user notices the shortcut exists. */
+function inlineLinkBtn(): preact.JSX.CSSProperties {
+  return {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--smirk-accent)',
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: 'pointer',
+    padding: '2px 0',
+    fontFamily: 'inherit',
+    textDecoration: 'underline',
+    textUnderlineOffset: 2,
+  };
+}
+
+/** Small explainer text under an input. Explicit `lineHeight: 1.5`
+ *  so the chunky pixel fonts used by some themes (Gameboy / DMG
+ *  Workbench) don't crash into the previous line. */
+function helperTextStyle(): preact.JSX.CSSProperties {
+  return {
+    fontSize: 10,
+    color: 'var(--smirk-fg-muted)',
+    marginTop: 6,
+    lineHeight: 1.5,
+  };
 }
 
 function addrInputStyle(): preact.JSX.CSSProperties {

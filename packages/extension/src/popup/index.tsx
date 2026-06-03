@@ -2927,8 +2927,6 @@ function SwapRouter({
     );
   }
 
-  void wallet;
-
   return (
     <SwapTab
       fromAssets={listAssets()
@@ -2946,6 +2944,11 @@ function SwapRouter({
       }}
       parseAmount={(assetId, text) => parseAmount(assetId, text)}
       resolveIcon={resolveIcon}
+      resolveAddress={(assetId) =>
+        (wallet.addresses as unknown as Record<string, string | undefined>)[
+          assetId
+        ] ?? null
+      }
       onTrocadorQuote={async (req) => {
         const q = await trocador.quote({
           fromAsset: req.fromAsset,
