@@ -5,10 +5,238 @@ monorepo. New entries on top.
 
 ---
 
+## 2026-06-04 — Pre-v0.3.0 ship audit (four fund-safety / integrity entries)
+
+A deep audit of every tip / swap / send / claim / clawback flow
+surfaced thirteen findings ranging from CRITICAL fund loss to
+defensive hardening. All thirteen shipped fixes before v0.3.0
+release. The four with security or fund-safety impact are recorded
+here; the rest are tracked in the private TODO.md (defensive
+plumbing, none of them user-visible).
+
+### 1. Clawback was backend-only — funds orphaned at tip address (CRITICAL)
+
+**Severity:** Critical (fund loss)
+**Reporter:** discovered live during dogfood by johnwmurphy
+**Status:** Fixed before v0.3.0 release. One affected on-chain
+orphan (11 GRIN) was recovered via URL-paste public-claim during
+the same session.
+
+#### What was wrong
+
+v0.3.0 shipped `clawback_social_tip` as a single
+`await api.clawbackSocialTip(tipId); await removeTipKeyBackup(tipId)`
+in the popup. The backend marked the tip as `status='clawed_back'`
+and the local key backup was deleted, but **no on-chain action
+ever ran**. Funds stayed at the tip address with no path to
+recovery — the backend reported "recovered" while the wallet's
+balance never moved.
+
+Affected ALL 5 chains (BTC, LTC, XMR, WOW, Grin). The wallet
+silently lost any unclaimed tip that the sender attempted to
+clawback.
+
+The legacy `smirk-extension` v0.2.4 had the correct flow — the
+v0.3 monorepo rewrite dropped the on-chain sweep step during the
+port and the regression went un-caught through dogfood until a
+user happened to clawback a public Grin tip and noticed the
+balance didn't move.
+
+#### What shipped
+
+Ported v0.2.4's flow into `tip-claim-handler.ts` as
+`clawbackSocialTip`:
+
+1. Look up local tip-key backup by `tipId`.
+2. Decrypt the per-tip key material using the wallet's BTC
+   private key (symmetric, same `deriveStorageKey(btc)` as
+   storage).
+3. Per-asset sweep `tipAddress → wallet.addresses[asset]` using
+   the same `sweepUtxo` / `sweepXmrWow` / `sweepGrin` helpers
+   that the recipient claim flow uses (destination differs,
+   on-chain operation is identical).
+4. Best-effort `api.clawbackSocialTip(tipId)` to mark the
+   backend state — funds are already moved on-chain, so a backend
+   failure here is non-fatal.
+
+Backend side: `clawback_social_tip` now accepts `status='claiming'`
+in addition to `'pending'` (guarded by `sweep_confirmed_at IS NULL`)
+so a recipient-vs-sender race where the recipient calls
+`mark_tip_claiming` first doesn't make the sender's Clawback fail
+with a misleading "Tip not found" error after the on-chain sweep
+already succeeded.
+
+#### Impact assessment
+
+Any clawback attempted on a v0.3.0 build prior to this fix
+silently orphaned the funds at the tip address. The wallet user
+retains:
+
+- **Recovery via the new clawback flow** if the local tip-key
+  backup is still present (it was removed by the broken flow, but
+  if the user upgraded to the fixed build before their next
+  clawback attempt their backup survives).
+- **Recovery via URL re-paste** for public tips if the user
+  preserved the share URL (e.g. via the Tip Sent screenshot).
+- **Manual backend reset + claim** if neither of the above —
+  contact support with the tip id.
+
+For the 0-to-N affected production users prior to v0.3.0 release:
+this code path was only on dogfood builds. No public release ever
+shipped with the broken clawback. The 11 GRIN orphan that surfaced
+the bug was recovered same-session.
+
+#### Lessons
+
+1. **Port-or-rewrite parity tests.** Critical-path flows that
+   already exist in production should have a "port checklist"
+   that the rewrite has to satisfy before the old flow can be
+   removed. Clawback shipped with the backend-flip part of the
+   v0.2.4 flow and dropped the on-chain part — the reviewer would
+   have caught that with a one-page mapping.
+2. **Dogfood discipline.** The bug was found live, not in
+   review. That's a good outcome (caught before public ship) but
+   the only reason it surfaced is the user happened to clawback a
+   tip and notice the balance. Future ship audits should
+   explicitly exercise every recovery path on every chain, not
+   just the happy paths.
+
+### 2. ApprovalApp shipped without `ensureWasmInit()` — cross-chain dapp claims broken
+
+**Severity:** High (functional regression; UTXO unaffected)
+**Reporter:** discovered live during the clawback recovery flow
+**Status:** Fixed before v0.3.0 release.
+
+#### What was wrong
+
+`ApprovalApp` is a separate render root from the main popup,
+mounted when the wallet dispatches a `chrome.windows.create(...)`
+dapp approval popup. The main popup's unlock path calls
+`ensureWasmInit()` eagerly, so every wasm operation in the wallet
+UI finds the module pre-loaded. The dapp-approval popup never
+went through that path. Every `window.smirk.claimPublicTip()` or
+`requestPayment` for Grin / XMR / WOW hit a cold WASM binding and
+failed with `Cannot read properties of undefined (reading
+'__wbindgen_free')`.
+
+UTXO-only payments (BTC / LTC) slipped through because
+`@scure/btc-signer` is pure JS — no WASM needed.
+
+#### What shipped
+
+One-line `await ensureWasmInit()` at the top of
+`handleApprove` in ApprovalApp. Idempotent (memoised init
+promise) so subsequent dispatches pay zero overhead.
+
+#### Impact assessment
+
+Any user attempting to claim a Grin / XMR / WOW public tip from
+the smirk.cash URL during the dogfood period saw an opaque WASM
+error instead of a successful claim. Tip funds remained at the
+tip address; user could recover by retrying once the build with
+the fix was loaded. No fund loss; pure functional regression.
+
+No public release shipped with this regression.
+
+### 3. Balance snapshot serializer corrupted `BigInt` values on second refresh
+
+**Severity:** Medium (data integrity; surfaced as UI corruption,
+no fund-loss path)
+**Reporter:** discovered live during the BigInt-mixing throw
+**Status:** Fixed before v0.3.0 release.
+
+#### What was wrong
+
+The balance snapshot cache (popup-side, `chrome.storage.session`)
+wrote `Balances` objects with `BigInt` fields directly. On Brave,
+the round-trip through structured-clone silently stringified the
+BigInts on write — round-trip integrity wasn't preserved.
+
+On second refresh after popup restart, the snapshot's restored
+values were strings while the freshly-fetched values from
+`fetchAllBalances` were BigInts. Subsequent arithmetic
+(`b.pending > 0n`, `b.confirmed + b.pending`) threw `Cannot mix
+BigInt and other types, use explicit conversions`. The throw
+landed mid-render in Preact, which left the reconciliation
+half-broken so the next route change rendered the AppShell twice
+side-by-side (the "Settings doubling" bug).
+
+#### What shipped
+
+Explicit `BigInt → string` on snapshot write and
+`string → BigInt` on read. Bumped the cache key from
+`smirk_balance_snapshot_v1` to `_v2` so pre-fix entries don't
+poison the new readers. No reliance on structured-clone BigInt
+preservation anywhere.
+
+#### Impact assessment
+
+User-visible as UI corruption (the "Settings doubling" screenshot
+the user reported) plus a console throw on each refresh. No
+fund-loss path: the on-chain reality is the source of truth and
+the throw didn't cause any incorrect tx to be broadcast.
+
+No public release shipped with this bug.
+
+### 4. dapp public-cache had no session-expiry — false `isUnlocked` after auto-lock
+
+**Severity:** Medium (UX; the user-visible symptom was a 3-click
+claim flow, not a security boundary failure)
+**Reporter:** discovered live during the clawback recovery flow
+**Status:** Fixed before v0.3.0 release.
+
+#### What was wrong
+
+`DappPublicCache` (the `chrome.storage.local` blob the SW dapp
+provider reads to answer `isUnlocked` / `getAddresses` /
+`getPublicKeys`) only knew "is the cache present". The popup
+wrote on unlock and cleared on lock, but those handlers only fire
+when the popup is OPEN. When the session auto-lock TTL expired
+with the popup closed, the cache stayed populated and the SW
+provider returned `isUnlocked = true` even though
+`walletKeystore.getState()` would say `locked` on the next read.
+
+User-visible symptom: claiming a tip via `smirk.cash` with an
+auto-locked wallet took 3 clicks — first opened the approval
+popup with `LockScreen` (because the actual keystore is locked,
+even though the dapp adapter thought the wallet was unlocked),
+user unlocked, then a second site click bounced "unlock first"
+(because the original dapp-API request had already failed at
+`assertUnlocked` before the SW received the unlock signal), then
+a third click finally succeeded.
+
+Note: this is NOT a security boundary failure. The SW only ever
+reports *public* material from the cache. Asking it for keys or
+signatures still requires a fresh approval-popup flow that pulls
+the real unlocked wallet from the main popup process. A
+falsely-reported `isUnlocked = true` doesn't leak any unlocked
+key material; it just confuses the dapp-side wait-for-unlock
+prompt.
+
+#### What shipped
+
+`DappPublicCache` gained an optional `sessionExpiresAtMs` field
+stamped at write time from the popup's `autoLockMinutes` setting.
+The SW provider's `readCache()` now treats entries with
+`sessionExpiresAtMs < Date.now()` as expired, GCs them from
+storage, and returns `null` (= locked). Backward-compatible with
+pre-fix cache entries (no `sessionExpiresAtMs` field) which fall
+through to the legacy "presence == unlocked" behaviour.
+
+#### Impact assessment
+
+No fund loss, no key leak, no unauthorized signature path. UX
+papercut for anyone using a dapp-integrated wallet flow with
+auto-lock enabled.
+
+No public release shipped with this bug.
+
+---
+
 ## 2026-05-10 — `outgoing_view_key` hardcoded to zero (XMR/WOW signing)
 
 **Severity:** High (privacy regression, no key compromise)
-**Reporter:** Luke (community), via johnwmurphy
+**Reporter:** community reviewer, via johnwmurphy
 **Status:** Fixed in monorepo before any release; back-ported to legacy
 `smirk-wasm-monero` for the in-production extension.
 
@@ -122,7 +350,7 @@ Triggered a full sweep of:
 2. Where the failure mode is silent (signing still works, chain
    accepts it), regressions can ship undetected. Pin the security
    contract with a unit test, not just a comment.
-3. Independent reviewers like Luke catch what we don't. Fast triage
+3. Independent community reviewers catch what we don't. Fast triage
    path: read the upstream docs first, hypothesize-then-verify, fix +
    regression test before scope-creeping into related issues.
 
