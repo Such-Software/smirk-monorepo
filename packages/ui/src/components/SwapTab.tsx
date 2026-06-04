@@ -538,7 +538,17 @@ function TrocadorWizard(props: TrocadorWizardProps) {
       {step === 2 && fields.inFlight && (
         <DepositStep
           swap={fields.inFlight}
-          onOpenSend={() => props.onOpenSend(fields.inFlight!)}
+          onOpenSend={() => {
+            // Hand the deposit off to Send, AND advance the wizard to
+            // the status step in the same tick. Without this, the user
+            // sends, comes back to the Swap tab and lands back on the
+            // "Send to deposit address" view as if nothing happened. If
+            // they bail on the Send wizard the status page just shows
+            // "waiting for deposit" until Trocador's quote-validity
+            // window expires — same terminal we already handle.
+            props.onOpenSend(fields.inFlight!);
+            setStep(3);
+          }}
           onContinue={() => setStep(3)}
         />
       )}
