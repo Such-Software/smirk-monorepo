@@ -48,6 +48,52 @@ import { grin as wasmGrin } from '@smirk/wasm';
 import { send } from './send-handler';
 import { storeTipKeyBackup } from './tip-key-backup';
 
+/**
+ * Retry `api.attachSocialTipFunding` with exponential backoff.
+ * Critical: the on-chain broadcast has already happened by the time
+ * we call this, so a transient network glitch on the attach
+ * round-trip would otherwise orphan the funding from the backend's
+ * view (tip stays as draft with no `funding_txid`, doesn't appear
+ * in Sent Tips). Server-side dedupes on `(tip_id, funding_txid)` so
+ * retries are safe to issue.
+ *
+ * Per Finding 6 in the v0.3.0 pre-ship audit (TODO.md). Three
+ * attempts at 1s, 3s, 9s — total worst-case ~13s before surfacing
+ * to the user. If all attempts fail the on-chain funds are still
+ * recoverable: the local backup carries the tip key so the user can
+ * clawback via the on-chain sweep path, but the tip won't appear in
+ * Sent Tips until the attach eventually succeeds.
+ */
+async function attachFundingWithRetry(
+  tipId: string,
+  txid: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const delays = [1_000, 3_000, 9_000];
+  let lastErr: string | undefined;
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt - 1]!));
+    }
+    try {
+      const r = await api.attachSocialTipFunding(tipId, txid);
+      if (!r.error && r.data) return { ok: true };
+      lastErr = r.error ?? 'unknown';
+      console.warn(
+        `[tip] attach_funding attempt ${attempt + 1}/${delays.length} failed: ${lastErr}`,
+      );
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+      console.warn(
+        `[tip] attach_funding attempt ${attempt + 1}/${delays.length} threw: ${lastErr}`,
+      );
+    }
+  }
+  return {
+    ok: false,
+    error: lastErr ?? 'attach_funding failed after retries',
+  };
+}
+
 /** Broadcast metadata the shell needs to record a `pendingOutgoing`
  *  entry for instant balance feedback. Shape matches
  *  `PendingOutgoingTx` in @smirk/core. Fired immediately after a
@@ -61,6 +107,10 @@ export interface TipBroadcastEvent {
   recipient: string;
   inputs?: string[];
   inputsTotalAtomic?: bigint;
+  /** Backend tip id — included so the resulting `pendingOutgoing`
+   *  entry can carry `context: {kind:'tip-fund', tipId}` and the
+   *  per-asset Activity row can tap-route to the tip detail. */
+  tipId: string;
 }
 
 /**
@@ -185,6 +235,7 @@ async function createBtcLtcTip(
     isPublic: fields.isPublic,
     keyMaterial: tipPrivateKey,
     btcPrivateKey: wallet.keys.btc.privateKey,
+    ...(urlFragmentEncoded ? { urlFragmentEncoded } : {}),
   });
 
   // 5. Estimate fee. We use the `normal` tier; users wanting custom
@@ -224,6 +275,7 @@ async function createBtcLtcTip(
       amountAtomic: fields.amountAtomic,
       feeAtomic: sendResult.feeAtomic ?? 0n,
       recipient: tipAddress,
+      tipId,
       ...(sendResult.inputs ? { inputs: sendResult.inputs } : {}),
       ...(sendResult.inputsTotalAtomic !== undefined
         ? { inputsTotalAtomic: sendResult.inputsTotalAtomic }
@@ -233,17 +285,14 @@ async function createBtcLtcTip(
 
   // 7. Phase 2: attach the broadcast txid to the draft. Retryable
   //    server-side (dedupe on tip_id+funding_txid), so transient
-  //    network errors here recover automatically. If it permanently
-  //    fails the funds are on-chain and the key is on the backend —
-  //    user surfaces this via the asset-detail tip row → Clawback (full recovery
-  //    path, no key handling needed by the user).
-  const attach = await api.attachSocialTipFunding(tipId, sendResult.txid);
-  if (attach.error || !attach.data) {
+  //    network errors here recover automatically via the retry
+  //    helper. If all retries fail the funds are on-chain and the
+  //    key is in the local backup — user clawback path is available.
+  const attach = await attachFundingWithRetry(tipId, sendResult.txid);
+  if (!attach.ok) {
     return {
       ok: false,
-      error: `Funded ${asset} at ${tipAddress} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId}: ${
-        attach.error ?? 'unknown'
-      }. Open this asset on Home → tap the tip to Clawback.`,
+      error: `Funded ${asset} at ${tipAddress} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId} after 3 retries: ${attach.error}. Open this asset on Home → tap the tip to Clawback.`,
     };
   }
 
@@ -416,6 +465,7 @@ async function createXmrWowTip(
     isPublic: fields.isPublic,
     keyMaterial: tipKeys.spendKey,
     btcPrivateKey: wallet.keys.btc.privateKey,
+    ...(urlFragmentEncoded ? { urlFragmentEncoded } : {}),
   });
 
   // 5. (Skipped — `senderUserId` previously used for `api.registerLws`
@@ -450,6 +500,7 @@ async function createXmrWowTip(
       amountAtomic: fields.amountAtomic,
       feeAtomic: sendResult.feeAtomic ?? 0n,
       recipient: tipKeys.address,
+      tipId,
       ...(sendResult.inputs ? { inputs: sendResult.inputs } : {}),
       ...(sendResult.inputsTotalAtomic !== undefined
         ? { inputsTotalAtomic: sendResult.inputsTotalAtomic }
@@ -457,16 +508,15 @@ async function createXmrWowTip(
     });
   }
 
-  // 7. Phase 2 — attach the broadcast txid. Retryable server-side; if
-  //    it eventually fails the funds are on chain and the spend key is
-  //    on the backend, so the asset-detail tip row → Clawback fully recovers.
-  const attach = await api.attachSocialTipFunding(tipId, sendResult.txid);
-  if (attach.error || !attach.data) {
+  // 7. Phase 2 — attach the broadcast txid. Client retries 3x with
+  //    exponential backoff per Finding 6; if all retries fail the
+  //    funds are on chain and the spend key is in the local backup,
+  //    so the asset-detail tip row → Clawback fully recovers.
+  const attach = await attachFundingWithRetry(tipId, sendResult.txid);
+  if (!attach.ok) {
     return {
       ok: false,
-      error: `Funded ${asset} at ${tipKeys.address} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId}: ${
-        attach.error ?? 'unknown'
-      }. Open this asset on Home → tap the tip to Clawback.`,
+      error: `Funded ${asset} at ${tipKeys.address} (tx ${sendResult.txid}) but couldn't attach funding to backend tip ${tipId} after 3 retries: ${attach.error}. Open this asset on Home → tap the tip to Clawback.`,
     };
   }
 
@@ -734,6 +784,7 @@ async function createGrinTip(
     isPublic: fields.isPublic,
     keyMaterial: voucherDataBytes,
     btcPrivateKey: wallet.keys.btc.privateKey,
+    ...(urlFragmentEncoded ? { urlFragmentEncoded } : {}),
   });
 
   // 8. Record the on-chain tx + lock inputs (Grin-side bookkeeping).
@@ -789,14 +840,12 @@ async function createGrinTip(
 
   // 10. Phase 2 — attach the slate_id (acts as the funding identifier
   //     for Grin since the kernel commit IS the on-chain identity).
-  //     Retryable server-side.
-  const attach = await api.attachSocialTipFunding(tipId, slateId);
-  if (attach.error || !attach.data) {
+  //     Client retries 3x with exponential backoff per Finding 6.
+  const attach = await attachFundingWithRetry(tipId, slateId);
+  if (!attach.ok) {
     return {
       ok: false,
-      error: `Voucher broadcast (slate ${slateId}) but couldn't attach funding to backend tip ${tipId}: ${
-        attach.error ?? 'unknown'
-      }. Open this asset on Home → tap the tip to Clawback.`,
+      error: `Voucher broadcast (slate ${slateId}) but couldn't attach funding to backend tip ${tipId} after 3 retries: ${attach.error}. Open this asset on Home → tap the tip to Clawback.`,
     };
   }
 
