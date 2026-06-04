@@ -56,6 +56,7 @@ import {
   ApprovalScreen,
   AssetDetailScreen,
   ClaimableTipsBanner,
+  ReadyToShareTipsBanner,
   GrinPasteIncomingWizard,
   GrinPayInvoiceWizard,
   GrinRequestWizard,
@@ -100,7 +101,12 @@ import {
   calcGrinFee,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
-import { claimSocialTip, claimPublicTip, parseShareUrl } from './tip-claim-handler';
+import {
+  claimSocialTip,
+  claimPublicTip,
+  clawbackSocialTip,
+  parseShareUrl,
+} from './tip-claim-handler';
 import { listTipKeyBackups, removeTipKeyBackup } from './tip-key-backup';
 import {
   writeDappPublicCache,
@@ -230,6 +236,29 @@ async function fetchTipInbox(): Promise<{
         t.status === 'pending_confirmation' ||
         t.status === 'claiming',
     )
+    // Finding 12 in the v0.3.0 pre-ship audit: hide stale public
+    // tips in `claiming` state. Public-tip `encrypted_key` is
+    // sealed with the URL fragment, not the recipient's BTC
+    // pubkey, so the Inbox `Claim` path (which uses recipient-key
+    // ECIES) can't decrypt it — every retry surfaces "Decryption
+    // failed: bad point: got length 33". Active claims (≤ 2 min
+    // old by `claimed_at`, which `mark_tip_claiming` stamps on
+    // every attempt including retries) stay visible so the user
+    // sees "Claiming…" during the legitimate 5–10s WASM sweep
+    // window for XMR/WOW; anything older is orphaned by a failed
+    // dapp-claim attempt and the only recovery is re-pasting the
+    // URL via `+ Paste tip link`. Targeted tips
+    // (`is_public === false`) ignore this filter because their
+    // `encrypted_key` IS sealed with the recipient's BTC pubkey —
+    // the Inbox path handles them natively.
+    .filter((t) => {
+      if (!t.is_public) return true;
+      if (t.status !== 'claiming') return true;
+      const claimedAt = t.claimed_at ? Date.parse(t.claimed_at) : NaN;
+      if (!Number.isFinite(claimedAt)) return false;
+      const STALE_CLAIMING_MS = 2 * 60_000;
+      return Date.now() - claimedAt < STALE_CLAIMING_MS;
+    })
     // Stale-tip filter: hide pending tips that are still at zero
     // confirmations more than 24h after creation. Every supported
     // chain produces a first confirmation well inside an hour under
@@ -354,7 +383,10 @@ function bytesToHex(b: Uint8Array): string {
  * leave this function. Written into `chrome.storage.local` on every
  * unlock transition; cleared on lock / destroy.
  */
-function dappPublicCacheFor(wallet: UnlockedWallet): DappPublicCache {
+function dappPublicCacheFor(
+  wallet: UnlockedWallet,
+  autoLockMinutes: number,
+): DappPublicCache {
   const publicKeys: SmirkPublicKeys = {
     btc: bytesToHex(wallet.keys.btc.publicKey),
     ltc: bytesToHex(wallet.keys.ltc.publicKey),
@@ -373,11 +405,24 @@ function dappPublicCacheFor(wallet: UnlockedWallet): DappPublicCache {
     wow: wallet.addresses.wow,
     grin: wallet.addresses.grin,
   };
+  // Mirror the popup's own session-cache TTL into the dapp public
+  // cache so the SW provider can detect "wallet auto-locked while
+  // the popup was closed and never cleared the cache" without an
+  // IPC round-trip. Per Finding 13 in the v0.3.0 pre-ship audit.
+  // `autoLockMinutes < 0` = "Never" (legacy convention shared with
+  // writeSessionCache); map to MAX_SAFE_INTEGER.
+  const sessionExpiresAtMs =
+    autoLockMinutes < 0
+      ? NEVER_EXPIRES_MS
+      : autoLockMinutes === 0
+      ? Date.now() // immediate lock: cache is stale the moment we write it
+      : Date.now() + autoLockMinutes * 60_000;
   return {
     fingerprint: wallet.fingerprint,
     addresses,
     publicKeys,
     unlockedAt: Date.now(),
+    sessionExpiresAtMs,
   };
 }
 
@@ -616,14 +661,56 @@ async function clearBootstrapCache(): Promise<void> {
 //     "loading" instead of trusting half-hour-old numbers.
 // ============================================================================
 
-const BALANCE_SNAPSHOT_KEY = 'smirk_balance_snapshot_v1';
+// v1 → v2: BigInt fields explicitly stringified before storage. Brave's
+// chrome.storage.session is documented to support structured clone but
+// silently stringifies BigInts in practice — on read the values come
+// back as strings, then mix with freshly-fetched BigInts on the next
+// refresh and throw "Cannot mix BigInt and other types" deep in the
+// fiat-aggregation / comparison paths (`b.pending > 0n` etc). Explicit
+// string ⇄ BigInt at the boundary side-steps the ambiguity entirely.
+const BALANCE_SNAPSHOT_KEY = 'smirk_balance_snapshot_v2';
 const BALANCE_SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 
-interface BalanceSnapshotEntry {
+interface SerializedAssetBalance {
+  confirmed: string;
+  pending: string;
+  locked?: string;
+  error?: string;
+  scanProgress?: { scannedHeight: number; blockchainHeight: number; fraction: number };
+  verifiedSpentInputs?: string[];
+}
+
+type SerializedBalances = Record<keyof Balances, SerializedAssetBalance>;
+
+interface SerializedBalanceSnapshotEntry {
   fingerprint: string;
-  balances: Balances;
+  balances: SerializedBalances;
   prices: Prices | null;
   cachedAt: number;
+}
+
+function serializeAssetBalance(b: Balances[keyof Balances]): SerializedAssetBalance {
+  const out: SerializedAssetBalance = {
+    confirmed: b.confirmed.toString(),
+    pending: b.pending.toString(),
+  };
+  if (b.locked !== undefined) out.locked = b.locked.toString();
+  if (b.error !== undefined) out.error = b.error;
+  if (b.scanProgress !== undefined) out.scanProgress = b.scanProgress;
+  if (b.verifiedSpentInputs !== undefined) out.verifiedSpentInputs = b.verifiedSpentInputs;
+  return out;
+}
+
+function deserializeAssetBalance(s: SerializedAssetBalance): Balances[keyof Balances] {
+  const out: Balances[keyof Balances] = {
+    confirmed: BigInt(s.confirmed),
+    pending: BigInt(s.pending),
+  };
+  if (s.locked !== undefined) out.locked = BigInt(s.locked);
+  if (s.error !== undefined) out.error = s.error;
+  if (s.scanProgress !== undefined) out.scanProgress = s.scanProgress;
+  if (s.verifiedSpentInputs !== undefined) out.verifiedSpentInputs = s.verifiedSpentInputs;
+  return out;
 }
 
 async function readBalanceSnapshot(
@@ -632,16 +719,24 @@ async function readBalanceSnapshot(
   try {
     const raw = await sessionStorage.get(BALANCE_SNAPSHOT_KEY);
     if (!raw || typeof raw !== 'object') return null;
-    const entry = raw as BalanceSnapshotEntry;
+    const entry = raw as SerializedBalanceSnapshotEntry;
     if (entry.fingerprint !== walletFingerprint) return null;
     if (Date.now() - entry.cachedAt > BALANCE_SNAPSHOT_TTL_MS) return null;
     if (!entry.balances) return null;
+    const balances = {
+      btc: deserializeAssetBalance(entry.balances.btc),
+      ltc: deserializeAssetBalance(entry.balances.ltc),
+      xmr: deserializeAssetBalance(entry.balances.xmr),
+      wow: deserializeAssetBalance(entry.balances.wow),
+      grin: deserializeAssetBalance(entry.balances.grin),
+    };
     return {
-      balances: entry.balances,
+      balances,
       prices: entry.prices,
       cachedAt: entry.cachedAt,
     };
-  } catch {
+  } catch (e) {
+    console.warn('[smirk] balance snapshot read failed', e);
     return null;
   }
 }
@@ -651,9 +746,15 @@ async function writeBalanceSnapshot(
   balances: Balances,
   prices: Prices | null,
 ): Promise<void> {
-  const entry: BalanceSnapshotEntry = {
+  const entry: SerializedBalanceSnapshotEntry = {
     fingerprint: walletFingerprint,
-    balances,
+    balances: {
+      btc: serializeAssetBalance(balances.btc),
+      ltc: serializeAssetBalance(balances.ltc),
+      xmr: serializeAssetBalance(balances.xmr),
+      wow: serializeAssetBalance(balances.wow),
+      grin: serializeAssetBalance(balances.grin),
+    },
     prices,
     cachedAt: Date.now(),
   };
@@ -1053,9 +1154,17 @@ function App() {
   // `chrome.storage.local` cache so the background SW can answer
   // dapp `getPublicKeys` / `getAddresses` calls without holding
   // any secret state. Cleared on every transition out of unlocked.
+  // The auto-lock minutes are stamped into `sessionExpiresAtMs` so
+  // the SW provider can detect "session expired while popup was
+  // closed" without IPC (Finding 13).
   useEffect(() => {
     if (walletState?.kind === 'unlocked') {
-      void writeDappPublicCache(dappPublicCacheFor(walletState.wallet));
+      void store.load().then((s) => {
+        const minutes = s.ui.autoLockMinutes ?? 0;
+        void writeDappPublicCache(
+          dappPublicCacheFor(walletState.wallet, minutes),
+        );
+      });
     } else if (walletState) {
       void clearDappPublicCache();
     }
@@ -1261,6 +1370,8 @@ function App() {
           settings: (
             <SettingsRouter
               wallet={walletState.wallet}
+              session={session}
+              onRefresh={handleRefresh}
               onLock={lockHandler}
               onForgetComplete={async () => {
                 await sessionStorage.remove(SESSION_CACHE_KEY);
@@ -1308,7 +1419,7 @@ function HomeRouter({
   wallet,
   session,
   tips,
-  onRefresh: _onRefresh,
+  onRefresh,
   onTipClaim,
 }: {
   wallet: UnlockedWallet;
@@ -1450,6 +1561,16 @@ function HomeRouter({
           );
           const result = await send(wallet, fields, excludeInputs);
           if (result.ok && result.amountAtomic !== undefined && result.feeAtomic !== undefined) {
+            // Carry through the wizard's stashed `pendingContext` (if
+            // any) — set by non-vanilla entry points like the Trocador
+            // prefill so the resulting Activity row says "Swap deposit
+            // → XMR (CDNQ…)" and taps back to the right surface.
+            // Vanilla sends from the Home action bar default to
+            // `{kind: 'send'}` at render time.
+            const ctx = (await store.load()).wizards.send?.fields
+              ?.pendingContext as
+              | import('@smirk/core').PendingOutgoingContext
+              | undefined;
             // One atomic store.update writes both the pendingOutgoing
             // entry AND the wizard's lastTxid. The wizard's inner
             // onSubmit *also* writes lastTxid via patchFields, but
@@ -1471,6 +1592,7 @@ function HomeRouter({
               ...(result.inputsTotalAtomic !== undefined
                 ? { inputsTotal: result.inputsTotalAtomic.toString() }
                 : {}),
+              ...(ctx ? { context: ctx } : {}),
             };
             await store.update((s) => {
               s.pendingOutgoing.push(entry);
@@ -1613,6 +1735,7 @@ function HomeRouter({
         assetId={drilldownAssetId}
         wallet={wallet}
         session={session}
+        onRefresh={onRefresh}
         onBack={() => void navigate('home')}
         onSend={() => void navigate('home/send')}
         onReceive={() => void navigate('home/receive')}
@@ -1942,7 +2065,7 @@ function HomeRouter({
               }
             });
           }
-          void _onRefresh();
+          void onRefresh();
           const success: { ok: true; assetId?: string; amountAtomic?: bigint } = { ok: true };
           if (claimedAssetId !== undefined) success.assetId = claimedAssetId;
           if (claimedAmount !== undefined) success.amountAtomic = claimedAmount;
@@ -2123,6 +2246,7 @@ function HomeRouter({
                   fee: e.feeAtomic.toString(),
                   recipient: e.recipient,
                   submittedAt: Date.now(),
+                  context: { kind: 'tip-fund', tipId: e.tipId },
                   ...(e.inputs && e.inputs.length > 0
                     ? { inputs: e.inputs }
                     : {}),
@@ -2141,6 +2265,35 @@ function HomeRouter({
   }
 
   // Default: Home root.
+
+  // Sent public tips whose funding has buried past the per-asset
+  // confirmation gate — the URL we minted at create time is now safe
+  // to actually distribute. v0.2.4 surfaced this as a banner on its
+  // WalletView; v0.3 dropped it and senders had no cue. We poll on
+  // mount + every 60s so a tip that matures while Home is open
+  // lights up the banner without a manual refresh.
+  const [readyToShareCount, setReadyToShareCount] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      const r = await api.getSentSocialTips().catch(() => null);
+      const rows = r?.data?.tips ?? [];
+      const ready = rows.filter(
+        (t) =>
+          t.is_public &&
+          t.status === 'pending' &&
+          (t.funding_confirmations ?? 0) >= (t.confirmations_required ?? 1),
+      );
+      if (alive) setReadyToShareCount(ready.length);
+    };
+    void tick();
+    const handle = window.setInterval(() => void tick(), 60_000);
+    return () => {
+      alive = false;
+      window.clearInterval(handle);
+    };
+  }, []);
+
   const balances = session?.balances;
   const prices = session?.prices;
   const decimalsByAsset: Record<string, number> = (() => {
@@ -2271,6 +2424,10 @@ function HomeRouter({
               />
             );
           })()}
+          <ReadyToShareTipsBanner
+            count={readyToShareCount}
+            onView={() => void navigate('settings/sent-tips')}
+          />
           {scanningAssets.length > 0 ? (
             <ScanProgressBanner
               entries={scanningAssets.map(([assetId, b]) => ({
@@ -3045,6 +3202,11 @@ function SwapRouter({
       onOpenSend={(deposit) => {
         // Pre-fill the SendWizard with the deposit address + amount so
         // the user lands directly on Compose with everything filled.
+        // Also stash a `pendingContext` so the resulting
+        // pendingOutgoing entry is tagged as a swap-deposit — the
+        // AssetDetail Activity row then renders "Swap deposit → XMR
+        // (CDNQ…)" with a tap-link back to the swap status, instead
+        // of a generic "Sending to LTC1Q…".
         void store
           .update((s) => {
             s.wizards.send = {
@@ -3057,22 +3219,59 @@ function SwapRouter({
                   deposit.fromAmountAtomic,
                   deposit.fromAsset,
                 ),
+                pendingContext: {
+                  kind: 'swap-deposit',
+                  tradeId: deposit.id,
+                  toAsset: deposit.toAsset,
+                  provider: 'trocador',
+                },
               },
             };
           })
           .then(() => navigate('home/send'));
       }}
       onTrocadorFetchStatus={async (id) => {
-        // Poll the backend first — it's the canonical source of
-        // truth once the webhook has fired, and it's authenticated
-        // (Trocador's public /trade endpoint isn't, so we'd be
-        // leaking the trade_id to anyone watching the network).
-        // Fall back to Trocador direct if the backend has no record
-        // (e.g. the create_swap call failed earlier — see audit
-        // comment in onTrocadorConfirm).
+        // Hybrid: backend for identities (from/to/amount/address),
+        // Trocador direct for state. v0.3.0 originally trusted the
+        // backend's `status` column unconditionally — but the only
+        // signal that flips it is Trocador's webhook into
+        // `/api/v1/webhook/trocador`, and there's no backend poller
+        // to backstop a missed delivery. Real failure mode dogfooded
+        // 2026-06-04: LTC→XMR swap completed on Trocador's side, no
+        // webhook landed, backend stayed at `status='new'`, wallet
+        // showed "Waiting for your deposit" forever.
+        //
+        // Fix: when backend has a record but its status is
+        // non-terminal, ALSO query Trocador direct and prefer the
+        // direct state. Terminal backend statuses (finished /
+        // refunded / expired / error) are trusted as-is because the
+        // backend mirror won't regress past those. If both calls
+        // fail, fall through to whichever returned data.
         const backend = await api.getSwap(id).catch(() => null);
         if (backend && backend.data) {
           const r = backend.data;
+          const backendTerminal =
+            r.status === 'finished' ||
+            r.status === 'refunded' ||
+            r.status === 'expired' ||
+            r.status === 'error';
+          // Take the backend's identities + last-known state as the
+          // baseline.
+          let state = mapBackendStatus(r.status);
+          if (!backendTerminal) {
+            // Augment with Trocador direct. Best-effort: a Trocador
+            // outage shouldn't tank the polling loop — keep the
+            // backend's state as a fallback.
+            try {
+              const live = await trocador.status(id);
+              state = live;
+            } catch (e) {
+              console.warn(
+                '[swap] Trocador direct status fallback failed; using backend state',
+                e,
+              );
+            }
+          }
           return {
             id,
             fromAsset: r.from_asset,
@@ -3080,7 +3279,7 @@ function SwapRouter({
             fromAmountAtomic: r.amount_from_atomic,
             toAmountEstimateAtomic: r.amount_to_atomic ?? '0',
             depositAddress: r.deposit_address,
-            state: mapBackendStatus(r.status),
+            state,
           };
         }
         // Backend doesn't know about this swap — go direct.
@@ -3161,6 +3360,7 @@ function AssetDetailRoute({
   assetId,
   wallet,
   session,
+  onRefresh,
   onBack,
   onSend,
   onReceive,
@@ -3171,6 +3371,10 @@ function AssetDetailRoute({
   assetId: string;
   wallet: UnlockedWallet;
   session: WalletSession | null;
+  /** Trigger a balance refresh. Called after sweeping (claim or
+   *  clawback) so the user sees recovered funds without manual
+   *  intervention. */
+  onRefresh: () => Promise<void>;
   onBack: () => void;
   onSend: () => void;
   onReceive: () => void;
@@ -3184,6 +3388,8 @@ function AssetDetailRoute({
   ) => Promise<{ ok: boolean; error?: string }>;
   resolveIcon: (key: string) => string | undefined;
 }) {
+  const sessionState = useSessionState();
+  const { navigate } = useRoute();
   const [history, setHistory] = useState<AssetDetailTxRow[]>([]);
   const [sparkline, setSparkline] = useState<SparklinePoint | undefined>(
     undefined,
@@ -3196,6 +3402,30 @@ function AssetDetailRoute({
   // TS can't prove that across the route boundary. Narrow at the
   // indexing site.
   const balance = session?.balances?.[assetId as keyof typeof session.balances];
+
+  // In-flight outgoing rows: pulled live from session state so they
+  // disappear cleanly when the entry ages out or reconciles, without
+  // forcing a history refetch. Renders at the top of Activity (any
+  // chain-side row of the same tx will show up at its real block
+  // height; the pending row stays a separate "still mempool" entry
+  // until the entry is reaped).
+  const pendingRows: AssetDetailTxRow[] = useMemo(() => {
+    const entries = sessionState.pendingOutgoing ?? [];
+    return entries
+      .filter((e) => e.asset === assetId)
+      .map((e) => {
+        const row: AssetDetailTxRow = {
+          kind: 'pending-outgoing',
+          txid: e.txHash,
+          amountAtomic: BigInt(e.amount),
+          feeAtomic: BigInt(e.fee),
+          recipient: e.recipient,
+          submittedAt: new Date(e.submittedAt).toISOString(),
+          ...(e.context ? { context: e.context } : {}),
+        };
+        return row;
+      });
+  }, [sessionState.pendingOutgoing, assetId]);
 
   useEffect(() => {
     let alive = true;
@@ -3260,7 +3490,10 @@ function AssetDetailRoute({
         ? { lockedAtomic: balance.locked }
         : {})}
       {...(sparkline ? { sparkline } : {})}
-      history={history}
+      // Prepend in-flight outgoing rows so the user sees their just-
+      // broadcast tx immediately — Home's `↑ X sending` subline and
+      // this Activity row come from the same `pendingOutgoing` source.
+      history={[...pendingRows, ...history]}
       loading={loading}
       onBack={onBack}
       onSend={onSend}
@@ -3270,15 +3503,37 @@ function AssetDetailRoute({
         // Tip rows are tracked by tip_id, not chain-level — no
         // explorer URL applies. Skip silently for those.
         if (row.kind === 'tip-sent' || row.kind === 'tip-received') return;
+        // Pending-outgoing rows route by context: swap-deposit jumps
+        // straight to the Swap tab so the user lands on the Trocador
+        // status page they were probably trying to find. tip-fund
+        // falls through to the chain explorer (the broadcast tx
+        // exists on-chain even though the tip-detail surface doesn't
+        // exist as a route yet). Plain sends → chain explorer.
+        if (row.kind === 'pending-outgoing') {
+          if (row.context?.kind === 'swap-deposit') {
+            void navigate('swap');
+            return;
+          }
+          const url = explorerUrlForPendingOutgoing(assetId, row.txid);
+          if (url) window.open(url, '_blank', 'noopener,noreferrer');
+          return;
+        }
         const url = explorerUrlForRow(assetId, row);
         if (url) window.open(url, '_blank', 'noopener,noreferrer');
       }}
       onTipClawback={async (tipId) => {
-        const r = await api.clawbackSocialTip(tipId);
-        if (r.error || !r.data) {
-          return { ok: false, error: r.error ?? 'Clawback failed' };
-        }
+        // Full on-chain clawback: decrypt local backup → sweep tip
+        // address back into the sender's wallet → mark backend.
+        // Pre-2026-06-04 this was a backend-only status flip; the
+        // funds were left orphaned at the tip address. See
+        // tip-claim-handler.ts::clawbackSocialTip.
+        const userId = session?.bootstrap?.userId;
+        if (!userId) return { ok: false, error: 'Wallet not bootstrapped' };
+        const outcome = await clawbackSocialTip(wallet, userId, tipId);
+        if (!outcome.ok) return { ok: false, error: outcome.error };
         await removeTipKeyBackup(tipId);
+        // Refresh balances so the user sees the swept funds.
+        void onRefresh();
         return { ok: true };
       }}
       onTipDiscard={async (tipId) => {
@@ -3410,7 +3665,10 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
 
 function rowTimestamp(row: AssetDetailTxRow): number | null {
   if (row.kind === 'utxo') return null;
-  const iso = row.timestamp;
+  // pending-outgoing rows carry `submittedAt` (the broadcast time)
+  // instead of `timestamp` — they pre-date any chain-side timestamp
+  // so they sort to the very top of newest-first Activity.
+  const iso = row.kind === 'pending-outgoing' ? row.submittedAt : row.timestamp;
   if (!iso) return null;
   const t = Date.parse(iso);
   return Number.isNaN(t) ? null : t;
@@ -3512,6 +3770,20 @@ function explorerUrlForRow(
   if (row.kind === 'grin' && row.kernelExcess) {
     return `https://grincoin.org/kernel/${row.kernelExcess}`;
   }
+  return null;
+}
+
+/** Tap target for a `pending-outgoing` row when no richer context
+ *  applies — opens the chain explorer for the broadcast txid. Grin's
+ *  Mimblewimble model has no per-tx URL, so it returns null. */
+function explorerUrlForPendingOutgoing(
+  assetId: string,
+  txid: string,
+): string | null {
+  if (assetId === 'btc') return `https://mempool.space/tx/${txid}`;
+  if (assetId === 'ltc') return `https://litecoinspace.org/tx/${txid}`;
+  if (assetId === 'xmr') return `https://xmrchain.net/tx/${txid}`;
+  if (assetId === 'wow') return `https://explore.wownero.com/tx/${txid}`;
   return null;
 }
 
@@ -3776,17 +4048,28 @@ function AssetsVisibilityPanel({
  */
 function SettingsRouter({
   wallet,
+  session,
+  onRefresh,
   onLock,
   onForgetComplete,
 }: {
   wallet: UnlockedWallet;
+  session: WalletSession | null;
+  /** Balance refresh — threaded through to SentTipsRoute so clawback
+   *  can show the recovered funds immediately. */
+  onRefresh: () => Promise<void>;
   onLock: () => Promise<void>;
   onForgetComplete: () => Promise<void>;
 }) {
   const { route, navigate } = useRoute();
   if (route.current === 'settings/sent-tips') {
     return (
-      <SentTipsRoute onBack={() => void navigate('settings')} />
+      <SentTipsRoute
+        wallet={wallet}
+        session={session}
+        onRefresh={onRefresh}
+        onBack={() => void navigate('settings')}
+      />
     );
   }
   return (
@@ -3804,7 +4087,17 @@ function SettingsRouter({
  * survived a backend incident still show up + can be clawed back
  * via the local key material.
  */
-function SentTipsRoute({ onBack }: { onBack: () => void }) {
+function SentTipsRoute({
+  wallet,
+  session,
+  onRefresh,
+  onBack,
+}: {
+  wallet: UnlockedWallet;
+  session: WalletSession | null;
+  onRefresh: () => Promise<void>;
+  onBack: () => void;
+}) {
   const [rows, setRows] = useState<SentTipRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -3817,11 +4110,29 @@ function SentTipsRoute({ onBack }: { onBack: () => void }) {
         api.getSentSocialTips(),
         listTipKeyBackups().catch(() => []),
       ]);
-      const backupIds = new Set(backups.map((b) => b.tipId));
+      const backupsById = new Map(backups.map((b) => [b.tipId, b]));
       const serverTips = resp.data?.tips ?? [];
       const serverIds = new Set(serverTips.map((t) => t.id));
       const out: SentTipRow[] = [];
       for (const t of serverTips) {
+        const backup = backupsById.get(t.id);
+        // Reconstruct the share URL only for public tips that have
+        // (a) buried funding and (b) a local backup carrying the URL
+        // fragment. Pre-2026-06-04 backups lack the fragment field —
+        // those tips show no Copy link button (but can still be
+        // clawed back; the funds are recoverable, just the URL
+        // isn't). The fragment is the secret that decrypts the
+        // backend's `encrypted_key`, must never leave the client.
+        const fundingReady =
+          (t.funding_confirmations ?? 0) >=
+          (t.confirmations_required ?? 1);
+        const shareUrl =
+          t.is_public &&
+          t.status === 'pending' &&
+          fundingReady &&
+          backup?.urlFragmentEncoded
+            ? `https://smirk.cash/tip/${t.id}#${backup.urlFragmentEncoded}`
+            : undefined;
         out.push({
           id: t.id,
           asset: t.asset,
@@ -3833,7 +4144,8 @@ function SentTipsRoute({ onBack }: { onBack: () => void }) {
           createdAt: t.created_at,
           fundingConfirmations: t.funding_confirmations,
           confirmationsRequired: t.confirmations_required,
-          ...(backupIds.has(t.id) ? { hasLocalBackup: true } : {}),
+          ...(backup ? { hasLocalBackup: true } : {}),
+          ...(shareUrl ? { shareUrl } : {}),
         });
       }
       // Orphan local backups — server lost the row but we can still
@@ -3875,14 +4187,18 @@ function SentTipsRoute({ onBack }: { onBack: () => void }) {
       onBack={onBack}
       onRefresh={load}
       onClawback={async (tipId) => {
-        const r = await api.clawbackSocialTip(tipId);
-        if (r.error || !r.data) {
-          return { ok: false, error: r.error ?? 'Clawback failed' };
-        }
+        // Full on-chain clawback — see tip-claim-handler.ts.
+        // Decrypts local backup, sweeps tip address back to sender's
+        // wallet, marks backend as clawed_back, refreshes balances.
+        const userId = session?.bootstrap?.userId;
+        if (!userId) return { ok: false, error: 'Wallet not bootstrapped' };
+        const outcome = await clawbackSocialTip(wallet, userId, tipId);
+        if (!outcome.ok) return { ok: false, error: outcome.error };
         await removeTipKeyBackup(tipId);
         // Drop the row from local state — refresh will reflect new
         // backend state on next load.
         setRows((rs) => rs.filter((row) => row.id !== tipId));
+        void onRefresh();
         return { ok: true };
       }}
       onDiscardDraft={async (tipId) => {
@@ -4857,10 +5173,16 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
 
   // Cache public material on unlock just like the main app does, so
   // the SW provider stays consistent even if the user first unlocked
-  // inside an approval flow.
+  // inside an approval flow. Threads `autoLockMinutes` through so
+  // the SW provider's session-expiry check works (Finding 13).
   useEffect(() => {
     if (walletState?.kind === 'unlocked') {
-      void writeDappPublicCache(dappPublicCacheFor(walletState.wallet));
+      void store.load().then((s) => {
+        const minutes = s.ui.autoLockMinutes ?? 0;
+        void writeDappPublicCache(
+          dappPublicCacheFor(walletState.wallet, minutes),
+        );
+      });
     }
   }, [walletState]);
 
@@ -4920,6 +5242,16 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
   };
 
   const handleApprove = async (approval: ApprovalApproval) => {
+    // ApprovalApp is a separate render root from the main popup —
+    // the main popup's unlock path calls `ensureWasmInit()`
+    // eagerly so every wasm operation finds the module ready, but
+    // the dapp-approval path doesn't go through unlock. Without
+    // this, Grin claim/payment sweeps (which touch
+    // @smirk/wasm::grin) fail with "Cannot read properties of
+    // undefined (reading '__wbindgen_free')" because the WASM
+    // module never loaded. Idempotent: subsequent calls re-use the
+    // memoised init promise.
+    await ensureWasmInit();
     switch (approval.kind) {
       case 'connect': {
         await finish({
