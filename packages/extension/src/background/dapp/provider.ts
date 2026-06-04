@@ -57,6 +57,16 @@ export interface DappPublicCache {
   /** Unix ms when the popup last wrote this. Used as a coarse
    *  "wallet is currently unlocked" signal — see file header. */
   unlockedAt: number;
+  /**
+   * Unix ms when the session-cache auto-lock TTL expires. Set to
+   * `Number.MAX_SAFE_INTEGER` when the user picked "Never". Used by
+   * the SW provider to detect "wallet was unlocked but the session
+   * has since timed out and the popup hasn't been opened to clear
+   * the cache". Per Finding 13 in the v0.3.0 pre-ship audit. Optional
+   * for backward compat — pre-2026-06-04 cache entries lack this
+   * field and fall back to the legacy "presence == unlocked" check.
+   */
+  sessionExpiresAtMs?: number;
 }
 
 export function chromePublicCacheProvider(): WalletProvider {
@@ -80,10 +90,37 @@ export function chromePublicCacheProvider(): WalletProvider {
   };
 }
 
+/**
+ * Read the public cache, returning `null` when the wallet should be
+ * treated as locked. Per Finding 13 (v0.3.0 pre-ship audit): the
+ * raw presence of the cache is no longer sufficient — a session
+ * auto-lock can expire without the popup ever opening to call
+ * `clearDappPublicCache()`, leaving the SW provider falsely
+ * reporting "unlocked" until the next popup interaction. We now
+ * additionally enforce `sessionExpiresAtMs > now`, defensively
+ * clearing the stale entry from storage so the next read is fast.
+ * Backward compat: entries without `sessionExpiresAtMs` (pre-fix
+ * cache writes) fall through to the legacy "presence == unlocked"
+ * behavior. New writes always populate the field.
+ */
 async function readCache(): Promise<DappPublicCache | null> {
   const res = await chrome.storage.local.get(PUBLIC_CACHE_KEY);
   const v = res[PUBLIC_CACHE_KEY] as DappPublicCache | undefined;
   if (!v || typeof v !== 'object' || typeof v.fingerprint !== 'string') {
+    return null;
+  }
+  if (
+    typeof v.sessionExpiresAtMs === 'number' &&
+    Date.now() >= v.sessionExpiresAtMs
+  ) {
+    // Stale — popup never opened to clear it after session expiry.
+    // GC it so subsequent reads are fast (and so the website's
+    // `isUnlocked` response is accurate from this point on).
+    try {
+      await chrome.storage.local.remove(PUBLIC_CACHE_KEY);
+    } catch {
+      // Swallow — worst case the next read also pays the TTL check.
+    }
     return null;
   }
   return v;
