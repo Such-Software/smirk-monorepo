@@ -18,6 +18,7 @@ export const ltc: AssetDefinition = {
   displayName: 'Litecoin',
   ticker: 'LTC',
   decimals: 8,
+  displayDecimals: 4,
   iconKey: 'ltc',
 
   addressKind: 'address',

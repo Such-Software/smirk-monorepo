@@ -19,6 +19,7 @@ export const xmr: AssetDefinition = {
   displayName: 'Monero',
   ticker: 'XMR',
   decimals: 12,
+  displayDecimals: 4,
   iconKey: 'xmr',
 
   addressKind: 'address',

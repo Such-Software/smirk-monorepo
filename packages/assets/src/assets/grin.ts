@@ -31,6 +31,7 @@ export const grin: AssetDefinition = {
   displayName: 'Grin',
   ticker: 'GRIN',
   decimals: 9,
+  displayDecimals: 2,
   iconKey: 'grin',
 
   addressKind: 'interactive',

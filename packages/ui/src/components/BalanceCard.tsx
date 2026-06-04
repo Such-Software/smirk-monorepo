@@ -61,26 +61,30 @@ export function BalanceCard({
   class: className,
 }: BalanceCardProps) {
   const asset = mustGetAsset(assetId);
-  // Balance list: full precision, no trim. Users want to see dust
-  // (e.g., 0.00800000 LTC instead of 0.008) so they know what they
-  // actually have. Matches Sparrow / Bitcoin Core convention.
+  // Display cap per asset: BTC keeps 8 (high $/unit, dust matters), LTC
+  // 4, XMR 4, WOW 2, GRIN 2 — matches the v0.2.4 convention. Falls back
+  // to full precision for any asset that hasn't opted in. AssetDetail
+  // and copy/hover still surface the full atomic value.
+  const displayCap = asset.displayDecimals ?? asset.decimals;
+  // Balance list: trim zeros for compactness (`0.008` not `0.00800000`
+  // — the latter only made sense back when we showed full precision).
   const formatted = hidden
     ? HIDDEN_PLACEHOLDER
-    : formatAmountWithAsset(balanceAtomic, asset, 8, { trimZeros: false });
+    : formatAmountWithAsset(balanceAtomic, asset, displayCap);
   // Progressive disclosure: only render extra rows when they're non-zero.
   // Most users at most times have nothing pending/locked, so the default
   // row stays tight (one-line right column) even on pixel themes.
   const pending =
     !hidden && pendingAtomic !== undefined && pendingAtomic !== 0
-      ? formatAmountWithAsset(pendingAtomic, asset, 8)
+      ? formatAmountWithAsset(pendingAtomic, asset, displayCap)
       : null;
   const locked =
     !hidden && lockedAtomic !== undefined && lockedAtomic !== 0
-      ? formatAmountWithAsset(lockedAtomic, asset, 8)
+      ? formatAmountWithAsset(lockedAtomic, asset, displayCap)
       : null;
   const sending =
     !hidden && sendingAtomic !== undefined && sendingAtomic !== 0
-      ? formatAmountWithAsset(sendingAtomic, asset, 8)
+      ? formatAmountWithAsset(sendingAtomic, asset, displayCap)
       : null;
 
   const Container = onClick ? 'button' : 'div';

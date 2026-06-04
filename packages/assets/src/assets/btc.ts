@@ -20,6 +20,7 @@ export const btc: AssetDefinition = {
   displayName: 'Bitcoin',
   ticker: 'BTC',
   decimals: 8,
+  displayDecimals: 8,
   iconKey: 'btc',
 
   addressKind: 'address',

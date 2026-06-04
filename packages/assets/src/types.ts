@@ -204,6 +204,17 @@ export interface AssetDefinition {
   decimals: number;
 
   /**
+   * Decimals shown by default in compact balance lists (Home,
+   * choosers). Smaller than `decimals` for low-precision-relevant
+   * assets — XMR/Grin at 12/9 atomic decimals would render 0.000004
+   * unit-blocks of zeros that aren't useful at a glance. Hover
+   * tooltips and the AssetDetail screen still show full precision.
+   *
+   * Optional; falls back to `decimals` for back-compat.
+   */
+  displayDecimals?: number;
+
+  /**
    * Stable icon identifier — typically the same as `id`. The
    * consumer (extension popup, mobile app) maps this to an actual
    * file path.

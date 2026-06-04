@@ -25,6 +25,7 @@ export const wow: AssetDefinition = {
   displayName: 'Wownero',
   ticker: 'WOW',
   decimals: 11,
+  displayDecimals: 2,
   iconKey: 'wow',
 
   addressKind: 'address',
