@@ -48,6 +48,7 @@ import {
   monero as wasmMonero,
   type GrinSweepVoucherParams,
 } from '@smirk/wasm';
+import { decryptTipKeyBackup, getTipKeyBackup } from './tip-key-backup';
 
 /**
  * Unwrap the `{success, data?, error?}` envelope every monero-namespaced
@@ -163,17 +164,173 @@ export async function claimSocialTip(
 
   if (!sweep.ok) return sweep;
 
-  // Step 4: confirm sweep server-side. Best-effort — funds are
-  // already moved, the worst that happens on a failed confirm is the
-  // tip lingers in 'claiming' status on the backend until manual
-  // reconciliation. Don't fail the claim for this.
+  // Step 4: confirm sweep server-side. Per Finding 3 in the v0.3.0
+  // pre-ship audit: 3x exponential backoff so a transient failure
+  // doesn't leave the backend stuck at `claiming` while the funds
+  // are already moved on-chain. Still don't surface an error on
+  // total failure — the on-chain sweep is the source of truth and
+  // backend reconciliation can happen later — but log so support
+  // can detect the desync if it ever lands in prod. Targeted tips
+  // don't race (one recipient), so we ignore the response data.
+  void (await confirmSweepWithRetry(tipId, sweep.txid));
+
+  return sweep;
+}
+
+/**
+ * Backend `confirm_tip_sweep` retry helper. Mirrors
+ * `attachFundingWithRetry` in tip-handler.ts. Backend is idempotent
+ * (same `(tip_id, sweep_txid)` settles to the same outcome via
+ * first-wins race) so repeated attempts are safe.
+ *
+ * Returns the response data on success so callers (specifically the
+ * public-tip race detection) can inspect `sweep_txid` for race
+ * resolution. Returns `null` on total failure — funds are already
+ * on-chain at that point; caller should not block on this.
+ */
+async function confirmSweepWithRetry(
+  tipId: string,
+  sweepTxid: string,
+): Promise<{ sweep_txid: string | null; status: string } | null> {
+  const delays = [1_000, 3_000, 9_000];
+  let lastErr: string | undefined;
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt - 1]!));
+    }
+    try {
+      const conf = await api.confirmTipSweep(tipId, sweepTxid);
+      if (!conf.error && conf.data) return conf.data;
+      lastErr = conf.error ?? 'unknown';
+      console.warn(
+        `[tip-claim] confirmTipSweep attempt ${attempt + 1}/${delays.length} failed: ${lastErr}`,
+      );
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+      console.warn(
+        `[tip-claim] confirmTipSweep attempt ${attempt + 1}/${delays.length} threw: ${lastErr}`,
+      );
+    }
+  }
+  // All retries exhausted. The on-chain sweep already moved funds —
+  // backend will reconcile via its own poller or manual cleanup.
+  // Surface a console error so support can find it in logs.
+  console.error(
+    `[tip-claim] confirmTipSweep exhausted retries for tip ${tipId} sweep ${sweepTxid}: ${lastErr}. Funds are on-chain; backend mark is stale.`,
+  );
+  return null;
+}
+
+/**
+ * Sender-side clawback. Recovers an unclaimed tip's funds back into
+ * the sender's wallet. Mirrors v0.2.4's handleClawbackSocialTip
+ * (smirk-extension/src/background/social/clawback.ts).
+ *
+ * Critical bug context: v0.3 originally implemented clawback as a
+ * pure backend status flip (`status='clawed_back'`) with NO on-chain
+ * sweep. That left the on-chain funds orphaned at the tip address —
+ * marked recovered server-side, actually unrecoverable. Mirrors the
+ * v0.2.4 logic: decrypt the locally-stored key material with the
+ * wallet's BTC key, sweep the tip's on-chain UTXOs / commitments
+ * back into the sender's wallet, THEN mark the backend.
+ *
+ * Reuses the same per-asset sweepers as the recipient claim flow —
+ * for BTC/LTC/XMR/WOW the on-chain action is identical (sweep tip
+ * address → wallet), only the destination differs (here = sender,
+ * for claim = recipient, but both come from `wallet`).
+ *
+ * For Grin the local backup contains the full voucher metadata
+ * (`commitment + proof + blindingFactor + amount + nChild`); the
+ * sweep mints a fresh sender-owned output via the same WASM
+ * primitive the recipient uses for a normal claim.
+ *
+ * Requires the local backup. Tips created on a different device or
+ * a wiped install have no local backup → clawback returns an error
+ * directing the user to re-import the original seed, since the tip
+ * private key is what the backend's `clawback_social_tip` lacks.
+ *
+ * Note: caller must `removeTipKeyBackup(tipId)` on success — left
+ * to the caller so the UI layer controls the local-state lifecycle.
+ */
+export async function clawbackSocialTip(
+  wallet: UnlockedWallet,
+  userId: string,
+  tipId: string,
+): Promise<ClaimOutcome> {
+  // 1. Look up the local backup. Without it we can't sweep — the
+  //    backend never stored the per-tip private key.
+  const backup = await getTipKeyBackup(tipId);
+  if (!backup) {
+    return {
+      ok: false,
+      error:
+        'No local backup for this tip — can only clawback from the device where it was sent. Re-import the original seed on this device to enable.',
+    };
+  }
+
+  // 2. Decrypt the stored key material with the wallet's BTC key
+  //    (symmetric — see `tip-key-backup.ts::deriveStorageKey`).
+  let keyMaterial: Uint8Array;
   try {
-    const conf = await api.confirmTipSweep(tipId, sweep.txid);
-    if (conf.error) {
-      console.warn('[tip-claim] confirmTipSweep failed:', conf.error);
+    keyMaterial = decryptTipKeyBackup(backup, wallet.keys.btc.privateKey);
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Failed to decrypt local backup: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+
+  // 3. Per-asset sweep. The recipient-claim sweepers already do
+  //    exactly the right thing: sweep `backup.tipAddress` into the
+  //    `wallet`'s address. The caller IS the sender, so this puts
+  //    the funds back where they came from.
+  let sweep: ClaimOutcome;
+  try {
+    switch (backup.asset) {
+      case 'btc':
+      case 'ltc':
+        sweep = await sweepUtxo(
+          backup.asset,
+          keyMaterial,
+          backup.tipAddress,
+          wallet,
+        );
+        break;
+      case 'xmr':
+      case 'wow':
+        sweep = await sweepXmrWow(
+          backup.asset,
+          keyMaterial,
+          backup.tipAddress,
+          wallet,
+        );
+        break;
+      case 'grin':
+        sweep = await sweepGrin(keyMaterial, wallet, userId);
+        break;
     }
   } catch (e) {
-    console.warn('[tip-claim] confirmTipSweep threw:', e);
+    return {
+      ok: false,
+      error: `Clawback sweep failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+
+  if (!sweep.ok) return sweep;
+
+  // 4. Best-effort: mark the backend as clawed_back. If this fails
+  //    the funds are already on-chain back in the wallet — the
+  //    failure mode is the row staying as 'pending' server-side;
+  //    a subsequent retry of the same clawback would attempt a
+  //    re-sweep, see "No UTXOs at tip address", and the user can
+  //    confirm via on-chain proof.
+  try {
+    const r = await api.clawbackSocialTip(tipId);
+    if (r.error) {
+      console.warn('[clawback] backend mark failed:', r.error);
+    }
+  } catch (e) {
+    console.warn('[clawback] backend mark threw:', e);
   }
 
   return sweep;
@@ -289,27 +446,32 @@ export async function claimPublicTip(
   // but another claimer's sweep landed in the row first. Surface
   // that to the caller as a distinct outcome so the UI can render
   // "swept by someone else" instead of generic success.
-  try {
-    const conf = await api.confirmTipSweep(tipId, sweep.txid);
-    if (conf.error) {
-      console.warn('[tip-claim public] confirmTipSweep failed:', conf.error);
-    } else if (conf.data?.sweep_txid && conf.data.sweep_txid !== sweep.txid) {
-      // Race loser: backend already had a different winning sweep_txid.
-      // Our own broadcast may still confirm on-chain (mempool race
-      // could flip either way), but the backend's view is decided.
-      console.warn(
-        '[tip-claim public] race lost — backend winning sweep_txid =',
-        conf.data.sweep_txid,
-        'ours =',
-        sweep.txid,
-      );
-      return {
-        ok: false,
-        error: 'Someone else claimed this tip first. The on-chain race resolved to a different sweep.',
-      };
-    }
-  } catch (e) {
-    console.warn('[tip-claim public] confirmTipSweep threw:', e);
+  // Retry via the shared helper per Finding 3.
+  const conf = await confirmSweepWithRetry(tipId, sweep.txid);
+  if (conf?.sweep_txid && conf.sweep_txid !== sweep.txid) {
+    // Race loser: backend already had a different winning sweep_txid.
+    // Our own broadcast may still confirm on-chain (mempool race
+    // could flip either way), but the backend's view is decided.
+    // Per Finding 10 in the v0.3.0 pre-ship audit: the loser's
+    // broadcast is already in the mempool — if it wins the
+    // network-level race (RBF, miner preference, our tx happens to
+    // be in a more profitable block), the funds STILL arrive in
+    // their wallet via the normal balance scan. The backend
+    // accounting just shows the tip as claimed by someone else.
+    // No fund loss either way, so the messaging should reflect
+    // that nuance instead of implying a hard failure.
+    console.warn(
+      '[tip-claim public] race lost — backend winning sweep_txid =',
+      conf.sweep_txid,
+      'ours =',
+      sweep.txid,
+      'mempool race may still resolve in our favour',
+    );
+    return {
+      ok: false,
+      error:
+        'Someone else claimed this tip first on the backend. Your sweep tx is still in the mempool — if it wins the on-chain race the funds will arrive in your wallet on the next refresh. No action needed.',
+    };
   }
 
   // Echo asset id + amount on the success result so the calling
