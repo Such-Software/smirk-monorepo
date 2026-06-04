@@ -35,6 +35,17 @@ export interface SentTipRow {
   /** True iff the row has a local IndexedDB tip-key backup. Lets the
    *  UI tag rows that survive even if the backend loses them. */
   hasLocalBackup?: boolean;
+  /**
+   * Reconstructed share URL for a public tip — only present when (a)
+   * the tip is public, (b) funding has confirmed past the asset's
+   * required threshold, AND (c) the local backup carries the URL
+   * fragment so the shell can rebuild
+   * `https://smirk.cash/tip/{id}#{fragment}`. Drives the "📋 Copy
+   * link" affordance. Undefined for non-public tips, unconfirmed
+   * tips, and pre-2026-06-04 backups that predate fragment
+   * persistence (those tips can still be clawed back).
+   */
+  shareUrl?: string;
 }
 
 export interface SentTipsScreenProps {
@@ -295,6 +306,15 @@ function TipCard({
           </div>
         )}
 
+      {/* Public-tip share affordance — only present when the shell
+          successfully reconstructed the URL from the local backup's
+          fragment AND funding has buried. Sits next to (not instead
+          of) Clawback: the sender may still want to recover funds
+          even after sharing the link. */}
+      {row.shareUrl && (
+        <ShareUrlPanel shareUrl={row.shareUrl} />
+      )}
+
       {(isDraft || isClawbackable) && (
         <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
           {isDraft && (
@@ -322,6 +342,48 @@ function TipCard({
           {message}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Compact "ready to share" surface for a public tip. URL is rendered
+ *  monospace + word-break so it's verifiable at a glance, with a
+ *  one-tap Copy button. Shows a transient "Copied" affirmation so the
+ *  user knows the action landed. */
+function ShareUrlPanel({ shareUrl }: { shareUrl: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard.writeText(shareUrl).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        marginTop: 4,
+        padding: 8,
+        background: 'rgba(255,255,255,0.04)',
+        border: '1px solid var(--smirk-border)',
+        borderRadius: 'var(--smirk-radius, 6px)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          fontFamily: 'var(--smirk-font-family-mono)',
+          wordBreak: 'break-all',
+          color: 'var(--smirk-fg-muted)',
+        }}
+      >
+        {shareUrl}
+      </div>
+      <Button onClick={copy}>
+        {copied ? '✓ Copied' : '⧉ Copy link'}
+      </Button>
     </div>
   );
 }
