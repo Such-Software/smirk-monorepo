@@ -80,6 +80,18 @@ export interface SendFields extends Record<string, unknown> {
    *  pastes a slate with sta=S2 in Inbox, we deep-link here with the
    *  S2 ready for one-tap finalize instead of forcing another paste). */
   grinPastedS2?: string;
+
+  /**
+   * Pre-baked `pendingOutgoing.context` for this send. Set when the
+   * Send was opened from a non-vanilla flow (Trocador swap deposit,
+   * tip funding, etc.) so the resulting `pendingOutgoing` entry can
+   * carry that origin through to the per-asset Activity row and the
+   * row's tap-routing. Optional — vanilla sends from the Home action
+   * bar leave this undefined and the popup treats them as
+   * `{kind: 'send'}`. Stored as a plain object so it round-trips
+   * through `chrome.storage.session` without bespoke serialization.
+   */
+  pendingContext?: import('@smirk/core').PendingOutgoingContext;
 }
 
 export type SendSubmitResult =

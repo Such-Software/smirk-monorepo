@@ -100,6 +100,28 @@ export type AssetDetailTxRow =
        *  on pending tips. */
       fundingConfirmations?: number;
       confirmationsRequired?: number;
+    }
+  | {
+      /**
+       * In-flight outgoing tx that hasn't yet shown up in the regular
+       * history feed (mempool or scan-lag). Driven by the
+       * `pendingOutgoing` session-state entries — the same source
+       * that drives the `↑ X sending` Home subline. Renders at the
+       * top of Activity with a "pending" pill and context-specific
+       * copy (vanilla send vs swap-deposit vs tip-fund).
+       */
+      kind: 'pending-outgoing';
+      txid: string;
+      amountAtomic: bigint;
+      feeAtomic: bigint;
+      recipient: string;
+      submittedAt: string;
+      /** Optional context — drives the row's copy and tap-routing.
+       *  Mirrors `@smirk/core`'s `PendingOutgoingContext`. */
+      context?:
+        | { kind: 'send' }
+        | { kind: 'tip-fund'; tipId: string }
+        | { kind: 'swap-deposit'; tradeId: string; toAsset: string; provider: string };
     };
 
 export interface SparklinePoint {
@@ -662,6 +684,22 @@ function TxRow({
       meta = row.status
         ? `${tipStatusLabel(row.status)} · ${sender}`
         : sender;
+      break;
+    }
+    case 'pending-outgoing': {
+      incoming = false;
+      // Context-aware copy: a vanilla send shows the recipient; a
+      // swap-deposit shows the swap destination + trade id; a
+      // tip-fund shows the tip id. Tap-routing for the contextful
+      // variants is wired upstream via `onClick`.
+      const ctx = row.context;
+      if (ctx?.kind === 'swap-deposit') {
+        meta = `pending · swap → ${ctx.toAsset.toUpperCase()} (${truncId(ctx.tradeId)})`;
+      } else if (ctx?.kind === 'tip-fund') {
+        meta = `pending · funding tip ${truncId(ctx.tipId)}`;
+      } else {
+        meta = `pending · to ${truncId(row.recipient)}`;
+      }
       break;
     }
   }

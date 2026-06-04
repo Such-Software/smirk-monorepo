@@ -76,7 +76,30 @@ export interface PendingOutgoingTx {
    * reconcile early; they age out normally.
    */
   inputs?: string[];
+  /**
+   * Why this tx was sent — drives the per-asset Activity row's copy
+   * and tap-routing. Discriminated union so future categories (dapp
+   * payments, v0.4 native swap deposits, etc.) drop in without
+   * touching existing renderers.
+   *
+   * Optional + backward-compatible: pre-context entries render as
+   * generic "Sending to {recipient}". Add a new variant in three
+   * places: this union, the creating handler, and the Activity row
+   * renderer — no migration on stored entries needed because the
+   * field is optional.
+   */
+  context?: PendingOutgoingContext;
 }
+
+/**
+ * Why a `pendingOutgoing` entry exists. Each variant carries just
+ * enough context for the per-asset Activity row to render meaningful
+ * copy and route to the right detail surface when tapped.
+ */
+export type PendingOutgoingContext =
+  | { kind: 'send' }
+  | { kind: 'tip-fund'; tipId: string }
+  | { kind: 'swap-deposit'; tradeId: string; toAsset: string; provider: string };
 
 /**
  * Per-asset age-out window (ms). After this duration, an entry is

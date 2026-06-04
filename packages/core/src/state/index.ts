@@ -75,7 +75,7 @@ export {
   recentlySpentInputs,
   reconcilePendingOutgoing,
 } from './pending-outgoing';
-export type { PendingOutgoingTx } from './pending-outgoing';
+export type { PendingOutgoingTx, PendingOutgoingContext } from './pending-outgoing';
 
 export {
   visibleAssetIds,

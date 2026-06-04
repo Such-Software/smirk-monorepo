@@ -556,6 +556,24 @@ function TipClaimableRow({
           disabled={busy || !onClaim}
         />
       </div>
+      {/* CryptoNote (XMR/WOW) sweep involves WASM ring-sig + key-image
+          computation; total wall time is typically 5-10s on first
+          claim. Without this hint, the static "Claiming…" label looks
+          stuck and users start closing the popup mid-sweep. UTXO + Grin
+          claims finish in 1-2s so the hint is asset-gated. */}
+      {busy && (tip.assetId === 'xmr' || tip.assetId === 'wow') && (
+        <div
+          style={{
+            fontSize: 10,
+            color: 'var(--smirk-fg-muted)',
+            marginTop: 2,
+            lineHeight: 1.4,
+          }}
+        >
+          Building on-chain sweep — this can take ~5–10s for{' '}
+          {tip.assetId.toUpperCase()}. Safe to leave the popup open.
+        </div>
+      )}
       {error && (
         <div
           style={{

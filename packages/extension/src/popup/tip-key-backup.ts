@@ -63,6 +63,19 @@ export interface TipKeyBackup {
    *  GrinVoucherEncryptionData (blind + commitment + proof +
    *  n_child + amount + features). */
   keyCiphertextHex: string;
+  /**
+   * Base64url-encoded URL fragment key used to derive the per-tip
+   * share URL (`https://smirk.cash/tip/{id}#{fragment}`). Public tips
+   * only. Without this the sender can't reconstruct the share URL
+   * after popup close — the fragment isn't persisted server-side by
+   * design (it's the secret that decrypts the backend's
+   * `encrypted_key` payload, must never leave the client). v0.2.4
+   * stored the equivalent in IndexedDB `pendingTips`; v0.3 lost the
+   * affordance until 2026-06-04 when the Sent Tips ready-to-share
+   * surface needed it. Older backups (pre-2026-06-04) lack this
+   * field — those tips can still be clawed back, just no Copy URL.
+   */
+  urlFragmentEncoded?: string;
 }
 
 /** Derive the symmetric encryption key from the wallet's BTC private
@@ -85,6 +98,11 @@ export async function storeTipKeyBackup(params: {
   /** Raw per-asset key material — encrypted before storage. */
   keyMaterial: Uint8Array;
   btcPrivateKey: Uint8Array;
+  /** For public tips: the URL fragment used to encrypt the backend's
+   *  `encrypted_key`. Required to reconstruct the share URL after
+   *  popup close. Undefined for directed tips (which use the
+   *  recipient's pubkey for encryption — no URL needed). */
+  urlFragmentEncoded?: string;
 }): Promise<void> {
   try {
     const storageKey = deriveStorageKey(params.btcPrivateKey);
@@ -97,6 +115,9 @@ export async function storeTipKeyBackup(params: {
       createdAt: Date.now(),
       isPublic: params.isPublic,
       keyCiphertextHex: bytesToHex(ciphertext),
+      ...(params.urlFragmentEncoded
+        ? { urlFragmentEncoded: params.urlFragmentEncoded }
+        : {}),
     };
     await chrome.storage.local.set({
       [`${STORAGE_PREFIX}${params.tipId}`]: record,
@@ -147,4 +168,20 @@ export function decryptTipKeyBackup(
 ): Uint8Array {
   const storageKey = deriveStorageKey(btcPrivateKey);
   return decrypt(hexToBytes(backup.keyCiphertextHex), storageKey);
+}
+
+/** Look up a single backup by tipId. Returns `null` if absent —
+ *  the on-chain clawback flow uses this to decide whether to fall
+ *  back to a "no local backup, can't sweep" error. */
+export async function getTipKeyBackup(
+  tipId: string,
+): Promise<TipKeyBackup | null> {
+  try {
+    const result = await chrome.storage.local.get(`${STORAGE_PREFIX}${tipId}`);
+    const value = result[`${STORAGE_PREFIX}${tipId}`];
+    return (value as TipKeyBackup) ?? null;
+  } catch (err) {
+    console.warn('[tip-key-backup] failed to get:', err);
+    return null;
+  }
 }
