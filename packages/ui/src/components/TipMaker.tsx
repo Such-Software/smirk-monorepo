@@ -557,7 +557,15 @@ function TipSuccess({
           : `We notified @${normalizeUsername(platform, username)} on ${PLATFORM_LABEL[platform]} 🎉`}
       </div>
 
-      {isPublic && shareUrl && (
+      {/* Two states for public tips:
+          (a) confirmation-gated chains (XMR/WOW/GRIN) right after
+              create: link exists but recipients would just see "0
+              confs" if we surfaced it now. Hide the URL + button
+              entirely; point the user at the Home banner that lights
+              up when funding confirms.
+          (b) instant chains (BTC/LTC) or any tip that's already
+              past the confirmation gate: show URL + Copy link. */}
+      {isPublic && shareUrl && !shareUrlPending && (
         <div>
           <div
             style={{
@@ -579,10 +587,28 @@ function TipSuccess({
       )}
 
       {isPublic && shareUrlPending && (
-        <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
-          Share link ready after the funding tx confirms.
-          <br />
-          Find it in this tip's detail page from Home.
+        <div
+          style={{
+            fontSize: 12,
+            color: 'var(--smirk-fg-muted)',
+            padding: 12,
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px dashed var(--smirk-border)',
+            borderRadius: 6,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ fontWeight: 600, color: 'inherit' }}>
+            ⏳ Waiting for funding to confirm
+          </div>
+          <div>
+            Share link goes live once the funding tx has enough
+            confirmations. Home will show a banner the moment it's
+            ready to share.
+          </div>
         </div>
       )}
 
