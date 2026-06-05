@@ -34,6 +34,45 @@
  *  - URL normalization (the consumer's `onSubmitUrl` decides whether
  *    `youtube.com` becomes `https://youtube.com` or routes through a
  *    search provider).
+ *
+ * ## Accessibility
+ *
+ * This component coordinates an interaction pattern with non-obvious
+ * a11y semantics; full conventions live in
+ * [docs/ACCESSIBILITY.md](../../../../../docs/ACCESSIBILITY.md).
+ * The shell's contract:
+ *
+ * - **Frame slot semantics.** The empty `<div>` that the native
+ *   webview overlays carries `role="region"` and
+ *   `aria-label="Embedded browser content"` so screen readers
+ *   announce entry into the browseable area before descending into
+ *   the OS-native a11y tree of the webview itself.
+ * - **Focus order.** DOM order: tab strip → URL bar (back, forward,
+ *   reload, security indicator, URL input, trailing slot) → frame
+ *   slot. Reverse order on `Shift+Tab`. The wallet shell consuming
+ *   `BrowserShell` is responsible for routing focus into the URL
+ *   input via the `browser:focus-url-bar` keymap action (Cmd/Ctrl+L)
+ *   — `BrowserShell` does not bind keys itself; the consuming shell
+ *   wires `@smirk/keymap` and exposes a `focusUrlBar()` imperative
+ *   handle when that lands.
+ * - **Live regions.** Loading-state transitions DO NOT emit a live
+ *   announcement (would spam during navigation). Critical state
+ *   changes (security downgrade, certificate error) route through
+ *   `<LiveRegion>` with `politeness="assertive"` once the security
+ *   error UI lands.
+ * - **Reduced motion.** The shell renders no animations directly;
+ *   child components respect `prefers-reduced-motion`.
+ *
+ * Behaviour any new platform implementation MUST preserve to remain
+ * accessible:
+ *
+ *  1. The frame slot's DOM presence must remain even when the
+ *     native webview is overlaying it — screen readers rely on the
+ *     `role="region"` for the announcement boundary.
+ *  2. `controller.setFrameRect()` is called whenever the slot's
+ *     bounding rect changes; the native impl must respect zero-sized
+ *     rects (i.e. hide the webview) so a settings overlay obscuring
+ *     the browser doesn't leave a stale webview painted on top.
  */
 
 import type { JSX, RefObject } from 'preact';
@@ -133,10 +172,18 @@ export function BrowserShell(props: BrowserShellProps): JSX.Element {
           controller paints its native webview on top of this region
           via `setFrameRect`. We deliberately render no content
           inside; anything we draw here would be invisible behind the
-          overlay anyway and would skew the bounding-rect measurement. */}
+          overlay anyway and would skew the bounding-rect measurement.
+
+          a11y: `role="region"` + `aria-label` mark the boundary
+          between the chrome (URL bar, tabs) and the embedded page.
+          Screen readers announce entry into "Embedded browser
+          content" and then traverse the OS-native a11y tree of the
+          webview itself for the page's own content. See file header
+          for the full a11y contract. */}
       <div
         ref={frameRef}
         class="smirk-browser-shell__frame"
+        role="region"
         aria-label="Embedded browser content"
         style={{
           flex: 1,

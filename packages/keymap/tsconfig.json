@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    /* DOM brings KeyboardEvent + navigator for the chord-matching
+       and platform-detection helpers. This package runs in a UI
+       context on every platform (webview / extension / Tauri /
+       Capacitor) so DOM is always present. */
+    "lib": ["ES2022", "DOM"],
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}
