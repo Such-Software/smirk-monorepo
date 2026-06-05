@@ -44,9 +44,10 @@ npm run tauri:build
 ```
 
 Outputs bundle artifacts to `src-tauri/target/release/bundle/`. Targets are
-read from `tauri.conf.json::bundle.targets` (currently `"all"` — produces
-`.app` + `.dmg` on macOS, `.msi` + `.exe` on Windows, `.deb` + `.AppImage` on
-Linux).
+read from `tauri.conf.json::bundle.targets` (currently
+`["appimage", "app", "dmg", "nsis"]` — produces `.app` + `.dmg` on macOS,
+`.msi` / `.exe` on Windows, `.AppImage` on Linux). `.deb` and `.rpm` are
+intentionally omitted; AppImage is the agreed Linux delivery format.
 
 ## Signing & notarization
 
@@ -55,8 +56,8 @@ Linux).
   `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` env vars. Both null in
   the committed config — the maintainer wires them per-environment.
 - **Windows:** unsigned for v0.3.0 (SmartScreen will warn on first launch).
-- **Linux:** unsigned `.AppImage` / `.deb`; users verify against the
-  repository's SHA256SUMS file.
+- **Linux:** unsigned `.AppImage`; users verify against the repository's
+  SHA256SUMS file.
 
 ## Updater
 

@@ -68,8 +68,8 @@ release notes call this out and provide SHA256 checksums.
 
 Code-signing on Windows requires an Authenticode cert from a CA
 (~$300/yr for an EV cert that bypasses SmartScreen immediately). On
-Linux, .deb / .AppImage signing is uncommon — most distros expect
-users to verify checksums or use the publisher's apt repository.
+Linux, AppImage signing is uncommon — most users verify the SHA256
+against the published value.
 
 If we get user demand for signed Windows builds, the workflow is
 ready to take the cert (uncomment the cert fields in the matrix and
@@ -99,7 +99,7 @@ add `WINDOWS_CERTIFICATE` / `WINDOWS_CERTIFICATE_PASSWORD` secrets).
 6. **Verify** the published GitHub release has:
    - macOS: `Smirk Wallet_0.3.1_universal.dmg`
    - Windows: `Smirk Wallet_0.3.1_x64_en-US.msi`
-   - Linux: `smirk-wallet_0.3.1_amd64.deb` + `smirk-wallet_0.3.1_amd64.AppImage`
+   - Linux: `smirk-wallet_0.3.1_amd64.AppImage`
    - A `latest.json` file (the updater manifest, signed)
 7. **Smoke-test** each platform's binary by installing on a clean
    VM. Lock + unlock the wallet, send a tiny transaction, claim a

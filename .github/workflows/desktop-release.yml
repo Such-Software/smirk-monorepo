@@ -152,7 +152,7 @@ jobs:
 
             - **macOS** (universal — Apple Silicon + Intel): `.dmg`
             - **Windows** (x64): `.msi`
-            - **Linux** (x64): `.deb`, `.AppImage`
+            - **Linux** (x64): `.AppImage`
 
             ## Signing status
 

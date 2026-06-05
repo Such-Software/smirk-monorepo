@@ -31,7 +31,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["appimage", "app", "dmg", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -59,9 +59,6 @@
       }
     },
     "linux": {
-      "deb": {
-        "depends": []
-      },
       "appimage": {
         "bundleMediaFramework": false
       }
