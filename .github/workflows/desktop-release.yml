@@ -1,0 +1,168 @@
+name: Desktop release
+
+# Tag-triggered release pipeline for the Tauri desktop app. Pushes
+# a tag like `v0.3.0` to fire a matrix build across macOS / Windows
+# / Linux, then publishes the bundles to a GitHub release.
+#
+# Per the v0.3.0 ship plan: macOS gets signed + notarized when the
+# Apple secrets are present; Windows + Linux ship unsigned. SmartScreen
+# / kernel-warn-on-first-launch warnings are documented in the
+# release notes.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow a manual fire from the Actions tab for ad-hoc test builds
+  # against a draft release. Doesn't publish unless the caller flips
+  # the input.
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish release after build (otherwise creates a draft)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Universal binary so a single .dmg works on Apple Silicon
+          # AND Intel Macs. Slightly slower build, way simpler ship.
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            target: universal-apple-darwin
+            os_label: macos
+          - platform: ubuntu-22.04
+            args: ''
+            target: x86_64-unknown-linux-gnu
+            os_label: linux
+          - platform: windows-latest
+            args: ''
+            target: x86_64-pc-windows-msvc
+            os_label: windows
+
+    runs-on: ${{ matrix.platform }}
+    name: ${{ matrix.os_label }} build
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux: Tauri needs the WebKit GTK + soup development headers.
+      # Mirrors the host system deps documented in packages/desktop/README.md.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libxdo-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,${{ matrix.target }}
+
+      # On macOS the universal target needs both arches. Add the x86_64
+      # leg explicitly because dtolnay's action takes one target.
+      - name: Add macOS x86_64 target
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            packages/desktop/src-tauri
+
+      - name: Install wasm-bindgen-cli
+        run: |
+          # Match the wasm-bindgen lib version in Cargo.lock (same as CI).
+          WB_VERSION=$(cargo pkgid wasm-bindgen | sed 's/.*@//')
+          cargo install -f wasm-bindgen-cli --version "${WB_VERSION}"
+        shell: bash
+
+      - name: Build WASM
+        run: make wasm
+        shell: bash
+
+      - name: Install workspace deps
+        run: npm install
+
+      # Build the monorepo packages the desktop app pulls in. Topological
+      # order — same shape as ci.yml's TypeScript job. Without these the
+      # desktop's vite build can't resolve @smirk/* workspace imports.
+      - name: Build TypeScript workspace
+        run: |
+          npm run build -w @smirk/wasm
+          npm run build -w @smirk/assets
+          npm run build -w @smirk/core
+          npm run build -w @smirk/ui
+          npm run build -w @smirk/dapp-api
+        shell: bash
+
+      # The Tauri action does the actual build + bundle. tagName /
+      # releaseName / body templating mirrors Tauri's docs example.
+      - name: Build Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # Updater signing (skip when secrets aren't set — produces
+          # unsigned bundles, which is fine for the v0.3.0 preview).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS signing + notarization. These secrets are scoped to
+          # the macos-latest runner; on other platforms they're empty
+          # and the Tauri action skips signing automatically.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: packages/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Smirk Wallet ${{ github.ref_name }}'
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
+          prerelease: false
+          args: ${{ matrix.args }}
+          # Render the release body from the CHANGELOG entry that matches
+          # this tag. Maintained manually in CHANGELOG.md at the
+          # monorepo root — tooling to auto-extract a section is a v0.3.x
+          # nicety.
+          releaseBody: |
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+            for the full release notes.
+
+            ## Download
+
+            - **macOS** (universal — Apple Silicon + Intel): `.dmg`
+            - **Windows** (x64): `.msi`
+            - **Linux** (x64): `.deb`, `.AppImage`
+
+            ## Signing status
+
+            - **macOS** binaries are signed and notarized.
+            - **Windows** binaries are not yet code-signed; first launch
+              will trigger a SmartScreen warning. Verify the SHA256
+              checksum against the one published in this release.
+            - **Linux** binaries are not signed. Verify the SHA256
+              checksum.
+
+            ## Reporting issues
+
+            File at https://github.com/${{ github.repository }}/issues.
