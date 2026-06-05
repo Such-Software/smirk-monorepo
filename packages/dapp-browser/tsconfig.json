@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    /*
+     * `WebWorker` brings `URL`, `queueMicrotask`, and the structured-
+     * clone surface without dragging in the full DOM (no `document`,
+     * no `window`). That matches what the package actually needs:
+     * pure types + a synchronous in-memory state machine. Consumers
+     * pull in DOM themselves if they happen to be UI code.
+     */
+    "lib": ["ES2022", "WebWorker"],
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -162,6 +162,16 @@ export type { AppShellProps } from './components/shell/AppShell';
 export { BottomNav } from './components/shell/BottomNav';
 export type { BottomNavProps } from './components/shell/BottomNav';
 
+// ----- Embedded browser -----
+// Pluggable chrome around a @smirk/dapp-browser controller. See
+// `docs/EMBEDDED_BROWSER.md` for the architecture.
+export { BrowserShell } from './components/browser/BrowserShell';
+export type { BrowserShellProps } from './components/browser/BrowserShell';
+export { BrowserUrlBar } from './components/browser/BrowserUrlBar';
+export type { BrowserUrlBarProps } from './components/browser/BrowserUrlBar';
+export { BrowserTabStrip } from './components/browser/BrowserTabStrip';
+export type { BrowserTabStripProps } from './components/browser/BrowserTabStrip';
+
 // ----- State / hooks -----
 export {
   StateProvider,

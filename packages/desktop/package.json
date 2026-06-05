@@ -20,6 +20,7 @@
     "@smirk/assets": "*",
     "@smirk/core": "*",
     "@smirk/dapp-api": "*",
+    "@smirk/dapp-browser": "*",
     "@smirk/ui": "*",
     "@smirk/wasm": "*",
     "@tauri-apps/api": "^2",

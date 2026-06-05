@@ -23,6 +23,7 @@
   "dependencies": {
     "@smirk/assets": "*",
     "@smirk/core": "*",
+    "@smirk/dapp-browser": "*",
     "preact": "^10.19.0"
   },
   "license": "MIT"
