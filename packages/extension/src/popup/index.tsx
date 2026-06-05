@@ -81,6 +81,8 @@ import {
   type ApprovalRequest as UiApprovalRequest,
   type ApprovalApproval,
   type AssetDetailTxRow,
+  type ExistingIdentity,
+  type ExistingSocial,
   type InboxItem,
   type InboxTipItem,
   type RecentRecipient,
@@ -768,11 +770,13 @@ async function writeBalanceSnapshot(
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
-  // Handle already reserved for this wallet on a previous device — set
-  // by the onboarding `onComplete` callback after bootstrap+lookup so
-  // the setup wizard can skip the "reserve a handle" step. `null`
-  // means "no handle yet" (default); a string means "skip the prompt".
-  const [existingHandle, setExistingHandle] = useState<string | null>(null);
+  // Backend-derived identity that survives an import — Smirk handle
+  // and/or linked third-party socials (Telegram, Discord, future
+  // platforms). Set inside the onboarding `onComplete` callback after
+  // bootstrap so the setup wizard can swap the reserve-handle prompt
+  // for a "Welcome back" summary. `null` means "no identity to surface
+  // yet" (the default on a fresh-create flow).
+  const [existingIdentity, setExistingIdentity] = useState<ExistingIdentity | null>(null);
   const [grinInbox, setGrinInbox] = useState<{
     items: InboxItem[];
     loading: boolean;
@@ -1206,17 +1210,44 @@ function App() {
           // idempotent on the backend, costs one extra round-trip we
           // can pay once at onboarding.
           await bootstrapAuth(api, wallet);
-          // Check whether this wallet already owns a handle on a
-          // previous device. If so, the setup wizard skips the
-          // reserve-handle prompt and just confirms the existing one.
-          // Failures here are non-fatal — fall back to the prompt.
+          // Surface any identity this wallet already owns on the
+          // backend (Smirk handle + linked socials). Issued in
+          // parallel — both are read-only and one slow leg shouldn't
+          // hold up the other. Failures are non-fatal: the wizard
+          // falls back to the reserve-handle prompt when the lookup
+          // can't be completed (offline, transient 5xx, etc.).
           try {
-            const res = await api.getMySmirkUsername();
-            if (!res.error && typeof res.data === 'string' && res.data.length > 0) {
-              setExistingHandle(res.data);
+            const [nameRes, socialsRes] = await Promise.all([
+              api.getMySmirkUsername(),
+              api.getMyLinkedSocials(),
+            ]);
+            const smirkName =
+              !nameRes.error && typeof nameRes.data === 'string' && nameRes.data.length > 0
+                ? nameRes.data
+                : undefined;
+            const linkedSocials: ExistingSocial[] =
+              !socialsRes.error && socialsRes.data
+                ? socialsRes.data.socials
+                    // Render verified first to lead with the strongest signal,
+                    // pending after. Ordering only affects display.
+                    .slice()
+                    .sort((a, b) => Number(b.verified) - Number(a.verified))
+                    .map((s) => ({
+                      platform: s.platform,
+                      username: s.username ?? s.display_name ?? s.platform_user_id ?? '',
+                      verified: s.verified,
+                    }))
+                    // Drop rows we can't usefully label.
+                    .filter((s) => s.username.length > 0)
+                : [];
+            if (smirkName || linkedSocials.length > 0) {
+              setExistingIdentity({
+                ...(smirkName ? { smirkName } : {}),
+                linkedSocials,
+              });
             }
           } catch (e) {
-            console.warn('[smirk] handle lookup failed during onboarding', e);
+            console.warn('[smirk] identity lookup failed during onboarding', e);
           }
         }}
         reserveSmirkName={async (handle) => {
@@ -1228,7 +1259,7 @@ function App() {
         setInjectEnabled={async (enabled) => {
           await setInjectDisabled(!enabled);
         }}
-        {...(existingHandle ? { existingHandle } : {})}
+        {...(existingIdentity ? { existingIdentity } : {})}
         onFullyDone={refresh}
       />
     );

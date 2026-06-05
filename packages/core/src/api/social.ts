@@ -21,6 +21,28 @@ export interface SocialLookupResponse {
   } | null;
 }
 
+/**
+ * One linked third-party social account (Telegram, Discord, and any
+ * platform we add later — Matrix, Bluesky, etc.). Wire shape matches
+ * the backend's `SocialAccountInfo`. `platform` is intentionally a
+ * string, not a closed union, so the client picks up new platforms
+ * automatically when the backend rolls them out.
+ */
+export interface LinkedSocialAccount {
+  platform: string;
+  username: string | null;
+  display_name: string | null;
+  platform_user_id: string | null;
+  verified: boolean;
+  verified_at: string | null;
+  pending_verification: boolean;
+}
+
+/** Response shape of `GET /api/v1/socials/me`. */
+export interface LinkedSocialsResponse {
+  socials: LinkedSocialAccount[];
+}
+
 export interface CreateSocialTipRequest {
   platform?: string;
   username?: string;
@@ -159,6 +181,20 @@ export interface SocialMethods {
   getMySmirkUsername(): Promise<ApiResponse<string | null>>;
 
   /**
+   * List the user's linked third-party social accounts (Telegram,
+   * Discord, future platforms). Used on import alongside
+   * `getMySmirkUsername` to compose the full "Welcome back" panel.
+   *
+   * The wire shape is platform-agnostic: callers should iterate
+   * `socials` and render each entry generically rather than special-
+   * casing platforms. Adding Matrix or Bluesky later is a backend
+   * change with no client edits required.
+   *
+   * Auth required.
+   */
+  getMyLinkedSocials(): Promise<ApiResponse<LinkedSocialsResponse>>;
+
+  /**
    * Create a social tip. Two modes:
    *
    * - **Draft** (v0.3+, recommended): omit `funding_txid`. Backend
@@ -281,6 +317,14 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
       // Read-only — retryable on 5xx / network. Backend returns the
       // raw `Option<String>` as the JSON body: `"my-handle"` or `null`.
       return client.retryableRequest<string | null>('/users/me/username', {
+        method: 'GET',
+      });
+    },
+
+    async getMyLinkedSocials() {
+      // Read-only — retryable. Empty `socials` array is a valid
+      // response (user has no linked platforms).
+      return client.retryableRequest<LinkedSocialsResponse>('/socials/me', {
         method: 'GET',
       });
     },

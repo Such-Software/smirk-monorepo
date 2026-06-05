@@ -123,7 +123,11 @@ export { ReceiveScreen } from './components/ReceiveScreen';
 export type { ReceiveScreenProps } from './components/ReceiveScreen';
 
 export { OnboardingWizard } from './components/OnboardingWizard';
-export type { OnboardingWizardProps } from './components/OnboardingWizard';
+export type {
+  ExistingIdentity,
+  ExistingSocial,
+  OnboardingWizardProps,
+} from './components/OnboardingWizard';
 
 export { LockScreen } from './components/LockScreen';
 export type { LockScreenProps } from './components/LockScreen';

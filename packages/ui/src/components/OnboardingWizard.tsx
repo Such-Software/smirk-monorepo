@@ -27,6 +27,33 @@ import { useMemo, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Button } from './Button';
 
+/**
+ * One linked third-party social (Telegram, Discord, Matrix, …).
+ * Mirrors `LinkedSocialAccount` from `@smirk/core` so we don't
+ * import that here — keeps `@smirk/ui` API-free. Caller projects
+ * the backend response into this shape.
+ */
+export interface ExistingSocial {
+  /** Lowercase machine name: `'telegram'`, `'discord'`, `'matrix'`, … */
+  readonly platform: string;
+  /** Display handle to show next to the platform. */
+  readonly username: string;
+  /** Already-verified via the platform's bot/OAuth flow. */
+  readonly verified: boolean;
+}
+
+/**
+ * Backend-derived identity that survives a wallet import. Either
+ * field may be empty; a non-empty `smirkName` OR non-empty
+ * `linkedSocials` is enough to render the "Welcome back" panel.
+ */
+export interface ExistingIdentity {
+  /** Reserved Smirk @handle, or omitted if none. */
+  readonly smirkName?: string;
+  /** Linked third-party socials, in display order. */
+  readonly linkedSocials: readonly ExistingSocial[];
+}
+
 export interface OnboardingWizardProps {
   /** Generate a fresh BIP39 mnemonic. Caller wires `generateMnemonicPhrase` from `@smirk/core`. */
   generateMnemonic: () => string;
@@ -55,13 +82,18 @@ export interface OnboardingWizardProps {
    */
   reserveSmirkName?: (handle: string) => Promise<void>;
   /**
-   * Handle the imported wallet already owns on the backend. Set when
-   * the caller's `onComplete` resolves a prior reservation (typical on
-   * import to a fresh device). The setup step skips the reserve-handle
-   * prompt and shows a "Welcome back" panel instead. Omit on create
-   * or when the lookup returned no handle.
+   * Identity the imported wallet already owns on the backend (Smirk
+   * handle + linked third-party socials). Set when the caller's
+   * `onComplete` resolves a prior identity — typical on import to a
+   * fresh device. The setup step renders a "Welcome back" panel
+   * summarising what carries over instead of the reserve-handle
+   * prompt. Omit on create or when both lookups returned empty.
+   *
+   * `linkedSocials` is treated as opaque rows by the wizard — caller
+   * passes whatever platforms the backend reports, including future
+   * ones (Matrix, Bluesky, etc.) without a wizard update.
    */
-  existingHandle?: string;
+  existingIdentity?: ExistingIdentity;
   /**
    * Persist the user's choice for `window.smirk` injection on
    * websites. If omitted, the privacy toggle in the setup step
@@ -189,7 +221,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         <SmirkSetup
           {...(props.reserveSmirkName ? { reserveSmirkName: props.reserveSmirkName } : {})}
           {...(props.setInjectEnabled ? { setInjectEnabled: props.setInjectEnabled } : {})}
-          {...(props.existingHandle ? { existingHandle: props.existingHandle } : {})}
+          {...(props.existingIdentity ? { existingIdentity: props.existingIdentity } : {})}
           onContinue={finishSetup}
         />
       )}
@@ -470,39 +502,44 @@ function ImportMnemonic({
   return (
     <div>
       <ScreenHeader title="Import recovery phrase" onBack={onBack} />
-      <p style={bodyTextStyle}>
-        Type or paste your 12-word Smirk recovery phrase. Pasting a full
-        phrase into any box auto-fills the rest.
+      <p style={{ ...bodyTextStyle, margin: '4px 0 6px' }}>
+        Type or paste your 12-word Smirk recovery phrase.
+      </p>
+      <p style={{ ...bodyTextStyle, margin: '0 0 18px', opacity: 0.55, fontSize: 12 }}>
+        Tip: paste the full phrase into any box — it auto-fills the rest.
       </p>
 
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(2, 1fr)',
-          gap: 6,
-          marginBottom: 16,
+          gap: 10,
+          marginBottom: 20,
         }}
       >
         {words.map((w, i) => (
           <div
             key={i}
+            class="smirk-mnemonic-cell"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 6,
-              background: 'rgba(255,255,255,0.03)',
-              border: '1px solid rgba(255,255,255,0.08)',
+              gap: 8,
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.10)',
               borderRadius: 8,
-              padding: '4px 8px',
+              padding: '8px 10px',
+              transition: 'border-color 120ms ease, background 120ms ease',
             }}
           >
             <span
               style={{
-                opacity: 0.45,
+                opacity: 0.4,
                 fontSize: 11,
-                width: 18,
+                minWidth: 18,
                 textAlign: 'right',
                 fontFamily: 'monospace',
+                userSelect: 'none',
               }}
             >
               {(i + 1).toString().padStart(2, '0')}
@@ -526,8 +563,8 @@ function ImportMnemonic({
                 outline: 'none',
                 color: 'inherit',
                 fontFamily: 'monospace',
-                fontSize: 13,
-                padding: '4px 0',
+                fontSize: 14,
+                padding: '2px 0',
                 width: '100%',
                 minWidth: 0,
               }}
@@ -614,18 +651,47 @@ function ImportWarning({
   return (
     <div>
       <ScreenHeader title="Before you import" onBack={onBack} />
-      <p style={bodyTextStyle}>
-        Smirk only restores wallets that were originally created in
-        Smirk. Pasting a seed from another wallet (MetaMask, Cake,
-        Electrum, Trezor, etc.) will show empty balances — not
-        because your funds are lost, but because Smirk uses its own
-        derivation paths for some chains.
+      <p style={{ ...bodyTextStyle, margin: '4px 0 14px' }}>
+        Only paste a phrase that was originally generated in Smirk.
       </p>
-      <p style={{ ...bodyTextStyle, margin: '0 0 16px' }}>
-        If your seed was generated elsewhere, restore it in that
-        wallet instead. To move funds into Smirk, send them from that
-        wallet to a Smirk receive address after onboarding.
-      </p>
+      <div
+        style={{
+          borderLeft: '3px solid var(--smirk-warning, #f59e0b)',
+          background: 'rgba(245, 158, 11, 0.06)',
+          padding: '12px 14px',
+          borderRadius: 8,
+          marginBottom: 18,
+          fontSize: 13,
+          lineHeight: 1.5,
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>
+          A seed from another wallet won't work as you expect
+        </div>
+        <ul
+          style={{
+            margin: 0,
+            paddingLeft: 18,
+            opacity: 0.85,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+          }}
+        >
+          <li>
+            MetaMask, Cake, Electrum, Trezor, etc. use different
+            derivation paths.
+          </li>
+          <li>
+            You'll see empty balances — funds are safe, but visible in
+            the wallet that generated the seed.
+          </li>
+          <li>
+            To move funds into Smirk, send to a Smirk receive address
+            after onboarding.
+          </li>
+        </ul>
+      </div>
       <Button onClick={onContinue}>Continue with Smirk seed</Button>
     </div>
   );
@@ -634,14 +700,17 @@ function ImportWarning({
 function SmirkSetup({
   reserveSmirkName,
   setInjectEnabled,
-  existingHandle,
+  existingIdentity,
   onContinue,
 }: {
   reserveSmirkName?: (handle: string) => Promise<void>;
   setInjectEnabled?: (enabled: boolean) => Promise<void>;
-  existingHandle?: string;
+  existingIdentity?: ExistingIdentity;
   onContinue: () => Promise<void> | void;
 }) {
+  const hasExistingIdentity = Boolean(
+    existingIdentity?.smirkName || (existingIdentity?.linkedSocials?.length ?? 0) > 0,
+  );
   const [handle, setHandle] = useState('');
   const [handleStatus, setHandleStatus] = useState<
     | { kind: 'idle' }
@@ -703,24 +772,8 @@ function SmirkSetup({
         Settings later.
       </p>
 
-      {existingHandle ? (
-        <section
-          style={{
-            background: 'var(--smirk-bg-sunken, rgba(255,255,255,0.03))',
-            border: '1px solid var(--smirk-border, rgba(255,255,255,0.08))',
-            borderRadius: 10,
-            padding: 14,
-            marginBottom: 12,
-          }}
-        >
-          <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>
-            Welcome back, @{existingHandle}
-          </h3>
-          <p style={{ ...bodyTextStyle, margin: 0, fontSize: 12 }}>
-            Your handle is already reserved. You can rename it any time
-            from Settings.
-          </p>
-        </section>
+      {hasExistingIdentity ? (
+        <WelcomeBackPanel identity={existingIdentity!} />
       ) : reserveSmirkName && (
         <section
           style={{
@@ -872,9 +925,132 @@ function SmirkSetup({
       )}
 
       <Button onClick={() => void submitAndContinue()}>
-        {handleStatus.kind === 'reserved' ? 'Continue' : 'Skip for now'}
+        {handleStatus.kind === 'reserved' || hasExistingIdentity
+          ? 'Continue'
+          : 'Skip for now'}
       </Button>
     </div>
+  );
+}
+
+/**
+ * "Welcome back" panel shown on import when the backend reports the
+ * wallet already owns a Smirk handle and/or has linked socials. Three
+ * shapes:
+ *  - Smirk handle only
+ *  - Linked socials only (no Smirk handle reserved)
+ *  - Both
+ *
+ * The linked-socials list is rendered generically: one row per
+ * platform with a small platform-tag and the username. No per-
+ * platform special-casing — adding a new platform (Matrix, Bluesky,
+ * etc.) is a backend ship with zero UI changes here.
+ */
+function WelcomeBackPanel({ identity }: { identity: ExistingIdentity }) {
+  const { smirkName, linkedSocials } = identity;
+  const hasSmirk = Boolean(smirkName);
+  const hasSocials = linkedSocials.length > 0;
+
+  const headline = hasSmirk
+    ? `Welcome back, @${smirkName}`
+    : 'Welcome back';
+  const subhead = hasSmirk
+    ? 'Your handle is already reserved. You can rename it any time from Settings.'
+    : 'These platforms are linked to this wallet. Manage them any time from Settings.';
+
+  return (
+    <section
+      style={{
+        background: 'var(--smirk-bg-sunken, rgba(255,255,255,0.03))',
+        border: '1px solid var(--smirk-border, rgba(255,255,255,0.08))',
+        borderRadius: 10,
+        padding: 14,
+        marginBottom: 12,
+      }}
+    >
+      <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>
+        {headline}
+      </h3>
+      <p style={{ ...bodyTextStyle, margin: 0, fontSize: 12 }}>
+        {subhead}
+      </p>
+
+      {hasSocials && (
+        <ul
+          style={{
+            margin: '10px 0 0',
+            padding: 0,
+            listStyle: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          {linkedSocials.map((s) => (
+            <LinkedSocialRow
+              key={`${s.platform}:${s.username}`}
+              social={s}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function LinkedSocialRow({ social }: { social: ExistingSocial }) {
+  // Show the platform name in title-case, the username, and a small
+  // verified/pending badge. No platform-specific glyphs — the wallet
+  // doesn't bundle social-network logos and the row stays compact.
+  const label =
+    social.platform.length > 0
+      ? social.platform[0]!.toUpperCase() + social.platform.slice(1)
+      : 'Platform';
+  return (
+    <li
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 12,
+        padding: '6px 8px',
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: 6,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+          opacity: 0.6,
+          minWidth: 56,
+        }}
+      >
+        {label}
+      </span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {social.username}
+      </span>
+      <span
+        style={{
+          fontSize: 10,
+          padding: '2px 6px',
+          borderRadius: 4,
+          background: social.verified
+            ? 'rgba(34, 197, 94, 0.12)'
+            : 'rgba(245, 158, 11, 0.12)',
+          color: social.verified
+            ? 'var(--smirk-positive, #22c55e)'
+            : 'var(--smirk-warning, #f59e0b)',
+          fontWeight: 600,
+        }}
+      >
+        {social.verified ? 'Verified' : 'Pending'}
+      </span>
+    </li>
   );
 }
 
