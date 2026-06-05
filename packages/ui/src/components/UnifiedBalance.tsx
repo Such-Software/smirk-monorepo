@@ -158,12 +158,13 @@ export function UnifiedBalance({
             border: 'none',
             color: 'var(--smirk-fg-muted)',
             cursor: 'pointer',
-            fontSize: 18,
             padding: '4px 8px',
             lineHeight: 1,
+            display: 'inline-flex',
+            alignItems: 'center',
           }}
         >
-          {hidden ? '👁' : '👁‍🗨'}
+          <EyeGlyph hidden={hidden} />
         </button>
       </div>
 
@@ -256,5 +257,35 @@ export function HomeActionRow({
       <ActionButton label="Receive" icon="↘" {...(onReceive ? { onClick: onReceive } : {})} {...(disabled.receive ? { disabled: true } : {})} />
       <ActionButton label="Swap" icon="⇄" {...(onSwap ? { onClick: onSwap } : {})} {...(disabled.swap ? { disabled: true } : {})} />
     </div>
+  );
+}
+
+/**
+ * Eye / eye-with-slash glyph for the hide-balance toggle. Inline SVG
+ * instead of an emoji because the eye-in-speech-bubble ZWJ sequence
+ * (`👁‍🗨`) renders inconsistently across Linux desktops, and the
+ * lone-eye codepoint (`👁`) renders as a tofu box on systems without
+ * a color emoji font (Tauri on Ubuntu, for one). Stroke colour
+ * inherits from the button.
+ */
+function EyeGlyph({ hidden }: { hidden: boolean }) {
+  const stroke = 'currentColor';
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={stroke}
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+      {hidden && <line x1="3" y1="21" x2="21" y2="3" />}
+    </svg>
   );
 }

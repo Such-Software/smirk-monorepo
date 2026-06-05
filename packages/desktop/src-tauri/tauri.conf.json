@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Smirk Wallet",
         "width": 420,
         "height": 700,

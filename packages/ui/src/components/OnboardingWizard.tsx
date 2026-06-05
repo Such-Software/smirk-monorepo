@@ -71,7 +71,7 @@ type Step =
   | { kind: 'verify'; mnemonic: string; indices: number[] }
   | { kind: 'import-warning' }
   | { kind: 'import' }
-  | { kind: 'password'; mnemonic: string }
+  | { kind: 'password'; mnemonic: string; isImport: boolean }
   | { kind: 'submitting' }
   | { kind: 'setup' }
   | { kind: 'done' };
@@ -87,7 +87,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     const indices = pickRandomIndices(wordCount, props.verifyCount ?? 3);
     setStep({ kind: 'verify', mnemonic, indices });
   };
-  const proceedToPassword = (mnemonic: string) => setStep({ kind: 'password', mnemonic });
+  const proceedToPassword = (mnemonic: string, isImport: boolean) =>
+    setStep({ kind: 'password', mnemonic, isImport });
 
   // The setup step renders only when the caller wired at least one
   // post-create action. Old callers that didn't pass either callback
@@ -104,7 +105,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     }, 250);
   };
 
-  const handleSubmit = async (mnemonic: string, password: string) => {
+  const handleSubmit = async (mnemonic: string, password: string, isImport: boolean) => {
     setStep({ kind: 'submitting' });
     setError(null);
     try {
@@ -116,7 +117,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create wallet');
-      setStep({ kind: 'password', mnemonic });
+      setStep({ kind: 'password', mnemonic, isImport });
     }
   };
 
@@ -145,7 +146,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         <VerifyMnemonic
           mnemonic={step.mnemonic}
           indices={step.indices}
-          onSuccess={() => proceedToPassword(step.mnemonic)}
+          onSuccess={() => proceedToPassword(step.mnemonic, false)}
           onBack={() => setStep({ kind: 'show', mnemonic: step.mnemonic })}
         />
       )}
@@ -160,7 +161,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       {step.kind === 'import' && (
         <ImportMnemonic
           isValidMnemonic={props.isValidMnemonic}
-          onContinue={proceedToPassword}
+          onContinue={(mnemonic) => proceedToPassword(mnemonic, true)}
           onBack={() => setStep({ kind: 'import-warning' })}
         />
       )}
@@ -168,7 +169,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       {step.kind === 'password' && (
         <SetPassword
           {...(error ? { error } : {})}
-          onSubmit={(pw) => void handleSubmit(step.mnemonic, pw)}
+          isImport={step.isImport}
+          onSubmit={(pw) => void handleSubmit(step.mnemonic, pw, step.isImport)}
           onBack={() => setStep({ kind: 'welcome' })}
         />
       )}
@@ -535,10 +537,12 @@ function SetPassword({
   onSubmit,
   onBack,
   error,
+  isImport,
 }: {
   onSubmit: (password: string) => void;
   onBack: () => void;
   error?: string;
+  isImport: boolean;
 }) {
   const [pw1, setPw1] = useState('');
   const [pw2, setPw2] = useState('');
@@ -586,7 +590,7 @@ function SetPassword({
         />
       </div>
       {(localError || error) && <FieldError>{localError ?? error}</FieldError>}
-      <Button onClick={handleSubmit}>Create wallet</Button>
+      <Button onClick={handleSubmit}>{isImport ? 'Import wallet' : 'Create wallet'}</Button>
     </div>
   );
 }
