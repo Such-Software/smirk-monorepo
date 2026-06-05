@@ -8,8 +8,16 @@
 )]
 
 mod browser_plugin;
-mod menu;
 
+// No native menu bar. The wallet is a small focused tool; the menu
+// items we had (Close Window, clipboard, Fullscreen, Minimize, About)
+// duplicated either the system window controls or the in-wallet UI.
+// On Linux/GTK several Tauri 2.x `PredefinedMenuItem`s also render
+// without labels, so the bar showed empty submenus. Keyboard
+// shortcuts for clipboard / fullscreen work via the webview anyway.
+// Re-introduce only if wallet-specific actions warrant their own
+// surface — wire as `webview.emit("smirk:menu:X")` per the original
+// menu.rs contributor note.
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -34,8 +42,6 @@ fn main() {
             browser_plugin::smirk_browser_hide_frame,
             browser_plugin::smirk_browser_respond_page_request,
         ])
-        .menu(|app| menu::build_menu(app))
-        .on_menu_event(menu::on_menu_event)
         .run(tauri::generate_context!())
         .expect("error while running smirk-desktop");
 }

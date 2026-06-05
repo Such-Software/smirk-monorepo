@@ -55,6 +55,14 @@ export interface OnboardingWizardProps {
    */
   reserveSmirkName?: (handle: string) => Promise<void>;
   /**
+   * Handle the imported wallet already owns on the backend. Set when
+   * the caller's `onComplete` resolves a prior reservation (typical on
+   * import to a fresh device). The setup step skips the reserve-handle
+   * prompt and shows a "Welcome back" panel instead. Omit on create
+   * or when the lookup returned no handle.
+   */
+  existingHandle?: string;
+  /**
    * Persist the user's choice for `window.smirk` injection on
    * websites. If omitted, the privacy toggle in the setup step
    * doesn't render. Defaults to enabled when shown.
@@ -181,6 +189,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         <SmirkSetup
           {...(props.reserveSmirkName ? { reserveSmirkName: props.reserveSmirkName } : {})}
           {...(props.setInjectEnabled ? { setInjectEnabled: props.setInjectEnabled } : {})}
+          {...(props.existingHandle ? { existingHandle: props.existingHandle } : {})}
           onContinue={finishSetup}
         />
       )}
@@ -625,10 +634,12 @@ function ImportWarning({
 function SmirkSetup({
   reserveSmirkName,
   setInjectEnabled,
+  existingHandle,
   onContinue,
 }: {
   reserveSmirkName?: (handle: string) => Promise<void>;
   setInjectEnabled?: (enabled: boolean) => Promise<void>;
+  existingHandle?: string;
   onContinue: () => Promise<void> | void;
 }) {
   const [handle, setHandle] = useState('');
@@ -692,7 +703,25 @@ function SmirkSetup({
         Settings later.
       </p>
 
-      {reserveSmirkName && (
+      {existingHandle ? (
+        <section
+          style={{
+            background: 'var(--smirk-bg-sunken, rgba(255,255,255,0.03))',
+            border: '1px solid var(--smirk-border, rgba(255,255,255,0.08))',
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 12,
+          }}
+        >
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px' }}>
+            Welcome back, @{existingHandle}
+          </h3>
+          <p style={{ ...bodyTextStyle, margin: 0, fontSize: 12 }}>
+            Your handle is already reserved. You can rename it any time
+            from Settings.
+          </p>
+        </section>
+      ) : reserveSmirkName && (
         <section
           style={{
             background: 'var(--smirk-bg-sunken, rgba(255,255,255,0.03))',

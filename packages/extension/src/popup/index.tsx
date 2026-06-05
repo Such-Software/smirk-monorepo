@@ -768,6 +768,11 @@ async function writeBalanceSnapshot(
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
+  // Handle already reserved for this wallet on a previous device — set
+  // by the onboarding `onComplete` callback after bootstrap+lookup so
+  // the setup wizard can skip the "reserve a handle" step. `null`
+  // means "no handle yet" (default); a string means "skip the prompt".
+  const [existingHandle, setExistingHandle] = useState<string | null>(null);
   const [grinInbox, setGrinInbox] = useState<{
     items: InboxItem[];
     loading: boolean;
@@ -1201,6 +1206,18 @@ function App() {
           // idempotent on the backend, costs one extra round-trip we
           // can pay once at onboarding.
           await bootstrapAuth(api, wallet);
+          // Check whether this wallet already owns a handle on a
+          // previous device. If so, the setup wizard skips the
+          // reserve-handle prompt and just confirms the existing one.
+          // Failures here are non-fatal — fall back to the prompt.
+          try {
+            const res = await api.getMySmirkUsername();
+            if (!res.error && typeof res.data === 'string' && res.data.length > 0) {
+              setExistingHandle(res.data);
+            }
+          } catch (e) {
+            console.warn('[smirk] handle lookup failed during onboarding', e);
+          }
         }}
         reserveSmirkName={async (handle) => {
           const res = await api.setMySmirkUsername(handle);
@@ -1211,6 +1228,7 @@ function App() {
         setInjectEnabled={async (enabled) => {
           await setInjectDisabled(!enabled);
         }}
+        {...(existingHandle ? { existingHandle } : {})}
         onFullyDone={refresh}
       />
     );

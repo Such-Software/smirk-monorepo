@@ -150,6 +150,15 @@ export interface SocialMethods {
   ): Promise<ApiResponse<{ username: string }>>;
 
   /**
+   * Read the current user's reserved Smirk handle, or `null` if none
+   * is set. Used on import to skip the onboarding "reserve a handle"
+   * prompt for wallets that already own one on a previous device.
+   *
+   * Auth required.
+   */
+  getMySmirkUsername(): Promise<ApiResponse<string | null>>;
+
+  /**
    * Create a social tip. Two modes:
    *
    * - **Draft** (v0.3+, recommended): omit `funding_txid`. Backend
@@ -265,6 +274,14 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
       return client.request<{ username: string }>('/users/me/username', {
         method: 'POST',
         body: JSON.stringify({ username: cleanUsername }),
+      });
+    },
+
+    async getMySmirkUsername() {
+      // Read-only — retryable on 5xx / network. Backend returns the
+      // raw `Option<String>` as the JSON body: `"my-handle"` or `null`.
+      return client.retryableRequest<string | null>('/users/me/username', {
+        method: 'GET',
       });
     },
 
