@@ -1,14 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Smirk Wallet (dev)",
+  "name": "Smirk Wallet",
   "version": "0.3.0",
-  "description": "Smirk multi-currency wallet — monorepo skeleton build. Not for production use.",
+  "description": "Non-custodial multi-currency tip wallet for Telegram, Discord, and more",
   "permissions": [
     "storage",
     "alarms",
     "notifications",
-    "scripting",
-    "activeTab",
     "clipboardRead",
     "clipboardWrite"
   ],
@@ -20,8 +18,7 @@
     "default_popup": "popup.html",
     "default_title": "Smirk",
     "default_icon": {
-      "16": "icons/favicon-16.png",
-      "32": "icons/favicon-16.png"
+      "16": "icons/favicon-16.png"
     }
   },
   "background": {
