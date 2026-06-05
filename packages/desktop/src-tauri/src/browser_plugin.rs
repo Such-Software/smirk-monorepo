@@ -141,6 +141,81 @@ struct BrowserPluginInner {
     frame_rect: Option<BrowserFrameRect>,
 }
 
+// ----------------------------------------------------------------------
+// Pure mutation API — drives the in-memory state machine without any
+// Tauri / webview side effects. Commands delegate to these methods and
+// then perform the webview-side work; tests exercise them directly.
+// ----------------------------------------------------------------------
+
+impl BrowserPluginInner {
+    fn open(&mut self) {
+        self.opened = true;
+    }
+
+    fn close(&mut self) {
+        self.opened = false;
+        self.tabs.clear();
+        self.active_tab = None;
+    }
+
+    fn set_init_scripts(&mut self, scripts: Vec<String>) {
+        self.init_scripts = scripts;
+    }
+
+    fn new_tab(&mut self, url: Option<String>) -> String {
+        self.next_tab_serial += 1;
+        let id = format!("tab-{}", self.next_tab_serial);
+        let target_url = url.unwrap_or_else(|| "about:blank".to_string());
+        let tab = BrowserTab {
+            id: id.clone(),
+            state: stubbed_state(&target_url),
+            created_at: now_ms(),
+        };
+        self.tabs.insert(id.clone(), tab);
+        self.active_tab = Some(id.clone());
+        id
+    }
+
+    fn close_tab(&mut self, id: &str) {
+        self.tabs.remove(id);
+        if self.active_tab.as_deref() == Some(id) {
+            self.active_tab = self.tabs.keys().last().cloned();
+        }
+    }
+
+    fn switch_tab(&mut self, id: &str) -> Result<(), String> {
+        if !self.tabs.contains_key(id) {
+            return Err(format!("Unknown tab: {}", id));
+        }
+        self.active_tab = Some(id.to_string());
+        Ok(())
+    }
+
+    fn navigate(&mut self, url: String, tab: Option<String>) -> Result<(), String> {
+        let tab_id = tab
+            .or_else(|| self.active_tab.clone())
+            .ok_or_else(|| "No active tab".to_string())?;
+        if let Some(t) = self.tabs.get_mut(&tab_id) {
+            t.state.url = url;
+            t.state.is_loading = true;
+        }
+        Ok(())
+    }
+
+    fn set_frame_rect(&mut self, rect: BrowserFrameRect) {
+        self.frame_rect = Some(rect);
+    }
+
+    fn hide_frame(&mut self) {
+        self.frame_rect = Some(BrowserFrameRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        });
+    }
+}
+
 // ======================================================================
 // Commands
 // ======================================================================
@@ -151,10 +226,7 @@ pub async fn smirk_browser_open<R: Runtime>(
     state: State<'_, BrowserPluginState>,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    if inner.opened {
-        return Ok(());
-    }
-    inner.opened = true;
+    inner.open();
     // TODO(@desktop): allocate the initial WebviewWindow for tab 1
     // and emit the first snapshot. STUBBED for now.
     Ok(())
@@ -163,9 +235,7 @@ pub async fn smirk_browser_open<R: Runtime>(
 #[tauri::command]
 pub async fn smirk_browser_close(state: State<'_, BrowserPluginState>) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.opened = false;
-    inner.tabs.clear();
-    inner.active_tab = None;
+    inner.close();
     // TODO(@desktop): destroy all WebviewWindow instances. STUBBED.
     Ok(())
 }
@@ -176,7 +246,7 @@ pub async fn smirk_browser_set_init_scripts(
     scripts: Vec<String>,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.init_scripts = scripts;
+    inner.set_init_scripts(scripts);
     Ok(())
 }
 
@@ -186,16 +256,7 @@ pub async fn smirk_browser_new_tab(
     url: Option<String>,
 ) -> Result<String, String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.next_tab_serial += 1;
-    let id = format!("tab-{}", inner.next_tab_serial);
-    let target_url = url.unwrap_or_else(|| "about:blank".to_string());
-    let tab = BrowserTab {
-        id: id.clone(),
-        state: stubbed_state(&target_url),
-        created_at: now_ms(),
-    };
-    inner.tabs.insert(id.clone(), tab);
-    inner.active_tab = Some(id.clone());
+    let id = inner.new_tab(url);
     // TODO(@desktop): create real WebviewWindow with init_scripts.
     Ok(id)
 }
@@ -206,10 +267,7 @@ pub async fn smirk_browser_close_tab(
     id: String,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.tabs.remove(&id);
-    if inner.active_tab.as_deref() == Some(&id) {
-        inner.active_tab = inner.tabs.keys().last().cloned();
-    }
+    inner.close_tab(&id);
     // TODO(@desktop): destroy the WebviewWindow for this tab.
     Ok(())
 }
@@ -220,10 +278,7 @@ pub async fn smirk_browser_switch_tab(
     id: String,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    if !inner.tabs.contains_key(&id) {
-        return Err(format!("Unknown tab: {}", id));
-    }
-    inner.active_tab = Some(id);
+    inner.switch_tab(&id)?;
     // TODO(@desktop): raise the corresponding WebviewWindow + apply
     // the cached frame_rect.
     Ok(())
@@ -236,16 +291,9 @@ pub async fn smirk_browser_navigate(
     tab: Option<String>,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    let tab_id = tab
-        .or_else(|| inner.active_tab.clone())
-        .ok_or_else(|| "No active tab".to_string())?;
-    if let Some(t) = inner.tabs.get_mut(&tab_id) {
-        t.state.url = url.clone();
-        t.state.is_loading = true;
-    }
+    inner.navigate(url, tab)?;
     // TODO(@desktop): WebviewWindow::eval(`window.location.href = "..."`)
     // or the dedicated loader API once it lands in Tauri 2.x.
-    let _ = url;
     Ok(())
 }
 
@@ -282,7 +330,7 @@ pub async fn smirk_browser_set_frame_rect(
     rect: BrowserFrameRect,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.frame_rect = Some(rect);
+    inner.set_frame_rect(rect);
     // TODO(@desktop): WebviewWindow::set_position + set_size from rect.
     Ok(())
 }
@@ -290,12 +338,7 @@ pub async fn smirk_browser_set_frame_rect(
 #[tauri::command]
 pub async fn smirk_browser_hide_frame(state: State<'_, BrowserPluginState>) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.frame_rect = Some(BrowserFrameRect {
-        x: 0.0,
-        y: 0.0,
-        width: 0.0,
-        height: 0.0,
-    });
+    inner.hide_frame();
     Ok(())
 }
 
@@ -361,3 +404,277 @@ pub fn manage_state<R: Runtime>(_app: &AppHandle<R>) -> BrowserPluginState {
 
 #[allow(dead_code)]
 fn _wry_marker(_: &AppHandle<Wry>) {}
+
+// ======================================================================
+// Tests — pure state-machine behaviour. Webview integration is
+// out-of-scope here (requires a running Tauri app) and is exercised by
+// the manual smoke test on packaged builds.
+// ======================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh() -> BrowserPluginInner {
+        BrowserPluginInner::default()
+    }
+
+    // -------- stubbed_state() --------
+
+    #[test]
+    fn stubbed_state_https_is_secure() {
+        let s = stubbed_state("https://example.com/path");
+        assert!(matches!(s.security_state, SecurityState::Secure));
+        assert_eq!(s.origin, "https://example.com");
+        assert_eq!(s.url, "https://example.com/path");
+        assert!(s.is_loading);
+        assert!(!s.can_go_back);
+        assert!(!s.can_go_forward);
+        assert!(s.favicon_url.is_none());
+        assert_eq!(s.title, "");
+    }
+
+    #[test]
+    fn stubbed_state_http_is_insecure() {
+        let s = stubbed_state("http://example.com");
+        assert!(matches!(s.security_state, SecurityState::Insecure));
+        assert_eq!(s.origin, "http://example.com");
+    }
+
+    #[test]
+    fn stubbed_state_about_blank_is_unknown_with_no_origin() {
+        let s = stubbed_state("about:blank");
+        assert!(matches!(s.security_state, SecurityState::Unknown));
+        assert_eq!(s.origin, "");
+    }
+
+    #[test]
+    fn stubbed_state_extracts_host_only_for_origin() {
+        // origin must be scheme + host, NOT include the path.
+        let s = stubbed_state("https://example.com/deep/path?query=1");
+        assert_eq!(s.origin, "https://example.com");
+    }
+
+    // -------- now_ms --------
+
+    #[test]
+    fn now_ms_returns_non_zero() {
+        let t = now_ms();
+        assert!(t > 0, "now_ms should return a non-zero unix-ms value");
+    }
+
+    // -------- lifecycle --------
+
+    #[test]
+    fn open_then_close_clears_state() {
+        let mut inner = fresh();
+        inner.open();
+        inner.new_tab(Some("https://a.example.com".into()));
+        inner.new_tab(Some("https://b.example.com".into()));
+        assert!(inner.opened);
+        assert_eq!(inner.tabs.len(), 2);
+
+        inner.close();
+        assert!(!inner.opened);
+        assert!(inner.tabs.is_empty());
+        assert!(inner.active_tab.is_none());
+    }
+
+    #[test]
+    fn open_is_idempotent() {
+        let mut inner = fresh();
+        inner.open();
+        inner.open();
+        assert!(inner.opened);
+        assert_eq!(inner.tabs.len(), 0, "open should not allocate tabs by itself");
+    }
+
+    #[test]
+    fn close_before_open_is_a_no_op() {
+        let mut inner = fresh();
+        inner.close();
+        assert!(!inner.opened);
+        assert!(inner.tabs.is_empty());
+    }
+
+    // -------- new_tab --------
+
+    #[test]
+    fn new_tab_assigns_monotonic_ids() {
+        let mut inner = fresh();
+        let a = inner.new_tab(None);
+        let b = inner.new_tab(None);
+        let c = inner.new_tab(None);
+        assert_eq!(a, "tab-1");
+        assert_eq!(b, "tab-2");
+        assert_eq!(c, "tab-3");
+    }
+
+    #[test]
+    fn new_tab_with_no_url_defaults_to_about_blank() {
+        let mut inner = fresh();
+        let id = inner.new_tab(None);
+        let tab = inner.tabs.get(&id).expect("tab must exist");
+        assert_eq!(tab.state.url, "about:blank");
+        assert!(matches!(tab.state.security_state, SecurityState::Unknown));
+    }
+
+    #[test]
+    fn new_tab_sets_the_active_tab() {
+        let mut inner = fresh();
+        let id = inner.new_tab(Some("https://example.com".into()));
+        assert_eq!(inner.active_tab.as_deref(), Some(id.as_str()));
+    }
+
+    // -------- close_tab --------
+
+    #[test]
+    fn close_tab_removes_the_tab() {
+        let mut inner = fresh();
+        let a = inner.new_tab(None);
+        inner.close_tab(&a);
+        assert!(!inner.tabs.contains_key(&a));
+    }
+
+    #[test]
+    fn close_tab_on_active_promotes_a_surviving_tab() {
+        let mut inner = fresh();
+        let a = inner.new_tab(None);
+        let b = inner.new_tab(None);
+        // active is now `b`.
+        inner.close_tab(&b);
+        // `a` is the only surviving tab.
+        assert_eq!(inner.active_tab.as_deref(), Some(a.as_str()));
+    }
+
+    #[test]
+    fn close_tab_on_active_leaves_no_active_when_last_tab_closed() {
+        let mut inner = fresh();
+        let a = inner.new_tab(None);
+        inner.close_tab(&a);
+        // The plugin (intentionally) does NOT auto-reopen — that's
+        // handled by the TS-side controller. Just confirm we cleared
+        // the active pointer.
+        assert!(inner.active_tab.is_none());
+    }
+
+    #[test]
+    fn close_tab_with_unknown_id_is_a_no_op() {
+        let mut inner = fresh();
+        let _ = inner.new_tab(None);
+        let before = inner.tabs.len();
+        inner.close_tab("does-not-exist");
+        assert_eq!(inner.tabs.len(), before);
+    }
+
+    // -------- switch_tab --------
+
+    #[test]
+    fn switch_tab_updates_active() {
+        let mut inner = fresh();
+        let a = inner.new_tab(None);
+        let _b = inner.new_tab(None);
+        inner.switch_tab(&a).expect("switch should succeed");
+        assert_eq!(inner.active_tab.as_deref(), Some(a.as_str()));
+    }
+
+    #[test]
+    fn switch_tab_rejects_unknown_ids() {
+        let mut inner = fresh();
+        let err = inner.switch_tab("does-not-exist").unwrap_err();
+        assert!(err.contains("does-not-exist"), "error should name the id: {}", err);
+    }
+
+    // -------- navigate --------
+
+    #[test]
+    fn navigate_updates_the_active_tab_url_and_loading() {
+        let mut inner = fresh();
+        let id = inner.new_tab(None);
+        inner
+            .navigate("https://other.example.com".into(), None)
+            .expect("navigate should succeed");
+        let t = inner.tabs.get(&id).expect("tab should still exist");
+        assert_eq!(t.state.url, "https://other.example.com");
+        assert!(t.state.is_loading);
+    }
+
+    #[test]
+    fn navigate_targets_a_specific_tab_when_passed() {
+        let mut inner = fresh();
+        let a = inner.new_tab(Some("https://a.example.com".into()));
+        let b = inner.new_tab(Some("https://b.example.com".into()));
+        inner
+            .navigate("https://b-redirect.example.com".into(), Some(b.clone()))
+            .expect("navigate should succeed");
+        assert_eq!(
+            inner.tabs.get(&a).unwrap().state.url,
+            "https://a.example.com",
+            "non-target tab should be untouched",
+        );
+        assert_eq!(
+            inner.tabs.get(&b).unwrap().state.url,
+            "https://b-redirect.example.com",
+        );
+    }
+
+    #[test]
+    fn navigate_with_no_active_tab_errors() {
+        let mut inner = fresh();
+        let err = inner
+            .navigate("https://example.com".into(), None)
+            .unwrap_err();
+        assert!(err.contains("No active tab"), "got: {}", err);
+    }
+
+    // -------- frame rect --------
+
+    #[test]
+    fn set_frame_rect_records_the_rect() {
+        let mut inner = fresh();
+        inner.set_frame_rect(BrowserFrameRect {
+            x: 10.0,
+            y: 20.0,
+            width: 800.0,
+            height: 600.0,
+        });
+        let r = inner.frame_rect.as_ref().expect("rect should be set");
+        assert_eq!(r.x, 10.0);
+        assert_eq!(r.width, 800.0);
+    }
+
+    #[test]
+    fn hide_frame_records_zeroes() {
+        let mut inner = fresh();
+        inner.set_frame_rect(BrowserFrameRect {
+            x: 10.0,
+            y: 20.0,
+            width: 800.0,
+            height: 600.0,
+        });
+        inner.hide_frame();
+        let r = inner.frame_rect.as_ref().expect("rect should be set");
+        assert_eq!(r.x, 0.0);
+        assert_eq!(r.y, 0.0);
+        assert_eq!(r.width, 0.0);
+        assert_eq!(r.height, 0.0);
+    }
+
+    // -------- init scripts --------
+
+    #[test]
+    fn set_init_scripts_replaces_the_list() {
+        let mut inner = fresh();
+        inner.set_init_scripts(vec!["a".into(), "b".into()]);
+        assert_eq!(inner.init_scripts, vec!["a", "b"]);
+        inner.set_init_scripts(vec!["c".into()]);
+        assert_eq!(inner.init_scripts, vec!["c"]);
+    }
+
+    #[test]
+    fn set_init_scripts_can_be_empty() {
+        let mut inner = fresh();
+        inner.set_init_scripts(vec![]);
+        assert!(inner.init_scripts.is_empty());
+    }
+}

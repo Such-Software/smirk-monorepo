@@ -1,3 +1,5 @@
+// @jsxRuntime automatic
+// @jsxImportSource preact
 /**
  * `BrowserShell` — the top-level embedded-browser surface.
  *

@@ -336,11 +336,13 @@ export class MockController implements DappBrowserController {
   private makeInitialState(url: string): BrowserNavigationState {
     let origin = '';
     try {
-      origin = new URL(url).origin;
+      const parsed = new URL(url).origin;
+      // WHATWG opaque origins (e.g. `about:blank`, `data:`) serialize
+      // to the literal string `'null'`. Treat those the same as
+      // unparseable inputs — no origin to grant permissions against.
+      if (parsed !== 'null') origin = parsed;
     } catch {
-      // Non-URL inputs (e.g. `about:blank`, search terms) leave origin
-      // empty; controllers should treat that as "no origin to grant
-      // permissions against".
+      // Non-URL inputs (e.g. search terms) leave origin empty.
     }
     const securityState: BrowserNavigationState['securityState'] =
       url.startsWith('https://') ? 'secure'

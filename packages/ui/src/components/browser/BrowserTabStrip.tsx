@@ -1,3 +1,5 @@
+// @jsxRuntime automatic
+// @jsxImportSource preact
 /**
  * `BrowserTabStrip` — horizontal tab strip with close affordances.
  *

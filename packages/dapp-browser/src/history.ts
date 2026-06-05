@@ -75,6 +75,7 @@ export class InMemoryHistoryStore implements HistoryStore {
   }
 
   async recent(limit: number, query?: string): Promise<readonly HistoryEntry[]> {
+    if (limit <= 0) return [];
     const needle = query?.toLowerCase();
     const filtered = needle
       ? this.entries.filter(

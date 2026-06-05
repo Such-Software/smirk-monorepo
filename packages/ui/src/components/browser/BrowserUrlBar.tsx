@@ -1,3 +1,5 @@
+// @jsxRuntime automatic
+// @jsxImportSource preact
 /**
  * `BrowserUrlBar` — the address-bar / status-indicator strip.
  *
