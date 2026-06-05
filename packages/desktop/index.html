@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smirk Wallet</title>
+    <style>
+      /* Root layout — the popup's own CSS will paint over this once
+         the wallet UI mounts. These styles are just to keep the
+         initial paint clean (no white flash). */
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        background: #0e0e10;
+        color: #f5f5f5;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      #root { height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,42 @@
+# Standalone workspace — keeps Tauri's transitive deps from
+# colliding with the monorepo's monero-oxide / smirk-wasm workspace.
+# Tauri's deps tree is large and idiosyncratic; isolating it speeds
+# up incremental builds on both sides.
+[workspace]
+
+[package]
+name = "smirk-desktop"
+version = "0.3.0"
+description = "Smirk Wallet desktop shell. Tauri 2.x wrapper around the @smirk/extension popup UI."
+authors = ["Smirk Wallet contributors"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Binary name surfaced in the bundle and in /usr/bin on Linux installs.
+[[bin]]
+name = "smirk-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-store = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-updater = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Profile tuning. Tauri's docs recommend lto=true and codegen-units=1
+# for the smallest binary at the cost of build time. We trade a few
+# seconds for ~20% smaller bundle.
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+incremental = false
+opt-level = "s"
+strip = true
