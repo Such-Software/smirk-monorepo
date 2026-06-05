@@ -78,47 +78,57 @@ their 12-word seed.
   LTC and XMR at 4, WOW and GRIN at 2 to keep the row tight.
   AssetDetail hover and copy still show full precision.
 
-### Fixed
+### Pre-release hardening
 
-- **Clawback now actually returns funds** *(CRITICAL)*. Prior to
-  this release, hitting Clawback marked the tip as "clawed back"
-  on the backend but did nothing on-chain — the funds stayed at
-  the tip address. We now decrypt your locally-stored tip key,
-  sweep the tip address back into your wallet on-chain, and only
-  then mark the backend. Affects all 5 chains (BTC, LTC, XMR,
-  WOW, Grin). If you clawed back a tip on an earlier v0.3 build
-  and the funds didn't arrive in your wallet, the on-chain
-  recovery flow can still rescue them — contact support with the
-  tip id.
+v0.3.0 is the first v0.3 release, so these aren't regressions
+from a shipped build — they're issues found during the release-
+candidate dogfood cycle and squashed before any binary went out
+publicly. Called out individually because the security-conscious
+audience that reads CHANGELOGs cares.
+
+- **Clawback now performs an on-chain sweep** *(CRITICAL during
+  RC; never shipped publicly)*. Earlier dogfood builds of
+  v0.3.0's Clawback button marked the tip as "clawed back" on
+  the backend but did nothing on-chain — funds would have stayed
+  at the tip address. Now the wallet decrypts your locally-stored
+  tip key, sweeps the tip address back into your wallet on-chain,
+  and only then notifies the backend. Applies to all 5 chains
+  (BTC, LTC, XMR, WOW, Grin). v0.2.x in the public stores already
+  has the correct flow; this only affected internal RC builds.
 - **Tip claim retry hardening** — `confirm tip sweep` and
-  `attach funding` calls now retry 3× with exponential backoff
-  (1s / 3s / 9s) so a transient network glitch on either side of
-  a broadcast doesn't leave your wallet's view out of sync with
-  the chain.
-- **Cross-chain dapp claim no longer fails on first try** —
-  claiming a public Grin/XMR/WOW tip via `smirk.cash` used to
-  throw a WASM init error on first dispatch. Now ensures the
-  cryptography module is loaded before any approval handler runs.
-- **Smirk wallet no longer shows "Waiting for your deposit" after
-  swap completes** — if the provider's status webhook to our
-  backend drops on the floor, the wallet now polls the provider
-  directly as a backstop.
-- **Sent-tip share link respects funding confirmations** — the
-  Tip Sent screen for XMR/WOW/GRIN public tips now waits to show
-  the share URL until enough confirmations have buried the
-  funding tx. Prevents accidentally sharing a link the recipient
-  can't yet claim.
-- **Home balance loads incrementally** — Bitcoin / Litecoin /
-  Grin balances now appear as each chain responds rather than
-  blocking on the slowest (typically Monero LWS catching up).
-  Snapshot cache means the headline number renders instantly on
+  `attach funding` round-trips now retry 3× with exponential
+  backoff (1s / 3s / 9s) so a transient network glitch on either
+  side of a broadcast doesn't leave your wallet's view out of
+  sync with the chain.
+- **Cross-chain dapp claim WASM init** — the approval popup
+  (the standalone window that opens when a website calls
+  `window.smirk.claimPublicTip(...)`) now ensures the
+  cryptography WASM module is loaded before dispatching. Pure-JS
+  paths (BTC / LTC payments) were already fine; Grin / XMR / WOW
+  claims via the dapp adapter now work on first dispatch.
+- **Trocador status backstop** — if the swap provider's status
+  webhook doesn't reach our backend, the wallet polls the
+  provider directly. Status field reflects on-chain reality even
+  when our infrastructure misses an update.
+- **Tip Sent share link gated on funding confirmations** — for
+  confirmation-gated chains (XMR / WOW / GRIN), the share URL is
+  hidden on the Tip Sent screen until funding has buried enough
+  to be claimable. Home shows a banner the moment it's safe to
+  share, replacing the previous "we trust you to time this
+  yourself" model.
+- **Home balance loads incrementally** — BTC / LTC / Grin
+  balances now appear as each chain responds rather than blocking
+  on the slowest (typically Monero LWS catching up). Snapshot
+  cache surfaces the last-known headline number instantly on
   popup reopen.
-- **Settings tab no longer doubles** under the DMG theme on some
-  Brave builds. Root cause was a `BigInt`-mixing throw in the
-  balance snapshot's serializer that broke Preact reconciliation
-  mid-render.
-- **GRIN voucher recovery flow** validated end-to-end via a live
-  orphan-tip recovery this session.
+- **JSON-safe balance snapshot** — explicit `BigInt → string`
+  serialization at the storage boundary side-steps a Brave-
+  specific structured-clone behaviour that could throw "Cannot
+  mix BigInt and other types" on a subsequent balance read.
+- **GRIN voucher recovery validated end-to-end** during the RC
+  cycle — restoring a lost-then-recovered orphan tip via the
+  URL-paste public-claim path landed funds in the recipient
+  wallet as expected.
 
 ### Backend (announced for transparency)
 
