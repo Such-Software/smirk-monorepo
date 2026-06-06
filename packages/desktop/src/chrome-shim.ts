@@ -19,12 +19,22 @@
  * any popup code (which calls `chrome.*` at module top-level). See
  * `main.ts` for the hand-off.
  *
- * Limitations:
+ * Limitations (v0.3.0):
  *  - The dapp adapter (background SW + content scripts) does NOT run
- *    in Tauri. Calls into `chrome.runtime.sendMessage` would fail —
- *    they're not polyfilled here. Desktop is wallet-only for v0.3.0;
- *    the in-app browser path that would re-light dapp support comes
- *    in v0.3.x.
+ *    in Tauri. `chrome.runtime.sendMessage` is not polyfilled here.
+ *    Desktop is wallet-only for v0.3.0; the in-app browser path that
+ *    re-lights dapp support is tracked for v0.4 (see
+ *    `docs/EMBEDDED_BROWSER.md`).
+ *  - `chrome.alarms` is NOT polyfilled. Auto-lock currently works
+ *    only while the wallet window stays open (the popup-level timer
+ *    fires); background auto-lock does not exist on desktop. Mobile
+ *    will have the same gap until a `WalletTimers` abstraction lands
+ *    (`packages/core/src/state/platform.ts`).
+ *  - `chrome.notifications` is NOT polyfilled. Tip-arrival and
+ *    confirmation notifications silently do nothing on desktop.
+ *    Same `WalletNotifications` abstraction track.
+ *  - `chrome.windows.create` is a no-op. The action-popup "pop out"
+ *    button does nothing in desktop (single-window app).
  */
 
 import { load, Store } from '@tauri-apps/plugin-store';
@@ -223,12 +233,10 @@ export function installChromeShim(): void {
     },
     windows: {
       async create(_options: unknown): Promise<void> {
-        // Desktop has a single first-class window — the wallet IS the
-        // popped-out experience. The action-popup "pop out" button is
-        // a no-op here; the existing window stays focused.
-        console.info(
-          '[chrome-shim] chrome.windows.create called — no-op in desktop (single-window app).',
-        );
+        // Desktop is a single first-class window — the wallet IS the
+        // popped-out experience. The action-popup "pop out" button
+        // is a no-op here; no log because this fires every time the
+        // user clicks it and the existing window stays focused.
       },
     },
   };

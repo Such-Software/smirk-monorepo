@@ -22,16 +22,15 @@ libs.
 
 ## Headline finding
 
-The monorepo extension is currently a small skeleton — most of the
-attack surface (slatepack parsing, `window.smirk` dApp API, content-
-script messaging, storage of secret material) lives only in legacy and
-hasn't been ported yet. That makes the monorepo *shallow* but not
-*safe*: when those modules get ported, they will inherit the legacy's
-findings unless we re-architect.
+This audit was first written when the monorepo extension was a
+skeleton and most of the attack surface still lived in the legacy
+v0.2.x codebase. The v0.3.0 release closes the porting work — the
+monorepo extension now owns the wallet end-to-end.
 
-So this doc has two halves: **monorepo issues to fix now** (small) and
-**legacy patterns to NOT inherit** (the actual punch list for the
-next several PRs).
+The doc still has two halves: **monorepo issues** (now closed for
+v0.3.0 — listed below as a record) and **legacy patterns to NOT
+inherit** (the architectural rules that shaped the v0.3.0 port,
+preserved here so future modules don't reintroduce them).
 
 ---
 

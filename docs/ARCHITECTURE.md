@@ -13,8 +13,9 @@ It's authoritative when something in another doc disagrees with it.
 Smirk ships to three surfaces over the v0.3 → v0.5 arc:
 
 - **Extension** (Chrome MV3 + Firefox MV3) — primary today
-- **Mobile** (Capacitor bundled WebView) — v0.3
-- **Desktop** (Tauri bundled WebView) — v0.4+
+- **Desktop** (Tauri bundled WebView) — v0.3.0 (wallet UI;
+  embedded browser scaffold, full wiring tracked for v0.4)
+- **Mobile** (Capacitor bundled WebView) — v0.4
 
 All three are essentially "Preact app in a WebView." They differ on
 storage backends, background process model, platform permissions
@@ -154,8 +155,10 @@ try/catch swallows the throw and balance computation degrades.
 }
 ```
 
-Already present in `manifest.json` and `manifest.firefox.json` as of
-2026-05-11. Don't remove it.
+This is present in both `manifest.json` and `manifest.firefox.json`
+and has been since 2026-05-11. Don't remove it — without
+`'wasm-unsafe-eval'` the Monero / Wownero / Grin code paths fail to
+load.
 
 ### `import * from "env"` stub aliasing
 
@@ -176,8 +179,9 @@ fragile to depend on. The session-cache for opt-in auto-unlock uses
 
 ### LWS admin endpoint hard rules
 
-(Cross-reference `docs/SCALING.md` → "Hard rules going forward"; both
-docs must match.)
+These are operator-side invariants enforced by the backend's typed
+wrappers. They live here because client code that interacts with the
+backend should know what shape it relies on:
 
 1. `/rescan` is **backwards-only**. `height > current scan_height` is
    undefined behavior; the daemon may exit cleanly leaving the system
@@ -185,8 +189,8 @@ docs must match.)
 2. `modify_account_status` mid-scan corrupts LMDB metadata
    (`MDB_NOTFOUND`). Status changes must drain the scanner first.
 
-The backend's typed wrappers enforce these. Don't `curl` the admin
-endpoints from operator shells for non-diagnostic operations.
+Don't `curl` the admin endpoints from operator shells for
+non-diagnostic operations.
 
 ---
 
@@ -334,7 +338,6 @@ worth not re-introducing. They're documented in:
 
 - `docs/SECURITY_LOG.md` — OVK ZERO incident (2026-05-10)
 - `docs/SECURITY_AUDIT.md` — internal audit (2026-05-10), do-not-inherit list
-- `docs/SCALING.md` → "LWS scan-tier policy" — LWS cost structure + tier policy
 - This doc → "Build-pipeline gotchas" — WASM env imports, MV3 CSP
 
 When porting code from `~/src/smirk-extension/` (legacy) into a

@@ -100,8 +100,9 @@ interface TrocadorRateResponse {
   network_from: string;
   network_to: string;
   /** Trocador's JSON often serializes amounts as numbers, sometimes
-   *  as strings. Accept both — readAmount() narrows to string for
-   *  precision-safe BigInt math (avoids float drift on WOW=11 dec,
+   *  as strings. Accept both — `normalizeAmountString()` narrows to
+   *  a string for precision-safe BigInt math (avoids float drift on
+   *  WOW=11 dec,
    *  XMR=12 dec). */
   amount_from: number | string;
   amount_to: number | string;
@@ -126,7 +127,7 @@ interface TrocadorTradeResponse extends TrocadorRateResponse {
 /** Trocador can serialize amounts as either number or string. Always
  *  read through this helper so the precision-loss vector for high-
  *  decimal assets (WOW=11, XMR=12) is one well-marked spot. */
-function readAmount(v: number | string | undefined | null): string {
+function normalizeAmountString(v: number | string | undefined | null): string {
   if (v === undefined || v === null) return '0';
   if (typeof v === 'string') return v;
   // Stringify with enough digits to round-trip. Number→string is
@@ -420,7 +421,7 @@ function mapStatus(t: TrocadorTradeResponse): SwapStatus {
         // render as a broken explorer link).
         outboundTxId: t.id_provider || '',
         toAmount: decimalToAtomicString(
-          readAmount(t.amount_to),
+          normalizeAmountString(t.amount_to),
           TROCADOR_COIN[t.ticker_to]?.decimals ?? 8,
         ),
       };

@@ -506,13 +506,18 @@ export function parseShareUrl(
     return null;
   }
   // Match `/tip/<uuid>` or `/tip/<uuid>/` — keep the host check
-  // restrictive (smirk.cash + dev-hosted variants).
+  // restrictive. Production accepts smirk.cash + such.software
+  // staging only. `localhost` is allowed in dev builds so the local
+  // claim page works during testing; gating prevents a malicious
+  // localhost page from posing as a Smirk claim URL on a release
+  // build.
   const host = url.hostname.toLowerCase();
+  const allowLocalhost = import.meta.env.DEV === true;
   const okHost =
     host === 'smirk.cash' ||
-    host === 'localhost' ||
     host.endsWith('.smirk.cash') ||
-    host.endsWith('.such.software');
+    host.endsWith('.such.software') ||
+    (allowLocalhost && host === 'localhost');
   if (!okHost) return null;
   const match = url.pathname.match(/^\/tip\/([A-Za-z0-9-]+)\/?$/);
   if (!match || !match[1]) return null;

@@ -1,13 +1,30 @@
 /**
- * Smirk popup — Phase 3.
+ * Smirk popup — the action-popup wallet UI entry point.
  *
- * Real `HomeTab` with action row, `SendWizard` and `ReceiveScreen`
- * wired in as drill-downs from Home (`home/send`, `home/receive`).
+ * The single largest file in the repo. It's structured top-down,
+ * roughly: imports → module-level singletons → `App` component →
+ * routed sub-screens (Home, Send, Receive, Tip, Asset Detail, Inbox,
+ * Settings) → onboarding / lock-screen renderers. Splitting it into
+ * per-screen files is tracked for a v0.3.x refactor — see
+ * `docs/V0_3_PLAN.md`.
  *
- * Data is stubbed for visual-smoke purposes — zero balances, allow-all
- * address validation, fake submit. Real wallet wiring (key derivation,
- * balances from LWS, signing, broadcast) lands incrementally; the UI
- * surface is what we wanted to verify visually first.
+ * **Where to look:**
+ *
+ * | Concern                                | Search for                       |
+ * |----------------------------------------|----------------------------------|
+ * | Asset icon registry                    | `ICON_BY_KEY`                    |
+ * | Wallet keystore + storage              | `walletKeystore`                 |
+ * | Session cache (auto-lock, bootstrap)   | `SESSION_CACHE_KEY`              |
+ * | App component + routing                | `function App()`                 |
+ * | Onboarding flow                        | `walletState.kind === 'empty'`   |
+ * | Lock screen                            | `walletState.kind === 'locked'`  |
+ * | Home tab + per-asset rows              | `<HomeTab`                       |
+ * | Send / Receive routes                  | `home/send`, `home/receive`      |
+ * | Tip creation                           | `home/tip`                       |
+ * | Inbox (claimable tips)                 | `tab === 'inbox'`                |
+ * | Swap tab                               | `tab === 'swap'`                 |
+ * | Settings tab                           | `tab === 'settings'`             |
+ * | Dapp approval (separate window mode)   | `runMode === 'approval'`         |
  */
 
 import { render } from 'preact';
@@ -2389,9 +2406,10 @@ function HomeRouter({
         denominationLabel: balances ? 'USD' : '',
         hidden: balancesHidden,
         onToggleHidden: toggleBalancesHidden,
-        onCycleDenomination: () => {
-          // TODO: cycle denomination once price-feed wiring lands.
-        },
+        // onCycleDenomination intentionally omitted — UnifiedBalance
+        // suppresses the pointer cursor when the handler is absent so
+        // users don't get a misleading "click me" affordance. Wire
+        // this when denomination cycling lands (tracked for v0.3.x).
         loading: session?.refreshing ?? false,
       }}
       actions={{

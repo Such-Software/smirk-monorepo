@@ -138,7 +138,7 @@ mandatory.
 
    # The resulting check.zip should byte-match the uploaded
    # smirk-wallet-firefox-v0.3.0.zip. Confirmed SHA256:
-   #   f30dc02100a5d9cc0877530eff51a5af42f7ae7e23e3c4a3cfd89f7f0e2236e6
+   #   5e78880fd0385ea523a447587e810e239f178fde8886436a6b0bc7e739daffa4
    ```
 
 6. **Submit**. AMO review for a new version typically lands within

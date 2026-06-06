@@ -87,6 +87,21 @@ export interface CryptonoteKeys {
   publicViewKey: Uint8Array;
 }
 
+/**
+ * All per-asset keys derived from a single mnemonic. The shape varies
+ * by chain family because the cryptographic primitives differ:
+ *
+ * - **UTXO** (BTC, LTC) — secp256k1: one (privateKey, publicKey) pair
+ *   per chain.
+ * - **Cryptonote** (XMR, WOW) — ed25519 with the dual-key model: a
+ *   spend key and a view key, public AND private. See
+ *   {@link CryptonoteKeys}.
+ * - **Mimblewimble** (Grin) — schnorr-on-secp256k1zkp plus the
+ *   slatepack-address ed25519 keypair. See {@link GrinKeys}.
+ *
+ * Per-asset shapes deliberately don't share a base type — that would
+ * paper over the asymmetry and force every consumer to narrow.
+ */
 export interface DerivedKeys {
   btc: { privateKey: Uint8Array; publicKey: Uint8Array };
   ltc: { privateKey: Uint8Array; publicKey: Uint8Array };

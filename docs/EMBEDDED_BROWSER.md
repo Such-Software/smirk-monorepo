@@ -150,7 +150,11 @@ This is intentional — keeps `dapp-browser` ignorant of `dapp-api`, and
 `dapp-api` ignorant of any browser.
 
 ```ts
-// In packages/desktop/src/dapp/wiring.ts (parallel in packages/mobile):
+// Wallet shells compose dapp-browser + dapp-api at the boundary.
+// Today the desktop shell does this against `TauriBrowserController`
+// in packages/desktop/src/dapp/tauri-browser-controller.ts; the
+// future mobile shell will mirror the shape against a
+// `CapacitorBrowserController`.
 import { getPageApiInjectionScript, createWalletHandler } from '@smirk/dapp-api';
 import { TauriBrowserController } from './tauri-browser-controller';
 
@@ -221,17 +225,24 @@ rewrite the UI.
 
 ## What ships when
 
-| Layer                                    | v0.3.0 desktop | v0.3.0 mobile | v0.3.1+ |
-| ---------------------------------------- | -------------- | ------------- | ------- |
-| `@smirk/dapp-api` (already shipped)      | unchanged      | unchanged     | —       |
-| `@smirk/dapp-browser` types + interface  | ship           | ship          | —       |
-| `BrowserShell` + sub-components          | ship           | ship          | —       |
-| `TauriBrowserController` (single-tab)    | ship           | —             | —       |
-| Capacitor iOS plugin + controller        | —              | ship          | —       |
-| Capacitor Android plugin + controller    | —              | ship          | —       |
-| Multi-tab UI polish                      | —              | —             | v0.3.1  |
-| Bookmarks persistence                    | —              | —             | v0.3.1  |
-| History persistence + autocomplete       | —              | —             | v0.3.1  |
+| Layer                                    | v0.3.0 desktop  | v0.4 mobile | v0.4+ polish |
+| ---------------------------------------- | --------------- | ----------- | ------------ |
+| `@smirk/dapp-api` (already shipped)      | unchanged       | unchanged   | —            |
+| `@smirk/dapp-browser` types + interface  | ship            | ship        | —            |
+| `BrowserShell` + sub-components          | ship            | ship        | —            |
+| `TauriBrowserController` (single-tab)    | scaffold (v0.4 wire) | —      | —            |
+| Capacitor iOS plugin + controller        | —               | ship        | —            |
+| Capacitor Android plugin + controller    | —               | ship        | —            |
+| Multi-tab UI polish                      | —               | —           | v0.4+        |
+| Bookmarks persistence                    | —               | —           | v0.4+        |
+| History persistence + autocomplete       | —               | —           | v0.4+        |
+
+**Note on v0.3.0 desktop.** The TypeScript `TauriBrowserController`,
+`@smirk/dapp-browser` types, and `BrowserShell` UI components all
+ship in v0.3.0. The Rust `browser_plugin.rs` commands that drive
+real `WebviewWindow` instances are scaffolded but stubbed — the
+v0.3.0 desktop wallet is wallet-only. The Rust wiring is the
+single piece tracked for v0.4 alongside the Capacitor mobile work.
 
 ## Conventions
 

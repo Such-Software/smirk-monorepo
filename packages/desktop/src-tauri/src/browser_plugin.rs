@@ -228,7 +228,7 @@ pub async fn smirk_browser_open<R: Runtime>(
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     inner.open();
     // TODO(@desktop): allocate the initial WebviewWindow for tab 1
-    // and emit the first snapshot. STUBBED for now.
+    // and emit the first snapshot. STUBBED — see file header.
     Ok(())
 }
 
@@ -236,7 +236,7 @@ pub async fn smirk_browser_open<R: Runtime>(
 pub async fn smirk_browser_close(state: State<'_, BrowserPluginState>) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     inner.close();
-    // TODO(@desktop): destroy all WebviewWindow instances. STUBBED.
+    // TODO(@desktop): destroy all WebviewWindow instances. STUBBED — see file header.
     Ok(())
 }
 
@@ -302,7 +302,8 @@ pub async fn smirk_browser_go_back(
     state: State<'_, BrowserPluginState>,
     tab: Option<String>,
 ) -> Result<(), String> {
-    let _ = (state, tab); // STUBBED
+    // STUBBED — see file header "Implementation checklist".
+    let _ = (state, tab);
     Ok(())
 }
 
@@ -311,7 +312,8 @@ pub async fn smirk_browser_go_forward(
     state: State<'_, BrowserPluginState>,
     tab: Option<String>,
 ) -> Result<(), String> {
-    let _ = (state, tab); // STUBBED
+    // STUBBED — see file header "Implementation checklist".
+    let _ = (state, tab);
     Ok(())
 }
 
@@ -320,7 +322,8 @@ pub async fn smirk_browser_reload(
     state: State<'_, BrowserPluginState>,
     tab: Option<String>,
 ) -> Result<(), String> {
-    let _ = (state, tab); // STUBBED
+    // STUBBED — see file header "Implementation checklist".
+    let _ = (state, tab);
     Ok(())
 }
 

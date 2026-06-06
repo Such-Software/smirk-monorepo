@@ -49,7 +49,11 @@ export {
   WebLocalStorage,
   autoDetectEphemeralStorage,
 } from './platform';
-export type { PlatformStorage } from './platform';
+export type {
+  PlatformStorage,
+  WalletTimers,
+  WalletNotifications,
+} from './platform';
 
 export {
   CURRENT_VERSION,

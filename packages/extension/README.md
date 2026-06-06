@@ -1,11 +1,13 @@
 # @smirk/extension
 
-Browser-extension shell (Chrome MV3 + Firefox) for Smirk. The v0.3
-monorepo client — the canonical Smirk wallet on browsers.
+Chrome MV3 + Firefox MV3 wallet extension — the canonical Smirk
+client. v0.3.0+.
 
-## Current state (2026-05-25)
+The legacy v0.2.x extension lives at
+[Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension);
+it is frozen. New work happens here.
 
-Wallet flows working end-to-end:
+## Wallet flows shipping in v0.3.0
 
 - Wallet create / import / unlock / lock / destroy (encrypted keystore
   in `chrome.storage.local`, opt-in N-minute auto-lock session cache).
@@ -23,14 +25,14 @@ Wallet flows working end-to-end:
   https://github.com/Such-Software/smirk-extension/issues/1)
   short-term ask).
 
-Still deferred or marked PHASE-2 in code:
+Tracked for v0.3.x / v0.4 follow-up:
 
 - `requestPayment` from dapp → wallet send-wizard handoff.
 - `claimPublicTip` via dapp.
 - `signMessage` for XMR / WOW / Grin (ed25519 path).
-- Standalone "Sent Tips" Settings screen (replaced by inline asset-row
-  clawback in v0.3; the `SentTipsScreen` component exists but isn't
-  mounted).
+- Standalone "Sent Tips" Settings screen — the `SentTipsScreen`
+  component exists but isn't mounted in v0.3.0 (replaced by inline
+  asset-row clawback). Either wire it or remove the dead component.
 
 ## Layout
 
@@ -84,7 +86,8 @@ Load the unpacked extension from `packages/extension/dist/`.
   the unlocked wallet, performs the operation, writes the result
   back via `chrome.storage.session` for the SW to relay.
 - **Cross-platform reuse.** `@smirk/dapp-api` is transport-agnostic:
-  the same `WalletHandler` + `ApprovalHandler` interfaces will drive
-  the v0.4 Capacitor mobile build and the eventual Tauri desktop
-  build. Only the message-transport adapter is extension-specific
-  (chrome.runtime.sendMessage ↔ Capacitor.WebView ↔ __TAURI__.event).
+  the same `WalletHandler` + `ApprovalHandler` interfaces already
+  drive the v0.3.0 Tauri desktop build and will drive the v0.4
+  Capacitor mobile build. Only the message-transport adapter is
+  extension-specific (chrome.runtime.sendMessage ↔ __TAURI__.event ↔
+  Capacitor.WebView).

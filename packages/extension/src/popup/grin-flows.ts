@@ -445,10 +445,12 @@ export async function startGrinSend(args: {
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
 
-  // Plan-C diagnostic: log which derivation matched each input.
-  // Expect "v3+Regular" for post-2026-05 outputs; "legacy+Regular"
+  // Derivation breadcrumb — useful when a user reports a spend that
+  // matched an unexpected derivation path. `console.debug` keeps this
+  // off the default console view; users opening "Verbose" in DevTools
+  // see it. Expect "v3+Regular" for post-2026-05 outputs; "legacy+Regular"
   // (or "legacy+None") for pre-rotation v0.2.x outputs.
-  console.log('[grin-send] input derivations:', sendResult.input_derivations);
+  console.debug('[grin-send] input derivations:', sendResult.input_derivations);
 
   // 5. Backend bookkeeping — record + lock + relay drop.
   await api.recordGrinTransaction({
@@ -786,7 +788,8 @@ export async function signGrinInvoice(args: {
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
 
-  console.log('[grin-pay-invoice] input derivations:', signed.input_derivations);
+  // See grin-send derivation breadcrumb above for the rationale.
+  console.debug('[grin-pay-invoice] input derivations:', signed.input_derivations);
 
   // Lock + record at the payer's side.
   await api.recordGrinTransaction({

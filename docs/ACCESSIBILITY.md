@@ -241,26 +241,28 @@ checklist. The short version, for reference:
       through `<LiveRegion>`.
 - [ ] axe-core sweep added to the component's tests.
 
-## Toolchain — to be added
+## Toolchain — tracked for v0.3.x
 
-Tracked items, not yet shipped:
+v0.3.0 ships the conventions and the static patterns above; the
+following supporting toolchain is the next pass. Tracked here so it
+doesn't drift; each item should land in its own PR:
 
 - **ESLint** with `@typescript-eslint`, `eslint-plugin-preact`, and
-  `eslint-plugin-jsx-a11y` configured. ESLint setup is its own PR —
-  parser / plugin / rule-set choices warrant their own design pass.
-- **`@axe-core/preact`** added to the monorepo dev deps; example test
-  in `packages/ui/src/components/browser/__tests__/a11y.test.ts`.
-- **`<LiveRegion>` component** in `@smirk/ui` — the central live-region
+  `eslint-plugin-jsx-a11y`. Parser / plugin / rule-set choices
+  warrant their own design pass.
+- **`@axe-core/preact`** as a monorepo dev dep with example test in
+  `packages/ui/src/components/browser/__tests__/a11y.test.ts`.
+- **`<LiveRegion>` component** in `@smirk/ui` — central live-region
   router with politeness-level mapping.
-- **`<Dialog>` component** in `@smirk/ui` — focus trap + return-focus
-  pattern.
+- **`<Dialog>` component** in `@smirk/ui` — focus trap +
+  return-focus pattern.
 - **`useFocusTrap()` hook** in `@smirk/ui`.
 - **`<SkipLink>` component** for the desktop wallet shell.
 - **Theme contrast test** in
   `packages/ui/src/themes/__tests__/contrast.test.ts`.
 
-Add to this list (and remove when shipped) in the same PR that
-introduces or removes the toolchain piece.
+Update this list (add new gaps, remove shipped items) in the same PR
+that introduces or removes the toolchain piece.
 
 ## Public posture
 

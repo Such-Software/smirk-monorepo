@@ -68,8 +68,7 @@ export interface PendingOutgoingTx {
    * - **CryptoNote (XMR/WOW)**: lowercase-hex computed key image, one
    *   per spent output.
    * - **UTXO (BTC/LTC)**: `${txid}:${vout}` pair, one per spent UTXO.
-   * - **Mimblewimble (Grin)**: TBD when Grin send lands — likely the
-   *   input commitment hex per input.
+   * - **Mimblewimble (Grin)**: input commitment hex per input.
    *
    * Optional for forward compat with the timing-only v1 entries. The
    * older entries simply never appear in input exclusion / never
@@ -118,7 +117,9 @@ export type PendingOutgoingContext =
  *   gives the scanner room.
  * - **BTC/LTC** ~10 / ~2.5 min blocks, 1-conf shown as available →
  *   60 min covers worst case Electrum lag.
- * - **Grin** TBD; conservative 60 min until Grin send lands.
+ * - **Grin** ~60 s blocks, but the lock-window cushion makes the
+ *   relevant window 60 min — matches BTC/LTC for now. Revisit once
+ *   we have spend telemetry from production.
  */
 const AGE_OUT_MS_BY_ASSET: Record<string, number> = {
   wow: 5 * 60_000,

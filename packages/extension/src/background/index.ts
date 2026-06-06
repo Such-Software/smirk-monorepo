@@ -20,12 +20,15 @@ import { api, CORE_PACKAGE_VERSION } from '@smirk/core';
 
 import { installDappBridge } from './dapp/dispatch';
 
-console.log('[smirk] background worker starting', {
+// Diagnostic breadcrumbs at SW startup + install. `console.debug`
+// keeps these out of the default extension console view; developers
+// debugging the service worker see them with "Verbose" enabled.
+console.debug('[smirk] background worker starting', {
   core: CORE_PACKAGE_VERSION,
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[smirk] installed; api base:', (api as unknown as { baseUrl: string }).baseUrl);
+  console.debug('[smirk] installed; api base:', (api as unknown as { baseUrl: string }).baseUrl);
 });
 
 // PING listener — registered FIRST so the dapp bridge's

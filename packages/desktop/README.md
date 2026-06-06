@@ -18,9 +18,24 @@ extension-API surfaces the popup uses:
 | `chrome.runtime.getURL`    | Identity transform — Tauri serves from `/`  |
 | `chrome.windows.create`    | No-op stub — single-window app              |
 
-The dapp adapter (background SW + content scripts) does NOT ship with the
-desktop build. v0.3.0 desktop is wallet-only; in-app browser support that
-would re-light dapp integration is planned for v0.3.x.
+## Known limitations (v0.3.0)
+
+- **Dapp `window.smirk` injection on browsed sites is not available.**
+  Desktop ships wallet-only for v0.3.0. The in-app browser surface
+  (`browser_plugin.rs` + `TauriBrowserController`) is scaffolded; the
+  full `WebviewWindow` wiring + dapp integration is tracked for v0.4.
+- **Background auto-lock is degraded.** The extension uses
+  `chrome.alarms` to fire auto-lock even when the popup is closed.
+  Tauri has no equivalent yet, and `chrome-shim.ts` does not polyfill
+  `chrome.alarms`. Auto-lock fires correctly while the wallet window
+  is open; it does not fire if you minimise / hide the window. A
+  `WalletTimers` abstraction in `@smirk/core` is the planned fix.
+- **Tip-arrival notifications are silent.** Same shape — the shim
+  does not polyfill `chrome.notifications`. Inbox still updates on
+  open; only the OS-level notification doesn't fire.
+- **`chrome.windows.create`** ("pop out the wallet to its own
+  window") is a no-op. The desktop is already a single first-class
+  window, so the action-popup "pop out" button does nothing here.
 
 ## Development
 
@@ -73,10 +88,12 @@ is a placeholder. To activate:
 The update server endpoint pattern follows Tauri's default; the actual
 release backend lives at `releases.smirk.cash/desktop/...`.
 
-## Known limitations (v0.3.0 desktop preview)
+## Tracked for v0.4
 
-- No in-app browser → dapp adapter inactive on desktop.
-- No deep links (`smirk://` URL handler) → tip-claim URLs from clipboard
-  only.
+- No deep links (`smirk://` URL handler) — tip-claim URLs work via
+  clipboard only.
 - No system tray.
 - No autostart-on-login option.
+- In-app dapp browser — see the chrome-shim limitations section
+  above; full WebviewWindow wiring lands with the v0.4 embedded
+  browser ship.

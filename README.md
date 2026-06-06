@@ -18,7 +18,11 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `packages/ui/` | Working — `@smirk/ui` shared Preact components: Home (UnifiedBalance, BalanceCard, ActionRow), SendWizard (5 assets incl. Grin interactive Exchange step), GrinRequestWizard, ReceiveScreen, OnboardingWizard, LockScreen, AppShell + BottomNav, ApprovalScreen (dapp prompt UI), theme registry (7 themes incl. retro themes) |
 | `packages/dapp-api/` | Working — `@smirk/dapp-api` transport-agnostic dapp injection: wire protocol, `WalletHandler` dispatcher, page-context `window.smirk` factory, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. Platform adapters live in `packages/extension/` (and eventually mobile / desktop). |
 | `packages/extension/` | Working — Chrome MV3 + Firefox MV3. Keystore + wallet-flow + lockscreen, send (BTC/LTC/XMR/WOW/Grin), receive, social tipping (two-phase create), per-asset detail screen, tri-state balance (confirmed/pending/locked), pendingOutgoing reconciliation. `window.smirk` dapp injection (connect, signMessage for BTC+LTC, isConnected, disconnect, getPublicKeys, getAddresses) with per-origin permissions + standalone approval-window flow + global privacy toggle in Settings. |
-| `packages/mobile/` `packages/desktop/` | Not yet populated — Capacitor planned v0.4, Tauri v0.5+ |
+| `packages/dapp-browser/` | Working — `@smirk/dapp-browser` embedded-browser shell abstraction. Platform-agnostic `DappBrowserController` + `MockController`; UI consumers (`BrowserShell`, `BrowserUrlBar`, `BrowserTabStrip`) live in `@smirk/ui`. |
+| `packages/keymap/` | Working — `@smirk/keymap` cross-platform keyboard-shortcut registry (per-platform bindings, action enum, runtime dispatcher). |
+| `packages/swap/` | Working — `@smirk/swap` swap orchestration. `ThorchainSwap` + `TrocadorSwap` aggregator implementations; native adaptor-signature implementations planned v0.4+. |
+| `packages/desktop/` | Working — `@smirk/desktop` Tauri 2.x wallet shell. Wraps the extension popup via a `chrome.*` shim (storage backed by tauri-plugin-store). Embedded-browser commands in `browser_plugin.rs` are scaffolded; full wiring is v0.4. |
+| `packages/mobile/` | Not yet populated — Capacitor planned v0.4 |
 
 The legacy browser extension at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) is frozen at v0.2.x; `packages/extension/` here is the canonical v0.3+ client.
 
@@ -38,9 +42,13 @@ smirk-monorepo/
 │   ├── wasm/                 # @smirk/wasm — TS bindings around crates/smirk-wasm/pkg/
 │   ├── core/                 # @smirk/core — API client, crypto, HD derivation, codecs
 │   ├── assets/               # @smirk/assets — pure-data registry of every supported chain
-│   ├── ui/                   # @smirk/ui — shared Preact components (BalanceCard, ActionButton, ApprovalScreen, ...)
+│   ├── ui/                   # @smirk/ui — shared Preact components (BalanceCard, SendWizard, OnboardingWizard, BrowserShell, ...)
 │   ├── dapp-api/             # @smirk/dapp-api — transport-agnostic window.smirk wire protocol + WalletHandler
-│   └── extension/            # @smirk/extension — Chrome MV3 + Firefox
+│   ├── dapp-browser/         # @smirk/dapp-browser — embedded-browser shell abstraction (Tauri + Capacitor)
+│   ├── keymap/               # @smirk/keymap — cross-platform keyboard-shortcut registry
+│   ├── swap/                 # @smirk/swap — swap orchestration (THORChain, Trocador, future native adaptor sigs)
+│   ├── extension/            # @smirk/extension — Chrome MV3 + Firefox (the v0.3.0 canonical client)
+│   └── desktop/              # @smirk/desktop — Tauri 2.x wallet shell (v0.3.0 wallet-only; embedded browser v0.4)
 ├── docs/                     # design notes per crate
 ├── Cargo.toml                # flat Rust workspace, all crates listed at root
 ├── package.json              # npm workspace root

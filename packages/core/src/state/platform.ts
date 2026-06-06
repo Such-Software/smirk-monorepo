@@ -293,3 +293,80 @@ export function autoDetectEphemeralStorage(): PlatformStorage {
   }
   return new InMemoryStorage();
 }
+
+// ============================================================================
+// WalletTimers — abstract scheduled-callback surface
+// ============================================================================
+
+/**
+ * Persistent scheduler — fires the registered callback even when the
+ * wallet UI surface is closed / backgrounded. Used by auto-lock and
+ * any future "wake up the wallet at time T" flow.
+ *
+ * Implementations exist per surface:
+ *  - **Extension** wraps `chrome.alarms`. The SW receives the alarm
+ *    and routes to whichever handler the popup registered.
+ *  - **Desktop** would wrap a Tauri-side scheduler that survives
+ *    window close. NOT YET IMPLEMENTED in v0.3.0 — desktop currently
+ *    uses a popup-level `setTimeout` that dies with the window; see
+ *    `packages/desktop/src/chrome-shim.ts` limitations.
+ *  - **Mobile** will wrap an iOS/Android background-task scheduler
+ *    exposed through a Capacitor plugin.
+ *
+ * The public name is `WalletTimers` rather than `Alarms` because
+ * "alarm" carries chrome.* baggage that doesn't map cleanly to
+ * either Tauri or Capacitor.
+ */
+export interface WalletTimers {
+  /**
+   * Schedule `name` to fire once after `delayMs`. Replaces any
+   * existing timer with the same name. Firing is delivered through
+   * a handler registered via `onTimer`.
+   */
+  scheduleOnce(name: string, delayMs: number): Promise<void>;
+
+  /** Cancel a scheduled timer. No-op if `name` isn't scheduled. */
+  cancel(name: string): Promise<void>;
+
+  /**
+   * Register the handler invoked when any timer fires. Returns an
+   * unsubscribe. Implementations may dispatch multiple firings to a
+   * single listener — the listener inspects `name` and routes.
+   */
+  onTimer(listener: (name: string) => void): () => void;
+}
+
+// ============================================================================
+// WalletNotifications — abstract OS-notification surface
+// ============================================================================
+
+/**
+ * OS-level notification surface — the bell the user sees when a tip
+ * arrives or a confirmation lands. Implementations:
+ *  - **Extension** wraps `chrome.notifications`.
+ *  - **Desktop** would wrap Tauri's `notification` plugin. NOT YET
+ *    IMPLEMENTED in v0.3.0 — desktop tip-arrival is silent.
+ *  - **Mobile** will wrap iOS / Android native notifications via
+ *    Capacitor's `@capacitor/local-notifications`.
+ *
+ * Failures here are non-fatal — a wallet that can't show a
+ * notification should still write the row to the in-wallet inbox.
+ * Implementations should swallow + log rather than throw.
+ */
+export interface WalletNotifications {
+  /**
+   * Show a single notification. `id` is opaque to the user; it lets
+   * the caller replace or dismiss a specific notification later.
+   * Icons are absolute URLs or `chrome.runtime.getURL`-style paths
+   * that the implementation resolves.
+   */
+  show(input: {
+    id: string;
+    title: string;
+    body: string;
+    iconUrl?: string;
+  }): Promise<void>;
+
+  /** Dismiss a previously-shown notification, if still visible. */
+  dismiss(id: string): Promise<void>;
+}
