@@ -48,7 +48,7 @@ smirk-monorepo/
 │   ├── keymap/               # @smirk/keymap — cross-platform keyboard-shortcut registry
 │   ├── swap/                 # @smirk/swap — swap orchestration (THORChain, Trocador, future native adaptor sigs)
 │   ├── extension/            # @smirk/extension — Chrome MV3 + Firefox (the v0.3.0 canonical client)
-│   └── desktop/              # @smirk/desktop — Tauri 2.x wallet shell (v0.3.0 wallet-only; embedded browser v0.4)
+│   └── desktop/              # @smirk/desktop — Tauri 2.x wallet shell + embedded dapp browser (v0.3.0)
 ├── docs/                     # design notes per crate
 ├── Cargo.toml                # flat Rust workspace, all crates listed at root
 ├── package.json              # npm workspace root

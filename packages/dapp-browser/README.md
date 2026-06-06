@@ -49,8 +49,9 @@ await browser.close();
 ```
 
 In production code, swap `MockController` for `TauriBrowserController`
-(desktop) or `CapacitorBrowserController` (mobile). The interface is
-the same.
+(desktop — ships v0.3.0, in `@smirk/desktop`) or
+`CapacitorBrowserController` (mobile — planned v0.4). The interface
+is the same.
 
 ## Public surface
 

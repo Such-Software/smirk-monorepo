@@ -1,7 +1,10 @@
 # Embedded browser architecture
 
-A guide for contributors adding to or implementing Smirk's in-app browser
-on desktop (Tauri) and mobile (Capacitor / iOS / Android).
+A guide for contributors adding to or implementing Smirk's in-app
+browser. The Tauri desktop implementation ships in v0.3.0; the
+Capacitor mobile (iOS / Android) implementation is planned for v0.4
+and will reuse everything in this document except the
+platform-specific controller.
 
 This document explains the layered architecture, the package boundaries,
 the contracts between layers, and the conventions every contributor is

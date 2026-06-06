@@ -31,6 +31,11 @@ const BASE_TABS: TabConfig[] = [
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
 
+// `◯` (U+25EF, GREAT CIRCLE) — same Geometric Shapes Unicode block
+// as the other nav glyphs (House, Envelope, Gear, Arrow pair) so
+// the cross-platform font story is consistent. Smoke-tested on
+// Linux/WebKitGTK. Move all nav icons to inline SVG together if a
+// future platform regresses.
 const BROWSE_TAB: TabConfig = { id: 'browse', label: 'Browse', icon: '◯' };
 
 /**
@@ -41,19 +46,23 @@ const BROWSE_TAB: TabConfig = { id: 'browse', label: 'Browse', icon: '◯' };
  *
  * The order places Browse last (right side / bottom of the vertical
  * sidebar) so it doesn't shuffle existing muscle memory.
+ *
+ * Per-render (not module-load) so import-order quirks under HMR /
+ * tests don't lock us into a stale answer. The lookup is two field
+ * reads — cheaper than a single style recompute.
  */
-function activeTabsForRuntime(): TabConfig[] {
-  const browseAvailable =
+function isBrowseAvailable(): boolean {
+  return Boolean(
     typeof globalThis !== 'undefined' &&
-    Boolean((globalThis as { __smirk_browser__?: unknown }).__smirk_browser__);
-  return browseAvailable ? [...BASE_TABS, BROWSE_TAB] : BASE_TABS;
+      (globalThis as { __smirk_browser__?: unknown }).__smirk_browser__,
+  );
 }
 
 export function BottomNav({ orientation = 'horizontal', badges }: BottomNavProps) {
   const { tab: activeTab, switchTab, navigate, route } = useRoute();
 
   const isVertical = orientation === 'vertical';
-  const TABS = activeTabsForRuntime();
+  const TABS: TabConfig[] = isBrowseAvailable() ? [...BASE_TABS, BROWSE_TAB] : BASE_TABS;
 
   return (
     <nav

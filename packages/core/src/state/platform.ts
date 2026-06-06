@@ -307,9 +307,9 @@ export function autoDetectEphemeralStorage(): PlatformStorage {
  *  - **Extension** wraps `chrome.alarms`. The SW receives the alarm
  *    and routes to whichever handler the popup registered.
  *  - **Desktop** would wrap a Tauri-side scheduler that survives
- *    window close. NOT YET IMPLEMENTED in v0.3.0 — desktop currently
- *    uses a popup-level `setTimeout` that dies with the window; see
- *    `packages/desktop/src/chrome-shim.ts` limitations.
+ *    window close. Not implemented in v0.3.0 by design — the desktop
+ *    surface launches with a popup-level `setTimeout` that dies with
+ *    the window. See `packages/desktop/README.md` "Known limitations".
  *  - **Mobile** will wrap an iOS/Android background-task scheduler
  *    exposed through a Capacitor plugin.
  *
@@ -344,8 +344,9 @@ export interface WalletTimers {
  * OS-level notification surface — the bell the user sees when a tip
  * arrives or a confirmation lands. Implementations:
  *  - **Extension** wraps `chrome.notifications`.
- *  - **Desktop** would wrap Tauri's `notification` plugin. NOT YET
- *    IMPLEMENTED in v0.3.0 — desktop tip-arrival is silent.
+ *  - **Desktop** would wrap Tauri's `notification` plugin. Not
+ *    implemented in v0.3.0 by design — desktop tip-arrival is silent.
+ *    See `packages/desktop/README.md` "Known limitations".
  *  - **Mobile** will wrap iOS / Android native notifications via
  *    Capacitor's `@capacitor/local-notifications`.
  *

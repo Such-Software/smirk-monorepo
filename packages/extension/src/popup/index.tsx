@@ -836,6 +836,14 @@ async function writeBalanceSnapshot(
   }
 }
 
+// Read the embedded-browser controller the desktop shell installed on
+// boot. `undefined` on extension builds — the BottomNav and routing
+// branch on this. The narrow inline cast is the only place in the
+// extension that touches the global; downstream code uses
+// `browserController` instead.
+const browserController: BrowserControllerGlobal | undefined =
+  (globalThis as { __smirk_browser__?: BrowserControllerGlobal }).__smirk_browser__;
+
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
@@ -1504,18 +1512,7 @@ function App() {
           // `globalThis.__smirk_browser__` at boot and the
           // BottomNav renders the tab only when the controller is
           // present. Extension users never see it.
-          ...((globalThis as { __smirk_browser__?: BrowserControllerGlobal }).__smirk_browser__
-            ? {
-                browse: (
-                  <BrowseTab
-                    controller={
-                      (globalThis as { __smirk_browser__?: BrowserControllerGlobal })
-                        .__smirk_browser__!
-                    }
-                  />
-                ),
-              }
-            : {}),
+          ...(browserController ? { browse: <BrowseTab controller={browserController} /> } : {}),
         }}
       />
     </StateProvider>

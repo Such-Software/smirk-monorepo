@@ -16,7 +16,7 @@ extension-API surfaces the popup uses:
 | `chrome.storage.session`   | In-memory `Map` (cleared on window close)   |
 | `chrome.storage.onChanged` | Custom EventTarget around the two backends  |
 | `chrome.runtime.getURL`    | Identity transform — Tauri serves from `/`  |
-| `chrome.windows.create`    | No-op stub — single-window app              |
+| `chrome.windows.create`    | No-op — extension "pop out" only; not used by browser tabs |
 
 ## Known limitations (v0.3.0)
 
@@ -90,6 +90,7 @@ release backend lives at `releases.smirk.cash/desktop/...`.
   clipboard only.
 - No system tray.
 - No autostart-on-login option.
-- Multi-tab UI polish for the in-app browser. The Rust plugin
-  supports multiple tabs today (each is its own `WebviewWindow`);
-  v0.4 lights up the tab strip + bookmarks + history surface.
+- In-app browser polish. The Rust plugin and the `BrowserShell` UI
+  already support multiple tabs and per-tab `window.smirk`
+  injection — what defers to v0.4 is the visual tab-strip surface,
+  bookmarks persistence, and history-backed URL-bar autocomplete.

@@ -36,11 +36,10 @@
  * either Rust or TS should live in Rust where it has direct access to
  * the webview APIs; TS just round-trips.
  *
- * STATUS: scaffold only. The Rust plugin currently stubs every
- * command — calling `controller.navigate` etc. will succeed but
- * won't actually drive a webview. Wiring the Rust commands to real
- * webview management is the next milestone (see `browser_plugin.rs`
- * file header for the implementation checklist).
+ * Status: fully wired as of v0.3.0. Each tab is a borderless
+ * `WebviewWindow` on the Rust side; this controller's `invoke` calls
+ * drive the actual webview lifecycle. See `browser_plugin.rs` for
+ * the architecture write-up.
  */
 
 import { invoke } from '@tauri-apps/api/core';

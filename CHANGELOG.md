@@ -13,9 +13,10 @@ the private `smirk-backend` repo and aren't echoed here.
 
 ## [Unreleased]
 
-Pre-release polish for v0.3.0. Reproducible-build dry run, Tauri
-desktop shell, and store submission artefacts still pending. See
-`docs/V0_3_PLAN.md` rev 9 (internal) for the running ship plan.
+Pre-release polish for v0.3.0. Store submission upload is the only
+remaining gate; reproducible-build, Tauri desktop shell, and embedded
+dapp browser all shipped. See `docs/V0_3_PLAN.md` rev 9 (internal)
+for the running ship plan.
 
 ## [0.3.0] — 2026-06-04
 
@@ -30,6 +31,19 @@ their 12-word seed.
 
 ### Added
 
+- **Desktop wallet with embedded dapp browser** — Tauri 2.x build
+  for macOS, Windows, and Linux that runs the same Preact wallet
+  UI as the extension via a `chrome.*` shim. New "Browse" tab opens
+  an in-app browser with per-tab `window.smirk` injection so dapps
+  that integrate with Smirk work without leaving the wallet. Each
+  browser tab is its own borderless `WebviewWindow` positioned over
+  the wallet UI's frame slot and locked to wallet movement via a
+  window-event hook. Capability scope on embedded webviews is
+  intentionally narrow — `event:emit`/`listen`/`unlisten` only, so
+  a malicious page can't reach plugin-store, plugin-shell, or any
+  other Tauri surface. See `docs/EMBEDDED_BROWSER.md` for the
+  architecture write-up including the `add_child` → `WebviewWindow`
+  pivot motivated by a Linux/WebKitGTK layout quirk.
 - **Trocador swap surface** — in-wallet crypto swaps via Trocador's
   CEX aggregator. Non-custodial: the wallet talks directly to
   `api.trocador.app` with an affiliate key bundled in the build, so

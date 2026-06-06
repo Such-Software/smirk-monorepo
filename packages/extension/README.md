@@ -86,8 +86,11 @@ Load the unpacked extension from `packages/extension/dist/`.
   the unlocked wallet, performs the operation, writes the result
   back via `chrome.storage.session` for the SW to relay.
 - **Cross-platform reuse.** `@smirk/dapp-api` is transport-agnostic:
-  the same `WalletHandler` + `ApprovalHandler` interfaces already
-  drive the v0.3.0 Tauri desktop build and will drive the v0.4
-  Capacitor mobile build. Only the message-transport adapter is
-  extension-specific (chrome.runtime.sendMessage ↔ __TAURI__.event ↔
-  Capacitor.WebView).
+  the same `WalletHandler` + `ApprovalHandler` interfaces drive the
+  extension AND the v0.3.0 Tauri desktop embedded browser (each
+  embedded webview gets the same `window.smirk` injection script,
+  with responses routed back through Tauri events). The Capacitor
+  mobile build will reuse the same interfaces in v0.4 — only the
+  message-transport adapter is platform-specific
+  (`chrome.runtime.sendMessage` ↔ `__TAURI__.event` ↔
+  `Capacitor.WebView`).

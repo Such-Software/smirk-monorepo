@@ -283,8 +283,11 @@ impl BrowserPluginInner {
 // ----------------------------------------------------------------------
 
 /// Emit the current snapshot to the main wallet webview. Best-effort
-/// — a failed emit (window closed mid-update) logs but doesn't
-/// propagate so the command path stays simple.
+/// only: a failed emit (typically because the main window is closing
+/// mid-update) logs and returns. We don't propagate the error
+/// because the command path that triggered the snapshot is itself
+/// already at a "we changed state, here's an update" stage —
+/// callers can't meaningfully act on the emit failure.
 fn push_snapshot<R: Runtime>(app: &AppHandle<R>, state: &BrowserPluginInner) {
     if let Some(snap) = state.snapshot() {
         if let Err(e) = app.emit_to(MAIN_WINDOW_LABEL, EVT_SNAPSHOT, snap) {
@@ -543,7 +546,10 @@ pub async fn smirk_browser_switch_tab<R: Runtime>(
     if let Some(w) = app.get_webview_window(&webview_label_for(&id)) {
         let _ = w.show();
         let _ = w.set_position(LogicalPosition::new(rect.x, rect.y));
-        let _ = w.set_size(LogicalSize::new(rect.width.max(1.0), rect.height.max(1.0)));
+        let _ = w.set_size(LogicalSize::new(
+            rect.width.max(MIN_SIZE),
+            rect.height.max(MIN_SIZE),
+        ));
     }
 
     let inner = state.inner.lock().map_err(|e| e.to_string())?;
@@ -830,8 +836,14 @@ pub fn manage_state<R: Runtime>(_app: &AppHandle<R>) -> BrowserPluginState {
 /// webview-per-window after the Linux/WebKitGTK issue).
 pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
     let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        // This should never fire — Tauri creates the main window
+        // before `setup` is invoked. If it ever does, embedded
+        // browser tabs will still work but won't reposition when
+        // the wallet moves. Caller (main.rs) is expected to call
+        // exactly once at startup.
         eprintln!(
-            "[browser_plugin] install_window_follow: main window '{}' not found",
+            "[browser_plugin] install_window_follow: main window '{}' missing at setup; \
+             embedded browser tabs will not follow window moves",
             MAIN_WINDOW_LABEL,
         );
         return;
