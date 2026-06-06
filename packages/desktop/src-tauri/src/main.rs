@@ -27,6 +27,13 @@ fn main() {
         // invoke_handler below. See browser_plugin.rs file header for
         // architecture + implementation checklist.
         .manage(browser_plugin::BrowserPluginState::default())
+        .setup(|app| {
+            // Wire main-window Move + Resize + Focus events to
+            // reposition the active embedded-browser tab's child
+            // window so it always tracks the wallet's frame slot.
+            browser_plugin::install_window_follow(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             browser_plugin::smirk_browser_open,
             browser_plugin::smirk_browser_close,

@@ -20,10 +20,6 @@ extension-API surfaces the popup uses:
 
 ## Known limitations (v0.3.0)
 
-- **Dapp `window.smirk` injection on browsed sites is not available.**
-  Desktop ships wallet-only for v0.3.0. The in-app browser surface
-  (`browser_plugin.rs` + `TauriBrowserController`) is scaffolded; the
-  full `WebviewWindow` wiring + dapp integration is tracked for v0.4.
 - **Background auto-lock is degraded.** The extension uses
   `chrome.alarms` to fire auto-lock even when the popup is closed.
   Tauri has no equivalent yet, and `chrome-shim.ts` does not polyfill
@@ -94,6 +90,6 @@ release backend lives at `releases.smirk.cash/desktop/...`.
   clipboard only.
 - No system tray.
 - No autostart-on-login option.
-- In-app dapp browser — see the chrome-shim limitations section
-  above; full WebviewWindow wiring lands with the v0.4 embedded
-  browser ship.
+- Multi-tab UI polish for the in-app browser. The Rust plugin
+  supports multiple tabs today (each is its own `WebviewWindow`);
+  v0.4 lights up the tab strip + bookmarks + history surface.

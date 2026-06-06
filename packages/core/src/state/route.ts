@@ -27,13 +27,25 @@
 
 import type { SessionStateStore, Route } from './session-state';
 
-/** Top-level tab parsed from a route id. */
-export type Tab = 'home' | 'swap' | 'inbox' | 'settings';
+/**
+ * Top-level wallet tab. `browse` is desktop-only — the BottomNav only
+ * renders it when an embedded-browser controller is wired (the
+ * desktop shell sets `globalThis.__smirk_browser__` at boot). The
+ * extension popup never surfaces `browse` because the host browser
+ * is the browser.
+ */
+export type Tab = 'home' | 'swap' | 'inbox' | 'settings' | 'browse';
 
 /** Get the tab segment of a route id. */
 export function tabOf(route: Route): Tab {
   const first = route.current.split('/')[0];
-  if (first === 'home' || first === 'swap' || first === 'inbox' || first === 'settings') {
+  if (
+    first === 'home' ||
+    first === 'swap' ||
+    first === 'inbox' ||
+    first === 'settings' ||
+    first === 'browse'
+  ) {
     return first;
   }
   // Wizards + unknown routes default to home as the conceptual parent.

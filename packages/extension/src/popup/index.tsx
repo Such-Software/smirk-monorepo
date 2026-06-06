@@ -68,6 +68,7 @@ import {
 } from '@smirk/core';
 import {
   AppShell,
+  BrowserShell,
   SentTipsScreen,
   type SentTipRow,
   ApprovalScreen,
@@ -490,6 +491,57 @@ const walletKeystore = new WalletKeystore(new ChromeLocalStorage());
  * the seed never leaves popup-process memory.
  */
 const sessionStorage = new ChromeSessionStorage();
+
+// ============================================================================
+// Browse tab — desktop-only, mounted via globalThis.__smirk_browser__
+// ============================================================================
+
+/**
+ * Shape of the embedded-browser controller the desktop shell exposes
+ * on the global. Structurally compatible with `DappBrowserController`
+ * from `@smirk/dapp-browser`, but typed locally to avoid the
+ * extension package having to depend on `@smirk/dapp-browser`.
+ */
+type BrowserControllerGlobal = Parameters<
+  typeof import('@smirk/ui').BrowserShell
+>[0]['controller'];
+
+function BrowseTab({ controller }: { controller: BrowserControllerGlobal }) {
+  const [opened, setOpened] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void controller.open().then(() => {
+      if (cancelled) return;
+      setOpened(true);
+      // First-tab default. If the controller already has tabs (e.g.
+      // re-mounted from a previous Browse-tab visit), this no-ops on
+      // the controller side.
+      void controller
+        .listTabs()
+        .then((tabs) => {
+          if (cancelled) return;
+          if (tabs.length === 0) {
+            void controller.newTab('https://smirk.cash');
+          }
+        })
+        .catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+      // Leave the controller open across tab switches so navigation
+      // state persists when the user toggles back to Home and back
+      // to Browse.
+    };
+  }, [controller]);
+  if (!opened) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center', opacity: 0.6 }}>
+        Loading browser…
+      </div>
+    );
+  }
+  return <BrowserShell controller={controller} />;
+}
 
 function openPopOut() {
   const popoutUrl = chrome.runtime.getURL('popup.html');
@@ -1448,6 +1500,22 @@ function App() {
               }}
             />
           ),
+          // `browse` is desktop-only — the desktop shell installs
+          // `globalThis.__smirk_browser__` at boot and the
+          // BottomNav renders the tab only when the controller is
+          // present. Extension users never see it.
+          ...((globalThis as { __smirk_browser__?: BrowserControllerGlobal }).__smirk_browser__
+            ? {
+                browse: (
+                  <BrowseTab
+                    controller={
+                      (globalThis as { __smirk_browser__?: BrowserControllerGlobal })
+                        .__smirk_browser__!
+                    }
+                  />
+                ),
+              }
+            : {}),
         }}
       />
     </StateProvider>

@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Smirk Wallet",
-        "width": 420,
-        "height": 700,
+        "width": 1024,
+        "height": 720,
         "minWidth": 380,
         "minHeight": 600,
         "resizable": true,

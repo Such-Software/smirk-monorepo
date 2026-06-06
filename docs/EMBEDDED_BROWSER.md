@@ -225,24 +225,28 @@ rewrite the UI.
 
 ## What ships when
 
-| Layer                                    | v0.3.0 desktop  | v0.4 mobile | v0.4+ polish |
-| ---------------------------------------- | --------------- | ----------- | ------------ |
-| `@smirk/dapp-api` (already shipped)      | unchanged       | unchanged   | —            |
-| `@smirk/dapp-browser` types + interface  | ship            | ship        | —            |
-| `BrowserShell` + sub-components          | ship            | ship        | —            |
-| `TauriBrowserController` (single-tab)    | scaffold (v0.4 wire) | —      | —            |
-| Capacitor iOS plugin + controller        | —               | ship        | —            |
-| Capacitor Android plugin + controller    | —               | ship        | —            |
-| Multi-tab UI polish                      | —               | —           | v0.4+        |
-| Bookmarks persistence                    | —               | —           | v0.4+        |
-| History persistence + autocomplete       | —               | —           | v0.4+        |
+| Layer                                    | v0.3.0 desktop | v0.4 mobile | v0.4+ polish |
+| ---------------------------------------- | -------------- | ----------- | ------------ |
+| `@smirk/dapp-api` (already shipped)      | unchanged      | unchanged   | —            |
+| `@smirk/dapp-browser` types + interface  | ship           | ship        | —            |
+| `BrowserShell` + sub-components          | ship           | ship        | —            |
+| `TauriBrowserController` + Rust plugin   | ship           | —           | —            |
+| Capacitor iOS plugin + controller        | —              | ship        | —            |
+| Capacitor Android plugin + controller    | —              | ship        | —            |
+| Multi-tab UI polish                      | —              | —           | v0.4+        |
+| Bookmarks persistence                    | —              | —           | v0.4+        |
+| History persistence + autocomplete       | —              | —           | v0.4+        |
 
-**Note on v0.3.0 desktop.** The TypeScript `TauriBrowserController`,
-`@smirk/dapp-browser` types, and `BrowserShell` UI components all
-ship in v0.3.0. The Rust `browser_plugin.rs` commands that drive
-real `WebviewWindow` instances are scaffolded but stubbed — the
-v0.3.0 desktop wallet is wallet-only. The Rust wiring is the
-single piece tracked for v0.4 alongside the Capacitor mobile work.
+**v0.3.0 desktop browser architecture.** Each browser tab is a
+borderless Tauri `WebviewWindow` positioned over the wallet's
+`<BrowserShell>` frame slot, with `install_window_follow()` in the
+plugin keeping the active tab glued to the wallet on Move/Resize/
+Focus events. We tried the multi-webview-per-window API
+(`Window::add_child`, gated behind Tauri's `unstable` feature)
+first but wry packs `add_child`'d webviews into the parent's
+`GtkBox` on Linux/WebKitGTK, silently ignoring our positioning.
+The stable per-tab `WebviewWindow` approach gives pixel-perfect
+positioning on every platform from one code path.
 
 ## Conventions
 

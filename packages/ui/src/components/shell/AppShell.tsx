@@ -32,7 +32,13 @@ import { BottomNav } from './BottomNav';
 
 export interface AppShellProps {
   /** Per-tab content. Each tab's render is the consumer's responsibility. */
-  routes: Record<Tab, ComponentChildren>;
+  /**
+   * Route renderers per top-level tab. `Partial` because not every
+   * shell wires every tab — the desktop adds `browse`; the extension
+   * popup doesn't. The shell falls back to `null` for missing
+   * renderers, which trivially renders nothing.
+   */
+  routes: Partial<Record<Tab, ComponentChildren>>;
   /**
    * Optional callback for the pop-out button in the header. If
    * omitted (or we detect we're already in pop-out), the button is
@@ -104,7 +110,7 @@ export function AppShell({ routes, onPopOut, brand, headerActions, tabBadges, cl
           minWidth: 0,
         }}
       >
-        {routes[tab]}
+        {routes[tab] ?? null}
       </main>
 
       {!isPopout && <BottomNav {...(tabBadges ? { badges: tabBadges } : {})} />}

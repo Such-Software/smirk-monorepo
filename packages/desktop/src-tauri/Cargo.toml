@@ -22,6 +22,13 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Tauri 2.x — stable feature set. We tried the `unstable` multi-
+# webview-per-window API (`Window::add_child`) for the embedded
+# browser; on Linux/WebKitGTK wry packs add_child webviews into the
+# main window's `GtkBox` instead of a `GtkFixed`, so positioning was
+# silently dropped. Switched to per-tab `WebviewWindow` instances
+# positioned over the main wallet window — works across platforms
+# with stable API only.
 tauri = { version = "2", features = [] }
 tauri-plugin-store = "2"
 tauri-plugin-shell = "2"
@@ -29,6 +36,7 @@ tauri-plugin-updater = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 
 # Profile tuning. Tauri's docs recommend lto=true and codegen-units=1
 # for the smallest binary at the cost of build time. We trade a few

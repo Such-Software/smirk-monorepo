@@ -24,17 +24,36 @@ interface TabConfig {
   icon: string;
 }
 
-const TABS: TabConfig[] = [
+const BASE_TABS: TabConfig[] = [
   { id: 'home', label: 'Home', icon: '⌂' },
   { id: 'swap', label: 'Swap', icon: '⇄' },
   { id: 'inbox', label: 'Inbox', icon: '✉' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
 
+const BROWSE_TAB: TabConfig = { id: 'browse', label: 'Browse', icon: '◯' };
+
+/**
+ * Browse tab renders only when an embedded-browser controller is
+ * wired into the runtime via `globalThis.__smirk_browser__`. The
+ * desktop shell installs the global at boot; the extension popup
+ * never does, so extension users see the original 4-tab nav.
+ *
+ * The order places Browse last (right side / bottom of the vertical
+ * sidebar) so it doesn't shuffle existing muscle memory.
+ */
+function activeTabsForRuntime(): TabConfig[] {
+  const browseAvailable =
+    typeof globalThis !== 'undefined' &&
+    Boolean((globalThis as { __smirk_browser__?: unknown }).__smirk_browser__);
+  return browseAvailable ? [...BASE_TABS, BROWSE_TAB] : BASE_TABS;
+}
+
 export function BottomNav({ orientation = 'horizontal', badges }: BottomNavProps) {
   const { tab: activeTab, switchTab, navigate, route } = useRoute();
 
   const isVertical = orientation === 'vertical';
+  const TABS = activeTabsForRuntime();
 
   return (
     <nav

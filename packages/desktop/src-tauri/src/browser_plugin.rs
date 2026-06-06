@@ -2,8 +2,10 @@
 //!
 //! Bridges the TypeScript `TauriBrowserController`
 //! (`packages/desktop/src/dapp/tauri-browser-controller.ts`) to
-//! native `WebviewWindow` instances. Each tab corresponds to one
-//! webview window; the plugin maintains tab state, emits navigation
+//! native `WebviewWindow` instances. Each browser tab corresponds to
+//! one borderless `WebviewWindow` positioned over the wallet's
+//! frame slot (the `<div class="smirk-browser-shell__frame">` inside
+//! `BrowserShell`). The plugin maintains tab state, emits navigation
 //! snapshots on change, and forwards `window.smirk` wire messages
 //! from embedded pages into the wallet webview.
 //!
@@ -22,11 +24,13 @@
 //!                                                        │ owns
 //!                                                        ▼
 //!                                              ┌───────────────────┐
-//!                                              │  WebviewWindow A  │
-//!                                              │  (tab id "a-1")   │
-//!                                              ├───────────────────┤
-//!                                              │  WebviewWindow B  │
-//!                                              │  (tab id "a-2")   │
+//!                                              │  WebviewWindow A  │ ← tab "tab-1"
+//!                                              │  borderless,      │   positioned over
+//!                                              │  follows main     │   the wallet
+//!                                              ├───────────────────┤   frame slot
+//!                                              │  WebviewWindow B  │ ← tab "tab-2"
+//!                                              │  (hidden when     │   (hidden until
+//!                                              │  not active)      │   user switches)
 //!                                              └─────────┬─────────┘
 //!                                                        │ emits
 //!                                                        ▼
@@ -34,35 +38,59 @@
 //!                          ◄── emit smirk:browser:page-request
 //! ```
 //!
-//! ## Implementation status
+//! ## Why `WebviewWindow` per tab, not multi-webview-per-window
 //!
-//! This file currently STUBS every command. Calling
-//! `controller.navigate("https://example.com")` from TS will return
-//! Ok(()) but no webview is created and no navigation happens. The
-//! TypeScript scaffold is shipped first so the UI components and the
-//! wiring layer can be tested against `MockController`.
-//!
-//! ### Implementation checklist (next milestone)
-//!
-//! 1. Replace `STUBBED` with `WebviewWindowBuilder` calls inside each
-//!    command. Use `parent` to anchor the embedded webview to the
-//!    main window. Position via `set_position` from `set_frame_rect`.
-//! 2. Inject `init_scripts` via `WebviewWindowBuilder::initialization_script`
-//!    before the navigation starts. Tauri runs them at document-start.
-//! 3. Wire `on_navigation` / `on_page_load` from the webview to update
-//!    `BrowserPluginState::tabs[id].state` and emit the snapshot.
-//! 4. Implement the `smirk:dapp:rpc` listener inside the embedded
-//!    webview (via injection script) and a Rust-side handler that
-//!    forwards into `smirk:browser:page-request`. Round-trip the
-//!    response via `smirk_browser_respond_page_request`.
-//! 5. Handle webview destruction on `close_tab` and active-tab
-//!    bookkeeping per the controller interface spec.
+//! Tauri 2.x has an `unstable`-gated multi-webview-per-window API
+//! (`Window::add_child` + `WebviewBuilder`). We tried it first; on
+//! Linux/WebKitGTK wry packs `add_child`'d webviews into the
+//! window's `GtkBox` container, so `pack_start` layout-manages them
+//! and `set_position` is silently ignored. Switching to one
+//! `WebviewWindow` per tab uses stable Tauri APIs only and gives us
+//! pixel-perfect positioning by computing
+//! `main_window.inner_position() + frame_rect` and pushing through
+//! `set_position`. `install_window_follow()` keeps active tabs
+//! glued to the main wallet's frame slot through Move/Resize/Focus.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Runtime, State, Wry};
+use tauri::{
+    webview::{WebviewWindow, WebviewWindowBuilder},
+    AppHandle, Emitter, Listener, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl, Wry,
+};
+use url::Url;
+
+/// Width of a "0×0" tab — Tauri/wry on some platforms rejects truly
+/// zero-sized windows, so we floor at 1px. Visually still invisible.
+const MIN_SIZE: f64 = 1.0;
+
+/// Label for the main wallet window. Has to match the `label` field
+/// in `tauri.conf.json::app.windows[0]`. Centralised so every
+/// embedded webview attaches to the same parent.
+const MAIN_WINDOW_LABEL: &str = "main";
+
+/// Map an internal tab id (e.g. `tab-7`) to the webview label that
+/// hosts it. The prefix scopes the label namespace so we never
+/// collide with the main wallet window.
+fn webview_label_for(tab_id: &str) -> String {
+    format!("smirk-browser-{}", tab_id)
+}
+
+/// Snapshot event name — matches `EVT_SNAPSHOT` in
+/// `packages/desktop/src/dapp/tauri-browser-controller.ts`.
+const EVT_SNAPSHOT: &str = "smirk:browser:snapshot";
+
+/// Page-request event name — page-side `window.smirk.X()` calls
+/// surface here and the wallet UI handler answers via the
+/// `smirk_browser_respond_page_request` command. Matches
+/// `EVT_PAGE_REQUEST` on the TS side.
+const EVT_PAGE_REQUEST: &str = "smirk:browser:page-request";
+
+/// The `kind: 'tauri'` event the injected `window.smirk` IIFE emits
+/// from inside the embedded webview. Matches `TAURI_DAPP_RPC_EVENT`
+/// in `tauri-browser-controller.ts`.
+const PAGE_RPC_EVENT: &str = "smirk:dapp:rpc";
 
 // ======================================================================
 // Wire types (mirror the TS shapes in tauri-browser-controller.ts and
@@ -107,7 +135,7 @@ pub struct BrowserSnapshot {
     pub active_state: BrowserNavigationState,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserFrameRect {
     pub x: f64,
@@ -139,6 +167,12 @@ struct BrowserPluginInner {
     /// webview on switch_tab so a backgrounded tab returns to the
     /// previously-visible region.
     frame_rect: Option<BrowserFrameRect>,
+    /// Routing table for in-flight page requests. Key is the
+    /// `requestId` we mint when forwarding the page's RPC to the
+    /// wallet; value is the webview label that the response should
+    /// route back into.
+    pending_page_requests: HashMap<u64, String>,
+    next_request_id: u64,
 }
 
 // ----------------------------------------------------------------------
@@ -214,7 +248,128 @@ impl BrowserPluginInner {
             height: 0.0,
         });
     }
+
+    /// Snapshot the current state for emission to the wallet UI.
+    /// `None` if no active tab — the wallet UI drops snapshots
+    /// without an active tab.
+    fn snapshot(&self) -> Option<BrowserSnapshot> {
+        let active_tab = self.active_tab.as_ref()?.clone();
+        let active = self.tabs.get(&active_tab)?;
+        Some(BrowserSnapshot {
+            active_tab,
+            tabs: self.tabs.values().cloned().collect(),
+            active_state: active.state.clone(),
+        })
+    }
+
+    /// Mint a request id for a new in-flight page-RPC and record
+    /// the source webview label so the response can be routed back.
+    fn allocate_request_id(&mut self, source_webview_label: String) -> u64 {
+        self.next_request_id += 1;
+        let id = self.next_request_id;
+        self.pending_page_requests.insert(id, source_webview_label);
+        id
+    }
+
+    fn take_request_target(&mut self, id: u64) -> Option<String> {
+        self.pending_page_requests.remove(&id)
+    }
 }
+
+// ----------------------------------------------------------------------
+// Webview-side helpers — pure functions that interact with the live
+// Tauri webview graph. Kept separate from `BrowserPluginInner` so the
+// state-machine tests stay testable without a Tauri app.
+// ----------------------------------------------------------------------
+
+/// Emit the current snapshot to the main wallet webview. Best-effort
+/// — a failed emit (window closed mid-update) logs but doesn't
+/// propagate so the command path stays simple.
+fn push_snapshot<R: Runtime>(app: &AppHandle<R>, state: &BrowserPluginInner) {
+    if let Some(snap) = state.snapshot() {
+        if let Err(e) = app.emit_to(MAIN_WINDOW_LABEL, EVT_SNAPSHOT, snap) {
+            eprintln!("[browser_plugin] snapshot emit failed: {}", e);
+        }
+    }
+}
+
+/// Apply a frame rect (in wallet-content-area logical CSS px) to the
+/// given browser-tab `WebviewWindow`. Resolves the wallet's
+/// `inner_position()` (screen coords of the content area top-left),
+/// adds the rect offsets, and `set_position` the embedded window.
+///
+/// Hides the window if the rect collapses to zero (which is what
+/// the wallet UI signals when the user switches off the Browse tab).
+fn apply_rect<R: Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+    rect: &BrowserFrameRect,
+) -> Result<(), String> {
+    let embedded = app
+        .get_webview_window(label)
+        .ok_or_else(|| format!("webview window not found: {}", label))?;
+
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        let _ = embedded.hide();
+        return Ok(());
+    }
+
+    let main = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| format!("main window '{}' not found", MAIN_WINDOW_LABEL))?;
+    let main_inner = main
+        .inner_position()
+        .map_err(|e| format!("inner_position: {}", e))?;
+    let scale = main
+        .scale_factor()
+        .map_err(|e| format!("scale_factor: {}", e))?;
+
+    // `inner_position()` is in PHYSICAL pixels (already scaled by the
+    // OS); `rect` is in LOGICAL CSS px. Convert physical → logical
+    // for the math, then hand the LogicalPosition to Tauri which
+    // scales back when calling the OS.
+    let main_inner_logical_x = main_inner.x as f64 / scale;
+    let main_inner_logical_y = main_inner.y as f64 / scale;
+
+    let target_x = main_inner_logical_x + rect.x;
+    let target_y = main_inner_logical_y + rect.y;
+
+    embedded
+        .set_position(LogicalPosition::new(target_x, target_y))
+        .map_err(|e| e.to_string())?;
+    embedded
+        .set_size(LogicalSize::new(
+            rect.width.max(MIN_SIZE),
+            rect.height.max(MIN_SIZE),
+        ))
+        .map_err(|e| e.to_string())?;
+    let _ = embedded.show();
+    Ok(())
+}
+
+/// Parse a `String` into a `Url`. Treats scheme-less inputs as
+/// `https://` per the browser-URL-bar convention documented on
+/// `DappBrowserController::navigate`. `about:blank` is preserved.
+fn parse_url(input: &str) -> Result<Url, String> {
+    if input == "about:blank" {
+        return Url::parse("about:blank").map_err(|e| e.to_string());
+    }
+    if input.contains("://") {
+        return Url::parse(input).map_err(|e| e.to_string());
+    }
+    Url::parse(&format!("https://{}", input)).map_err(|e| e.to_string())
+}
+
+/// Default placeholder rect when a tab is created before the wallet
+/// UI has measured the frame slot. Anchored slightly inside the
+/// window so any rendering issues are visible rather than hidden
+/// at (0,0,0,0).
+const DEFAULT_RECT: BrowserFrameRect = BrowserFrameRect {
+    x: 0.0,
+    y: 0.0,
+    width: 0.0,
+    height: 0.0,
+};
 
 // ======================================================================
 // Commands
@@ -222,27 +377,37 @@ impl BrowserPluginInner {
 
 #[tauri::command]
 pub async fn smirk_browser_open<R: Runtime>(
-    _app: AppHandle<R>,
-    state: State<'_, BrowserPluginState>,
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     inner.open();
-    // TODO(@desktop): allocate the initial WebviewWindow for tab 1
-    // and emit the first snapshot. STUBBED — see file header.
+    push_snapshot(&app, &inner);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_close(state: State<'_, BrowserPluginState>) -> Result<(), String> {
+pub async fn smirk_browser_close<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
+) -> Result<(), String> {
+    let labels: Vec<String> = {
+        let inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.tabs.keys().map(|t| webview_label_for(t)).collect()
+    };
+    for label in labels {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.close();
+        }
+    }
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     inner.close();
-    // TODO(@desktop): destroy all WebviewWindow instances. STUBBED — see file header.
     Ok(())
 }
 
 #[tauri::command]
 pub async fn smirk_browser_set_init_scripts(
-    state: State<'_, BrowserPluginState>,
+    state: tauri::State<'_, BrowserPluginState>,
     scripts: Vec<String>,
 ) -> Result<(), String> {
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
@@ -251,108 +416,357 @@ pub async fn smirk_browser_set_init_scripts(
 }
 
 #[tauri::command]
-pub async fn smirk_browser_new_tab(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_new_tab<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     url: Option<String>,
 ) -> Result<String, String> {
-    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    let id = inner.new_tab(url);
-    // TODO(@desktop): create real WebviewWindow with init_scripts.
-    Ok(id)
+    let (tab_id, target_url, init_scripts) = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        let tab_id = inner.new_tab(url.clone());
+        let target_url = url.unwrap_or_else(|| "about:blank".to_string());
+        let scripts = inner.init_scripts.clone();
+        (tab_id, target_url, scripts)
+    };
+
+    let label = webview_label_for(&tab_id);
+    let parsed = parse_url(&target_url)?;
+    let mut builder = WebviewWindowBuilder::<R, _>::new(
+        &app,
+        &label,
+        WebviewUrl::External(parsed),
+    )
+    // Borderless + non-resizable + not on taskbar — the embedded
+    // browser tab is a child window we composite over the wallet,
+    // not an independently movable OS window.
+    .decorations(false)
+    .resizable(false)
+    .skip_taskbar(true)
+    // Don't render visible until apply_rect positions us correctly.
+    .visible(false)
+    // Don't steal focus from the wallet on creation.
+    .focused(false)
+    // Initial size — apply_rect will override on the wallet's
+    // first setFrameRect call.
+    .inner_size(MIN_SIZE, MIN_SIZE);
+
+    for script in &init_scripts {
+        builder = builder.initialization_script(script.clone());
+    }
+
+    let app_for_load = app.clone();
+    let tab_id_for_load = tab_id.clone();
+    builder = builder.on_page_load(move |_webview, payload| {
+        let is_finished = matches!(payload.event(), tauri::webview::PageLoadEvent::Finished);
+        let url_string = payload.url().to_string();
+        let state: tauri::State<BrowserPluginState> = app_for_load.state();
+        let mut inner = match state.inner.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if let Some(tab) = inner.tabs.get_mut(&tab_id_for_load) {
+            tab.state.url = url_string.clone();
+            tab.state.origin = parse_url(&url_string)
+                .ok()
+                .map(|u| u.origin().ascii_serialization())
+                .unwrap_or_default();
+            tab.state.security_state = classify_security_state(&url_string);
+            tab.state.is_loading = !is_finished;
+        }
+        push_snapshot(&app_for_load, &inner);
+    });
+
+    let webview = builder.build().map_err(|e| format!("build: {}", e))?;
+
+    // Apply the cached frame rect if the wallet has already
+    // measured. If not, the wallet's first `setFrameRect` call
+    // will reposition + show.
+    let cached_rect = {
+        let inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.frame_rect
+    };
+    if let Some(rect) = cached_rect {
+        let _ = apply_rect(&app, &label, &rect);
+    }
+
+    // Per-webview RPC listener — page-side `window.smirk.X()` calls
+    // emit `smirk:dapp:rpc` from inside this webview; we forward
+    // them to the wallet UI as `smirk:browser:page-request` and
+    // track the requestId so the response routes back.
+    attach_per_webview_rpc(&app, &webview, tab_id.clone());
+
+    {
+        let inner = state.inner.lock().map_err(|e| e.to_string())?;
+        push_snapshot(&app, &inner);
+    }
+
+    Ok(tab_id)
 }
 
 #[tauri::command]
-pub async fn smirk_browser_close_tab(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_close_tab<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     id: String,
 ) -> Result<(), String> {
+    let label = webview_label_for(&id);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.close();
+    }
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     inner.close_tab(&id);
-    // TODO(@desktop): destroy the WebviewWindow for this tab.
+    push_snapshot(&app, &inner);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_switch_tab(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_switch_tab<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     id: String,
 ) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.switch_tab(&id)?;
-    // TODO(@desktop): raise the corresponding WebviewWindow + apply
-    // the cached frame_rect.
+    let (prev_active, rect) = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        let prev = inner.active_tab.clone();
+        inner.switch_tab(&id)?;
+        let rect = inner.frame_rect.unwrap_or(DEFAULT_RECT);
+        (prev, rect)
+    };
+
+    if let Some(prev_id) = prev_active {
+        if prev_id != id {
+            if let Some(w) = app.get_webview_window(&webview_label_for(&prev_id)) {
+                let _ = w.hide();
+            }
+        }
+    }
+    if let Some(w) = app.get_webview_window(&webview_label_for(&id)) {
+        let _ = w.show();
+        let _ = w.set_position(LogicalPosition::new(rect.x, rect.y));
+        let _ = w.set_size(LogicalSize::new(rect.width.max(1.0), rect.height.max(1.0)));
+    }
+
+    let inner = state.inner.lock().map_err(|e| e.to_string())?;
+    push_snapshot(&app, &inner);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_navigate(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_navigate<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     url: String,
     tab: Option<String>,
 ) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.navigate(url, tab)?;
-    // TODO(@desktop): WebviewWindow::eval(`window.location.href = "..."`)
-    // or the dedicated loader API once it lands in Tauri 2.x.
+    let resolved = parse_url(&url)?;
+    let target_tab = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.navigate(url.clone(), tab.clone())?;
+        tab.clone().or_else(|| inner.active_tab.clone())
+    }
+    .ok_or_else(|| "no active tab".to_string())?;
+
+    let label = webview_label_for(&target_tab);
+    let w = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("webview {} not found", label))?;
+    w.navigate(resolved).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_go_back(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_go_back<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     tab: Option<String>,
 ) -> Result<(), String> {
-    // STUBBED — see file header "Implementation checklist".
-    let _ = (state, tab);
+    let webview = resolve_webview(&app, &state, tab)?;
+    // Tauri 2.x's stable surface doesn't expose history navigation
+    // directly. `history.back()` evaluated inside the page is the
+    // portable equivalent.
+    webview.eval("history.back()").map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_go_forward(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_go_forward<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     tab: Option<String>,
 ) -> Result<(), String> {
-    // STUBBED — see file header "Implementation checklist".
-    let _ = (state, tab);
+    let webview = resolve_webview(&app, &state, tab)?;
+    webview
+        .eval("history.forward()")
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_reload(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_reload<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     tab: Option<String>,
 ) -> Result<(), String> {
-    // STUBBED — see file header "Implementation checklist".
-    let _ = (state, tab);
+    let webview = resolve_webview(&app, &state, tab)?;
+    webview.reload().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_set_frame_rect(
-    state: State<'_, BrowserPluginState>,
+pub async fn smirk_browser_set_frame_rect<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
     rect: BrowserFrameRect,
 ) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.set_frame_rect(rect);
-    // TODO(@desktop): WebviewWindow::set_position + set_size from rect.
+    let label = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.set_frame_rect(rect);
+        inner.active_tab.as_ref().map(|t| webview_label_for(t))
+    };
+    if let Some(label) = label {
+        apply_rect(&app, &label, &rect)?;
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn smirk_browser_hide_frame(state: State<'_, BrowserPluginState>) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    inner.hide_frame();
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn smirk_browser_respond_page_request(
-    _request_id: u64,
-    _response: serde_json::Value,
+pub async fn smirk_browser_hide_frame<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
 ) -> Result<(), String> {
-    // TODO(@desktop): forward the response payload back to the
-    // originating embedded webview via Tauri events.
+    let label = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.hide_frame();
+        inner.active_tab.as_ref().map(|t| webview_label_for(t))
+    };
+    if let Some(label) = label {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.hide();
+        }
+    }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn smirk_browser_respond_page_request<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, BrowserPluginState>,
+    request_id: u64,
+    response: serde_json::Value,
+) -> Result<(), String> {
+    let target_label = {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.take_request_target(request_id)
+    };
+    let label = target_label.ok_or_else(|| format!("unknown requestId: {}", request_id))?;
+    let event_name = format!("{}:response", PAGE_RPC_EVENT);
+    app.emit_to(&label, &event_name, response)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Command-side helpers (Tauri-aware — separate from the pure inner
+// methods on `BrowserPluginInner` so the state-machine tests stay
+// runtime-free).
+// ----------------------------------------------------------------------
+
+/// Look up the webview a navigation command should drive — the
+/// passed tab if any, otherwise the active tab. Returns an error
+/// if neither resolves to a live webview.
+fn resolve_webview<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &tauri::State<'_, BrowserPluginState>,
+    tab: Option<String>,
+) -> Result<WebviewWindow<R>, String> {
+    let label = {
+        let inner = state.inner.lock().map_err(|e| e.to_string())?;
+        let target = tab
+            .or_else(|| inner.active_tab.clone())
+            .ok_or_else(|| "no active tab".to_string())?;
+        webview_label_for(&target)
+    };
+    app.get_webview_window(&label)
+        .ok_or_else(|| format!("webview {} not found", label))
+}
+
+/// Classify the URL's security state. Mirrors the TS-side logic in
+/// `MockController::makeInitialState`. WHATWG opaque-origin schemes
+/// (`about:`, `data:`, `chrome:`) fall through to `Unknown`.
+fn classify_security_state(url: &str) -> SecurityState {
+    if url.starts_with("https://") {
+        SecurityState::Secure
+    } else if url.starts_with("http://") {
+        SecurityState::Insecure
+    } else {
+        SecurityState::Unknown
+    }
+}
+
+// ----------------------------------------------------------------------
+// Page-RPC bridge — receive the page's `window.smirk.X()` call and
+// forward to the wallet UI; route the response back.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardedPageRequest {
+    request_id: u64,
+    origin: String,
+    tab: String,
+    payload: serde_json::Value,
+}
+
+/// Attach a webview-scoped `smirk:dapp:rpc` listener to a newly-
+/// created embedded webview. Each page-RPC the listener sees gets
+/// a monotonically-increasing `requestId`; the wallet UI handles
+/// the request and calls `smirk_browser_respond_page_request(id,
+/// response)` which routes the response back to this webview's
+/// `smirk:dapp:rpc:response` channel.
+fn attach_per_webview_rpc<R: Runtime>(
+    app: &AppHandle<R>,
+    webview: &WebviewWindow<R>,
+    tab_id: String,
+) {
+    let label = webview.label().to_string();
+    let app = app.clone();
+    webview.listen(PAGE_RPC_EVENT, move |event| {
+        let payload: serde_json::Value = match serde_json::from_str(event.payload()) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[browser_plugin] page-RPC payload not JSON: {}", e);
+                return;
+            }
+        };
+
+        let origin = app
+            .get_webview_window(&label)
+            .and_then(|w| w.url().ok())
+            .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_default();
+
+        let request_id = {
+            let bound_state: tauri::State<BrowserPluginState> = app.state();
+            let mut inner = match bound_state.inner.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("[browser_plugin] state lock poisoned: {}", e);
+                    return;
+                }
+            };
+            inner.allocate_request_id(label.clone())
+        };
+
+        let forward = ForwardedPageRequest {
+            request_id,
+            origin,
+            tab: tab_id.clone(),
+            payload,
+        };
+        if let Err(e) = app.emit_to(MAIN_WINDOW_LABEL, EVT_PAGE_REQUEST, forward) {
+            eprintln!("[browser_plugin] forward page-RPC failed: {}", e);
+        }
+    });
 }
 
 // ======================================================================
@@ -403,6 +817,58 @@ fn now_ms() -> u64 {
 /// `Builder::invoke_handler(...)`. See `main.rs` for wiring.
 pub fn manage_state<R: Runtime>(_app: &AppHandle<R>) -> BrowserPluginState {
     BrowserPluginState::default()
+}
+
+/// Wire main-window Move + Resize + visibility events to reposition
+/// (or hide) all embedded browser-tab `WebviewWindow`s. Called once
+/// from `main.rs::setup` after the main window is built.
+///
+/// Without this, the embedded webview windows stay parked at their
+/// last screen position even when the user drags the main wallet
+/// elsewhere, since `WebviewWindow`s are independent OS windows on
+/// every platform (that's the whole reason we abandoned multi-
+/// webview-per-window after the Linux/WebKitGTK issue).
+pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        eprintln!(
+            "[browser_plugin] install_window_follow: main window '{}' not found",
+            MAIN_WINDOW_LABEL,
+        );
+        return;
+    };
+    let app = app.clone();
+    main.on_window_event(move |event| match event {
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+            reposition_active_tab(&app);
+        }
+        tauri::WindowEvent::Focused(focused) => {
+            // When the wallet regains focus, raise the active embedded
+            // tab so a previously-stacked-behind state doesn't leave
+            // it under another OS window.
+            if *focused {
+                reposition_active_tab(&app);
+            }
+        }
+        _ => {}
+    });
+}
+
+fn reposition_active_tab<R: Runtime>(app: &AppHandle<R>) {
+    let (active_label, rect) = {
+        let state: tauri::State<BrowserPluginState> = app.state();
+        let inner = match state.inner.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let Some(active) = inner.active_tab.as_ref() else {
+            return;
+        };
+        let Some(rect) = inner.frame_rect else {
+            return;
+        };
+        (webview_label_for(active), rect)
+    };
+    let _ = apply_rect(app, &active_label, &rect);
 }
 
 #[allow(dead_code)]

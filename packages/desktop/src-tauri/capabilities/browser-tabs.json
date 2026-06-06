@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser-tabs",
+  "description": "Permissions granted to embedded browser webviews (label prefix `smirk-browser-`). Scope is intentionally narrow: only what the `@smirk/dapp-api` injection script needs to forward `window.smirk.X()` calls to the wallet — `event:allow-emit` and `event:allow-listen`. NOTHING else is granted, so a malicious page can't reach plugin-store, plugin-shell, plugin-updater, or any other Tauri surface.",
+  "webviews": ["smirk-browser-*"],
+  "permissions": [
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

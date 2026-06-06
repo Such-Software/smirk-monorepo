@@ -20,11 +20,11 @@
  * `main.ts` for the hand-off.
  *
  * Limitations (v0.3.0):
- *  - The dapp adapter (background SW + content scripts) does NOT run
- *    in Tauri. `chrome.runtime.sendMessage` is not polyfilled here.
- *    Desktop is wallet-only for v0.3.0; the in-app browser path that
- *    re-lights dapp support is tracked for v0.4 (see
- *    `docs/EMBEDDED_BROWSER.md`).
+ *  - `chrome.runtime.sendMessage` (the extension's background-SW
+ *    bridge) is not polyfilled. The embedded browser handles dapp
+ *    integration on desktop via its own Tauri-side bridge (see
+ *    `browser_plugin.rs::attach_per_webview_rpc`), so the SW
+ *    surface isn't needed.
  *  - `chrome.alarms` is NOT polyfilled. Auto-lock currently works
  *    only while the wallet window stays open (the popup-level timer
  *    fires); background auto-lock does not exist on desktop. Mobile

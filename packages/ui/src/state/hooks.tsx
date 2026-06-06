@@ -144,6 +144,7 @@ export function useRoute(): UseRouteApi {
     swap: 'swap',
     inbox: 'inbox',
     settings: 'settings',
+    browse: 'browse',
   });
   useEffect(() => {
     lastByTab.current[tabOf(route)] = route.current;

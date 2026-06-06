@@ -21,7 +21,7 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `packages/dapp-browser/` | Working — `@smirk/dapp-browser` embedded-browser shell abstraction. Platform-agnostic `DappBrowserController` + `MockController`; UI consumers (`BrowserShell`, `BrowserUrlBar`, `BrowserTabStrip`) live in `@smirk/ui`. |
 | `packages/keymap/` | Working — `@smirk/keymap` cross-platform keyboard-shortcut registry (per-platform bindings, action enum, runtime dispatcher). |
 | `packages/swap/` | Working — `@smirk/swap` swap orchestration. `ThorchainSwap` + `TrocadorSwap` aggregator implementations; native adaptor-signature implementations planned v0.4+. |
-| `packages/desktop/` | Working — `@smirk/desktop` Tauri 2.x wallet shell. Wraps the extension popup via a `chrome.*` shim (storage backed by tauri-plugin-store). Embedded-browser commands in `browser_plugin.rs` are scaffolded; full wiring is v0.4. |
+| `packages/desktop/` | Working — `@smirk/desktop` Tauri 2.x wallet shell + embedded dapp browser. Wraps the extension popup via a `chrome.*` shim (storage backed by tauri-plugin-store). Each browser tab is a borderless `WebviewWindow` positioned over the wallet UI's frame slot. |
 | `packages/mobile/` | Not yet populated — Capacitor planned v0.4 |
 
 The legacy browser extension at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) is frozen at v0.2.x; `packages/extension/` here is the canonical v0.3+ client.

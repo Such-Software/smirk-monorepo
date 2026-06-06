@@ -13,8 +13,9 @@ It's authoritative when something in another doc disagrees with it.
 Smirk ships to three surfaces over the v0.3 → v0.5 arc:
 
 - **Extension** (Chrome MV3 + Firefox MV3) — primary today
-- **Desktop** (Tauri bundled WebView) — v0.3.0 (wallet UI;
-  embedded browser scaffold, full wiring tracked for v0.4)
+- **Desktop** (Tauri bundled WebView) — v0.3.0, including the
+  embedded dapp browser (one `WebviewWindow` per browser tab,
+  composited over the wallet UI)
 - **Mobile** (Capacitor bundled WebView) — v0.4
 
 All three are essentially "Preact app in a WebView." They differ on
