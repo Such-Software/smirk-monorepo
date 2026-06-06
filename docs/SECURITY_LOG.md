@@ -21,6 +21,12 @@ plumbing, none of them user-visible).
 **Status:** Fixed before v0.3.0 release. One affected on-chain
 orphan (11 GRIN) was recovered via URL-paste public-claim during
 the same session.
+**Commits:** `e76e26e` (on-chain sweep in
+[`packages/extension/src/popup/tip-claim-handler.ts`](../packages/extension/src/popup/tip-claim-handler.ts)),
+`7ac6131` (popup wiring in
+[`packages/extension/src/popup/index.tsx`](../packages/extension/src/popup/index.tsx)).
+Backend race-fix tracked separately in
+[smirk-backend `5aa91ea`](https://github.com/jwinterm/smirk-backend/commit/5aa91ea).
 
 #### What was wrong
 
@@ -106,6 +112,8 @@ the bug was recovered same-session.
 **Severity:** High (functional regression; UTXO unaffected)
 **Reporter:** discovered live during the clawback recovery flow
 **Status:** Fixed before v0.3.0 release.
+**Commit:** `7ac6131` (one-line fix in `ApprovalApp.handleApprove` —
+[`packages/extension/src/popup/index.tsx`](../packages/extension/src/popup/index.tsx)).
 
 #### What was wrong
 
@@ -144,6 +152,9 @@ No public release shipped with this regression.
 no fund-loss path)
 **Reporter:** discovered live during the BigInt-mixing throw
 **Status:** Fixed before v0.3.0 release.
+**Commit:** `7ac6131` (snapshot read/write helpers in
+[`packages/extension/src/popup/index.tsx`](../packages/extension/src/popup/index.tsx)
+— cache key bumped from `_v1` to `_v2`).
 
 #### What was wrong
 
@@ -184,6 +195,11 @@ No public release shipped with this bug.
 claim flow, not a security boundary failure)
 **Reporter:** discovered live during the clawback recovery flow
 **Status:** Fixed before v0.3.0 release.
+**Commit:** `09d9251` —
+[`packages/extension/src/background/dapp/provider.ts`](../packages/extension/src/background/dapp/provider.ts)
+gained the expiry check;
+[`packages/extension/src/popup/index.tsx`](../packages/extension/src/popup/index.tsx)
+writes the `sessionExpiresAtMs` field on cache populate.
 
 #### What was wrong
 
