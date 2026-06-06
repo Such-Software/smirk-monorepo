@@ -861,8 +861,39 @@ pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
                 reposition_active_tab(&app);
             }
         }
+        tauri::WindowEvent::CloseRequested { .. } => {
+            // Each browser tab is its own `WebviewWindow` — closing
+            // the wallet alone would orphan them as floating OS
+            // windows (a visible glitch where the embedded page
+            // hovers on screen with no wallet behind it). Destroy
+            // every `smirk-browser-*` webview before the main
+            // window's close propagates.
+            close_all_browser_tabs(&app);
+        }
         _ => {}
     });
+}
+
+/// Destroy every embedded browser tab window. Called on the main
+/// window's `CloseRequested` so we don't leave orphaned floating
+/// `WebviewWindow`s on screen after the user closes the wallet.
+///
+/// Iterates the labels stored in plugin state (rather than scanning
+/// every `app.webview_windows()`) so the close is deterministic
+/// against whatever tabs the state machine knows about — a tab
+/// already destroyed via `close_tab` is a no-op via the get-by-label
+/// guard.
+fn close_all_browser_tabs<R: Runtime>(app: &AppHandle<R>) {
+    let state: tauri::State<BrowserPluginState> = app.state();
+    let labels: Vec<String> = match state.inner.lock() {
+        Ok(g) => g.tabs.keys().map(|t| webview_label_for(t)).collect(),
+        Err(_) => return,
+    };
+    for label in labels {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.destroy();
+        }
+    }
 }
 
 fn reposition_active_tab<R: Runtime>(app: &AppHandle<R>) {
