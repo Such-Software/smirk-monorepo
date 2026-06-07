@@ -27,9 +27,9 @@
  * | Dapp approval (separate window mode)   | `runMode === 'approval'`         |
  */
 
-import { render } from 'preact';
+import { Fragment, render } from 'preact';
 import type { ComponentChildren } from 'preact';
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { TrocadorSwap } from '@smirk/swap';
 import {
   ChromeLocalStorage,
@@ -69,6 +69,7 @@ import {
 import {
   AppShell,
   BrowserShell,
+  IframeBrowserContent,
   SentTipsScreen,
   type SentTipRow,
   ApprovalScreen,
@@ -133,15 +134,22 @@ import {
   clearDappPublicCache,
   type DappPublicCache,
 } from '../background/dapp/provider';
+import { chromeStoragePermissionStore } from '../background/dapp/permissions';
 import { approvalPopupBridge, type PendingApproval } from '../background/dapp/approval';
 import { isInjectDisabled, setInjectDisabled } from '../background/dapp/inject-policy';
-import type {
-  ApprovalResult as DappApprovalResult,
-  SmirkAddresses,
-  SmirkPublicKeys,
-  SmirkSignResult,
+import {
+  createWalletHandler,
+  type ApprovalRequest as DappApprovalRequest,
+  type ApprovalResult as DappApprovalResult,
+  type SmirkAddresses,
+  type SmirkPublicKeys,
 } from '@smirk/dapp-api';
-import { signBitcoinMessage, signEd25519WithScalar } from '@smirk/core';
+import {
+  createInPopupApprovalQueue,
+  createLiveWalletProvider,
+  createPageRequestBridge,
+  executeApproval,
+} from '../dapp-popup';
 import {
   initialize as initSmirkWasm,
   monero as wasmMonero,
@@ -506,16 +514,115 @@ type BrowserControllerGlobal = Parameters<
   typeof import('@smirk/ui').BrowserShell
 >[0]['controller'];
 
-function BrowseTab({ controller }: { controller: BrowserControllerGlobal }) {
+// Imported as a type only — the actual class lives in
+// `@smirk/dapp-browser` and is instantiated by `@smirk/desktop`'s
+// `main.ts`. BrowseTab only needs the structural shape (the
+// `inlineMode` brand + `dispatchPageMessage` / `getReloadGen` /
+// `notifyTabLoaded` methods) when narrowing the controller to
+// pass into `<IframeBrowserContent>`.
+type IframeBrowserController = import('@smirk/dapp-browser').IframeBrowserController;
+
+/**
+ * BrowseTab wires the embedded-browser controller (provided by the
+ * Tauri desktop shell on the `__smirk_browser__` global) to the
+ * wallet's dapp surface. Three concerns live here:
+ *
+ *  1. **Open the browser** (`controller.open()`) and seed a first
+ *     tab so the user lands somewhere useful instead of a blank
+ *     frame slot.
+ *  2. **Wire the page-RPC bridge** so `window.smirk` calls inside
+ *     embedded pages route through the same `WalletHandler` the
+ *     extension SW uses — full method parity (connect / signMessage
+ *     / requestPayment / claimPublicTip). No SW round-trip; the
+ *     unlocked wallet stays in this React tree.
+ *  3. **Render the approval modal** on top of the browser shell
+ *     when a dapp request needs user consent. Single-pending queue:
+ *     a second concurrent request gets a deny so the user can't be
+ *     tricked into approving the wrong thing.
+ *
+ * The provider + permission store are reused verbatim from the
+ * extension's chrome-shim-backed factories — the chrome-shim turns
+ * `chrome.storage.*` into Tauri's `plugin-store`, so the same code
+ * persists per-origin permissions on desktop.
+ *
+ * `walletStateRef` lets the approval handler read the latest unlock
+ * state at the moment the user clicks Approve (which may be many
+ * seconds after the request arrived). A user who locks mid-decision
+ * gets a clear "wallet locked" error instead of a stale signature.
+ */
+function BrowseTab({
+  controller,
+  walletStateRef,
+}: {
+  controller: BrowserControllerGlobal;
+  walletStateRef: { current: WalletState | null };
+}) {
   const [opened, setOpened] = useState(false);
+  const [pending, setPending] = useState<DappApprovalRequest | null>(null);
+
+  // Approval queue + wallet handler — created once per BrowseTab
+  // mount. The queue's listener wiring lives in its own effect
+  // below so the React subscriber unsubscribes on unmount.
+  const queue = useMemo(() => createInPopupApprovalQueue(), []);
+
+  useEffect(() => queue.subscribe(setPending), [queue]);
+
+  // Hide the embedded WebviewWindow while an approval is pending.
+  // The embedded webview is a separate top-level OS window stacked
+  // over the wallet's frame slot — a React `position: fixed` modal
+  // would render in the wallet popup BENEATH that window, invisible
+  // to the user. `controller.hideFrame()` calls `embedded.hide()` on
+  // the Rust side; when the user resolves the approval, we nudge a
+  // resize event so `BrowserShell`'s `ResizeObserver` re-pushes the
+  // frame rect to Rust, which restores the embedded webview to its
+  // previous position via the apply_rect → show() path.
+  const hadPendingRef = useRef(false);
   useEffect(() => {
+    if (pending) {
+      void controller.hideFrame();
+      hadPendingRef.current = true;
+    } else if (hadPendingRef.current) {
+      hadPendingRef.current = false;
+      // BrowserShell's `useFrameRect` listens for window resize and
+      // re-measures + re-pushes. Fire it once after the React tree
+      // settles so the resize handler reads the post-modal layout.
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+    }
+  }, [pending, controller]);
+
+  useEffect(() => {
+    // Desktop uses a LIVE provider that reads `walletStateRef`
+    // directly, not the chrome-shim-backed public cache. Two reasons:
+    // (1) the cache's `sessionExpiresAtMs` is stamped to `Date.now()`
+    // for `autoLockMinutes = 0` (the default), which the SW provider
+    // treats as expired → every dapp call from the desktop browser
+    // would come back `LOCKED`. (2) BrowseTab has direct access to
+    // the unlocked wallet in this React tree, so going through a
+    // cache adds a stale-read failure mode for no benefit. The
+    // permission store still uses the chrome-shim — per-origin
+    // permissions DO want to persist across wallet locks.
+    const provider = createLiveWalletProvider(() => {
+      const ws = walletStateRef.current;
+      return ws && ws.kind === 'unlocked' ? ws.wallet : null;
+    });
+    const permissions = chromeStoragePermissionStore();
+    const dispatch = createWalletHandler({
+      provider,
+      permissions,
+      approval: queue.handler,
+    });
+    const bridge = createPageRequestBridge(dispatch);
+    void controller.setPageRequestHandler(async (req) => {
+      const resp = await bridge(req);
+      return resp;
+    });
+
     let cancelled = false;
     void controller.open().then(() => {
       if (cancelled) return;
       setOpened(true);
-      // First-tab default. If the controller already has tabs (e.g.
-      // re-mounted from a previous Browse-tab visit), this no-ops on
-      // the controller side.
       void controller
         .listTabs()
         .then((tabs) => {
@@ -528,19 +635,121 @@ function BrowseTab({ controller }: { controller: BrowserControllerGlobal }) {
     });
     return () => {
       cancelled = true;
-      // Leave the controller open across tab switches so navigation
+      // Unregister the page-request handler on unmount so a
+      // re-mounted BrowseTab (different controller instance, or
+      // simply hot-reload during dev) doesn't end up with a stale
+      // listener pointing at a dead React tree.
+      void controller.setPageRequestHandler(null);
+      // Leave the controller's tabs OPEN across mounts so navigation
       // state persists when the user toggles back to Home and back
       // to Browse.
     };
-  }, [controller]);
-  if (!opened) {
-    return (
-      <div style={{ padding: 24, textAlign: 'center', opacity: 0.6 }}>
-        Loading browser…
-      </div>
-    );
-  }
-  return <BrowserShell controller={controller} />;
+  }, [controller, queue]);
+
+  const handleApprove = async (approval: ApprovalApproval) => {
+    if (!pending) return;
+    const ws = walletStateRef.current;
+    if (!ws || ws.kind !== 'unlocked') {
+      // Wallet locked between request arrival and approve click.
+      // Resolve as denied so the page sees USER_REJECTED rather
+      // than hanging on the modal that just disappeared.
+      queue.resolveCurrent({ approved: false });
+      return;
+    }
+    try {
+      const result = await executeApproval(pending, approval, {
+        wallet: ws.wallet,
+        ensureWasmInit,
+        send,
+        claimPublicTip,
+        readBootstrapCache,
+        api,
+        loadState: () => store.load(),
+        updateState: (m) => store.update(m),
+      });
+      queue.resolveCurrent(result);
+    } catch (e) {
+      console.error('[BrowseTab] executeApproval threw:', e);
+      queue.resolveCurrent({ approved: false });
+    }
+  };
+
+  const handleDeny = () => {
+    queue.resolveCurrent({ approved: false });
+  };
+
+  // BrowserShell must render UNWRAPPED so its content-frame
+  // `getBoundingClientRect` returns the same rect the parent
+  // AppShell gave it — any extra flex/grid wrapper collapses the
+  // measured slot and the embedded WebviewWindow ends up
+  // positioned over a zero-size area (i.e. invisible).
+  //
+  // The approval modal renders as a sibling at `position: fixed`,
+  // overlaying the entire wallet window (sidebar included). That's
+  // intentional: while a dapp approval is pending, the only
+  // sensible actions are Approve / Deny / close-wallet — letting
+  // the user click the Home tab and forget the request open is a
+  // worse UX.
+  // When the controller advertises `inlineMode` (currently the
+  // `IframeBrowserController` used on Linux desktop), pass an
+  // `IframeBrowserContent` into `BrowserShell`'s frame slot so the
+  // iframe elements live inside the React tree. For native-WebView
+  // controllers (Tauri WebviewWindow on macOS / Windows) the slot
+  // stays empty and the controller overlays its own native window
+  // via `setFrameRect`. Same component for both — only the slot
+  // content differs.
+  const isInlineController =
+    (controller as { inlineMode?: boolean }).inlineMode === true;
+  const slotContent = isInlineController ? (
+    <IframeBrowserContent
+      controller={controller as unknown as IframeBrowserController}
+    />
+  ) : null;
+
+  return (
+    <Fragment>
+      {!opened ? (
+        <div style={{ padding: 24, textAlign: 'center', opacity: 0.6 }}>
+          Loading browser…
+        </div>
+      ) : (
+        <BrowserShell controller={controller} slotContent={slotContent} />
+      )}
+      {pending && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            style={{
+              maxWidth: 420,
+              width: '90%',
+              maxHeight: '90%',
+              overflow: 'auto',
+              background: 'var(--smirk-bg)',
+              border: '1px solid var(--smirk-border)',
+              borderRadius: 8,
+            }}
+          >
+            <ApprovalScreen
+              request={pending as unknown as UiApprovalRequest}
+              onApprove={handleApprove}
+              onDeny={handleDeny}
+            />
+          </div>
+        </div>
+      )}
+    </Fragment>
+  );
 }
 
 function openPopOut() {
@@ -847,6 +1056,12 @@ const browserController: BrowserControllerGlobal | undefined =
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
+  // Live ref to walletState so async closures (notably the BrowseTab
+  // dapp-approval handler) can read the latest unlock status at the
+  // moment they need it, without re-creating the effect on every
+  // walletState change.
+  const walletStateRef = useRef<WalletState | null>(walletState);
+  walletStateRef.current = walletState;
   // Backend-derived identity that survives an import — Smirk handle
   // and/or linked third-party socials (Telegram, Discord, future
   // platforms). Set inside the onboarding `onComplete` callback after
@@ -1512,7 +1727,16 @@ function App() {
           // `globalThis.__smirk_browser__` at boot and the
           // BottomNav renders the tab only when the controller is
           // present. Extension users never see it.
-          ...(browserController ? { browse: <BrowseTab controller={browserController} /> } : {}),
+          ...(browserController
+            ? {
+                browse: (
+                  <BrowseTab
+                    controller={browserController}
+                    walletStateRef={walletStateRef}
+                  />
+                ),
+              }
+            : {}),
         }}
       />
     </StateProvider>
@@ -3457,7 +3681,17 @@ function mapBackendStatus(status: string): SwapInFlight['state'] {
     case 'error':
       return { state: 'failed', reason: 'Provider reported error' };
     default:
-      return { state: 'pending', reason: 'in_progress' };
+      // Unknown status from the backend mirror. Surface it as a
+      // failure with the raw value so the user (and Smirk support)
+      // can act on it, rather than silently parking on
+      // "in_progress" which the wizard renders as "Provider
+      // exchanging" forever — that's how the 2026-06-04 audit
+      // found a future-Trocador-status would manifest as a stuck
+      // visual on a swap that actually completed.
+      return {
+        state: 'failed',
+        reason: `Unknown provider status: ${status || '(empty)'}`,
+      };
   }
 }
 
@@ -4947,7 +5181,68 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
             trust physically.
           </p>
         )}
+        {browserController && (
+          // Desktop-only callout: the chrome-shim does not polyfill
+          // `chrome.alarms`, so the auto-lock timer only runs while
+          // the wallet window is open. A user who closes the wallet
+          // does NOT relock until they reopen the app — make sure
+          // they know. Tracked for a `WalletTimers` abstraction in
+          // `@smirk/core/state/platform.ts`.
+          <p
+            style={{
+              fontSize: 11,
+              opacity: 0.7,
+              margin: '6px 0 0',
+              lineHeight: 1.4,
+              color: 'var(--smirk-warn, #c69)',
+            }}
+          >
+            Desktop: the auto-lock timer pauses while the wallet
+            window is closed. Closing the window does not relock
+            until you reopen it. Plan accordingly when stepping
+            away from the device.
+          </p>
+        )}
       </section>
+
+      {browserController && (
+        // Desktop-only: surface the v0.3.0 known limitations a user
+        // would otherwise blame on a bug. Notifications are silent
+        // because chrome.notifications isn't polyfilled. Tracked
+        // alongside auto-lock under `WalletTimers` /
+        // `WalletNotifications` in `@smirk/core/state/platform.ts`.
+        <section
+          style={{
+            marginTop: 20,
+            padding: '10px 12px',
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid rgba(255,255,255,0.10)',
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>
+            Desktop limitations (v0.3.0)
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 16,
+              fontSize: 11,
+              opacity: 0.65,
+              lineHeight: 1.5,
+            }}
+          >
+            <li>
+              Auto-lock pauses while the wallet window is closed
+              (no background timer).
+            </li>
+            <li>
+              Tip-arrival notifications are silent (no OS-level
+              alerts). Check the Inbox tab for new tips.
+            </li>
+          </ul>
+        </section>
+      )}
 
       <section style={{ marginTop: 20 }}>
         <label
@@ -5374,141 +5669,23 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
   };
 
   const handleApprove = async (approval: ApprovalApproval) => {
-    // ApprovalApp is a separate render root from the main popup —
-    // the main popup's unlock path calls `ensureWasmInit()`
-    // eagerly so every wasm operation finds the module ready, but
-    // the dapp-approval path doesn't go through unlock. Without
-    // this, Grin claim/payment sweeps (which touch
-    // @smirk/wasm::grin) fail with "Cannot read properties of
-    // undefined (reading '__wbindgen_free')" because the WASM
-    // module never loaded. Idempotent: subsequent calls re-use the
-    // memoised init promise.
-    await ensureWasmInit();
-    switch (approval.kind) {
-      case 'connect': {
-        await finish({
-          kind: 'connect',
-          approved: true,
-          approvedAssets: approval.approvedAssets,
-        });
-        return;
-      }
-      case 'signMessage': {
-        if (pending.request.kind !== 'signMessage') {
-          throw new Error('Pending request kind mismatch');
-        }
-        const result = signMessageInPopup(wallet, pending.request.message, pending.request.assets);
-        await finish({ kind: 'signMessage', approved: true, result });
-        return;
-      }
-      case 'requestPayment': {
-        if (pending.request.kind !== 'requestPayment') {
-          throw new Error('Pending request kind mismatch');
-        }
-        const req = pending.request;
-        // pendingOutgoing is the same exclude-set the main popup feeds
-        // into send(); without it the dapp tx could double-spend an
-        // input the user just spent through the wallet UI in the
-        // adjacent tab.
-        const sessionState = await store.load();
-        const excludeInputs = recentlySpentInputs(
-          sessionState.pendingOutgoing ?? [],
-          req.asset,
-        );
-        // Resolve a real fee rate. send-handler doesn't fall back to
-        // a "normal" tier on its own — passing 0 makes selectUtxos
-        // compute fee = ceil(vsize * 0) = 0, then trip the
-        // `feeSat <= 0` guard and fail every dapp UTXO payment.
-        // Pull the user's normal tier from Electrum (same source the
-        // SendWizard uses) before calling send. Falls back to 1 sat/vB
-        // — relay floor for both BTC and LTC — if the API roundtrip
-        // fails, so the tx still has a chance to land.
-        let feeRateSatPerVb = 1;
-        if (req.asset === 'btc' || req.asset === 'ltc') {
-          const tiers = await api.estimateFee(req.asset).catch(() => null);
-          const normal = tiers?.data?.normal;
-          if (typeof normal === 'number' && normal > 0) {
-            feeRateSatPerVb = normal;
-          }
-        }
-        const result = await send(
-          wallet,
-          {
-            fromAssetId: req.asset,
-            amountAtomic: BigInt(req.amount),
-            toAddress: req.address,
-            feeRateSatPerVb,
-            sweep: false,
-          },
-          excludeInputs,
-        );
-        if (result.ok && result.amountAtomic !== undefined && result.feeAtomic !== undefined) {
-          const entry = {
-            asset: req.asset,
-            txHash: result.txid,
-            amount: result.amountAtomic.toString(),
-            fee: result.feeAtomic.toString(),
-            recipient: req.address,
-            submittedAt: Date.now(),
-            ...(result.inputs && result.inputs.length > 0
-              ? { inputs: result.inputs }
-              : {}),
-            ...(result.inputsTotalAtomic !== undefined
-              ? { inputsTotal: result.inputsTotalAtomic.toString() }
-              : {}),
-          };
-          await store.update((s) => {
-            s.pendingOutgoing.push(entry);
-          });
-        }
-        await finish({
-          kind: 'requestPayment',
-          approved: true,
-          result: result.ok
-            ? { success: true, txid: result.txid }
-            : { success: false, error: result.error },
-        });
-        return;
-      }
-      case 'claimPublicTip': {
-        if (pending.request.kind !== 'claimPublicTip') {
-          throw new Error('Pending request kind mismatch');
-        }
-        const req = pending.request;
-        // claimPublicTip orchestrates: getPublicSocialTip
-        // (unauthenticated) → claimSocialTip (authenticated) → sweep.
-        // The middle step needs the same access token the main popup
-        // bootstrapped, otherwise the backend returns 401 and the user
-        // sees a "Backend rejected claim" generic message.
-        const cached = await readBootstrapCache(wallet.fingerprint);
-        if (!cached) {
-          await finish({
-            kind: 'claimPublicTip',
-            approved: true,
-            result: {
-              success: false,
-              error: 'Open Smirk once to sign in, then retry the claim.',
-            },
-          });
-          return;
-        }
-        api.setAccessToken(cached.accessToken);
-        const outcome = await claimPublicTip(
-          wallet,
-          cached.bootstrap.userId,
-          req.tipId,
-          req.fragmentKey,
-        );
-        await finish({
-          kind: 'claimPublicTip',
-          approved: true,
-          result: outcome.ok
-            ? { success: true, txid: outcome.txid }
-            : { success: false, error: outcome.error },
-        });
-        return;
-      }
-    }
+    // Delegate to the shared executor used by every wallet-foreground
+    // approval surface (extension popup window AND Tauri desktop's
+    // BrowseTab modal). The executor calls `ensureWasmInit()` itself,
+    // computes signatures with the unlocked wallet, performs payments
+    // / claims, and returns the result envelope to pass back to the
+    // SW via `approvalPopupBridge.writeResult`.
+    const result = await executeApproval(pending.request, approval, {
+      wallet,
+      ensureWasmInit,
+      send,
+      claimPublicTip,
+      readBootstrapCache,
+      api,
+      loadState: () => store.load(),
+      updateState: (m) => store.update(m),
+    });
+    await finish(result);
   };
 
   // Translate the dapp-api ApprovalRequest into the UI's shape. They
@@ -5525,90 +5702,9 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
   );
 }
 
-/**
- * Compute one signature per authorized asset. BTC/LTC use the
- * canonical Bitcoin-message format (`signBitcoinMessage`); XMR/WOW
- * sign the raw UTF-8 message bytes with their ed25519 private
- * spend-key scalar; Grin signs with its slatepack ed25519 scalar.
- * All ed25519 signatures go through `signEd25519WithScalar` because
- * our keys are stored as raw scalars, not RFC-8032 seeds — passing
- * them to `ed25519.sign` would re-clamp into a different scalar and
- * yield signatures that don't verify against the public keys we
- * actually publish.
- *
- * Per-asset failures are captured per-asset (empty signature string)
- * rather than aborting the whole result — smirk.cash and similar
- * dapps pick the signature for the asset the user chose, so one
- * failing asset shouldn't kill the others.
- */
-function signMessageInPopup(
-  wallet: UnlockedWallet,
-  message: string,
-  assets: Array<'btc' | 'ltc' | 'xmr' | 'wow' | 'grin'>,
-): SmirkSignResult {
-  const msgBytes = new TextEncoder().encode(message);
-  const signatures: SmirkSignResult['signatures'] = [];
-  for (const asset of assets) {
-    try {
-      switch (asset) {
-        case 'btc':
-          signatures.push({
-            asset: 'btc',
-            signature: signBitcoinMessage(message, wallet.keys.btc.privateKey),
-            publicKey: bytesToHex(wallet.keys.btc.publicKey),
-          });
-          break;
-        case 'ltc':
-          signatures.push({
-            asset: 'ltc',
-            signature: signBitcoinMessage(message, wallet.keys.ltc.privateKey),
-            publicKey: bytesToHex(wallet.keys.ltc.publicKey),
-          });
-          break;
-        case 'xmr': {
-          const pub = wallet.keys.xmr.publicSpendKey;
-          signatures.push({
-            asset: 'xmr',
-            signature: bytesToHex(
-              signEd25519WithScalar(msgBytes, wallet.keys.xmr.privateSpendKey, pub),
-            ),
-            publicKey: bytesToHex(pub),
-          });
-          break;
-        }
-        case 'wow': {
-          const pub = wallet.keys.wow.publicSpendKey;
-          signatures.push({
-            asset: 'wow',
-            signature: bytesToHex(
-              signEd25519WithScalar(msgBytes, wallet.keys.wow.privateSpendKey, pub),
-            ),
-            publicKey: bytesToHex(pub),
-          });
-          break;
-        }
-        case 'grin': {
-          const pub = wallet.keys.grin.publicKey;
-          signatures.push({
-            asset: 'grin',
-            signature: bytesToHex(
-              signEd25519WithScalar(msgBytes, wallet.keys.grin.privateKey, pub),
-            ),
-            publicKey: bytesToHex(pub),
-          });
-          break;
-        }
-      }
-    } catch (e) {
-      console.error(`[signMessage] ${asset} signing failed:`, e);
-      // Emit an empty-signature entry so the dapp gets a clear "we
-      // know about this asset, we just couldn't sign" signal rather
-      // than silently dropping the asset. smirk.cash surfaces this
-      // as "No signature found for <asset>" downstream.
-    }
-  }
-  return { message, signatures };
-}
+// signMessage logic moved to `../dapp-popup/signers.ts` and is
+// invoked by `executeApproval`. Same code, single source of truth,
+// reused by the desktop BrowseTab modal.
 
 const root = document.getElementById('root');
 if (root) {

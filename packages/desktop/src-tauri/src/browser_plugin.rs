@@ -173,6 +173,17 @@ struct BrowserPluginInner {
     /// route back into.
     pending_page_requests: HashMap<u64, String>,
     next_request_id: u64,
+    /// Webview labels that have already been `show()`n at least once.
+    /// `apply_rect` only calls `show()` on first application per tab
+    /// — repeating it on every Move/Resize tick is what causes the
+    /// WebKitGTK compositor surface to race itself into a black
+    /// state during a drag-resize (tauri-apps/wry#1727 family). On
+    /// `hide_frame` we DON'T clear this — the wallet uses hideFrame
+    /// to dismiss a tab visually while keeping it loaded; the next
+    /// `apply_rect` with a non-zero rect skips the show() but our
+    /// own hide_frame path explicitly toggles via the embedded
+    /// window's show() in the unhide branch.
+    shown_tabs: std::collections::HashSet<String>,
 }
 
 // ----------------------------------------------------------------------
@@ -337,16 +348,44 @@ fn apply_rect<R: Runtime>(
     let target_x = main_inner_logical_x + rect.x;
     let target_y = main_inner_logical_y + rect.y;
 
-    embedded
-        .set_position(LogicalPosition::new(target_x, target_y))
-        .map_err(|e| e.to_string())?;
-    embedded
-        .set_size(LogicalSize::new(
-            rect.width.max(MIN_SIZE),
-            rect.height.max(MIN_SIZE),
-        ))
-        .map_err(|e| e.to_string())?;
+    // Linux/WebKitGTK positioning sequence is order-sensitive. wry
+    // packs each top-level WebviewWindow's webview into a GtkBox
+    // (NOT a GtkFixed), so `set_size` only resizes the outer
+    // gtk::Window — the inner WebView widget's drawing area never
+    // gets a corresponding `size_allocate` call. The accelerated
+    // compositor then has a stale surface size and renders pure
+    // black on the next repaint. Forcing GTK to re-map (`show_all`
+    // → `size_allocate` on the whole tree) is the documented
+    // recovery; the trick is to do it WITHOUT teleporting the
+    // window to its GTK default position (0,0 screen coords).
+    //
+    // The order below — set_size while hidden, then show, then
+    // set_position — does exactly that: the size update is applied
+    // to the GtkWindow before the X11 remap, so when show() runs
+    // GTK allocates the inner widget at the right dimensions, and
+    // the subsequent set_position pins the now-correctly-sized
+    // window to the wallet's frame slot.
+    //
+    // The `shown_tabs` set is for first-mount discovery only; once
+    // shown we still re-show on every apply_rect because hide is
+    // what reliably triggers the size_allocate WebKitGTK needs to
+    // recover its compositor surface after a parent-window resize.
+    // Combined with the JS-side 120 ms debounce, this fires ~8x/s
+    // max during a drag (versus 60+ before), well below the
+    // upstream-tracked race threshold.
+    let size = LogicalSize::new(rect.width.max(MIN_SIZE), rect.height.max(MIN_SIZE));
+    let pos = LogicalPosition::new(target_x, target_y);
+    let _ = embedded.hide();
+    embedded.set_size(size).map_err(|e| e.to_string())?;
     let _ = embedded.show();
+    embedded
+        .set_position(pos)
+        .map_err(|e| e.to_string())?;
+    let state: tauri::State<BrowserPluginState> = app.state();
+    {
+        let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+        inner.shown_tabs.insert(label.to_string());
+    }
     Ok(())
 }
 
@@ -614,7 +653,18 @@ pub async fn smirk_browser_reload<R: Runtime>(
     tab: Option<String>,
 ) -> Result<(), String> {
     let webview = resolve_webview(&app, &state, tab)?;
-    webview.reload().map_err(|e| e.to_string())?;
+    // `webkit_web_view_reload` is a no-op against a stale-bounds
+    // surface on Linux/WebKitGTK (tauri#13885 family). Running
+    // `location.reload()` from page context dispatches through the
+    // live navigation pipeline and bypasses the compositor-level
+    // dead path. Same outcome on macOS/Windows. Surface recovery
+    // (hide → show → reposition) lives in `apply_rect`, not here —
+    // calling it from reload teleports the embedded window to GTK
+    // default position (0,0) because the cached frame rect doesn't
+    // get re-applied in this codepath.
+    webview
+        .eval("window.location.reload()")
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -850,13 +900,34 @@ pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
     };
     let app = app.clone();
     main.on_window_event(move |event| match event {
-        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+        tauri::WindowEvent::Moved(_) => {
+            // Window MOVE only — `apply_rect` will set_position to
+            // follow but set_size with the unchanged cached
+            // dimensions, which is cheap and safe.
             reposition_active_tab(&app);
+        }
+        tauri::WindowEvent::Resized(_) => {
+            // INTENTIONALLY NOT handling Resize here. WebKitGTK on
+            // X11 races its GL compositor surface when `set_size` is
+            // called rapidly mid-drag (one Resize event per pointer
+            // motion = ~100/s), leaving the webview rendering a
+            // permanently black framebuffer. The JS-side path
+            // (BrowserShell's ResizeObserver → `setFrameRect`)
+            // already debounces by 16ms in `TauriBrowserController`,
+            // so the wallet's React layout reflow naturally produces
+            // a single trailing-edge `apply_rect` call per resize
+            // gesture. Routing through that single channel keeps the
+            // surface stable. Tracked upstream:
+            // tauri-apps/wry#1727 (`set_bounds` skips `size_allocate`
+            // on non-GtkFixed parents),
+            // tauri-apps/tauri#10011 (multi-WebviewWindow resize),
+            // tauri-apps/tauri#7537 (compositor surface loss).
         }
         tauri::WindowEvent::Focused(focused) => {
             // When the wallet regains focus, raise the active embedded
             // tab so a previously-stacked-behind state doesn't leave
-            // it under another OS window.
+            // it under another OS window. Position-only (apply_rect
+            // re-runs with cached dimensions) so no size churn.
             if *focused {
                 reposition_active_tab(&app);
             }

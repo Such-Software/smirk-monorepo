@@ -198,9 +198,18 @@ export class TauriBrowserController implements DappBrowserController {
   async setFrameRect(rect: BrowserFrameRect): Promise<void> {
     this.pendingRect = rect;
     if (this.setRectTimer !== null) return;
-    // 16 ms trailing-edge debounce ≈ one animation frame. Trades off
-    // a single frame of webview-position lag for far fewer Rust
-    // round-trips during continuous resize.
+    // 120 ms trailing-edge debounce. At 16 ms (one animation frame)
+    // a continuous wallet-window drag-resize fires ~60 `invoke`s per
+    // second, and the matching `set_size` calls on the embedded
+    // `WebviewWindow` race WebKitGTK's GL compositor surface
+    // creation. Symptom is the embedded webview rendering as a
+    // solid-black framebuffer until the tab is destroyed. 120 ms
+    // caps it at ~8/s during drag — well below the threshold the
+    // upstream issues (tauri#10011, tauri#13157) document — and the
+    // trailing-edge call still fires within one perceptible delay
+    // tick of the user releasing the mouse. The visible position
+    // lag during the drag is acceptable for a wallet UI; the alter-
+    // native (surface crash) is not.
     this.setRectTimer = window.setTimeout(async () => {
       this.setRectTimer = null;
       const next = this.pendingRect;
@@ -212,7 +221,7 @@ export class TauriBrowserController implements DappBrowserController {
         // Repositioning failures are non-fatal — log + keep going.
         console.warn('[TauriBrowserController] setFrameRect failed:', e);
       }
-    }, 16);
+    }, 120);
   }
 
   async hideFrame(): Promise<void> {

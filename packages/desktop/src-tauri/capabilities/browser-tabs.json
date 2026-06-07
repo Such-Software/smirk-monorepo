@@ -1,8 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "browser-tabs",
-  "description": "Permissions granted to embedded browser webviews (label prefix `smirk-browser-`). Scope is intentionally narrow: only what the `@smirk/dapp-api` injection script needs to forward `window.smirk.X()` calls to the wallet — `event:allow-emit` and `event:allow-listen`. NOTHING else is granted, so a malicious page can't reach plugin-store, plugin-shell, plugin-updater, or any other Tauri surface.",
+  "description": "Permissions granted to embedded browser webviews (label prefix `smirk-browser-`). Scope is intentionally narrow: only `core:event:allow-emit/listen/unlisten`, which is what the `@smirk/dapp-api` injection script needs to forward `window.smirk.X()` calls to the wallet. NOTHING else is granted, so a malicious page cannot reach plugin-store, plugin-shell, plugin-updater, or any other Tauri command surface. The wallet-side handler additionally validates every request payload before surfacing an approval modal.\n\n`remote.urls` MUST be set or the capability only applies to the bundled (local) app frontend — embedded webviews load external https:// pages and need an explicit URL allowlist. `https://*` matches every secure origin the user might navigate to; we intentionally do NOT grant `http://*` so plaintext pages stay sandboxed from the event bridge.",
   "webviews": ["smirk-browser-*"],
+  "remote": {
+    "urls": ["https://*"]
+  },
   "permissions": [
     "core:event:allow-emit",
     "core:event:allow-listen",
