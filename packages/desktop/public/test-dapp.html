@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Smirk — iframe test dapp</title>
+    <meta name="color-scheme" content="dark light" />
+    <style>
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        max-width: 640px;
+        margin: 24px auto;
+        padding: 0 16px;
+        background: #0e0e10;
+        color: #f5f5f5;
+        line-height: 1.5;
+      }
+      h1 {
+        margin-top: 0;
+        font-size: 20px;
+      }
+      button {
+        padding: 10px 18px;
+        margin: 8px 8px 8px 0;
+        font: inherit;
+        background: #f5dd3b;
+        color: #1a1a1a;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button:hover {
+        filter: brightness(1.05);
+      }
+      pre {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 12px;
+        border-radius: 6px;
+        overflow: auto;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .status {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 11px;
+        margin-left: 8px;
+      }
+      .ok {
+        background: rgba(80, 220, 100, 0.18);
+        color: #5fdc6a;
+      }
+      .err {
+        background: rgba(255, 80, 80, 0.18);
+        color: #ff7070;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>
+      Smirk Wallet — iframe transport smoke test
+      <span id="status" class="status">idle</span>
+    </h1>
+
+    <p>
+      Verifies the iframe + postMessage architecture used by Linux
+      desktop. Each button issues a <code>window.smirk</code> RPC via the
+      <code>postMessage</code> transport to the parent wallet, and renders
+      the response below. If the buttons hang or return errors, the
+      wallet-side handler isn't wired correctly.
+    </p>
+
+    <div>
+      <button id="connect">Connect</button>
+      <button id="addresses">Get addresses</button>
+      <button id="sign">Sign &ldquo;hello smirk&rdquo;</button>
+    </div>
+
+    <h3>Last response</h3>
+    <pre id="output">(none yet)</pre>
+
+    <script>
+      // Minimal page-side runtime that implements the wallet wire
+      // protocol against the parent window via postMessage. Mirrors
+      // the auto-detected behaviour of @smirk/dapp-api's page runtime
+      // for the postMessage transport; left inline here so the test
+      // file has no build dependency.
+      const CHANNEL = 'smirk:dapp';
+      const pending = new Map();
+      let nextId = 1;
+
+      function setStatus(text, kind) {
+        const el = document.getElementById('status');
+        el.textContent = text;
+        el.className = 'status ' + (kind || '');
+      }
+
+      function show(value) {
+        document.getElementById('output').textContent =
+          typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      }
+
+      function request(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          window.parent.postMessage(
+            {
+              channel: CHANNEL,
+              payload: {
+                type: 'SMIRK_REQUEST',
+                v: 1,
+                id,
+                method,
+                params: params ?? {},
+              },
+            },
+            '*',
+          );
+        });
+      }
+
+      window.addEventListener('message', (ev) => {
+        if (!ev.data || ev.data.channel !== CHANNEL) return;
+        const resp = ev.data.payload;
+        if (!resp || resp.type !== 'SMIRK_RESPONSE') return;
+        const entry = pending.get(resp.id);
+        if (!entry) return;
+        pending.delete(resp.id);
+        if (resp.error) entry.reject(new Error(resp.error.message || 'error'));
+        else entry.resolve(resp.result);
+      });
+
+      async function run(label, fn) {
+        try {
+          setStatus(label + '…');
+          const result = await fn();
+          setStatus(label + ' ok', 'ok');
+          show(result);
+        } catch (e) {
+          setStatus(label + ' failed', 'err');
+          show('Error: ' + (e?.message || String(e)));
+        }
+      }
+
+      document.getElementById('connect').addEventListener('click', () => {
+        void run('connect', () => request('connect', { assets: [] }));
+      });
+      document.getElementById('addresses').addEventListener('click', () => {
+        void run('getAddresses', () =>
+          request('getAddresses', { assets: ['btc', 'ltc', 'xmr', 'wow', 'grin'] }),
+        );
+      });
+      document.getElementById('sign').addEventListener('click', () => {
+        void run('signMessage', () =>
+          request('signMessage', { message: 'hello smirk', assets: ['btc'] }),
+        );
+      });
+    </script>
+  </body>
+</html>

@@ -36,6 +36,7 @@
 export * from './protocol';
 export * from './page-api';
 export * from './page-api-script';
+export * from './install-page-api';
 export * from './permissions';
 export * from './provider';
 export * from './approval';

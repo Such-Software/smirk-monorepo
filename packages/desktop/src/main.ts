@@ -19,6 +19,10 @@
  */
 
 import { getPageApiInjectionScript } from '@smirk/dapp-api';
+import {
+  IframeBrowserController,
+  type DappBrowserController,
+} from '@smirk/dapp-browser';
 
 import { installChromeShim } from './chrome-shim';
 import {
@@ -28,15 +32,27 @@ import {
 
 installChromeShim();
 
-// Wire the embedded-browser controller against the Tauri
-// `browser_plugin.rs` commands. Tabs created via this controller
-// each get the `@smirk/dapp-api` injection script applied at
-// document-start so `window.smirk` is defined inside browsed pages.
-async function installBrowserController(): Promise<void> {
+/**
+ * Linux desktop uses an iframe-backed controller; macOS / Windows
+ * use the native Tauri WebviewWindow path. The split exists because
+ * WebKitGTK on X11 loses its compositor surface on parent-window
+ * resize (tauri-apps/tauri#7537, tauri-apps/wry#1727), leaving the
+ * embedded WebView black until the tab is destroyed. WKWebView
+ * (macOS) and WebView2 (Windows) don't have this failure mode, so
+ * they keep the canonical "native WebView per tab" architecture
+ * that other wallets (MetaMask, Phantom) use on mobile.
+ *
+ * `navigator.userAgent` is the runtime platform signal at hand —
+ * Tauri's `os` plugin would be cleaner but pulls in another command
+ * roundtrip + capability. The UA-string check is fine here because
+ * we run in our own WebView; UA spoofing isn't a threat surface.
+ */
+function isLinuxDesktop(): boolean {
+  return /\bLinux\b/i.test(navigator.userAgent);
+}
+
+async function installTauriController(): Promise<TauriBrowserController> {
   const controller = new TauriBrowserController();
-  // The injection script's transport names must match the Rust
-  // side's event constants. `TAURI_DAPP_RPC_EVENT` is the canonical
-  // string used by both ends.
   try {
     const script = getPageApiInjectionScript({
       transport: { kind: 'tauri', event: TAURI_DAPP_RPC_EVENT },
@@ -45,7 +61,22 @@ async function installBrowserController(): Promise<void> {
   } catch (e) {
     console.warn('[smirk-desktop] setInitScripts failed:', e);
   }
-  (globalThis as { __smirk_browser__?: TauriBrowserController }).__smirk_browser__ =
+  return controller;
+}
+
+function installIframeController(): IframeBrowserController {
+  // The iframe controller is in-process JS — no Tauri command
+  // round-trip needed. Page-side script injection is the dapp's
+  // responsibility (cross-origin iframes block parent injection);
+  // see docs/DAPP_INTEGRATION.md.
+  return new IframeBrowserController({ homeUrl: 'https://smirk.cash' });
+}
+
+async function installBrowserController(): Promise<void> {
+  const controller: DappBrowserController = isLinuxDesktop()
+    ? installIframeController()
+    : await installTauriController();
+  (globalThis as { __smirk_browser__?: DappBrowserController }).__smirk_browser__ =
     controller;
 }
 

@@ -27,3 +27,9 @@ export { InMemoryBookmarkStore } from './bookmarks';
 
 export type { MockControllerOptions } from './mock-controller';
 export { MockController } from './mock-controller';
+
+export type {
+  IframeControllerOptions,
+  InlineModeController,
+} from './iframe-controller';
+export { IframeBrowserController } from './iframe-controller';

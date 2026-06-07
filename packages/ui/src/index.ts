@@ -175,6 +175,11 @@ export { BrowserUrlBar } from './components/browser/BrowserUrlBar';
 export type { BrowserUrlBarProps } from './components/browser/BrowserUrlBar';
 export { BrowserTabStrip } from './components/browser/BrowserTabStrip';
 export type { BrowserTabStripProps } from './components/browser/BrowserTabStrip';
+export {
+  IframeBrowserContent,
+  SMIRK_DAPP_POSTMESSAGE_CHANNEL,
+} from './components/browser/IframeBrowserContent';
+export type { IframeBrowserContentProps } from './components/browser/IframeBrowserContent';
 
 // ----- State / hooks -----
 export {

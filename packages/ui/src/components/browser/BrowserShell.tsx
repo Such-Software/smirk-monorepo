@@ -109,6 +109,22 @@ export interface BrowserShellProps {
    * needs to constrain the shell to a region of the wallet UI.
    */
   readonly class?: string;
+
+  /**
+   * Content to render INSIDE the frame slot. Default (omitted) leaves
+   * the slot empty so a native-webview controller (Tauri / Capacitor)
+   * can paint its OS-level webview on top via `setFrameRect`. Inline-
+   * mode controllers (notably `IframeBrowserController`) pass their
+   * own `<IframeBrowserContent />` here so the iframe element renders
+   * as a real DOM child of the slot — no native overlay, no rect
+   * measurement required.
+   *
+   * Why a prop rather than reading `controller.inlineMode`: keeps
+   * `BrowserShell` controller-shape-agnostic and lets a host wallet
+   * decide on its own composition (e.g. an A/B test that swaps
+   * transports without changing the shell).
+   */
+  readonly slotContent?: JSX.Element | null;
 }
 
 /** See file header for usage. */
@@ -190,9 +206,12 @@ export function BrowserShell(props: BrowserShellProps): JSX.Element {
         style={{
           flex: 1,
           minHeight: 0,
+          position: 'relative',
           background: 'var(--smirk-bg-sunken, rgba(0,0,0,0.2))',
         }}
-      />
+      >
+        {props.slotContent ?? null}
+      </div>
     </div>
   );
 }
