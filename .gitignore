@@ -52,3 +52,9 @@ coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Personal / local-only notes. Anything you don't want git to nag
+# about: scratch markdown, work-in-progress plans, smoke-test
+# checklists, private scribbles. Put it under `private/` and git
+# forgets the folder exists.
+private/
