@@ -124,14 +124,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const startImport = () => setStep({ kind: 'import-warning' });
   const proceedToVerify = (mnemonic: string) => {
     const wordCount = mnemonic.trim().split(/\s+/).length;
-    // Default to 6/12 verification words. The prior default (3/12)
-    // let a transposed or one-word-off seed pass by luck — a user
-    // who writes their backup down wrong has a real chance of
-    // confirming three correct words and then losing access. 6/12
-    // catches ~99% of single transpositions while staying quick to
-    // tap. Override via the `verifyCount` prop if a specific UX
-    // calls for fewer.
-    const indices = pickRandomIndices(wordCount, props.verifyCount ?? 6);
+    // 3/12 matches the industry middle of the road: Stack Wallet
+    // does 1-2, Cake Wallet does 2-3, BlueWallet does 3-4. Going
+    // higher catches a few more transposition mistakes but costs
+    // real onboarding-completion rate, especially on mobile.
+    // Override via the `verifyCount` prop if a wallet variant
+    // genuinely needs a different number.
+    const indices = pickRandomIndices(wordCount, props.verifyCount ?? 3);
     setStep({ kind: 'verify', mnemonic, indices });
   };
   const proceedToPassword = (mnemonic: string, isImport: boolean) =>
