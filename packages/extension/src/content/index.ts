@@ -28,7 +28,7 @@ import {
   PROTOCOL_VERSION,
   SmirkWireRequest,
   SmirkWireResponse,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 import { isInjectDisabled } from '../background/dapp/inject-policy';
 
 // --- Step 1: inject the page-context script (gated by user policy) ---

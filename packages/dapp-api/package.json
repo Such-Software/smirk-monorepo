@@ -1,7 +1,7 @@
 {
-  "name": "@smirk/dapp-api",
+  "name": "@such-software/smirk-dapp-api",
   "version": "0.3.0",
-  "description": "Smirk dapp-injection layer (window.smirk). Transport-agnostic protocol + page-side + wallet-side handlers. Platform adapters (extension MV3, Capacitor in-app browser, Tauri WebView) implement the small transport / approval / permission-store interfaces.",
+  "description": "Smirk wallet dapp integration. Provides window.smirk (connect / signMessage / requestPayment / claimPublicTip) for websites that want to support Smirk across the browser extension, desktop app, and mobile app. Transport-agnostic — auto-detects extension content-script injection, iframe + postMessage, or Capacitor bridge.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,13 +13,39 @@
   },
   "files": [
     "dist/",
-    "src/"
+    "README.md",
+    "LICENSE"
   ],
+  "license": "MIT",
+  "homepage": "https://github.com/Such-Software/smirk-monorepo/tree/main/packages/dapp-api",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Such-Software/smirk-monorepo.git",
+    "directory": "packages/dapp-api"
+  },
+  "bugs": {
+    "url": "https://github.com/Such-Software/smirk-monorepo/issues"
+  },
+  "keywords": [
+    "smirk",
+    "wallet",
+    "dapp",
+    "bitcoin",
+    "monero",
+    "litecoin",
+    "wownero",
+    "grin",
+    "window.smirk"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --import tsx src/__tests__/page-api-script.test.ts",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
   },
   "devDependencies": {
     "tsx": "^4.7.0"

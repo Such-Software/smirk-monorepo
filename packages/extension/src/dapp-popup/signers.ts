@@ -26,7 +26,7 @@ import {
   signEd25519WithScalar,
   type UnlockedWallet,
 } from '@smirk/core';
-import type { SmirkAsset, SmirkSignResult } from '@smirk/dapp-api';
+import type { SmirkAsset, SmirkSignResult } from '@such-software/smirk-dapp-api';
 
 export function signMessageWithUnlocked(
   wallet: UnlockedWallet,

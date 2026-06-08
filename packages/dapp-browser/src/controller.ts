@@ -79,7 +79,7 @@ export interface DappBrowserController {
   /**
    * Set the script sources injected into every new tab at
    * document-start. Use this to install `window.smirk` (the page-side
-   * `@smirk/dapp-api` surface) before the page's own scripts run.
+   * `@such-software/smirk-dapp-api` surface) before the page's own scripts run.
    *
    * MUST be called before `open()` for the scripts to apply to the
    * initial tab. Updates after `open()` apply only to tabs created

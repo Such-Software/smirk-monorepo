@@ -76,7 +76,7 @@ auth, dapp surface, network egress, or storage.
 ## Cross-platform parity
 
 For changes that affect `@smirk/ui`, `@smirk/core`, `@smirk/assets`,
-`@smirk/dapp-api`, `@smirk/dapp-browser`, or `@smirk/keymap`:
+`@such-software/smirk-dapp-api`, `@smirk/dapp-browser`, or `@smirk/keymap`:
 
 - [ ] Behaviour is the same on extension, desktop, and mobile (or
       divergence is documented and intentional).

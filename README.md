@@ -16,7 +16,7 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 | `packages/core/` | Working — shared TS lib (API client, crypto, BIP-137 signing, address codecs, HD derivation, session-state + wizard scaffold, pendingOutgoing reconciliation, wallet-flow composition) |
 | `packages/assets/` | Working — `@smirk/assets` registry: pure-data definitions (decimals, family, capabilities, networks) for every chain Smirk supports. 44 unit tests. |
 | `packages/ui/` | Working — `@smirk/ui` shared Preact components: Home (UnifiedBalance, BalanceCard, ActionRow), SendWizard (5 assets incl. Grin interactive Exchange step), GrinRequestWizard, ReceiveScreen, OnboardingWizard, LockScreen, AppShell + BottomNav, ApprovalScreen (dapp prompt UI), theme registry (7 themes incl. retro themes) |
-| `packages/dapp-api/` | Working — `@smirk/dapp-api` transport-agnostic dapp injection: wire protocol, `WalletHandler` dispatcher, page-context `window.smirk` factory, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. Platform adapters live in `packages/extension/` (and eventually mobile / desktop). |
+| `packages/dapp-api/` | Working — `@such-software/smirk-dapp-api` transport-agnostic dapp injection: wire protocol, `WalletHandler` dispatcher, page-context `window.smirk` factory, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. Platform adapters live in `packages/extension/` (and eventually mobile / desktop). |
 | `packages/extension/` | Working — Chrome MV3 + Firefox MV3. Keystore + wallet-flow + lockscreen, send (BTC/LTC/XMR/WOW/Grin), receive, social tipping (two-phase create), per-asset detail screen, tri-state balance (confirmed/pending/locked), pendingOutgoing reconciliation. `window.smirk` dapp injection (connect, signMessage for BTC+LTC, isConnected, disconnect, getPublicKeys, getAddresses) with per-origin permissions + standalone approval-window flow + global privacy toggle in Settings. |
 | `packages/dapp-browser/` | Working — `@smirk/dapp-browser` embedded-browser shell abstraction. Platform-agnostic `DappBrowserController` + `MockController`; UI consumers (`BrowserShell`, `BrowserUrlBar`, `BrowserTabStrip`) live in `@smirk/ui`. |
 | `packages/keymap/` | Working — `@smirk/keymap` cross-platform keyboard-shortcut registry (per-platform bindings, action enum, runtime dispatcher). |
@@ -43,7 +43,7 @@ smirk-monorepo/
 │   ├── core/                 # @smirk/core — API client, crypto, HD derivation, codecs
 │   ├── assets/               # @smirk/assets — pure-data registry of every supported chain
 │   ├── ui/                   # @smirk/ui — shared Preact components (BalanceCard, SendWizard, OnboardingWizard, BrowserShell, ...)
-│   ├── dapp-api/             # @smirk/dapp-api — transport-agnostic window.smirk wire protocol + WalletHandler
+│   ├── dapp-api/             # @such-software/smirk-dapp-api — transport-agnostic window.smirk wire protocol + WalletHandler
 │   ├── dapp-browser/         # @smirk/dapp-browser — embedded-browser shell abstraction (Tauri + Capacitor)
 │   ├── keymap/               # @smirk/keymap — cross-platform keyboard-shortcut registry
 │   ├── swap/                 # @smirk/swap — swap orchestration (THORChain, Trocador, future native adaptor sigs)

@@ -21,7 +21,7 @@
  * @example desktop wiring
  *
  * ```ts
- * import { getPageApiInjectionScript } from '@smirk/dapp-api';
+ * import { getPageApiInjectionScript } from '@such-software/smirk-dapp-api';
  * import { TauriBrowserController } from './tauri-browser-controller';
  *
  * const script = getPageApiInjectionScript({

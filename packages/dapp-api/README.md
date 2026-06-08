@@ -1,4 +1,4 @@
-# @smirk/dapp-api
+# @such-software/smirk-dapp-api
 
 Transport-agnostic dapp-injection layer for Smirk Wallet.
 
@@ -50,7 +50,7 @@ See `src/page-api-script.ts` for the IIFE that bootstraps
 ## Use — extension service worker
 
 ```ts
-import { createWalletHandler } from '@smirk/dapp-api';
+import { createWalletHandler } from '@such-software/smirk-dapp-api';
 
 const dispatch = createWalletHandler({
   provider: chromeWalletProvider(),

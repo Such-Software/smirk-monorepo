@@ -25,7 +25,7 @@ import type {
   ApprovalHandler,
   ApprovalRequest,
   ApprovalResult,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 
 export interface InPopupApprovalQueue {
   /** ApprovalHandler implementation — pass to `createWalletHandler`. */

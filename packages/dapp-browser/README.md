@@ -9,7 +9,7 @@ This package answers exactly one question:
 > navigation, and the ability to inject a wallet-RPC script?
 
 It does **not** know anything about wallets, signatures, or the
-`window.smirk` API. Wallet RPC lives in `@smirk/dapp-api`.
+`window.smirk` API. Wallet RPC lives in `@such-software/smirk-dapp-api`.
 
 If you're new to the codebase, read
 [docs/EMBEDDED_BROWSER.md](../../docs/EMBEDDED_BROWSER.md) first.

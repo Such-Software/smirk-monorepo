@@ -28,7 +28,7 @@ import {
   SmirkPageTransport,
   SmirkWireRequest,
   SmirkWireResponse,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 
 interface PendingRequest {
   resolve: (resp: SmirkWireResponse) => void;

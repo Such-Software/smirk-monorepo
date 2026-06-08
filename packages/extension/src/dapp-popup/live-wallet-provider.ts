@@ -31,7 +31,7 @@ import {
   type SmirkAsset,
   type SmirkPublicKeys,
   type WalletProvider,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 
 function emptyAddresses(): SmirkAddresses {
   return { btc: null, ltc: null, xmr: null, wow: null, grin: null };

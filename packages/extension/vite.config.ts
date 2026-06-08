@@ -58,7 +58,7 @@ function bundleClassicScripts() {
             // every page's content-script world). Minify mostly for
             // size, not obfuscation.
             minify: true,
-            // Resolve workspace imports (`@smirk/dapp-api`) via Node
+            // Resolve workspace imports (`@such-software/smirk-dapp-api`) via Node
             // resolution from the extension package root.
             absWorkingDir: resolve(__dirname),
           });

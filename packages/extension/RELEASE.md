@@ -131,7 +131,7 @@ mandatory.
    npm run build --workspace @smirk/wasm
    npm run build --workspace @smirk/assets
    npm run build --workspace @smirk/core
-   npm run build --workspace @smirk/dapp-api
+   npm run build --workspace @such-software/smirk-dapp-api
    npm run build --workspace @smirk/ui
    npm run build:firefox --workspace @smirk/extension
    ( cd packages/extension/dist && zip -r -X ../check.zip . )

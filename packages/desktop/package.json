@@ -19,7 +19,7 @@
   "dependencies": {
     "@smirk/assets": "*",
     "@smirk/core": "*",
-    "@smirk/dapp-api": "*",
+    "@such-software/smirk-dapp-api": "*",
     "@smirk/dapp-browser": "*",
     "@smirk/ui": "*",
     "@smirk/wasm": "*",

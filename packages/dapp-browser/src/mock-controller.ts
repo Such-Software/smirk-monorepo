@@ -7,7 +7,7 @@
  *    without a real platform.
  *  - Headless development of UI features against scripted navigation
  *    sequences.
- *  - Integration tests of `@smirk/dapp-api` wallet handlers that
+ *  - Integration tests of `@such-software/smirk-dapp-api` wallet handlers that
  *    don't care which platform fired the page request.
  *
  * The mock is deliberately minimal — it tracks the state shape the

@@ -43,7 +43,7 @@ import {
 
 /**
  * Channel discriminator that pairs with the `postMessage` transport
- * in `@smirk/dapp-api`'s page-api script. Must match the value the
+ * in `@such-software/smirk-dapp-api`'s page-api script. Must match the value the
  * page-side runtime uses. Public constant so dapps building their
  * own integration can reference it; treat as a stable wire field.
  */

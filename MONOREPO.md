@@ -129,7 +129,7 @@ make ext-firefox  # same dist/, but with Firefox manifest
 
 The vite config at `packages/extension/vite.config.ts` copies the WASM bundle from `crates/smirk-wasm/pkg/` into `dist/wasm/` so the MV3 service worker can `fetch()` it at runtime, and bundles `src/content/index.ts` + `src/inject/index.ts` as standalone IIFEs (Chrome content/page scripts can't import ES modules). Run `make wasm` first if you haven't built the WASM bundle yet.
 
-### `packages/dapp-api/` — `@smirk/dapp-api`
+### `packages/dapp-api/` — `@such-software/smirk-dapp-api`
 
 Transport-agnostic dapp injection layer. Wire protocol (JSON-RPC-shaped envelope), `WalletHandler` dispatcher, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. The extension wires platform-specific adapters (`chrome.runtime.sendMessage`, `chrome.windows.create` for approvals, `chrome.storage.local` for permissions); future Capacitor mobile + Tauri desktop builds will swap in their own adapters around the same handler.
 

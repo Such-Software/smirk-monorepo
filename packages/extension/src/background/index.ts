@@ -3,7 +3,7 @@
  *
  * Two main jobs in v0.3 (more to come as flows port over):
  *   1. The dapp bridge — relays `window.smirk` calls from content
- *      scripts into the `@smirk/dapp-api` wallet-handler, which
+ *      scripts into the `@such-software/smirk-dapp-api` wallet-handler, which
  *      checks permissions and opens approval popups as needed.
  *   2. Generic SW commands (`PING`, future alarms, future
  *      notifications) — these live alongside the dapp bridge but

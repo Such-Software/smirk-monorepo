@@ -21,7 +21,7 @@ import type {
   ApprovalHandler,
   ApprovalRequest,
   ApprovalResult,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 
 const PENDING_PREFIX = 'smirk:dapp:approval-pending:';
 const RESULT_PREFIX = 'smirk:dapp:approval-result:';

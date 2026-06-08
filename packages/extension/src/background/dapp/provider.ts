@@ -40,8 +40,8 @@ import type {
   SmirkAsset,
   SmirkPublicKeys,
   WalletProvider,
-} from '@smirk/dapp-api';
-import { emptyPublicKeys } from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
+import { emptyPublicKeys } from '@such-software/smirk-dapp-api';
 
 export const PUBLIC_CACHE_KEY = 'smirk:dapp:public-cache:v1';
 

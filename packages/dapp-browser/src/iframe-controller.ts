@@ -31,7 +31,7 @@
  * Page-script injection: cross-origin iframes don't allow parent-
  * side script injection (browser same-origin policy). The page is
  * expected to install `window.smirk` itself — typically via
- * `import { installSmirkPageApi } from '@smirk/dapp-api/page'` or
+ * `import { installSmirkPageApi } from '@such-software/smirk-dapp-api/page'` or
  * by including the standalone IIFE build as a `<script>`. The
  * `setInitScripts` method here is therefore a no-op, present only
  * to satisfy the interface contract. See
@@ -354,7 +354,7 @@ export class IframeBrowserController
    * Returns the handler's response (or `null` if no handler is set
    * or the handler resolves without a result). The caller posts that
    * response back into the iframe's window so the page-side
-   * `@smirk/dapp-api` runtime resolves its waiting promise.
+   * `@such-software/smirk-dapp-api` runtime resolves its waiting promise.
    */
   async dispatchPageMessage(
     origin: string,

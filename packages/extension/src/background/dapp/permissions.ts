@@ -12,7 +12,7 @@
 import type {
   OriginPermission,
   OriginPermissionStore,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 
 const KEY_PREFIX = 'smirk:dapp:origin:';
 

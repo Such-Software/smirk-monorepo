@@ -1,6 +1,6 @@
 /**
  * Glues `chrome.runtime.onMessage` to the transport-agnostic
- * `WalletHandlerDispatch` from `@smirk/dapp-api`.
+ * `WalletHandlerDispatch` from `@such-software/smirk-dapp-api`.
  *
  * **Why a separate file from `background/index.ts`.** The SW root
  * file is the boot script — it has to stay short, predictable, and
@@ -25,7 +25,7 @@ import {
   SmirkWireRequest,
   SmirkWireResponse,
   type OriginContext,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 
 import { chromePopupApprovalHandler } from './approval';
 import { chromeStoragePermissionStore } from './permissions';

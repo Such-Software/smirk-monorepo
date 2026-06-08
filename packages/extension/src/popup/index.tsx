@@ -143,7 +143,7 @@ import {
   type ApprovalResult as DappApprovalResult,
   type SmirkAddresses,
   type SmirkPublicKeys,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 import {
   createInPopupApprovalQueue,
   createLiveWalletProvider,

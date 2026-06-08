@@ -21,7 +21,7 @@ a UI component library that consumes them:
 
 | Package                  | Question it answers                                          |
 | ------------------------ | ------------------------------------------------------------ |
-| `@smirk/dapp-api`        | How does a webpage talk to a wallet?                         |
+| `@such-software/smirk-dapp-api`        | How does a webpage talk to a wallet?                         |
 | `@smirk/dapp-browser`    | How does an app embed a browseable web surface?              |
 | `@smirk/ui` (browser/)   | What does the URL bar / tab strip / chrome look like?        |
 
@@ -31,7 +31,7 @@ transport between embedded webview and wallet handler. The UI shell
 and the controller interface are platform-agnostic.
 
 The extension does **not** use `dapp-browser` — the host browser IS
-the browser there. The extension uses only `@smirk/dapp-api`.
+the browser there. The extension uses only `@such-software/smirk-dapp-api`.
 
 ## Layered architecture
 
@@ -70,7 +70,7 @@ the browser there. The extension uses only `@smirk/dapp-api`.
                          │ wallet RPC              │ wallet RPC
                          ▼                         ▼
                     ┌─────────────────────────────────────┐
-   wallet handling  │  @smirk/dapp-api                    │
+   wallet handling  │  @such-software/smirk-dapp-api                    │
    (unchanged)      │    installSmirkApi (page side)      │
                     │    createWalletHandler (wallet side)│
                     │    protocol / permissions / approval│
@@ -82,7 +82,7 @@ the browser there. The extension uses only `@smirk/dapp-api`.
 The cardinal rule: each package answers **one** question. If you're
 unsure where a new file belongs, identify which question it answers.
 
-### `@smirk/dapp-api` — wallet RPC
+### `@such-software/smirk-dapp-api` — wallet RPC
 
 Answers: *"How does a webpage talk to a wallet?"*
 
@@ -113,7 +113,7 @@ Contains:
 
 Does **not** contain:
 
-- Wallet RPC (use `@smirk/dapp-api`)
+- Wallet RPC (use `@such-software/smirk-dapp-api`)
 - UI components (use `@smirk/ui`)
 - Platform implementations (use `packages/desktop`, `packages/mobile`)
 
@@ -158,7 +158,7 @@ This is intentional — keeps `dapp-browser` ignorant of `dapp-api`, and
 // in packages/desktop/src/dapp/tauri-browser-controller.ts; the
 // future mobile shell will mirror the shape against a
 // `CapacitorBrowserController`.
-import { getPageApiInjectionScript, createWalletHandler } from '@smirk/dapp-api';
+import { getPageApiInjectionScript, createWalletHandler } from '@such-software/smirk-dapp-api';
 import { TauriBrowserController } from './tauri-browser-controller';
 
 const browserController = new TauriBrowserController();
@@ -230,7 +230,7 @@ rewrite the UI.
 
 | Layer                                    | v0.3.0 desktop | v0.4 mobile | v0.4+ polish |
 | ---------------------------------------- | -------------- | ----------- | ------------ |
-| `@smirk/dapp-api` (already shipped)      | unchanged      | unchanged   | —            |
+| `@such-software/smirk-dapp-api` (already shipped)      | unchanged      | unchanged   | —            |
 | `@smirk/dapp-browser` types + interface  | ship           | ship        | —            |
 | `BrowserShell` + sub-components          | ship           | ship        | —            |
 | `TauriBrowserController` + Rust plugin   | ship           | —           | —            |

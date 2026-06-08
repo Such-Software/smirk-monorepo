@@ -9,7 +9,7 @@ Companion to the v0.2.x [legacy integration guide](https://github.com/Such-Softw
 Add this near the top of your page bundle:
 
 ```ts
-import { installSmirkPageApi } from '@smirk/dapp-api';
+import { installSmirkPageApi } from '@such-software/smirk-dapp-api';
 
 installSmirkPageApi();
 ```
@@ -29,7 +29,7 @@ v0.3.0 introduces a **standalone desktop wallet** (Tauri-based, AppImage on Linu
 
 v0.4 will add the Capacitor mobile wallet with its own in-app browser using the same bridge pattern.
 
-Three transports, one API. The `@smirk/dapp-api` package abstracts the difference.
+Three transports, one API. The `@such-software/smirk-dapp-api` package abstracts the difference.
 
 ## How transport detection works
 
@@ -45,7 +45,7 @@ The detection is opt-in: dapps that haven't migrated to v0.3.0 keep working in t
 
 If you already use `window.smirk` (smirk.cash, play.wowne.ro, etc.):
 
-- [ ] Add `@smirk/dapp-api` to your dependencies. The package has zero runtime deps beyond `window.parent.postMessage` so it's safe in any environment.
+- [ ] Add `@such-software/smirk-dapp-api` to your dependencies. The package has zero runtime deps beyond `window.parent.postMessage` so it's safe in any environment.
 - [ ] Call `installSmirkPageApi()` once near the top of your client bundle (Next.js `app/layout.tsx`, Vite `main.ts`, similar).
 - [ ] No changes required to your existing `window.smirk.connect()` / `signMessage()` / etc. code. The surface is identical.
 - [ ] Update any "Smirk extension not found" UI to mention "or open this page in the Smirk desktop wallet" — both contexts are now first-class.
@@ -91,7 +91,7 @@ The `id` is per-request, allocated by the page side, and used to match each resp
 
 ## Privacy posture
 
-The integration is built so that **Smirk's infrastructure is never on the network path between your dapp and the user**. The page-side bundle ships from your domain (you `npm install @smirk/dapp-api`), there is no CDN we host, and the wallet itself runs locally on the user's device. The user's IP / referer / user-agent never touch Smirk-controlled servers as a result of calling `window.smirk.*`.
+The integration is built so that **Smirk's infrastructure is never on the network path between your dapp and the user**. The page-side bundle ships from your domain (you `npm install @such-software/smirk-dapp-api`), there is no CDN we host, and the wallet itself runs locally on the user's device. The user's IP / referer / user-agent never touch Smirk-controlled servers as a result of calling `window.smirk.*`.
 
 This is a hard architectural commitment, not a setting. We don't run a `cdn.smirk.cash` script tag because that would put us in the middle of every dapp's page load on every Smirk user.
 
@@ -107,5 +107,5 @@ This is a hard architectural commitment, not a setting. We don't run a `cdn.smir
 ## Where to file issues
 
 - v0.2.x extension behavior — [smirk-extension/issues](https://github.com/Such-Software/smirk-extension/issues)
-- v0.3.0 desktop / monorepo / `@smirk/dapp-api` — [smirk-monorepo/issues](https://github.com/Such-Software/smirk-monorepo/issues)
+- v0.3.0 desktop / monorepo / `@such-software/smirk-dapp-api` — [smirk-monorepo/issues](https://github.com/Such-Software/smirk-monorepo/issues)
 - Integration questions / new transport requests — same issue tracker; tag `dapp-integration`.

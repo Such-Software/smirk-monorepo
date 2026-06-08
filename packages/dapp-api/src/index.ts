@@ -1,5 +1,5 @@
 /**
- * @smirk/dapp-api — transport-agnostic dapp-injection layer.
+ * @such-software/smirk-dapp-api — transport-agnostic dapp-injection layer.
  *
  * Three layers:
  *   1. Protocol (protocol.ts) — JSON-RPC-shaped wire types shared by

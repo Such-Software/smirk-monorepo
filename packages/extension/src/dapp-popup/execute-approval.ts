@@ -26,7 +26,7 @@ import type {
   ApprovalRequest,
   ApprovalResult as DappApprovalResult,
   SmirkAsset,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 import type { ApprovalApproval } from '@smirk/ui';
 import { signMessageWithUnlocked } from './signers';
 

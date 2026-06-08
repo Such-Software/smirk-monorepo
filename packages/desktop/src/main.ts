@@ -18,7 +18,7 @@
  * reader can follow the hand-off in one read.
  */
 
-import { getPageApiInjectionScript } from '@smirk/dapp-api';
+import { getPageApiInjectionScript } from '@such-software/smirk-dapp-api';
 import {
   IframeBrowserController,
   type DappBrowserController,

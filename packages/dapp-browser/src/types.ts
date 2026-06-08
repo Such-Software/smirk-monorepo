@@ -142,7 +142,7 @@ export interface BrowserFrameRect {
 /**
  * Wire-format message from an embedded page, paired with the origin
  * the controller resolved it from. Opaque to this package — the
- * `request` field is whatever shape `@smirk/dapp-api`'s wallet
+ * `request` field is whatever shape `@such-software/smirk-dapp-api`'s wallet
  * handler expects.
  *
  * Why `request: unknown` instead of importing the type: keeps

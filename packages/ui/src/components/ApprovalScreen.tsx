@@ -27,7 +27,7 @@ import type { ComponentChildren } from 'preact';
 import { Button } from './Button';
 
 /** Asset id the dapp protocol exchanges. Mirrors `SmirkAsset` from
- *  `@smirk/dapp-api` — declared inline so this UI package doesn't
+ *  `@such-software/smirk-dapp-api` — declared inline so this UI package doesn't
  *  reach into the protocol package directly. */
 export type ApprovalAsset = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
 
@@ -39,7 +39,7 @@ export interface ApprovalOrigin {
 }
 
 /** Discriminated request shape — must match `ApprovalRequest` from
- *  `@smirk/dapp-api` so platform shells can pass it through. */
+ *  `@such-software/smirk-dapp-api` so platform shells can pass it through. */
 export type ApprovalRequest =
   | {
       kind: 'connect';

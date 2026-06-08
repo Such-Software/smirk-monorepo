@@ -23,7 +23,7 @@ import {
   type SmirkWireRequest,
   type SmirkWireResponse,
   type WalletHandlerDispatch,
-} from '@smirk/dapp-api';
+} from '@such-software/smirk-dapp-api';
 
 /**
  * Structural mirror of `@smirk/dapp-browser`'s `PageRequest`. We
