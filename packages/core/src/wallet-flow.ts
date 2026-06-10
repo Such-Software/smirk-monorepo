@@ -36,6 +36,7 @@
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
+import { solvePowChallenge } from './pow';
 
 export interface BootstrapAuthResult {
   userId: string;
@@ -132,6 +133,15 @@ export async function bootstrapAuth(
   // already has it — ignore on resubmission.
   const walletBirthday = isKnownWallet ? undefined : Math.floor(Date.now() / 1000);
 
+  // ALTCHA proof-of-work. ALWAYS solve, even when the backend's
+  // `POW_REQUIRED=false`. The cost (~1-2s of PBKDF2 on a laptop) is
+  // invisible inside the existing onboarding spinner, and shipping the
+  // wallet with PoW pre-wired means flipping the backend env var later
+  // is a server-only change with zero client redeploy required. See
+  // `pow.ts` for the implementation; failure is non-fatal — the
+  // backend accepts no-solution requests in graceful-migration mode.
+  const altchaSolution = await solvePowChallenge(api);
+
   const result = await api.extensionRegister({
     keys,
     seedFingerprint: wallet.fingerprint,
@@ -140,6 +150,7 @@ export async function bootstrapAuth(
     ...(walletBirthday !== undefined ? { walletBirthday } : {}),
     ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
     ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+    ...(altchaSolution !== null ? { altchaSolution } : {}),
   });
 
   if (result.error || !result.data) {

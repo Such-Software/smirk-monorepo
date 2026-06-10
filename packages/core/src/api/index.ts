@@ -67,6 +67,7 @@ export class SmirkApi
   refreshToken: AuthMethods['refreshToken'];
   extensionRegister: AuthMethods['extensionRegister'];
   checkRestore: AuthMethods['checkRestore'];
+  powChallenge: AuthMethods['powChallenge'];
 
   // Keys
   registerKey: KeysMethods['registerKey'];
@@ -155,6 +156,7 @@ export class SmirkApi
     this.refreshToken = auth.refreshToken;
     this.extensionRegister = auth.extensionRegister;
     this.checkRestore = auth.checkRestore;
+    this.powChallenge = auth.powChallenge;
 
     this.registerKey = keys.registerKey;
     this.getUserKeys = keys.getUserKeys;

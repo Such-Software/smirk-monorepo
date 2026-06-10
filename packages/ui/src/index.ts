@@ -214,3 +214,10 @@ export {
 
 // ----- Helpers -----
 export { formatAmount, formatAmountWithAsset, formatAmountWithTicker } from './format';
+
+// ----- Advanced settings -----
+export { RevealKeysPanel } from './components/RevealKeysPanel';
+export type {
+  RevealKeysPanelProps,
+  RevealKeysPanelWallet,
+} from './components/RevealKeysPanel';

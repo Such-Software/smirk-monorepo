@@ -38,6 +38,14 @@ export interface AuthMethods {
     signedTimestamp: number;
     /** Bitcoin message signature of `smirk-auth-{timestamp}` using BTC private key. */
     signature: string;
+    /**
+     * Optional ALTCHA proof-of-work solution. Always sent by v0.3.0+
+     * clients (so the backend can flip `POW_REQUIRED=true` without
+     * breaking us). Opaque from the client's perspective — the wallet
+     * fetches it from `/auth/pow-challenge`, solves it with
+     * `altcha-lib`, and posts it back verbatim.
+     */
+    altchaSolution?: unknown;
   }): Promise<
     ApiResponse<{
       accessToken: string;
@@ -46,6 +54,15 @@ export interface AuthMethods {
       user: { id: string; username?: string; isNew?: boolean };
     }>
   >;
+
+  /**
+   * Fetch a fresh ALTCHA proof-of-work challenge. The wallet must solve
+   * it (typically via `altcha-lib`'s `solveChallenge`) and pass the
+   * resulting payload as `altchaSolution` to `extensionRegister`.
+   * Challenges expire after 10 minutes; one challenge → one
+   * registration.
+   */
+  powChallenge(): Promise<ApiResponse<unknown>>;
 
   checkRestore(params: {
     fingerprint: string;
@@ -141,9 +158,19 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
           wow_start_height: params.wowStartHeight,
           signed_timestamp: params.signedTimestamp,
           signature: params.signature,
+          altcha_solution: params.altchaSolution,
         }),
       });
       return transformResponse(result, snakeToCamel<AuthResponseCamel>);
+    },
+
+    async powChallenge() {
+      // Retryable: this is a fresh-issue idempotent on the server
+      // (every call mints a new challenge), but transient 5xx
+      // shouldn't fail the wallet-creation flow on first try.
+      return await client.retryableRequest<unknown>('/auth/pow-challenge', {
+        method: 'POST',
+      });
     },
 
     async checkRestore(params) {

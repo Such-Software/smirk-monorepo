@@ -1484,6 +1484,7 @@ function App() {
       <OnboardingWizard
         generateMnemonic={generateMnemonicPhrase}
         isValidMnemonic={isValidMnemonic}
+        dogeMiningImageUrl={chrome.runtime.getURL('doge-mining.webp')}
         onComplete={async (mnemonic, password) => {
           const wallet = await walletKeystore.createWallet({ mnemonic, password });
           // Respect the user's stored auto-lock preference, if any was
@@ -1497,11 +1498,20 @@ function App() {
           // screen through its setup step. `onFullyDone` below flips
           // it to `unlocked` after the user is done.
           //
-          // The standard `startSession` effect (fires when walletState
-          // becomes unlocked) will re-bootstrap once that happens;
-          // idempotent on the backend, costs one extra round-trip we
-          // can pay once at onboarding.
-          await bootstrapAuth(api, wallet);
+          // Cache the bootstrap immediately so the standard
+          // `startSession` effect (which fires the moment walletState
+          // transitions to unlocked) finds a warm cache and skips a
+          // second bootstrap. Pre-PoW that doubled call cost ~50ms;
+          // post-PoW it would have re-run a full ~1-2s PBKDF2 solve.
+          const onboardBootstrap = await bootstrapAuth(api, wallet);
+          const onboardToken = api.getAccessToken();
+          if (onboardToken) {
+            await writeBootstrapCache(
+              wallet.fingerprint,
+              onboardToken,
+              onboardBootstrap,
+            );
+          }
           // Surface any identity this wallet already owns on the
           // backend (Smirk handle + linked socials). Issued in
           // parallel — both are read-only and one slow leg shouldn't
@@ -4856,11 +4866,102 @@ function ChangePasswordPanel({ onClose }: { onClose: () => void }) {
 
 function ExportKeysPanel({ wallet }: { wallet: UnlockedWallet }) {
   const [revealed, setRevealed] = useState(false);
+  const [powHash, setPowHash] = useState<string>('computing…');
   const keys = wallet.keys;
+
+  useEffect(() => {
+    // SHA-256 of the BTC pubkey hex string. Matches the backend's
+    // `hash_public_key` exactly so the value here pastes verbatim
+    // into TEST_POW_REQUIRED_FOR_PUBKEYS for safe pre-flip testing.
+    void (async () => {
+      const pubkeyHex = bytesToHex(keys.btc.publicKey);
+      const buf = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(pubkeyHex),
+      );
+      const hash = bytesToHex(new Uint8Array(buf));
+      setPowHash(hash);
+    })();
+  }, [keys.btc.publicKey]);
+
+  // Always-visible public material: addresses, public keys, the PoW
+  // gate hash. Safe to show without the reveal gate. Lives above the
+  // gate so a user doesn't have to opt into "I understand the risk"
+  // just to copy a public address or a hash that's only useful for
+  // anti-abuse config.
+  const publicMaterial = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <KeyRow
+        label="Smirk PoW gate hash"
+        sub="SHA-256 of your BTC pubkey hex — paste into TEST_POW_REQUIRED_FOR_PUBKEYS on the backend"
+        value={powHash}
+      />
+      <KeyRow
+        label="BTC address"
+        sub="bech32 P2WPKH — m/84'/0'/0'/0/0"
+        value={wallet.addresses.btc}
+      />
+      <KeyRow
+        label="BTC public key (compressed)"
+        sub="33-byte secp256k1 pubkey"
+        value={bytesToHex(keys.btc.publicKey)}
+      />
+      <KeyRow
+        label="LTC address"
+        sub="bech32 P2WPKH — m/84'/2'/0'/0/0"
+        value={wallet.addresses.ltc}
+      />
+      <KeyRow
+        label="LTC public key (compressed)"
+        sub="33-byte secp256k1 pubkey"
+        value={bytesToHex(keys.ltc.publicKey)}
+      />
+      <KeyRow
+        label="XMR address"
+        sub="standard CryptoNote address (95 chars)"
+        value={wallet.addresses.xmr}
+      />
+      <KeyRow
+        label="XMR public spend key"
+        sub="32-byte ed25519 — half of the public address"
+        value={bytesToHex(keys.xmr.publicSpendKey)}
+      />
+      <KeyRow
+        label="XMR public view key"
+        sub="32-byte ed25519 — half of the public address"
+        value={bytesToHex(keys.xmr.publicViewKey)}
+      />
+      <KeyRow
+        label="WOW address"
+        sub="standard Wownero address"
+        value={wallet.addresses.wow}
+      />
+      <KeyRow
+        label="WOW public spend key"
+        sub="32-byte ed25519"
+        value={bytesToHex(keys.wow.publicSpendKey)}
+      />
+      <KeyRow
+        label="WOW public view key"
+        sub="32-byte ed25519"
+        value={bytesToHex(keys.wow.publicViewKey)}
+      />
+      <KeyRow
+        label="Grin slatepack address"
+        sub="bech32-encoded ed25519 pubkey"
+        value={wallet.addresses.grin}
+      />
+      <KeyRow
+        label="Grin public key"
+        sub="32-byte ed25519 pubkey"
+        value={bytesToHex(keys.grin.publicKey)}
+      />
+    </div>
+  );
 
   if (!revealed) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <p
           style={{
             fontSize: 11,
@@ -4870,10 +4971,11 @@ function ExportKeysPanel({ wallet }: { wallet: UnlockedWallet }) {
           }}
         >
           For recovering your wallet in another tool (Monero CLI,
-          grin-wallet, Sparrow, Electrum, etc.). The same data is
-          derivable from your seed phrase — this panel just saves
-          the derivation work.
+          grin-wallet, Sparrow, Electrum, etc.) and for backend
+          anti-abuse config. Public material below is safe to copy;
+          private keys require a confirmation tap.
         </p>
+        {publicMaterial}
         <div
           style={{
             padding: '8px 10px',
@@ -4904,7 +5006,7 @@ function ExportKeysPanel({ wallet }: { wallet: UnlockedWallet }) {
             cursor: 'pointer',
           }}
         >
-          I understand the risk — reveal keys
+          I understand the risk — reveal private keys
         </button>
       </div>
     );
@@ -4912,6 +5014,19 @@ function ExportKeysPanel({ wallet }: { wallet: UnlockedWallet }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {publicMaterial}
+      <div
+        style={{
+          padding: '6px 10px',
+          background: 'rgba(239, 68, 68, 0.08)',
+          borderRadius: 4,
+          fontSize: 10,
+          color: '#ef4444',
+          opacity: 0.85,
+        }}
+      >
+        Private keys below — full spend access.
+      </div>
       <KeyRow
         label="BTC private key (secp256k1)"
         sub="BIP84 path m/84'/0'/0'/0/0 — import into Sparrow/Electrum"

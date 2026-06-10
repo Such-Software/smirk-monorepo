@@ -23,7 +23,7 @@
  * seed; the user re-does onboarding. UX cost we accept.
  */
 
-import { useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Button } from './Button';
 
@@ -102,6 +102,18 @@ export interface OnboardingWizardProps {
   setInjectEnabled?: (enabled: boolean) => Promise<void>;
   /** Number of words to require during the verification step (create flow). Default 3. */
   verifyCount?: number;
+  /**
+   * URL the consumer serves the "doge mining" animated WebP from.
+   * Drawn during the PoW solve in the submitting step. Falls back
+   * to a bouncing 🐕 emoji when omitted — for hosts that don't ship
+   * the asset (tests, Storybook).
+   *
+   * Why a URL prop rather than a bundled import: `@smirk/ui` stays
+   * asset-free so themes / bundlers don't have to learn about a new
+   * non-font asset. Each consumer (the extension, the Tauri desktop,
+   * the Capacitor mobile build) maps it to its own runtime path.
+   */
+  dogeMiningImageUrl?: string;
   class?: string;
 }
 
@@ -221,7 +233,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         />
       )}
 
-      {step.kind === 'submitting' && <FullPageStatus>Encrypting wallet…</FullPageStatus>}
+      {step.kind === 'submitting' && (
+        <PowSubmittingStatus
+          {...(props.dogeMiningImageUrl
+            ? { dogeImageUrl: props.dogeMiningImageUrl }
+            : {})}
+        />
+      )}
 
       {step.kind === 'setup' && (
         <SmirkSetup
@@ -1113,6 +1131,156 @@ function FullPageStatus({ children }: { children: ComponentChildren }) {
   return (
     <div style={{ padding: '60px 16px', textAlign: 'center', opacity: 0.7, fontSize: 14 }}>
       {children}
+    </div>
+  );
+}
+
+/**
+ * `PowSubmittingStatus` — what the user stares at while
+ * `props.onComplete` does its three things:
+ *   1. Encrypts the seed under the user's password
+ *   2. Solves the ALTCHA proof-of-work challenge the backend issues
+ *      (~1-2s of PBKDF2 on a laptop)
+ *   3. Registers the wallet against /auth/extension
+ *
+ * Renders a bouncing doge with doge-meme phrases cycling underneath.
+ * The fact that PBKDF2 is *actually* compute-bound makes the dancing
+ * doge legitimate — the page isn't pretending to work; it really is
+ * grinding hashes. Better than a static "Loading…" both for honesty
+ * and for telling people what proof-of-work even is.
+ *
+ * The phrase cycle deliberately includes the word "proof-of-work" so
+ * users who don't get the joke still get the meaning.
+ */
+function PowSubmittingStatus({ dogeImageUrl }: { dogeImageUrl?: string }) {
+  const phrases = [
+    'wow',
+    'much PoW',
+    'such proof',
+    'very work',
+    'so hash',
+    'many bits',
+    'much crypto',
+    'wow so secure',
+  ];
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => {
+      setIdx((i) => (i + 1) % phrases.length);
+    }, 700);
+    return () => clearInterval(t);
+    // phrases is a stable literal; ESLint dep-list would complain
+    // unnecessarily, hence the inline disable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Doge-meme palette — these are the canonical comic-sans-rainbow
+  // colours the meme uses. One per phrase, cycling with the same
+  // index so each new phrase gets its own colour.
+  const palette = [
+    '#ff6b9d', // pink
+    '#ffd93d', // yellow
+    '#6bcb77', // green
+    '#4d96ff', // blue
+    '#ff9f43', // orange
+    '#9d5cff', // purple
+    '#ff5e57', // red
+    '#1dd1a1', // teal
+  ];
+
+  return (
+    <div
+      style={{
+        padding: '48px 16px 16px',
+        textAlign: 'center',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 18,
+      }}
+    >
+      {dogeImageUrl ? (
+        // Honest-to-god animated doge mining WebP. Loops on its own.
+        // Wrap so the surrounding bounce animation applies to the
+        // whole graphic, not the img's internal frames.
+        <div
+          aria-hidden="true"
+          style={{
+            animation: 'smirk-doge-bounce 0.9s ease-in-out infinite',
+          }}
+        >
+          <img
+            src={dogeImageUrl}
+            alt=""
+            style={{
+              width: 140,
+              height: 'auto',
+              display: 'block',
+              imageRendering: 'auto',
+            }}
+          />
+        </div>
+      ) : (
+        // Fallback for hosts that don't ship the doge asset (tests,
+        // Storybook, dev environments without the file copied).
+        <div
+          aria-hidden="true"
+          style={{
+            fontSize: 64,
+            lineHeight: 1,
+            animation: 'smirk-doge-bounce 0.9s ease-in-out infinite',
+          }}
+        >
+          🐕
+        </div>
+      )}
+
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 600,
+          opacity: 0.9,
+        }}
+      >
+        Setting up wallet…
+      </div>
+
+      <div
+        role="status"
+        aria-live="polite"
+        style={{
+          fontFamily: 'Comic Sans MS, Comic Sans, cursive',
+          fontSize: 22,
+          fontWeight: 700,
+          color: palette[idx],
+          transition: 'color 0.3s ease',
+          minHeight: 30,
+          letterSpacing: '0.02em',
+          textShadow: '0 1px 2px rgba(0,0,0,0.25)',
+        }}
+      >
+        {phrases[idx]}
+      </div>
+
+      <div
+        style={{
+          fontSize: 11,
+          opacity: 0.55,
+          maxWidth: 280,
+          lineHeight: 1.4,
+        }}
+      >
+        Solving a proof-of-work puzzle to prove you&rsquo;re probably
+        human. Takes a second or two — bots hate it; you won&rsquo;t
+        notice it.
+      </div>
+
+      <style>{`
+        @keyframes smirk-doge-bounce {
+          0%, 100% { transform: translateY(0) rotate(-3deg); }
+          50%      { transform: translateY(-14px) rotate(3deg); }
+        }
+      `}</style>
     </div>
   );
 }

@@ -118,6 +118,13 @@ function copyMonorepoAssets() {
       if (existsSync('assets/fonts')) {
         copyDirRecursive('assets/fonts', 'dist/fonts');
       }
+
+      // Copy the doge-mining animated WebP used in the PoW solve
+      // status. Mirrored from wowne.ro-idp's `public/` so the asset
+      // ships with the extension binary instead of phoning home.
+      if (existsSync('assets/doge-mining.webp')) {
+        copyFileSync('assets/doge-mining.webp', 'dist/doge-mining.webp');
+      }
     },
   };
 }

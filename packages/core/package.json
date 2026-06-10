@@ -25,14 +25,15 @@
     "tsx": "^4.7.0"
   },
   "dependencies": {
-    "@smirk/assets": "*",
-    "@smirk/wasm": "*",
     "@noble/ciphers": "^0.5.0",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
     "@scure/base": "^2.0.0",
     "@scure/bip32": "^2.0.1",
-    "@scure/bip39": "^2.0.1"
+    "@scure/bip39": "^2.0.1",
+    "@smirk/assets": "*",
+    "@smirk/wasm": "*",
+    "altcha-lib": "^2.2.0"
   },
   "license": "MIT",
   "publishConfig": {
