@@ -140,6 +140,10 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, 'popup.html'),
         background: resolve(__dirname, 'src/background/index.ts'),
+        // Offscreen document for the background job runner. Chrome
+        // MV3 creates this via `chrome.offscreen.createDocument`;
+        // Vite emits it alongside popup.html.
+        'jobs-offscreen': resolve(__dirname, 'jobs-offscreen.html'),
       },
       output: {
         entryFileNames: '[name].js',

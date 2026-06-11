@@ -4,6 +4,7 @@
 
 import { ApiClient, ApiResponse } from './client';
 import { snakeToCamel } from './parse';
+import type { AltchaPayload } from '../pow';
 
 export interface AuthMethods {
   telegramLogin(initData: string): Promise<
@@ -41,11 +42,15 @@ export interface AuthMethods {
     /**
      * Optional ALTCHA proof-of-work solution. Always sent by v0.3.0+
      * clients (so the backend can flip `POW_REQUIRED=true` without
-     * breaking us). Opaque from the client's perspective — the wallet
-     * fetches it from `/auth/pow-challenge`, solves it with
-     * `altcha-lib`, and posts it back verbatim.
+     * breaking us). The `challenge` must be the FULL original
+     * Challenge object returned by `/auth/pow-challenge`, NOT the
+     * Solution's internal challenge-hash field — the envelope shape
+     * matches the backend's `altcha::Payload` struct exactly.
+     *
+     * The typed alias is in `@smirk/core/pow.ts::AltchaPayload`;
+     * `solvePowChallenge` returns it directly.
      */
-    altchaSolution?: unknown;
+    altchaSolution?: AltchaPayload;
   }): Promise<
     ApiResponse<{
       accessToken: string;

@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <!--
+    Offscreen-document host for the background job runner.
+
+    Chrome MV3 offscreen documents are hidden full-DOM pages
+    extensions can spawn for tasks the service worker can't host
+    cleanly (Web Crypto with Workers, long-running compute, etc.).
+    The SW creates this page via `chrome.offscreen.createDocument`;
+    `runner.ts` listens for `OffscreenJobRequest` messages and
+    dispatches them to the registered job handlers.
+
+    Page is visually empty — it never renders, only runs JS.
+  -->
+  <head>
+    <meta charset="utf-8" />
+    <title>Smirk job runner</title>
+  </head>
+  <body>
+    <script type="module" src="./src/background/jobs/offscreen/runner.ts"></script>
+  </body>
+</html>

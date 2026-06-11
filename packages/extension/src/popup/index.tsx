@@ -39,7 +39,6 @@ import {
   SESSION_CACHE_KEY,
   WalletKeystore,
   api,
-  bootstrapAuth,
   fetchAllBalances,
   visibleAssetIds,
   withAssetVisibility,
@@ -109,6 +108,7 @@ import {
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { send } from './send-handler';
+import { bootstrapAuthInExtension } from './jobs/bootstrap-in-extension';
 import {
   startGrinSend,
   processGrinS2,
@@ -764,6 +764,70 @@ function openPopOut() {
 }
 
 /**
+ * Placeholder rendered while the background `bootstrap-auth` job is
+ * still running. Shows the animated doge so the wait reads as
+ * intentional ("we're proving you're probably human") rather than
+ * a hang. The actual work — PoW + register — happens in the
+ * offscreen runner; this view just listens for the result.
+ *
+ * If the popup closes while this is showing, the SW continues the
+ * bootstrap; the *next* popup mount finds the result in
+ * `chrome.storage.session` via the bootstrap-auth job's dedup key.
+ */
+function BootstrappingPlaceholder({
+  dogeImageUrl,
+}: {
+  dogeImageUrl: string;
+}) {
+  return (
+    <div
+      style={{
+        padding: '48px 16px 16px',
+        textAlign: 'center',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 18,
+      }}
+    >
+      <div
+        aria-hidden="true"
+        style={{
+          animation: 'smirk-bootstrap-bounce 0.9s ease-in-out infinite',
+        }}
+      >
+        <img
+          src={dogeImageUrl}
+          alt=""
+          style={{ width: 140, height: 'auto', display: 'block' }}
+        />
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.9 }}>
+        Setting up wallet…
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          opacity: 0.55,
+          maxWidth: 280,
+          lineHeight: 1.4,
+        }}
+      >
+        Signing you in &mdash; this can take a few seconds. Safe to
+        click away; the work continues in the background and resumes
+        when you reopen the wallet.
+      </div>
+      <style>{`
+        @keyframes smirk-bootstrap-bounce {
+          0%, 100% { transform: translateY(0) rotate(-3deg); }
+          50%      { transform: translateY(-12px) rotate(3deg); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+/**
  * Live wallet session — auth bootstrap + fetched balances. Re-derived
  * whenever the user unlocks (or transitions empty → unlocked via
  * onboarding). Lives in module memory only; SW restart drops it and
@@ -1133,7 +1197,12 @@ function App() {
         api.setAccessToken(warm.accessToken);
         bootstrap = warm.bootstrap;
       } else {
-        bootstrap = await bootstrapAuth(api, wallet);
+        // Full bootstrap runs in the background SW so popup-close
+        // doesn't strand a half-finished registration. See
+        // packages/extension/src/background/jobs/handlers/bootstrap-auth.ts
+        // for the handler; the popup-side wrapper handles dedup +
+        // reuse of recently-completed jobs from a prior popup mount.
+        bootstrap = await bootstrapAuthInExtension(api, wallet);
         const tok = api.getAccessToken();
         if (tok) {
           await writeBootstrapCache(wallet.fingerprint, tok, bootstrap);
@@ -1503,7 +1572,7 @@ function App() {
           // transitions to unlocked) finds a warm cache and skips a
           // second bootstrap. Pre-PoW that doubled call cost ~50ms;
           // post-PoW it would have re-run a full ~1-2s PBKDF2 solve.
-          const onboardBootstrap = await bootstrapAuth(api, wallet);
+          const onboardBootstrap = await bootstrapAuthInExtension(api, wallet);
           const onboardToken = api.getAccessToken();
           if (onboardToken) {
             await writeBootstrapCache(
@@ -1659,6 +1728,21 @@ function App() {
       void refreshBalances(walletState.wallet, session.bootstrap);
     }
   };
+
+  // Render a "Setting up wallet…" placeholder while the background
+  // bootstrap (PoW solve + extensionRegister) is in flight. Without
+  // this gate the popup briefly renders the Home tab with no balances
+  // and fires data-fetching effects (tip inbox, balances, prices)
+  // that all 401 because the api access token hasn't been set yet.
+  // The placeholder mirrors the onboarding doge for visual continuity
+  // — same "we're proving you're probably human" mood.
+  if (!session?.bootstrap?.userId) {
+    return (
+      <BootstrappingPlaceholder
+        dogeImageUrl={chrome.runtime.getURL('doge-mining.webp')}
+      />
+    );
+  }
 
   return (
     <StateProvider store={store} router={router}>

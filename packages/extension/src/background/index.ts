@@ -19,6 +19,7 @@
 import { api, CORE_PACKAGE_VERSION } from '@smirk/core';
 
 import { installDappBridge } from './dapp/dispatch';
+import { installJobsCoordinator } from './jobs/coordinator';
 
 // Diagnostic breadcrumbs at SW startup + install. `console.debug`
 // keeps these out of the default extension console view; developers
@@ -46,3 +47,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 installDappBridge();
+
+// Jobs coordinator — drives the background job system (PoW solve,
+// future Grin finalize, swap polls, etc.). Installs message + Port
+// listeners; no synchronous side effects until a popup connects.
+installJobsCoordinator();

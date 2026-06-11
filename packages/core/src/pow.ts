@@ -21,7 +21,22 @@
  * backend rejects no-solution requests with a clear error message.
  */
 
-import { solveChallenge, type Challenge } from 'altcha-lib';
+import { solveChallenge, type Challenge, type Solution } from 'altcha-lib';
+
+/**
+ * Wire shape sent to the backend as `altcha_solution`. Mirrors the
+ * Rust `altcha::Payload` struct in `smirk-backend/src/api/auth.rs`
+ * (the `ExtensionRegisterRequest.altcha_solution` field). The
+ * `challenge` here is the FULL original Challenge the server signed,
+ * NOT the Solution's internal `challenge` hash field — that wrapping
+ * is the bug we hit in 2026-06 when the SW bootstrap handler shipped
+ * a bare Solution. Lock it at the type level so a future regression
+ * is a compile error, not a runtime 422.
+ */
+export interface AltchaPayload {
+  challenge: Challenge;
+  solution: Solution;
+}
 // `altcha-lib/algorithms/pbkdf2` pulls `node:crypto` + `node:util` —
 // fine under Node.js but breaks Vite's browser bundle. The `web/`
 // variant uses `crypto.subtle.deriveKey` directly, which works in
@@ -54,7 +69,7 @@ export async function solvePowChallenge(
   options: {
     signal?: AbortSignal;
   } = {},
-): Promise<unknown | null> {
+): Promise<AltchaPayload | null> {
   let challenge: Challenge;
   try {
     const fetched = await api.powChallenge();

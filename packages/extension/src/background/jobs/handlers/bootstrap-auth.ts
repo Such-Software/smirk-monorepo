@@ -1,0 +1,187 @@
+/**
+ * `bootstrap-auth` handler — runs the full `bootstrapAuth` pipeline
+ * (checkRestore + PoW + extensionRegister) inside the offscreen
+ * document so popup close can't abort it mid-flight.
+ *
+ * Why this exists alongside the simpler `pow-solve` handler: when
+ * just PoW ran in the background, the *register* step was still
+ * popup-resident. A popup that died mid-solve would never make the
+ * register call, and the popup that came back would have to redo
+ * everything from scratch (new challenge, new solve, new tokens).
+ * Moving the full bootstrap here means the tokens land in
+ * `chrome.storage.session` regardless of which popup (if any) is
+ * open when the solve completes — `jobs.list({ dedupKey })` on
+ * remount returns the completed job's result and the popup is
+ * authenticated without redoing any work.
+ *
+ * The popup pre-computes the BIP-137 signature over
+ * `smirk-auth-${timestamp}` because that's the one step that needs
+ * the unlocked-wallet private key, and we never want private keys
+ * crossing into the SW / offscreen context. The backend gives a
+ * 5-minute drift window on `signedTimestamp` (see
+ * `smirk-backend/src/api/auth.rs`) so even slow solves stay within
+ * the signature validity window.
+ *
+ * Single-source-of-truth design: the PoW solve delegates to
+ * `@smirk/core::solvePowChallenge` (with our abort signal threaded
+ * in) rather than duplicating the altcha-lib invocation here. That
+ * keeps the `{ challenge, solution }` envelope shape locked in
+ * exactly one place — a duplicated solve here previously regressed
+ * to shipping a bare `Solution` and surfaced as production HTTP 422
+ * 'altcha_solution: missing field `challenge`' on every wallet
+ * registration on 2026-06-11. See the audit at that date.
+ */
+
+import { api, solvePowChallenge } from '@smirk/core';
+
+import type { JobHandler } from '../types';
+
+/**
+ * Map a non-2xx `/auth/extension` response to a human-friendly
+ * single-line error the OnboardingWizard / popup can show under the
+ * password field. The generic surface used to be "Unknown error",
+ * which was actively unhelpful — rate-limit replies have no JSON
+ * body so `result.error` lands as 'Unknown error' even though the
+ * status (429) tells us exactly what happened.
+ *
+ * Backend pushes a structured `code` on most errors (AUTH_ERROR,
+ * VALIDATION_ERROR, RATE_LIMITED, …) — use that first; fall back to
+ * HTTP status; finally fall back to the raw error string.
+ */
+function friendlyRegisterError(result: {
+  error?: string;
+  status?: number;
+  code?: string;
+}): string {
+  const status = result.status;
+  if (status === 429 || result.code === 'RATE_LIMITED') {
+    return 'Too many wallet registrations from this network. Please try again in a few minutes.';
+  }
+  if (status === 400) {
+    const raw = result.error ?? '';
+    if (/proof[- ]of[- ]work|altcha/i.test(raw)) {
+      return 'Proof-of-work check failed. Please update Smirk to the latest version and try again.';
+    }
+    if (/timestamp|signature/i.test(raw)) {
+      return 'Network round-trip took too long — the signature timed out. Please try again.';
+    }
+    return raw || 'Wallet registration was rejected by the server.';
+  }
+  if (status === 422) {
+    // axum's Json-extractor rejection. The body text usually says
+    // exactly what's wrong ("missing field `signed_timestamp`",
+    // etc.). client.ts now surfaces that text in `error`.
+    const raw = result.error ?? '';
+    return raw
+      ? `Smirk server couldn't read the registration request: ${raw}`
+      : "Smirk server couldn't read the registration request (HTTP 422). This is a Smirk bug — please report it.";
+  }
+  if (status === 401 || status === 403) {
+    return result.error || 'Authentication failed — could not register wallet.';
+  }
+  if (status && status >= 500) {
+    return 'The Smirk server is having trouble. Please try again in a moment.';
+  }
+  if (!status) {
+    // No status field = network-level failure (fetch threw / offline /
+    // CORS blocked). client.ts returns just `{ error: '<message>' }`.
+    return result.error
+      ? `Couldn't reach Smirk servers: ${result.error}`
+      : "Couldn't reach Smirk servers. Check your internet connection and try again.";
+  }
+  return result.error || `Registration failed (HTTP ${status}).`;
+}
+
+export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
+  kind: 'bootstrap-auth',
+  async run(input, ctx) {
+    // ---- 1. checkRestore — best-effort lookup for resume heights ----
+    let xmrStartHeight: number | undefined;
+    let wowStartHeight: number | undefined;
+    let isKnownWallet = false;
+    try {
+      const restoreCheck = await api.checkRestore({
+        fingerprint: input.fingerprint,
+        keys: input.keys as Parameters<typeof api.checkRestore>[0]['keys'],
+      });
+      if (restoreCheck.data?.exists) {
+        isKnownWallet = true;
+        if (typeof restoreCheck.data.xmrStartHeight === 'number') {
+          xmrStartHeight = restoreCheck.data.xmrStartHeight;
+        }
+        if (typeof restoreCheck.data.wowStartHeight === 'number') {
+          wowStartHeight = restoreCheck.data.wowStartHeight;
+        }
+      }
+    } catch (e) {
+      console.warn('[bootstrap-auth] checkRestore failed, treating as new:', e);
+    }
+
+    const walletBirthday = isKnownWallet
+      ? undefined
+      : Math.floor(Date.now() / 1000);
+
+    // ---- 2. PoW solve — delegated to @smirk/core for ONE source of truth ----
+    // Returns null on any soft failure (challenge fetch threw, solver
+    // timed out, popup aborted). Returns the `AltchaPayload` envelope
+    // ({ challenge, solution }) the backend expects — the typed alias
+    // means a regression to a bare `Solution` is now a TS compile
+    // error, not a runtime 422.
+    const altchaSolution = await solvePowChallenge(api, {
+      signal: ctx.signal,
+    });
+
+    // ---- 3. extensionRegister ----
+    const result = await api.extensionRegister({
+      keys: input.keys as Parameters<
+        typeof api.extensionRegister
+      >[0]['keys'],
+      seedFingerprint: input.fingerprint,
+      signedTimestamp: input.signedTimestamp,
+      signature: input.signature,
+      ...(walletBirthday !== undefined ? { walletBirthday } : {}),
+      ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
+      ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+      ...(altchaSolution !== null ? { altchaSolution } : {}),
+    });
+
+    if (result.error || !result.data) {
+      // Log the full failure context to the offscreen-document
+      // DevTools (chrome://extensions → Inspect views → jobs-
+      // offscreen.html). Real-money software shouldn't hide what
+      // went wrong even if the throw → popup string is friendly.
+      console.error('[bootstrap-auth] extensionRegister failed', {
+        status: result.status,
+        code: result.code,
+        error: result.error,
+        request: {
+          keysSample: input.keys.map((k) => ({
+            asset: k.asset,
+            publicKeyLen: k.publicKey?.length ?? 0,
+          })),
+          seedFingerprint: input.fingerprint,
+          signedTimestamp: input.signedTimestamp,
+          signatureLen: input.signature?.length ?? 0,
+          walletBirthday,
+          xmrStartHeight,
+          wowStartHeight,
+          hadAltcha: altchaSolution !== null,
+        },
+      });
+      throw new Error(friendlyRegisterError(result));
+    }
+
+    return {
+      bootstrap: {
+        userId: result.data.user.id,
+        ...(result.data.user.username !== undefined
+          ? { username: result.data.user.username }
+          : {}),
+        isNew: result.data.user.isNew ?? false,
+        ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
+        ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+      },
+      accessToken: result.data.accessToken,
+    };
+  },
+};

@@ -88,11 +88,40 @@ export class ApiClient {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const body = await response.json().catch(() => ({ error: 'Unknown error' }));
+        // Try JSON first (our backend's normal { error, code } shape).
+        // Many failure paths bypass this: tower-governor 429s return
+        // empty bodies, nginx 502/503 returns HTML, and — critically —
+        // axum's Json extractor rejection at 422 returns a *plain
+        // string* explaining what was wrong with the body shape ("...
+        // missing field `signed_timestamp` ..."). Capturing that
+        // string is the difference between a useful HTTP 422 error
+        // and "HTTP 422" with no context.
+        //
+        // Read the body as text once and try to JSON.parse it. If
+        // that fails, use the text directly as the error message.
+        let bodyText = '';
+        try {
+          bodyText = await response.text();
+        } catch {
+          /* empty body or read failure — leave bodyText '' */
+        }
+        let bodyJson: { error?: string; code?: string } = {};
+        if (bodyText.trim().startsWith('{')) {
+          try {
+            bodyJson = JSON.parse(bodyText);
+          } catch {
+            /* not JSON; fall through to text-body fallback */
+          }
+        }
+        const error =
+          bodyJson.error ||
+          (bodyText && bodyText.trim().length > 0
+            ? bodyText.trim().slice(0, 300)
+            : `HTTP ${response.status}`);
         return {
-          error: body.error || `HTTP ${response.status}`,
+          error,
           status: response.status,
-          code: body.code,
+          ...(bodyJson.code !== undefined ? { code: bodyJson.code } : {}),
         };
       }
 

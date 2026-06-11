@@ -19,9 +19,10 @@
     "@scure/btc-signer": "^1.3.0",
     "@smirk/assets": "*",
     "@smirk/core": "*",
-    "@such-software/smirk-dapp-api": "*",
     "@smirk/ui": "*",
     "@smirk/wasm": "*",
+    "@such-software/smirk-dapp-api": "*",
+    "altcha-lib": "^2.2.0",
     "preact": "^10.19.0"
   },
   "devDependencies": {

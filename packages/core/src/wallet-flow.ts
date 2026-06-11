@@ -36,7 +36,7 @@
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
-import { solvePowChallenge } from './pow';
+import { solvePowChallenge, type AltchaPayload } from './pow';
 
 export interface BootstrapAuthResult {
   userId: string;
@@ -93,9 +93,39 @@ function buildKeysList(wallet: UnlockedWallet) {
  * Caller should surface the error to the user — auth is required for
  * any subsequent balance / tip / signing operation.
  */
+/**
+ * Optional dependency injection for `bootstrapAuth` callers.
+ *
+ * `powSolver` lets the host wallet plug in its own PoW pipeline. The
+ * extension wires this to a background-service-worker job that
+ * survives popup close (so a screenshot or alt-tab during the ~2s
+ * solve doesn't kill the registration). The Tauri desktop and
+ * future Capacitor builds can keep the inline solver since their
+ * popup-style hosts don't have the same lifecycle problem.
+ *
+ * Resolve with the `altchaSolution` payload to attach (an
+ * `altcha-lib` `{ challenge, solution }` envelope) or `null` to
+ * proceed without one — the graceful-migration path the backend
+ * accepts during the v0.2 → v0.3 window.
+ */
+export interface BootstrapAuthOptions {
+  /**
+   * Host-provided PoW solver. Receives the bound api client and
+   * resolves with the `AltchaPayload` envelope (or `null` on soft
+   * failure). Defaults to the in-process `solvePowChallenge` when
+   * omitted.
+   *
+   * The typed return is non-negotiable — see `pow.ts::AltchaPayload`
+   * comment. A regression here is what caused the 2026-06-11 wallet
+   * registration outage (bare Solution sent instead of envelope).
+   */
+  powSolver?: (api: SmirkApi) => Promise<AltchaPayload | null>;
+}
+
 export async function bootstrapAuth(
   api: SmirkApi,
   wallet: UnlockedWallet,
+  options: BootstrapAuthOptions = {},
 ): Promise<BootstrapAuthResult> {
   const keys = buildKeysList(wallet);
 
@@ -140,7 +170,11 @@ export async function bootstrapAuth(
   // is a server-only change with zero client redeploy required. See
   // `pow.ts` for the implementation; failure is non-fatal — the
   // backend accepts no-solution requests in graceful-migration mode.
-  const altchaSolution = await solvePowChallenge(api);
+  //
+  // Host wallets can inject their own solver via `options.powSolver`
+  // (the extension passes a background-SW-backed solver so the work
+  // survives popup close — see `packages/extension/src/popup/jobs/`).
+  const altchaSolution = await (options.powSolver ?? solvePowChallenge)(api);
 
   const result = await api.extensionRegister({
     keys,
