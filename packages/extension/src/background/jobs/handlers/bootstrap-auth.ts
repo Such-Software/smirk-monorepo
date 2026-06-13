@@ -121,15 +121,34 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
       ? undefined
       : Math.floor(Date.now() / 1000);
 
-    // ---- 2. PoW solve — delegated to @smirk/core for ONE source of truth ----
-    // Returns null on any soft failure (challenge fetch threw, solver
-    // timed out, popup aborted). Returns the `AltchaPayload` envelope
-    // ({ challenge, solution }) the backend expects — the typed alias
-    // means a regression to a bare `Solution` is now a TS compile
-    // error, not a runtime 422.
-    const altchaSolution = await solvePowChallenge(api, {
-      signal: ctx.signal,
-    });
+    // ---- 2. PoW solve — only for genuinely new wallets ----
+    // The backend's returning-user bypass (see smirk-backend's
+    // src/api/auth.rs `is_returning_user`) accepts re-registrations
+    // for an already-known pubkey_hash WITHOUT a PoW solution, even
+    // when POW_REQUIRED=true. The whole bypass exists so v0.2.x
+    // stragglers and lock+unlock flows don't spin PBKDF2 for nothing.
+    //
+    // We mirror that bypass client-side using the same signal:
+    // `checkRestore` already told us if the wallet is known (it's
+    // step 1 above), and that's exactly the predicate the backend
+    // uses. Skip the solve when it would be discarded anyway —
+    // saves ~3-5s of CPU on every lock+unlock and on every import
+    // of an already-registered wallet.
+    //
+    // New wallets still solve normally — that's the Sybil gate
+    // doing its job.
+    //
+    // solvePowChallenge returns the `AltchaPayload` envelope ({
+    // challenge, solution }); typed alias means a regression to a
+    // bare `Solution` is a TS compile error, not a runtime 422.
+    let altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>> = null;
+    if (isKnownWallet) {
+      console.debug(
+        '[bootstrap-auth] returning wallet (fingerprint matches existing user) — skipping PoW solve',
+      );
+    } else {
+      altchaSolution = await solvePowChallenge(api, { signal: ctx.signal });
+    }
 
     // ---- 3. extensionRegister ----
     const result = await api.extensionRegister({

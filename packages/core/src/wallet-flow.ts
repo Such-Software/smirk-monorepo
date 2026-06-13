@@ -163,18 +163,33 @@ export async function bootstrapAuth(
   // already has it — ignore on resubmission.
   const walletBirthday = isKnownWallet ? undefined : Math.floor(Date.now() / 1000);
 
-  // ALTCHA proof-of-work. ALWAYS solve, even when the backend's
-  // `POW_REQUIRED=false`. The cost (~1-2s of PBKDF2 on a laptop) is
-  // invisible inside the existing onboarding spinner, and shipping the
-  // wallet with PoW pre-wired means flipping the backend env var later
-  // is a server-only change with zero client redeploy required. See
-  // `pow.ts` for the implementation; failure is non-fatal — the
-  // backend accepts no-solution requests in graceful-migration mode.
+  // ALTCHA proof-of-work — only for genuinely new wallets.
+  //
+  // The backend's `is_returning_user` check (smirk-backend
+  // src/api/auth.rs) accepts a re-registration for an already-known
+  // pubkey_hash WITHOUT a PoW solution, even when POW_REQUIRED=true.
+  // The bypass is intentional — it's how v0.2.x stragglers and
+  // lock+unlock flows avoid burning CPU on a solution the server
+  // immediately discards.
+  //
+  // We mirror the same predicate client-side using the
+  // `isKnownWallet` flag `checkRestore` just gave us. Skipping the
+  // solve here saves ~3-5s of PBKDF2 on every lock+unlock and on
+  // every import of an already-registered wallet — the desktop
+  // wallet feels noticeably faster, and the extension SW handler
+  // also benefits via this code path.
+  //
+  // New wallets still solve normally — that's the Sybil gate doing
+  // its job. POW_REQUIRED=true with no isKnownWallet exemption =
+  // a real new-user PoW cost.
   //
   // Host wallets can inject their own solver via `options.powSolver`
   // (the extension passes a background-SW-backed solver so the work
   // survives popup close — see `packages/extension/src/popup/jobs/`).
-  const altchaSolution = await (options.powSolver ?? solvePowChallenge)(api);
+  let altchaSolution: AltchaPayload | null = null;
+  if (!isKnownWallet) {
+    altchaSolution = await (options.powSolver ?? solvePowChallenge)(api);
+  }
 
   const result = await api.extensionRegister({
     keys,

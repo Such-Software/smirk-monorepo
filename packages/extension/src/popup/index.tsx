@@ -1729,14 +1729,18 @@ function App() {
     }
   };
 
-  // Render a "Setting up wallet…" placeholder while the background
-  // bootstrap (PoW solve + extensionRegister) is in flight. Without
-  // this gate the popup briefly renders the Home tab with no balances
-  // and fires data-fetching effects (tip inbox, balances, prices)
-  // that all 401 because the api access token hasn't been set yet.
-  // The placeholder mirrors the onboarding doge for visual continuity
-  // — same "we're proving you're probably human" mood.
-  if (!session?.bootstrap?.userId) {
+  // Render a "Setting up wallet…" placeholder only while we have
+  // NOTHING to show — no balance snapshot, no live data. If a
+  // snapshot is in `session.balances` (the typical case after the
+  // first successful bootstrap), render the Home tab with stale
+  // numbers + the refreshing-spinner header so users don't see the
+  // doge on every unlock — they only see it during a cold start.
+  //
+  // Bootstrap-dependent effects (tip inbox, etc.) already guard on
+  // `session.bootstrap.userId` being non-empty (search for the
+  // identical guard in this file). The snapshot path stamps
+  // `userId: ''` as a placeholder for exactly that reason.
+  if (!session?.balances) {
     return (
       <BootstrappingPlaceholder
         dogeImageUrl={chrome.runtime.getURL('doge-mining.webp')}
