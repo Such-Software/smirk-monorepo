@@ -5,6 +5,125 @@ monorepo. New entries on top.
 
 ---
 
+## 2026-06-13 — Auto-unlock cache: keystore.ts header lied about plaintext mnemonic
+
+**Severity:** Documentation defect (no runtime change)
+**Reporter:** internal review of
+[`packages/core/src/keystore.ts`](../packages/core/src/keystore.ts)
+**Status:** Header comment fixed in this commit. Runtime
+re-architecture tracked for v0.3.x (see "Planned fix" below).
+
+### What was wrong
+
+The `keystore.ts` file-level JSDoc (lines 13-22 of the pre-fix file)
+claimed:
+
+> Seed and derived keys **never** persist plaintext to any
+> `chrome.storage` backend. […] We do **not** stash an ephemeral
+> session unwrap key in `storage.session` (the legacy pattern that
+> lets SW restart auto-unlock — and produces a plaintext-seed-
+> equivalent at rest).
+
+That description was accurate for the original v0.3.0 design but
+became stale when the "auto-lock after N minutes" UX shipped. The
+actual runtime behaviour, implemented by `rebuildUnlockedFromMnemonic`
+and the `SESSION_CACHE_KEY` constant in the same file, is:
+
+- When the user picks `autoLockMinutes > 0` (any non-zero value
+  including the `Number.MAX_SAFE_INTEGER` "Never" sentinel), the
+  popup writes a `SessionCacheEntry { mnemonic, fingerprint,
+  expiresAtMs }` into `chrome.storage.session` so subsequent popup
+  reopens skip the password prompt.
+- The mnemonic is stored **as a plaintext string** in that cache
+  — no wrapping, no encryption-at-rest within `storage.session`.
+
+The header comment described an in-principle threat model that no
+longer matched what the code did. A reader trusting the comment
+would mis-state the wallet's exposure window during a security
+review or external audit.
+
+### Why the runtime behaviour is still acceptable (for now)
+
+`chrome.storage.session` is **not** equivalent to `storage.local`:
+
+- It is held in browser process memory only — Chrome never writes
+  it to disk. Browser close (not just window close) clears it.
+- It is partitioned per extension ID. A co-resident malicious
+  extension cannot read another extension's `storage.session`,
+  the same isolation that protects `storage.local`.
+- The exposure window is bounded by `autoLockMinutes` — the popup's
+  unlock-state check evicts the entry when `Date.now() >
+  expiresAtMs`.
+
+The remaining exposure is **process-memory disclosure** — an
+attached debugger, OS-level malware with the right privileges, or
+a mid-flight heap snapshot can read the cached mnemonic. That is
+the same exposure level as the popup's own in-memory unlocked
+state — the cache extends the *duration* of that window for
+convenience, it does not introduce a new attack surface.
+
+The threat the header comment was actually warning about — a
+"plaintext-seed-equivalent at rest" — does not apply, because
+`storage.session` is not "at rest."
+
+### What shipped now (doc-only)
+
+Rewrote the `keystore.ts` file header to honestly describe:
+
+1. On-disk keystore is always encrypted (PBKDF2 + XChaCha20-Poly1305).
+2. The opt-in auto-unlock cache exists, stores plaintext mnemonic
+   in `chrome.storage.session`, and what its lifecycle is.
+3. The Chrome-level guarantees that make this acceptable
+   (in-memory only, per-extension partition, browser-close eviction).
+4. The actual residual threat (process-memory disclosure) and
+   that the cache does not change it qualitatively, only
+   quantitatively.
+5. A forward-reference to the planned v0.3.x wrapped-key
+   re-architecture.
+
+No runtime code changed. No tests changed.
+
+### Planned fix (v0.3.x re-architecture)
+
+Replace the mnemonic-in-`storage.session` cache with a
+**wrapped-key** approach:
+
+1. During the unlock ceremony, derive a short-lived AES-256
+   "wrapping key" via `crypto.subtle.generateKey` (non-extractable,
+   usage `wrapKey`/`unwrapKey`).
+2. Use that wrapping key to encrypt the *seed bytes* (not the
+   mnemonic) and store the wrapped ciphertext in
+   `chrome.storage.session` under `SESSION_CACHE_KEY`.
+3. Hold the wrapping `CryptoKey` handle in service-worker memory
+   only. On SW restart, the wrapping key is gone and the cache is
+   useless ciphertext until the user re-enters their password.
+4. Drop the mnemonic string reference immediately after the
+   wallet is built — the cache no longer needs it. (The
+   `rebuildUnlockedFromMnemonic` helper goes away; replace with
+   `rebuildUnlockedFromSeed` that takes raw seed bytes.)
+
+Net effect:
+
+- Process-memory disclosure attack now recovers a *wrapped blob*
+  plus a non-extractable `CryptoKey` handle. WebCrypto's
+  `extractable: false` flag means even a debugger cannot exfiltrate
+  the wrapping key material directly — they must exercise the
+  `unwrapKey` API in-context, which raises the attacker's bar
+  meaningfully.
+- The recovery phrase (the thing a user types into another wallet
+  to drain their funds) never sits in `storage.session` at all.
+  A heap snapshot can still observe the seed bytes briefly during
+  derivation, but the user-recoverable mnemonic string lifetime
+  collapses to the unlock-ceremony itself.
+- SW restart within an `autoLockMinutes` window stops being
+  "silent auto-unlock" and becomes "silent auto-unlock until the
+  SW dies, then re-prompt" — slightly worse UX, materially better
+  threat model. Acceptable tradeoff.
+
+Tracked as a v0.3.x item; not blocking any v0.3.0 ship work.
+
+---
+
 ## 2026-06-04 — Pre-v0.3.0 ship audit (four fund-safety / integrity entries)
 
 A deep audit of every tip / swap / send / claim / clawback flow
