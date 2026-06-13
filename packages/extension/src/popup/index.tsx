@@ -50,7 +50,11 @@ import {
   isValidMnemonic,
   isValidWowAddress,
   isValidXmrAddress,
-  rebuildUnlockedFromMnemonic,
+  restoreUnlockedFromCache,
+  clampAutoLockMinutes,
+  parseSessionCache,
+  AUTO_LOCK_MAX_MINUTES,
+  type SessionCachePayload,
   totalFiat,
   pendingOutgoingTotalWithFee,
   inFlightInputsTotal,
@@ -61,7 +65,6 @@ import {
   type Balances,
   type BootstrapAuthResult,
   type Prices,
-  type SessionCacheEntry,
   type UnlockedWallet,
   type WalletState,
 } from '@smirk/core';
@@ -437,14 +440,15 @@ function dappPublicCacheFor(
   // cache so the SW provider can detect "wallet auto-locked while
   // the popup was closed and never cleared the cache" without an
   // IPC round-trip. Per Finding 13 in the v0.3.0 pre-ship audit.
-  // `autoLockMinutes < 0` = "Never" (legacy convention shared with
-  // writeSessionCache); map to MAX_SAFE_INTEGER.
+  //
+  // autoLockMinutes is clamped to [0, AUTO_LOCK_MAX_MINUTES]. The
+  // pre-2026-06-13 "Never" sentinel (negative / MAX_SAFE_INTEGER)
+  // was dropped — legacy stored values self-heal to the 24h cap.
+  const clampedAutoLock = clampAutoLockMinutes(autoLockMinutes);
   const sessionExpiresAtMs =
-    autoLockMinutes < 0
-      ? NEVER_EXPIRES_MS
-      : autoLockMinutes === 0
+    clampedAutoLock === 0
       ? Date.now() // immediate lock: cache is stale the moment we write it
-      : Date.now() + autoLockMinutes * 60_000;
+      : Date.now() + clampedAutoLock * 60_000;
   return {
     fingerprint: wallet.fingerprint,
     addresses,
@@ -860,29 +864,37 @@ interface WalletSession {
 async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
   const raw = await sessionStorage.get(SESSION_CACHE_KEY);
   if (!raw) return null;
-  if (typeof raw !== 'object') return null;
-  const entry = raw as Partial<SessionCacheEntry>;
-  if (
-    typeof entry.mnemonic !== 'string' ||
-    typeof entry.fingerprint !== 'string' ||
-    typeof entry.expiresAtMs !== 'number'
-  ) {
+
+  // Parse via @smirk/core's `parseSessionCache` — rejects:
+  //   - legacy v0.2.x { mnemonic, fingerprint, expiresAtMs } shape
+  //   - missing version: 2 or missing _noMnemonic brand
+  //   - any payload that re-introduces a `mnemonic` field
+  // Any rejection drops the stored entry; the user re-enters their
+  // password once. See keystore.ts SessionCachePayload + the
+  // 2026-06-13 SECURITY_LOG.md entry.
+  const entry = parseSessionCache(raw);
+  if (!entry) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     return null;
   }
-  if (entry.expiresAtMs < NEVER_EXPIRES_MS && Date.now() >= entry.expiresAtMs) {
+  if (Date.now() >= entry.expiresAtMs) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     return null;
   }
-  // Cross-check fingerprint against the keystore on disk — if the user
-  // re-imported a different wallet, the stale cache must not unlock it.
+  // Cross-check fingerprint against the keystore on disk — if the
+  // user re-imported a different wallet, the stale cache must not
+  // unlock it.
   const ksState = await walletKeystore.getState();
   if (ksState.kind === 'empty' || ksState.keystore.fingerprint !== entry.fingerprint) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     return null;
   }
   try {
-    const wallet = rebuildUnlockedFromMnemonic(entry.mnemonic, entry.fingerprint);
+    const wallet = restoreUnlockedFromCache({
+      keys: entry.keys,
+      addresses: entry.addresses,
+      fingerprint: entry.fingerprint,
+    });
     (walletKeystore as unknown as { cached: UnlockedWallet }).cached = wallet;
     return wallet;
   } catch {
@@ -892,24 +904,27 @@ async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
 }
 
 /**
- * Sentinel for "never expires" (the `autoLockMinutes: -1` setting).
- * Avoiding `Infinity` because some serialization layers (notably
- * `JSON.stringify`) collapse it to `null`; chrome.storage.session
- * does preserve it via structured clone, but a plain bigint is
- * portable across any backend. ~year 285616 — safely never.
+ * Persist the unlocked wallet's derived keys + addresses for
+ * `minutes` of auto-unlock. Mnemonic is NEVER cached (2026-06-13
+ * hardening — see keystore.ts file header + docs/SECURITY_LOG.md).
+ *
+ * `minutes` is clamped to `[0, AUTO_LOCK_MAX_MINUTES]`. The legacy
+ * "Never" sentinel (negative / MAX_SAFE_INTEGER) was dropped in
+ * v0.3.0; a stored legacy value self-heals to the 24h cap on read.
  */
-const NEVER_EXPIRES_MS = Number.MAX_SAFE_INTEGER;
-
-/** Persist the unlocked mnemonic for `minutes` of auto-unlock. */
 async function writeSessionCache(wallet: UnlockedWallet, minutes: number): Promise<void> {
-  if (minutes === 0) {
+  const clamped = clampAutoLockMinutes(minutes);
+  if (clamped === 0) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     return;
   }
-  const expiresAtMs = minutes < 0 ? NEVER_EXPIRES_MS : Date.now() + minutes * 60_000;
-  const entry: SessionCacheEntry = {
-    mnemonic: wallet.mnemonic,
+  const expiresAtMs = Date.now() + clamped * 60_000;
+  const entry: SessionCachePayload = {
+    version: 2,
+    _noMnemonic: true,
     fingerprint: wallet.fingerprint,
+    keys: wallet.keys,
+    addresses: wallet.addresses,
     expiresAtMs,
   };
   await sessionStorage.set(SESSION_CACHE_KEY, entry);
@@ -4389,7 +4404,12 @@ const AUTO_LOCK_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 10, label: '10 minutes' },
   { value: 60, label: '1 hour' },
   { value: 240, label: '4 hours' },
-  { value: -1, label: 'Never (until browser closes)' },
+  // 2026-06-13: dropped the "Never (until browser closes)" /
+  // -1 / MAX_SAFE_INTEGER option as part of the wrapped-key
+  // session-cache hardening. AUTO_LOCK_MAX_MINUTES (24h) is the
+  // hardest upper bound now — anything beyond clamps. See
+  // keystore.ts file header.
+  { value: AUTO_LOCK_MAX_MINUTES, label: '24 hours (maximum)' },
 ];
 
 /**

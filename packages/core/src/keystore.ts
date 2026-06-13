@@ -147,9 +147,21 @@ export interface WalletAddresses {
  * `unlock()`; released when `lock()` or `destroy()` is called.
  */
 export interface UnlockedWallet {
-  mnemonic: string;
-  /** BIP39 seed bytes (64). Derived from mnemonic + empty passphrase. */
-  seed: Uint8Array;
+  /**
+   * BIP39 phrase. Present after a fresh `unlock()` /
+   * `createWallet()`, but **undefined** when the wallet was restored
+   * from the session cache (2026-06-13 hardening — session cache no
+   * longer persists the mnemonic). Call sites that need the phrase
+   * (BTC/LTC PSBT signing, every Grin surface, "show seed" /
+   * "export seed") must early-return with a "please re-unlock" UX
+   * when this is undefined.
+   */
+  mnemonic?: string;
+  /**
+   * BIP39 seed bytes (64). Derived from mnemonic + empty passphrase.
+   * Undefined on a session-cache restore (no mnemonic → no seed).
+   */
+  seed?: Uint8Array;
   /** Per-asset derived keys (see `DerivedKeys` in `./hd`). */
   keys: DerivedKeys;
   /** Per-asset receive addresses. */
@@ -290,32 +302,116 @@ export function deriveAddresses(keys: DerivedKeys): WalletAddresses {
  * `fingerprint` is supplied separately so we don't need to recompute it
  * (the encrypted keystore already has it).
  */
-export function rebuildUnlockedFromMnemonic(
-  mnemonic: string,
-  fingerprint: string,
-): UnlockedWallet {
-  if (!isValidMnemonic(mnemonic)) {
-    throw new Error('Invalid mnemonic in cache');
-  }
-  const seed = mnemonicToSeed(mnemonic);
-  const keys = deriveAllKeys(mnemonic, '', 3);
-  const addresses = deriveAddresses(keys);
-  return { mnemonic, seed, keys, addresses, fingerprint };
+/**
+ * Reconstruct an `UnlockedWallet` from cached leaf-key material, NO
+ * mnemonic involved. Used by the session-cache flow: when the user
+ * opts into "stay unlocked for N minutes," we stash the derived keys
+ * + addresses + fingerprint in `chrome.storage.session` and rebuild
+ * the wallet from them on popup reopen without re-prompting the
+ * password.
+ *
+ * The returned `UnlockedWallet` has `mnemonic === undefined` and
+ * `seed === undefined`. Surfaces that need either (BTC/LTC PSBT
+ * signing, every Grin surface, Show Seed / Export Seed) must
+ * gate-check and force a fresh password unlock.
+ *
+ * 2026-06-13 hardening: replaces `rebuildUnlockedFromMnemonic` which
+ * required the mnemonic to be present in cache. The old function is
+ * gone — call sites that referenced it are an audit finding.
+ */
+export function restoreUnlockedFromCache(args: {
+  keys: DerivedKeys;
+  addresses: WalletAddresses;
+  fingerprint: string;
+}): UnlockedWallet {
+  return {
+    keys: args.keys,
+    addresses: args.addresses,
+    fingerprint: args.fingerprint,
+    // mnemonic + seed deliberately omitted; gate-check at the call site.
+  };
+}
+
+/**
+ * Hard upper bound on the auto-unlock TTL. Twenty-four hours. The
+ * pre-2026-06-13 "Never" sentinel (`MAX_SAFE_INTEGER`) and the
+ * negative-int "Never" convention are gone — any stored preference
+ * that exceeds the cap clamps to the cap on read, so legacy v0.2.4
+ * users self-heal without a migration script.
+ */
+export const AUTO_LOCK_MAX_MINUTES = 24 * 60;
+
+/**
+ * Normalise an arbitrary stored `autoLockMinutes` value into the
+ * `[0, AUTO_LOCK_MAX_MINUTES]` band. Negative values (the legacy
+ * "Never" convention) clamp to the cap; `MAX_SAFE_INTEGER` clamps
+ * to the cap; non-finite or NaN values fall back to 0 (no cache).
+ * Storing 0 still means "do not cache" — that path is preserved.
+ */
+export function clampAutoLockMinutes(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
+  if (raw <= 0) return raw < 0 ? AUTO_LOCK_MAX_MINUTES : 0;
+  if (raw > AUTO_LOCK_MAX_MINUTES) return AUTO_LOCK_MAX_MINUTES;
+  return Math.floor(raw);
 }
 
 /**
  * Storage key for the optional session-cache (used by the "auto-lock
  * after N minutes" UX). Held in a separate, ephemeral storage
- * (`chrome.storage.session` on extension, in-memory elsewhere) — NEVER
- * the persistent storage that holds the encrypted keystore.
+ * (`chrome.storage.session` on extension, in-memory elsewhere) —
+ * NEVER the persistent storage that holds the encrypted keystore.
+ *
+ * v0.3.0 (2026-06-13) bumped the on-disk version from `v1` (which
+ * stored `{ mnemonic, fingerprint, expiresAtMs }`) to `v2` (which
+ * stores `{ keys, addresses, fingerprint, expiresAtMs }`). The
+ * parser rejects any payload missing `version: 2`, missing the
+ * `_noMnemonic: true` brand, or containing a `mnemonic` field; on
+ * rejection the cache is dropped and the user re-enters their
+ * password once. No migration / dual-parse / shim — the user
+ * decision was to break v0.2.4 cache compat for honest security.
  */
 export const SESSION_CACHE_KEY = 'smirk_unlocked_session_cache';
 
-export interface SessionCacheEntry {
-  mnemonic: string;
-  fingerprint: string;
-  /** Unix ms when this cache becomes invalid. `Infinity` for "never". */
-  expiresAtMs: number;
+/**
+ * On-the-wire shape of a v2 session-cache payload. The brand field
+ * `_noMnemonic` is a compile-time + runtime safeguard: any future
+ * commit that accidentally adds a `mnemonic` field would need to
+ * remove the brand, which would surface in code review.
+ */
+export interface SessionCachePayload {
+  readonly version: 2;
+  readonly _noMnemonic: true;
+  readonly fingerprint: string;
+  readonly keys: DerivedKeys;
+  readonly addresses: WalletAddresses;
+  /** Unix ms when this cache becomes invalid. Finite — no Infinity / "never". */
+  readonly expiresAtMs: number;
+}
+
+/**
+ * Parse a raw payload from `chrome.storage.session` into a
+ * `SessionCachePayload`. Returns `null` for any of:
+ *   - v0.2.x / pre-2026-06-13 v1 shape (mnemonic present, no version)
+ *   - missing or wrong `version`
+ *   - missing `_noMnemonic` brand
+ *   - any `mnemonic` field at all (defence-in-depth regression guard)
+ *   - structural mismatch
+ * Callers should drop the stored entry on `null` so the user
+ * re-enters the password once.
+ */
+export function parseSessionCache(raw: unknown): SessionCachePayload | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if ('mnemonic' in r) return null;
+  if (r.version !== 2) return null;
+  if (r._noMnemonic !== true) return null;
+  if (typeof r.fingerprint !== 'string') return null;
+  if (typeof r.expiresAtMs !== 'number' || !Number.isFinite(r.expiresAtMs)) {
+    return null;
+  }
+  if (!r.keys || typeof r.keys !== 'object') return null;
+  if (!r.addresses || typeof r.addresses !== 'object') return null;
+  return r as unknown as SessionCachePayload;
 }
 
 // ============================================================================
@@ -402,7 +498,9 @@ export class WalletKeystore {
    */
   async lock(): Promise<void> {
     if (this.cached) {
-      this.cached.seed.fill(0);
+      // `seed` is optional after the 2026-06-13 session-cache change
+      // — a wallet restored from cache has no seed bytes to zero.
+      this.cached.seed?.fill(0);
       // Best-effort key zeroization. Some private-key fields are
       // immutable typed arrays from `@noble/curves`; we zero what we can.
       zeroKeysIfPossible(this.cached.keys);
@@ -459,6 +557,16 @@ export class WalletKeystore {
     // on AEAD mismatch). We discard the decrypted wallet — the caller
     // doesn't need it; in-memory state stays whatever it was.
     const unlocked = await unlockKeystore(keystore, args.currentPassword);
+    // Sanity: `unlockKeystore` is the fresh-unlock path and must
+    // populate `mnemonic` + `seed`. The optional-on-the-type marker
+    // exists for the session-cache restore path; we never hit that
+    // here. Throwing turns an invariant violation into a clear
+    // error instead of a `String(undefined)` keystore corruption.
+    if (!unlocked.mnemonic || !unlocked.seed) {
+      throw new Error(
+        'changePassword: unlockKeystore returned a wallet without mnemonic/seed (invariant violation)',
+      );
+    }
     try {
       const next = await createKeystore(
         unlocked.mnemonic,
