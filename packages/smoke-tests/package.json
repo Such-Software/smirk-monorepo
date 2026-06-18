@@ -11,6 +11,7 @@
     "test": "node --test --import tsx 'src/**/__tests__/*.test.ts'",
     "smoke": "tsx src/main.ts",
     "smoke:dev": "tsx src/main.ts",
+    "provision": "tsx src/provision.ts",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

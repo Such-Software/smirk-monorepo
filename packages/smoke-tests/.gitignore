@@ -1,0 +1,10 @@
+# Secrets file written by provision.ts — contains BIP-39 mnemonics
+# for the production test wallets. NEVER commit.
+secrets/
+
+# tsc output
+dist/
+
+# Local env overrides
+.env
+.env.local
