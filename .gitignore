@@ -58,3 +58,14 @@ yarn-error.log*
 # checklists, private scribbles. Put it under `private/` and git
 # forgets the folder exists.
 private/
+
+# Wallet-to-wallet smoke harness. Operator-local tooling that boots
+# real funded production test wallets from BIP-39 mnemonics — kept
+# OUT of the monorepo so the test-wallet plumbing + secrets path
+# aren't shipped alongside the published extension code. Lives on
+# jw's machine + wherever it's deployed; deploy by rsync/scp, not
+# git clone. (The code was briefly tracked in commits e6ab38f +
+# 89283e4 before this decision — those still carry the source in
+# history, but NO secrets were ever committed: secrets/ was always
+# ignored and only ever existed post-`npm run provision`.)
+packages/smoke-tests/
