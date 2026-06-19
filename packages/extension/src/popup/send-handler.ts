@@ -19,6 +19,7 @@
 
 import {
   api,
+  applyRelayFloor,
   type UnlockedWallet,
 } from '@smirk/core';
 import { mustGetAsset } from '@smirk/assets';
@@ -672,12 +673,16 @@ export async function send(
   const asset = mustGetAsset(fields.fromAssetId);
 
   if (asset.id === 'btc' || asset.id === 'ltc') {
+    // Clamp to the relay floor — every BTC/LTC broadcast path must, or
+    // an at-floor Electrum estimate (e.g. 1.0 sat/vB) is rejected by
+    // network rules. The SendWizard already floors for display; this is
+    // the defensive backstop for non-wizard callers (tip funding, dapp).
     return sendBtcLtc(
       wallet,
       asset.id,
       fields.amountAtomic,
       fields.toAddress,
-      fields.feeRateSatPerVb,
+      applyRelayFloor(fields.feeRateSatPerVb),
       fields.sweep,
       excludeInputs,
     );

@@ -192,6 +192,7 @@ export function InboxTab(props: InboxTabProps) {
           )}
           {props.onPasteTipLink && (
             <button
+              data-testid="inbox-paste-tip-link-btn"
               onClick={props.onPasteTipLink}
               style={{
                 display: 'flex',

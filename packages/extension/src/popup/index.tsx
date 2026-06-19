@@ -3396,6 +3396,7 @@ function PasteTipLinkScreen({
           <span style={{ width: 60 }} />
         </header>
         <div
+          data-testid="paste-tip-success"
           style={{
             padding: 16,
             background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
@@ -3422,6 +3423,7 @@ function PasteTipLinkScreen({
         </div>
         <button
           onClick={onExit}
+          data-testid="paste-tip-done-btn"
           style={{
             background: 'var(--smirk-accent)',
             color: 'var(--smirk-accent-fg, #fff)',
@@ -3468,6 +3470,7 @@ function PasteTipLinkScreen({
       </div>
 
       <textarea
+        data-testid="paste-tip-input"
         value={text}
         onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
         placeholder="https://smirk.cash/tip/…#…"
@@ -3488,7 +3491,7 @@ function PasteTipLinkScreen({
       />
 
       {error && (
-        <div style={{ fontSize: 12, color: 'var(--smirk-negative, #ff6b6b)' }}>
+        <div data-testid="paste-tip-error" style={{ fontSize: 12, color: 'var(--smirk-negative, #ff6b6b)' }}>
           {error}
         </div>
       )}
@@ -3496,6 +3499,7 @@ function PasteTipLinkScreen({
       <div style={{ display: 'flex', gap: 8 }}>
         {onReadClipboard && (
           <button
+            data-testid="paste-tip-clipboard-btn"
             onClick={pasteFromClipboard}
             style={{
               background: 'transparent',
@@ -3511,6 +3515,7 @@ function PasteTipLinkScreen({
           </button>
         )}
         <button
+          data-testid="paste-tip-claim-btn"
           onClick={() => void submit()}
           disabled={!text.trim() || busy}
           style={{

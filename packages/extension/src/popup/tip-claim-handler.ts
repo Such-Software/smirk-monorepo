@@ -35,6 +35,7 @@ import { hex } from '@scure/base';
 
 import {
   api,
+  applyRelayFloor,
   decryptTipPayload,
   decryptPublicTipPayload,
   decodeUrlFragmentKey,
@@ -573,7 +574,10 @@ async function sweepUtxo(
   // 68 vB, 1 output ≈ 31 vB, base overhead ≈ 11 vB → ~110 vB per
   // input + 31 vB header + output for any input count.
   const feeRates = await api.estimateFee(asset);
-  const feeRate = feeRates.data?.normal ?? 10;
+  // Clamp to the relay floor — an at-floor estimate (1.0 sat/vB) would
+  // make the sweep tx "rejected by network rules" (same bug that broke
+  // tip funding). See applyRelayFloor.
+  const feeRate = applyRelayFloor(feeRates.data?.normal ?? 10);
   const estimatedVsize = 11 + 68 * utxos.length + 31;
   const feeSat = Math.max(
     Math.ceil(estimatedVsize * feeRate) + 1, // +1 to clear minrelaytxfee rounding

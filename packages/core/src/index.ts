@@ -32,6 +32,9 @@ export * from './crypto';
 // Address derivation + validation
 export * from './address';
 
+// BTC/LTC relay-fee floor (shared by every broadcast path)
+export * from './fees';
+
 // HD wallet derivation
 export * from './hd';
 

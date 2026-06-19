@@ -29,6 +29,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
 import type { AssetDefinition } from '@smirk/assets';
+import { applyRelayFloor } from '@smirk/core';
 import { useWizard } from '../state/hooks';
 import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
@@ -736,27 +737,16 @@ function estimateVsize(numOutputs: number): number {
 }
 
 /**
- * Network-relay floor for the standard fee tiers (Fast/Normal/Slow),
- * applied to whatever Electrum's `estimatefee` returns. Bitcoin Core's
- * wallet does the same thing under the name `incrementalRelayFee`: when
- * the estimated rate equals the network's `minRelayTxFee` (1.0 sat/vB
- * on BTC/LTC), some real nodes round up the per-tx comparison and
- * reject the tx as "min relay fee not met" — observed 2026-05-12 with
- * 140-vbyte 0.001-LTC tx at 1.0 sat/vB rejected by every public LTC
- * Electrum server.
- *
- * 1.1 puts us safely above that boundary while costing the user a few
- * extra lits. Not a multiplier — the user sees this exact rate in the
- * tier picker (Fast/Normal/Slow show `Math.max(electrumRate, 1.1)`).
+ * Network-relay floor for the standard fee tiers (Fast/Normal/Slow).
+ * Now sourced from `@smirk/core` (`applyRelayFloor`) so every BTC/LTC
+ * broadcast path — wizard, tip funding, tip-claim sweep, dapp — shares
+ * one floor; see that module for the full rationale (1.0 sat/vB at the
+ * relay minimum is rejected by public LTC Electrum servers).
  *
  * **Does NOT apply to the Custom tier.** Custom is the explicit-knob;
  * if a user types 0.5 deliberately, they get 0.5.
  */
-const RELAY_FLOOR_SAT_PER_VB = 1.1;
-
-function applyFloor(rate: number): number {
-  return Math.max(rate, RELAY_FLOOR_SAT_PER_VB);
-}
+const applyFloor = applyRelayFloor;
 
 /**
  * Compute fee in atomic units for a tier rate.
