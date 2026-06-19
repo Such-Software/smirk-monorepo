@@ -384,6 +384,18 @@ export const grin = {
     rewindNonceHex: string,
     proofHex: string,
   ): string => wasm.grin_bullet_proof_rewind(commitHex, rewindNonceHex, proofHex),
+  /**
+   * Seed-only output recovery (view-key scheme). Given the 64-byte
+   * extended private key and an on-chain output (commitment + rangeproof),
+   * returns JSON `{value, key_id_hex, n_child, depth, switch,
+   * blinding_factor_hex}` if the output belongs to this wallet, or the
+   * string `"null"` otherwise. Used by the Grin restore-discovery flow.
+   */
+  recoverOutput: (
+    extKeyHex: string,
+    commitHex: string,
+    proofHex: string,
+  ): string => wasm.grin_recover_output(extKeyHex, commitHex, proofHex),
 
   // ---- Slatepack codec
   slatepackArmor: (payloadHex: string): string => wasm.grin_slatepack_armor(payloadHex),

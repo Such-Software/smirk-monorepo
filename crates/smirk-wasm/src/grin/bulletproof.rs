@@ -96,3 +96,47 @@ pub fn grin_bullet_proof_rewind(
         None => Ok("null".to_string()),
     }
 }
+
+/// Seed-only Grin output recovery (view-key scheme). Given the wallet's
+/// 64-byte extended private key and an on-chain output (commitment +
+/// rangeproof), computes the view-key rewind nonce from the commitment,
+/// rewinds the proof, and parses the embedded message to recover the
+/// derivation path (v3 and legacy/pre-HF2 formats). Returns JSON
+/// `{ "value":"...", "key_id_hex":"...", "n_child":N, "depth":D,
+///    "switch":"Regular|None", "blinding_factor_hex":"..." }` on a hit
+/// (the output belongs to this wallet), or `null` otherwise. The ext key
+/// never leaves the device. `value` is a decimal string (u64 nanogrin).
+#[wasm_bindgen]
+pub fn grin_recover_output(
+    ext_key_hex: &str,
+    commit_hex: &str,
+    proof_hex: &str,
+) -> Result<String, JsValue> {
+    let mut ext_key = [0u8; 64];
+    hex::decode_to_slice(ext_key_hex, &mut ext_key)
+        .map_err(|e| JsValue::from_str(&format!("invalid ext_key_hex: {e}")))?;
+    let mut commit = [0u8; 33];
+    hex::decode_to_slice(commit_hex, &mut commit)
+        .map_err(|e| JsValue::from_str(&format!("invalid commit_hex: {e}")))?;
+    let proof_bytes = hex::decode(proof_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid proof_hex: {e}")))?;
+
+    match grin_ext::recover_output(&ext_key, &commit, &proof_bytes).map_err(|e| JsValue::from_str(&e))? {
+        Some(r) => {
+            let switch = match r.switch {
+                grin_ext::SwitchCommitmentType::Regular => "Regular",
+                grin_ext::SwitchCommitmentType::None => "None",
+            };
+            Ok(format!(
+                r#"{{"value":"{}","key_id_hex":"{}","n_child":{},"depth":{},"switch":"{}","blinding_factor_hex":"{}"}}"#,
+                r.value,
+                hex::encode(r.identifier),
+                r.n_child,
+                r.identifier[0],
+                switch,
+                hex::encode(r.blinding_factor),
+            ))
+        }
+        None => Ok("null".to_string()),
+    }
+}
