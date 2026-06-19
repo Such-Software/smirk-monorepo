@@ -18,6 +18,13 @@ remaining gate; reproducible-build, Tauri desktop shell, and embedded
 dapp browser all shipped. See `docs/V0_3_PLAN.md` rev 9 (internal)
 for the running ship plan.
 
+- **Grin: wallets are now recoverable from your seed phrase alone.** Grin
+  outputs now use the standard deterministic (view-key) rewind-nonce scheme,
+  so a restored wallet rediscovers its outputs directly from the chain instead
+  of relying on server-side records — matching how Bitcoin/Litecoin and
+  Monero/Wownero already restore. Outputs created by earlier builds remain
+  spendable. See `docs/grin.md` → "Output recovery".
+
 ## [0.3.0] — 2026-06-04
 
 First v0.3 release candidate. Ground-up rewrite of the wallet

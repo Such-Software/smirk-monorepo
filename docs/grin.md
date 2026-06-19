@@ -73,6 +73,24 @@ chain code  = bytes[32..64]  (used by addressKey/BIP32-like child derivation)
 
 The string `"IamVoldemort"` is the literal HMAC key used by both `grin-wallet` and the MWC reference. We do NOT use the BIP39 64-byte PBKDF2 seed — `grin-wallet` hashes the entropy directly.
 
+## Output recovery (seed-only)
+
+Grin outputs are created with **grin-standard deterministic rewind nonces**
+(`rewind_nonce = BLAKE2b(key = commitment, data = BLAKE2b(public_root_key))`) —
+the same view-key scheme `grin-wallet` uses. This makes a wallet **recoverable
+from its 12-word seed alone**: re-derive the view key, pull the chain's unspent
+outputs with their rangeproofs, and rewind each proof to find and value the
+ones that belong to you. The derivation path is read back out of the proof
+message, so recovery does not depend on knowing the original derivation depth.
+
+The trade-off is the standard view-key one: anyone holding the wallet's view
+key can scan the chain for its outputs (the rangeproof stays zero-knowledge to
+everyone else, and the nonce is per-commitment so there is no on-chain
+linkage). Treat the Grin view key as sensitive — exactly like a Monero view
+key. *(Earlier builds used random per-output nonces, which are not
+seed-derivable; those outputs remain spendable but are outside seed-only
+recovery.)*
+
 ## Test methodology
 
 Two-tier verification before any feature ships:
