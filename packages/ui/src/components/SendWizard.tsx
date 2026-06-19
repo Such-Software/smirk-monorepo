@@ -1306,6 +1306,13 @@ function Review({
   const [error, setError] = useState<string | null>(null);
   const [tiers, setTiers] = useState<FeeTiers | null>(null);
   const [estimatedFeeAtomic, setEstimatedFeeAtomic] = useState<bigint | null>(null);
+  // For CryptoNote (XMR/WOW) the fee is computed server-side, so `rate`
+  // is a constant 0 and can't gate the Send button. Track whether the
+  // display estimate has settled so we don't let the user commit while
+  // the review still reads "Estimating…". Falls back to settled after a
+  // timeout / on failure — the send-handler computes the real fee
+  // regardless, so a slow estimate must never permanently block Send.
+  const [feeEstimatePending, setFeeEstimatePending] = useState(!usesFeePicker);
 
   // Re-fetch the live fee estimate on mount for non-picker assets, same
   // pattern as Compose. Estimate may have shifted in the time it took
@@ -1313,13 +1320,34 @@ function Review({
   // so we tell the shell to size the estimate for the actual spendable
   // output count.
   useEffect(() => {
-    if (usesFeePicker || !resolveSendFeeEstimate) return;
+    if (usesFeePicker || !resolveSendFeeEstimate) {
+      setFeeEstimatePending(false);
+      return;
+    }
     let alive = true;
-    resolveSendFeeEstimate(assetId, { sweep }).then((fee) => {
-      if (alive && fee !== null) setEstimatedFeeAtomic(fee);
-    }, () => undefined);
+    setFeeEstimatePending(true);
+    setEstimatedFeeAtomic(null);
+    const settle = () => {
+      if (alive) setFeeEstimatePending(false);
+    };
+    // Safety valve: never block Send forever if the estimate hangs.
+    const fallback = setTimeout(settle, 12_000);
+    resolveSendFeeEstimate(assetId, { sweep }).then(
+      (fee) => {
+        if (!alive) return;
+        if (fee !== null) setEstimatedFeeAtomic(fee);
+        clearTimeout(fallback);
+        settle();
+      },
+      () => {
+        if (!alive) return;
+        clearTimeout(fallback);
+        settle();
+      },
+    );
     return () => {
       alive = false;
+      clearTimeout(fallback);
     };
   }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep]);
 
@@ -1356,7 +1384,11 @@ function Review({
   const amountAtomic = sweep ? 0n : parseAmount(assetId, amountText);
 
   const canSend =
-    rate !== null && rate !== undefined && (sweep || (amountAtomic !== null && amountAtomic > 0n));
+    rate !== null &&
+    rate !== undefined &&
+    (sweep || (amountAtomic !== null && amountAtomic > 0n)) &&
+    // CryptoNote: don't allow commit until the fee estimate has settled.
+    !feeEstimatePending;
 
   const handleSubmit = async () => {
     if (!canSend || rate === null || rate === undefined) return;
@@ -1400,7 +1432,9 @@ function Review({
           value={
             estimatedFeeAtomic !== null
               ? `~${formatAmountWithAsset(estimatedFeeAtomic, asset, 8)} ${asset.ticker}`
-              : 'Estimating…'
+              : feeEstimatePending
+                ? 'Estimating…'
+                : 'computed at send'
           }
         />
       )}
