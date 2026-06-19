@@ -252,10 +252,10 @@ export function HomeActionRow({
         padding: '4px 0 8px',
       }}
     >
-      <ActionButton label="Tip" icon="🎁" {...(onTip ? { onClick: onTip } : {})} {...(disabled.tip ? { disabled: true } : {})} />
-      <ActionButton label="Send" icon="↗" {...(onSend ? { onClick: onSend } : {})} {...(disabled.send ? { disabled: true } : {})} />
-      <ActionButton label="Receive" icon="↘" {...(onReceive ? { onClick: onReceive } : {})} {...(disabled.receive ? { disabled: true } : {})} />
-      <ActionButton label="Swap" icon="⇄" {...(onSwap ? { onClick: onSwap } : {})} {...(disabled.swap ? { disabled: true } : {})} />
+      <ActionButton testid="home-action-tip" label="Tip" icon="🎁" {...(onTip ? { onClick: onTip } : {})} {...(disabled.tip ? { disabled: true } : {})} />
+      <ActionButton testid="home-action-send" label="Send" icon="↗" {...(onSend ? { onClick: onSend } : {})} {...(disabled.send ? { disabled: true } : {})} />
+      <ActionButton testid="home-action-receive" label="Receive" icon="↘" {...(onReceive ? { onClick: onReceive } : {})} {...(disabled.receive ? { disabled: true } : {})} />
+      <ActionButton testid="home-action-swap" label="Swap" icon="⇄" {...(onSwap ? { onClick: onSwap } : {})} {...(disabled.swap ? { disabled: true } : {})} />
     </div>
   );
 }
