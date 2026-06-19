@@ -230,16 +230,31 @@ function TipCard({
 
   const { label, color } = statusBadge(row);
 
-  // Clawback-eligible: any state where funds are on-chain but not
+  // Clawback-eligible: any state where funds may be on-chain but not
   // claimed. Drafts have no on-chain funds → discard instead.
+  //
+  // 2026-06-13 tip-system audit additions:
+  //   - `funding_mismatch`: sender funded LESS than declared. v0.3.0
+  //     backend allows clawback (recovers the underfunded amount);
+  //     without this affordance the user saw a terminal-looking
+  //     state with no recovery path.
+  //   - `cancelled` WHEN hasLocalBackup: the tip-draft GC may flip
+  //     a funded-but-not-attached draft to `cancelled` after the
+  //     7-day window. The local backup still holds the spend key,
+  //     so this case is recoverable iff the user kept the backup.
+  //     Without hasLocalBackup we have no way to derive the spend
+  //     key client-side, so the button stays hidden.
   const isDraft = row.status === 'draft';
   const isClawbackable =
     row.status === 'pending' ||
     row.status === 'pending_confirmation' ||
-    row.status === 'claiming';
+    row.status === 'claiming' ||
+    row.status === 'funding_mismatch' ||
+    (row.status === 'cancelled' && !!row.hasLocalBackup);
 
   return (
     <div
+      data-testid={`sent-tip-card-${row.id}`}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -281,6 +296,7 @@ function TipCard({
           </div>
         </div>
         <span
+          data-testid="sent-tip-status-badge"
           style={{
             fontSize: 9,
             padding: '2px 6px',
@@ -318,12 +334,20 @@ function TipCard({
       {(isDraft || isClawbackable) && (
         <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
           {isDraft && (
-            <Button onClick={onDiscard} {...(busy ? { disabled: true } : {})}>
+            <Button
+              testid="sent-tip-discard-btn"
+              onClick={onDiscard}
+              {...(busy ? { disabled: true } : {})}
+            >
               Discard draft
             </Button>
           )}
           {isClawbackable && (
-            <Button onClick={onClawback} {...(busy ? { disabled: true } : {})}>
+            <Button
+              testid="sent-tip-clawback-btn"
+              onClick={onClawback}
+              {...(busy ? { disabled: true } : {})}
+            >
               ↩ Clawback
             </Button>
           )}
@@ -332,6 +356,7 @@ function TipCard({
 
       {message && (
         <div
+          data-testid="sent-tip-row-message"
           style={{
             fontSize: 10,
             color: message.startsWith('Error')
@@ -381,7 +406,7 @@ function ShareUrlPanel({ shareUrl }: { shareUrl: string }) {
       >
         {shareUrl}
       </div>
-      <Button onClick={copy}>
+      <Button testid="sent-tip-copy-link-btn" onClick={copy}>
         {copied ? '✓ Copied' : '⧉ Copy link'}
       </Button>
     </div>
@@ -393,7 +418,13 @@ function statusBadge(row: SentTipRow): { label: string; color: string } {
     case 'draft':
       return { label: 'Draft', color: 'var(--smirk-fg-muted)' };
     case 'cancelled':
-      return { label: 'Cancelled', color: 'var(--smirk-fg-muted)' };
+      // Distinguished from a plain Cancelled when a local backup is
+      // available — the user can still recover those funds via
+      // clawback. Without the hint the GC'd-funded-draft case looks
+      // identical to a benign abandoned draft.
+      return row.hasLocalBackup
+        ? { label: 'Cancelled (recoverable)', color: 'var(--smirk-negative, #ff6b6b)' }
+        : { label: 'Cancelled', color: 'var(--smirk-fg-muted)' };
     case 'pending_confirmation':
       return { label: 'Confirming', color: 'var(--smirk-accent)' };
     case 'pending':
@@ -404,6 +435,11 @@ function statusBadge(row: SentTipRow): { label: string; color: string } {
       return { label: 'Claimed', color: 'var(--smirk-positive)' };
     case 'clawed_back':
       return { label: 'Clawed back', color: 'var(--smirk-positive)' };
+    case 'funding_mismatch':
+      // Sender funded LESS than declared. Recoverable via clawback
+      // — the corresponding `isClawbackable` branch surfaces the
+      // button. Negative color flags this as needing attention.
+      return { label: 'Underfunded', color: 'var(--smirk-negative, #ff6b6b)' };
     default:
       return { label: row.status, color: 'var(--smirk-fg-muted)' };
   }

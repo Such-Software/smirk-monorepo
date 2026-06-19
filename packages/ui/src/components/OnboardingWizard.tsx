@@ -284,7 +284,7 @@ function Welcome({ onCreate, onImport }: { onCreate: () => void; onImport: () =>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
         <Button onClick={onCreate}>Create new wallet</Button>
-        <Button variant="secondary" onClick={onImport}>
+        <Button variant="secondary" onClick={onImport} testid="onboarding-import-btn">
           Import existing
         </Button>
       </div>
@@ -574,6 +574,7 @@ function ImportMnemonic({
               }}
               type="text"
               value={w}
+              data-testid={`onboarding-import-word-${i}`}
               onInput={(e) => setWordAt(i, (e.target as HTMLInputElement).value)}
               onPaste={(e) => handlePaste(i, e as ClipboardEvent)}
               onKeyDown={(e) => handleKey(i, e as KeyboardEvent)}
@@ -598,7 +599,7 @@ function ImportMnemonic({
       </div>
 
       {error && <FieldError>{error}</FieldError>}
-      <Button onClick={handleSubmit}>Continue</Button>
+      <Button onClick={handleSubmit} testid="onboarding-import-continue">Continue</Button>
     </div>
   );
 }
@@ -645,6 +646,7 @@ function SetPassword({
           placeholder="Password"
           autoFocus
           value={pw1}
+          data-testid="onboarding-password-input"
           onInput={(e) => setPw1((e.target as HTMLInputElement).value)}
           style={inputStyle}
         />
@@ -652,6 +654,7 @@ function SetPassword({
           type="password"
           placeholder="Confirm password"
           value={pw2}
+          data-testid="onboarding-password-confirm-input"
           onInput={(e) => setPw2((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
             if ((e as KeyboardEvent).key === 'Enter') handleSubmit();
@@ -660,7 +663,7 @@ function SetPassword({
         />
       </div>
       {(localError || error) && <FieldError>{localError ?? error}</FieldError>}
-      <Button onClick={handleSubmit}>{isImport ? 'Import wallet' : 'Create wallet'}</Button>
+      <Button onClick={handleSubmit} testid="onboarding-set-password-submit">{isImport ? 'Import wallet' : 'Create wallet'}</Button>
     </div>
   );
 }
@@ -716,7 +719,7 @@ function ImportWarning({
           </li>
         </ul>
       </div>
-      <Button onClick={onContinue}>Continue with Smirk seed</Button>
+      <Button onClick={onContinue} testid="onboarding-import-warning-continue">Continue with Smirk seed</Button>
     </div>
   );
 }
@@ -948,7 +951,7 @@ function SmirkSetup({
         </section>
       )}
 
-      <Button onClick={() => void submitAndContinue()}>
+      <Button onClick={() => void submitAndContinue()} testid="onboarding-setup-finish-btn">
         {handleStatus.kind === 'reserved' || hasExistingIdentity
           ? 'Continue'
           : 'Skip for now'}

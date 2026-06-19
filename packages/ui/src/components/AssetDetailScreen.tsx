@@ -219,6 +219,7 @@ export function AssetDetailScreen({
       {/* Header: back + asset name */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button
+          data-testid="asset-detail-back"
           onClick={onBack}
           style={{
             background: 'transparent',
@@ -271,7 +272,12 @@ export function AssetDetailScreen({
           <ActionPill onClick={onReceive} icon="↙" label="Receive" />
         )}
         {onTip && (
-          <ActionPill onClick={onTip} icon="🎁" label="Tip" />
+          <ActionPill
+            onClick={onTip}
+            icon="🎁"
+            label="Tip"
+            testid="asset-detail-tip"
+          />
         )}
       </div>
 
@@ -513,6 +519,7 @@ function AssetDetailBalance({
           for pathological retro themes where one character is wider
           than the whole popup; for normal renders the number fits. */}
       <div
+        data-testid="asset-detail-balance"
         style={{
           fontSize: 18,
           fontWeight: 600,
@@ -579,14 +586,17 @@ function ActionPill({
   onClick,
   icon,
   label,
+  testid,
 }: {
   onClick: () => void;
   icon: string;
   label: string;
+  testid?: string;
 }) {
   return (
     <button
       onClick={onClick}
+      {...(testid ? { 'data-testid': testid } : {})}
       style={{
         flex: 1,
         display: 'flex',
@@ -731,12 +741,21 @@ function TxRow({
   // tip-sent rows get Clawback / Discard, tip-received rows get Claim.
   // The row container becomes a non-clickable `<div>` whenever an
   // inline action is showing (HTML forbids nested buttons).
+  // Clawback eligibility mirrors SentTipsScreen.tsx — kept in sync
+  // by audit comment, not by a shared helper, because the row shapes
+  // differ. 2026-06-13 audit additions: `funding_mismatch` (sender
+  // funded LESS than declared; clawback recovers the underfunded
+  // amount), and `cancelled` WHEN hasLocalBackup (tip-draft GC may
+  // flip a funded-but-not-attached draft to `cancelled` after the
+  // 7-day window; local backup still holds the spend key).
   const showTipSentActions =
     row.kind === 'tip-sent' &&
     ((onTipClawback &&
       (row.status === 'pending' ||
         row.status === 'pending_confirmation' ||
-        row.status === 'claiming')) ||
+        row.status === 'claiming' ||
+        row.status === 'funding_mismatch' ||
+        (row.status === 'cancelled' && !!row.hasLocalBackup))) ||
       (onTipDiscard && row.status === 'draft'));
   const showTipReceivedActions = tipReadyToClaim && onTipClaim !== undefined;
   const showTipActions = showTipSentActions || showTipReceivedActions;
@@ -1003,6 +1022,11 @@ function tipStatusLabel(status: string): string {
       return 'claimed';
     case 'clawed_back':
       return 'clawed back';
+    case 'funding_mismatch':
+      // 2026-06-13 tip-system audit: distinct copy makes the
+      // recovery path obvious vs a generic "pending" / "cancelled".
+      // Paired with the clawback affordance added in showTipSentActions.
+      return 'underfunded';
     default:
       return status;
   }

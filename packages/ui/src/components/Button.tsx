@@ -28,6 +28,13 @@ export interface ButtonProps {
   /** Render at full container width (default). Pass `false` for inline. */
   fullWidth?: boolean;
   class?: string;
+  /**
+   * Stable hook for e2e automation, rendered as `data-testid`. Inert
+   * in production. Most CTAs route through this component, so the e2e
+   * harness relies on it for selector stability — see the smoke-e2e
+   * harness page objects.
+   */
+  testid?: string;
 }
 
 export function Button({
@@ -38,6 +45,7 @@ export function Button({
   type = 'button',
   fullWidth = true,
   class: className,
+  testid,
 }: ButtonProps) {
   // Read colors from theme tokens (set as CSS custom properties by
   // applyTheme) instead of hardcoding. Pre-fix this used #8b5cf6 (the
@@ -73,6 +81,7 @@ export function Button({
       type={type}
       onClick={onClick}
       disabled={disabled}
+      {...(testid ? { 'data-testid': testid } : {})}
       style={{
         ...styles,
         display: 'inline-flex',

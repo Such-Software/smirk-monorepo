@@ -78,6 +78,7 @@ export function AppShell({ routes, onPopOut, brand, headerActions, tabBadges, cl
   return (
     <div
       class={className}
+      data-testid="app-shell-root"
       style={{
         display: 'flex',
         flexDirection: isPopout ? 'row' : 'column',

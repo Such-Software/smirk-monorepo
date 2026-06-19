@@ -99,6 +99,54 @@ test('store subscribers fire on cross-context writes (via shared storage)', asyn
   b.destroy();
 });
 
+test('store update is serialized — 50 concurrent updates all land', async () => {
+  // Regression for 2026-06-13 Trocador swap audit. Pre-fix, two
+  // concurrent `update()` calls each `load()`-ed the same cached
+  // state, mutated independent JSON-deep-cloned drafts, and the
+  // later `save()` clobbered the earlier write. The Trocador
+  // "Open Send → pre-filled" handler hit this — its prefill write
+  // raced with the trocador-wizard step write and the prefill
+  // disappeared, sending the user to PICK A COIN instead of
+  // Compose. The Promise-chain mutex in `update()` makes every
+  // concurrent caller observe the previous write before its own
+  // load.
+  const store = new SessionStateStore(new InMemoryStorage());
+  const N = 50;
+  await Promise.all(
+    Array.from({ length: N }, (_, i) =>
+      store.update((s) => {
+        s.scroll[`row-${i}`] = i;
+      }),
+    ),
+  );
+  const final = await store.load();
+  for (let i = 0; i < N; i++) {
+    assert.equal(final.scroll[`row-${i}`], i, `row-${i} must survive concurrent writes`);
+  }
+  store.destroy();
+});
+
+test('store update mutator throw does not strand subsequent updates', async () => {
+  // Belt-and-suspenders: if one queued mutator throws, the chain
+  // must keep moving so the next caller still runs. Without the
+  // `.catch(() => {})` rescue on `updateChain`, a single throw
+  // would freeze the store for the rest of the session.
+  const store = new SessionStateStore(new InMemoryStorage());
+  const errors: unknown[] = [];
+  await Promise.all([
+    store.update(() => {
+      throw new Error('boom');
+    }).catch((e) => errors.push(e)),
+    store.update((s) => {
+      s.route = { current: 'inbox' };
+    }),
+  ]);
+  assert.equal(errors.length, 1);
+  const final = await store.load();
+  assert.equal(final.route.current, 'inbox');
+  store.destroy();
+});
+
 test('store reset returns to defaults', async () => {
   const store = new SessionStateStore(new InMemoryStorage());
   await store.update((s) => {

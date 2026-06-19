@@ -93,6 +93,7 @@ export function BalanceCard({
   return (
     <Container
       class={['smirk-balance-card', className].filter(Boolean).join(' ')}
+      data-testid={`asset-row-${assetId}`}
       onClick={onClick}
       style={{
         // Outer is a column so the main row keeps its tight icon-
@@ -134,7 +135,10 @@ export function BalanceCard({
         </div>
 
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 14, fontFamily: 'var(--smirk-font-family-mono, monospace)' }}>
+          <div
+            data-testid={`asset-row-${assetId}-balance`}
+            style={{ fontSize: 14, fontFamily: 'var(--smirk-font-family-mono, monospace)' }}
+          >
             {loading ? '—' : formatted}
           </div>
           {fiatDisplay && (

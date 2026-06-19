@@ -134,6 +134,28 @@ export async function dispatchSocialTip(args: {
 }): Promise<TipSubmitOutcome> {
   const { wallet, fields, onBroadcast } = args;
 
+  // MAX_SAFE_INTEGER guard (2026-06-13 tip audit should-fix #2).
+  // `api.createSocialTip` serializes `amount` as a JS Number — i.e.
+  // a u53. WOW (11 decimals) hits 2^53-1 at ~90,071 WOW per tip,
+  // realistic for whale/channel-raid tips. On-chain broadcast uses
+  // the original bigint (correct), but the backend stores the
+  // ROUNDED number as `tip.amount`, so the verifier then compares
+  // observed-vs-declared against the wrong target and mis-branches
+  // Verified vs Short. Recipient inbox + share URL display the
+  // rounded value too — silent precision loss with no user signal.
+  //
+  // Hard early-return BEFORE any broadcast so the user can split
+  // into smaller tips. v0.3.1 structural fix: switch
+  // CreateSocialTipRequest.amount to a decimal-string + i64 parse
+  // on the Rust side.
+  const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+  if (fields.amountAtomic > MAX_SAFE) {
+    return {
+      ok: false,
+      error: 'Amount too large — split into smaller tips. (Tip atomic-amounts are currently capped at 2^53-1; the limit will be lifted in v0.3.1.)',
+    };
+  }
+
   try {
     if (fields.assetId === 'btc' || fields.assetId === 'ltc') {
       return await createBtcLtcTip(wallet, fields, onBroadcast);

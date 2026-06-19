@@ -29,6 +29,8 @@ export interface ActionButtonProps {
    *  for secondary actions in a row of mostly-primary CTAs. */
   variant?: 'primary' | 'subtle';
   class?: string;
+  /** Stable e2e hook, rendered as `data-testid`. Inert in production. */
+  testid?: string;
 }
 
 export function ActionButton({
@@ -38,6 +40,7 @@ export function ActionButton({
   disabled,
   variant = 'primary',
   class: className,
+  testid,
 }: ActionButtonProps) {
   // Token-driven so themes can fully restyle. Variants:
   // - primary: accent-tinted background, accent foreground
@@ -49,6 +52,7 @@ export function ActionButton({
         .join(' ')}
       onClick={onClick}
       disabled={disabled}
+      {...(testid ? { 'data-testid': testid } : {})}
       style={{
         display: 'flex',
         flexDirection: 'column',

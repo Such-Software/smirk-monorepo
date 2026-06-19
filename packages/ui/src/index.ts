@@ -73,7 +73,7 @@ export type { ClaimableTipsBannerProps } from './components/ClaimableTipsBanner'
 export { ReadyToShareTipsBanner } from './components/ReadyToShareTipsBanner';
 export type { ReadyToShareTipsBannerProps } from './components/ReadyToShareTipsBanner';
 
-export { SwapTab } from './components/SwapTab';
+export { SwapTab, TROCADOR_WIZARD_ID } from './components/SwapTab';
 export type {
   SwapTabProps,
   SwapQuoteSummary,

@@ -92,6 +92,22 @@ export interface SendFields extends Record<string, unknown> {
    * through `chrome.storage.session` without bespoke serialization.
    */
   pendingContext?: import('@smirk/core').PendingOutgoingContext;
+
+  /**
+   * Snapshot of the prefill seed at the moment a non-vanilla entry
+   * point (Trocador "Open Send → pre-filled", tip funding, etc.)
+   * stashed the pendingContext above. The popup-level onSubmit
+   * cross-checks this against the actual submitted fromAssetId +
+   * toAddress and drops the pendingContext on mismatch — that way
+   * a user who back-navigates and switches to an unrelated asset/
+   * recipient doesn't end up with a vanilla send tagged as a swap-
+   * deposit in Activity. Optional; absence means "no seed → no
+   * cross-check needed".
+   */
+  pendingContextSeed?: {
+    fromAssetId?: string;
+    toAddress?: string;
+  };
 }
 
 export type SendSubmitResult =
@@ -543,6 +559,7 @@ function PickAsset({
           return (
             <button
               key={id}
+              data-testid={`send-asset-${id}`}
               onClick={() => onPick(id)}
               style={rowButtonStyle(active)}
             >
@@ -674,6 +691,7 @@ function EnterAddress({
         </div>
       ) : (
         <textarea
+          data-testid="send-address-input"
           value={text}
           onInput={(e) => {
             setText((e.target as HTMLTextAreaElement).value);
@@ -690,6 +708,7 @@ function EnterAddress({
       )}
       {error && <FieldError>{error}</FieldError>}
       <PrimaryButton
+        testid="send-address-continue"
         disabled={(!manualSlatepack && !text.trim()) || validating}
         onClick={handleContinue}
       >
@@ -1014,6 +1033,7 @@ function Compose({
           time so sweep is deferred to a Phase-2 handler. */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
         <input
+          data-testid="send-amount-input"
           type="text"
           inputMode="decimal"
           value={
@@ -1034,6 +1054,7 @@ function Compose({
         />
         {sweepSupported && (
           <button
+            data-testid="send-max-button"
             onClick={() => setSweep((s) => !s)}
             aria-pressed={sweep}
             style={{
@@ -1089,6 +1110,7 @@ function Compose({
               return (
                 <button
                   key={t}
+                  data-testid={`send-fee-tier-${t}`}
                   onClick={() => setTier(t)}
                   disabled={displayRate === null}
                   aria-pressed={active}
@@ -1123,6 +1145,7 @@ function Compose({
               </span>
               <span style={{ fontSize: 10, opacity: 0.7 }}>sat/vB</span>
               <input
+                data-testid="send-custom-fee-rate-input"
                 type="number"
                 min="0"
                 step="0.1"
@@ -1194,6 +1217,7 @@ function Compose({
 
       <div style={{ marginTop: 4 }}>
         <Button
+          testid="send-compose-continue"
           onClick={() =>
             onContinue({
               amountText,
@@ -1391,7 +1415,7 @@ function Review({
         />
       )}
       {error && <FieldError>{error}</FieldError>}
-      <PrimaryButton disabled={submitting || !canSend} onClick={handleSubmit}>
+      <PrimaryButton testid="send-review-submit" disabled={submitting || !canSend} onClick={handleSubmit}>
         {submitting ? 'Sending…' : sweep ? 'Send Max 🔓' : 'Send 🔓'}
       </PrimaryButton>
     </div>
@@ -1858,6 +1882,7 @@ function DoneStep({
               mixed case so users can match against block explorers
               that round-trip it verbatim. */}
           <button
+            data-testid="send-done-txid"
             onClick={copyTxid}
             data-no-uppercase
             title="Click to copy"
@@ -1926,7 +1951,7 @@ function DoneStep({
           </div>
         </div>
       )}
-      <PrimaryButton onClick={onClose}>Done</PrimaryButton>
+      <PrimaryButton testid="send-done-close" onClick={onClose}>Done</PrimaryButton>
     </div>
   );
 }
@@ -1987,6 +2012,7 @@ function Header({
       }}
     >
       <button
+        data-testid="send-wizard-header-back"
         onClick={onBack ?? onCancel}
         aria-label={onBack ? 'Back' : 'Cancel'}
         style={iconButtonStyle}
@@ -2046,14 +2072,20 @@ function PrimaryButton({
   children,
   onClick,
   disabled,
+  testid,
 }: {
   children: preact.ComponentChildren;
   onClick: () => void;
   disabled?: boolean;
+  testid?: string;
 }) {
   return (
     <div style={{ marginTop: 16 }}>
-      <Button onClick={onClick} {...(disabled ? { disabled: true } : {})}>
+      <Button
+        onClick={onClick}
+        {...(disabled ? { disabled: true } : {})}
+        {...(testid ? { testid } : {})}
+      >
         {children}
       </Button>
     </div>

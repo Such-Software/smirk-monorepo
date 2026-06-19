@@ -47,6 +47,7 @@ export function LockScreen({ onUnlock, iconUrl, class: className }: LockScreenPr
   return (
     <div
       class={className}
+      data-testid="lockscreen-root"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -65,6 +66,7 @@ export function LockScreen({ onUnlock, iconUrl, class: className }: LockScreenPr
         placeholder="Password"
         value={password}
         disabled={busy}
+        data-testid="lockscreen-password-input"
         onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
         onKeyDown={(e) => {
           if ((e as KeyboardEvent).key === 'Enter') void handleSubmit();
@@ -73,12 +75,13 @@ export function LockScreen({ onUnlock, iconUrl, class: className }: LockScreenPr
       />
 
       {error && (
-        <div style={{ color: '#ff6b6b', fontSize: 12, textAlign: 'center' }}>{error}</div>
+        <div data-testid="lockscreen-error" style={{ color: '#ff6b6b', fontSize: 12, textAlign: 'center' }}>{error}</div>
       )}
 
       <div style={{ width: '100%', maxWidth: 280 }}>
         <Button
           onClick={() => void handleSubmit()}
+          testid="lockscreen-unlock-btn"
           {...(!password || busy ? { disabled: true } : {})}
         >
           {busy ? 'Unlocking…' : 'Unlock'}

@@ -67,6 +67,7 @@ export function BottomNav({ orientation = 'horizontal', badges }: BottomNavProps
   return (
     <nav
       class="smirk-bottom-nav"
+      data-testid="bottom-nav"
       style={{
         display: 'flex',
         flexDirection: isVertical ? 'column' : 'row',
@@ -94,6 +95,7 @@ export function BottomNav({ orientation = 'horizontal', badges }: BottomNavProps
             key={t.id}
             role="tab"
             aria-selected={active}
+            data-testid={`nav-tab-${t.id}`}
             onClick={onTabClick}
             class={['smirk-bottom-nav__tab', active && 'smirk-bottom-nav__tab--active']
               .filter(Boolean)

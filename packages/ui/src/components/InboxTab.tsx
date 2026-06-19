@@ -237,19 +237,21 @@ export function InboxTab(props: InboxTabProps) {
       {(tipsClaimable.length > 0 ||
         (props.tips !== undefined && tipsClaimable.length === 0 && tipsPending.length === 0 && toSign.length === 0 && toFinalize.length === 0)) &&
         tipsClaimable.length > 0 && (
-        <Section
-          title="Tips ready to claim"
-          subtitle="Confirmed on-chain — one tap to sweep into your wallet."
-          count={tipsClaimable.length}
-        >
-          {tipsClaimable.map((tip) => (
-            <TipClaimableRow
-              key={tip.tipId}
-              tip={tip}
-              {...(props.onClaimTip ? { onClaim: () => props.onClaimTip!(tip) } : {})}
-            />
-          ))}
-        </Section>
+        <div data-testid="inbox-claimable-section">
+          <Section
+            title="Tips ready to claim"
+            subtitle="Confirmed on-chain — one tap to sweep into your wallet."
+            count={tipsClaimable.length}
+          >
+            {tipsClaimable.map((tip) => (
+              <TipClaimableRow
+                key={tip.tipId}
+                tip={tip}
+                {...(props.onClaimTip ? { onClaim: () => props.onClaimTip!(tip) } : {})}
+              />
+            ))}
+          </Section>
+        </div>
       )}
 
       {tipsPending.length > 0 && (
@@ -475,6 +477,7 @@ function InboxRow({
           <button
             onClick={onCancel}
             aria-label="Cancel"
+            data-testid="inbox-grin-cancel-btn"
             title="Cancel — drop this slatepack from the relay"
             style={{
               background: 'transparent',
@@ -521,6 +524,7 @@ function TipClaimableRow({
   };
   return (
     <div
+      data-testid={`tip-claimable-row-${tip.tipId}`}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -554,6 +558,7 @@ function TipClaimableRow({
           icon={busy ? '⋯' : '✓'}
           onClick={() => void handleClaim()}
           disabled={busy || !onClaim}
+          testid="tip-claim-btn"
         />
       </div>
       {/* CryptoNote (XMR/WOW) sweep involves WASM ring-sig + key-image
@@ -576,6 +581,7 @@ function TipClaimableRow({
       )}
       {error && (
         <div
+          data-testid="tip-claim-error"
           style={{
             fontSize: 11,
             color: 'var(--smirk-negative, #ff6b6b)',

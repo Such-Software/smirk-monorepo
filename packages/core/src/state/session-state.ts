@@ -266,6 +266,20 @@ export class SessionStateStore {
    */
   private lastWrittenJson: string | null = null;
 
+  /**
+   * Promise-chain mutex serializing every `update()` call. Without it,
+   * two near-simultaneous updates both read the same cached snapshot,
+   * each mutate an independent JSON-deep-cloned draft, then race to
+   * `save()` — and the later write silently clobbers the earlier one.
+   * Dogfooded 2026-06-13 by the Trocador swap "Open Send → pre-filled"
+   * click handler firing two concurrent `store.update`s and losing the
+   * prefill payload to the trocador-wizard step write. The mutex makes
+   * every caller observe a consistent load → mutate → save cycle.
+   * Callers that only `load()` / `save()` bypass it intentionally —
+   * single-shot writes don't need ordering with each other.
+   */
+  private updateChain: Promise<unknown> = Promise.resolve();
+
   constructor(
     private readonly storage: PlatformStorage,
     private readonly key: string = STORAGE_KEY,
@@ -308,15 +322,30 @@ export class SessionStateStore {
    * Atomically read-modify-write the state. The mutator may mutate
    * the passed object directly (it's a fresh copy) or return a new
    * shape; both are handled.
+   *
+   * Serialized via `updateChain`: concurrent callers queue and run
+   * one-at-a-time so each load → mutate → save observes the writes
+   * of every prior `update()`. Mutator throws propagate to the
+   * caller but don't break the chain — the next queued update runs
+   * with the pre-throw state (no partial write).
    */
   async update(
     mutator: (state: SessionState) => void | SessionState | Promise<void | SessionState>,
   ): Promise<SessionState> {
-    const current = await this.load();
-    const draft: SessionState = JSON.parse(JSON.stringify(current));
-    const result = await mutator(draft);
-    const next = (result === undefined ? draft : result) as SessionState;
-    await this.save(next);
+    const run = async (): Promise<SessionState> => {
+      const current = await this.load();
+      const draft: SessionState = JSON.parse(JSON.stringify(current));
+      const result = await mutator(draft);
+      const next = (result === undefined ? draft : result) as SessionState;
+      await this.save(next);
+      return next;
+    };
+    const next = this.updateChain.then(run, run);
+    // Keep the chain alive across rejections so one failing mutator
+    // doesn't strand all subsequent queued updates. The chain just
+    // tracks "the previous update has settled (success OR failure)";
+    // it never observes the value.
+    this.updateChain = next.catch(() => {});
     return next;
   }
 

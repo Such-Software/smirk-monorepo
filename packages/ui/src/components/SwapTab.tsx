@@ -29,7 +29,7 @@
  * calls + persistence + Send-handoff via the handler props.
  */
 
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
 import { useWizard } from '../state/hooks';
 import { AssetIcon } from './AssetIcon';
@@ -78,6 +78,33 @@ export interface SwapInFlight {
     | { state: 'failed'; reason: string };
 }
 
+/**
+ * One row of the user's swap history, shaped for the "Recent swaps"
+ * surface that resurfaces any non-terminal swap whose wizard state
+ * was destroyed (X-button cancel, popup-close-during-confirm,
+ * browser restart). Built from the backend's `listSwaps` response.
+ *
+ * Pre-2026-06-13 the wallet had no consumer for `listSwaps` so any
+ * cancel-and-no-recovery scenario stranded the user — they'd have
+ * to hunt through their Trocador confirmation email for the
+ * trade_id. The Recent-swaps section restores in-wallet recovery
+ * without making the wizard "forward-only" (which would lose the
+ * fast-path for users who just want to dismiss).
+ */
+export interface SwapSummary {
+  id: string;
+  fromAsset: string;
+  toAsset: string;
+  fromAmountAtomic: string;
+  toAmountEstimateAtomic: string;
+  depositAddress: string;
+  /** Trocador-string status (`new`, `waiting`, ..., `finished`). */
+  status: string;
+  /** ISO timestamp for the row's createdAt, used for sort + "started
+   *  N min ago" rendering. */
+  createdAt: string;
+}
+
 export type SwapKindBadge = 'CEX' | 'DEX';
 export type SwapProviderStatus = 'active' | 'coming_soon' | 'paused';
 
@@ -117,6 +144,36 @@ export interface SwapTabProps {
    *  an asset that's registered but not yet derived for some
    *  reason). */
   resolveAddress?: (assetId: string) => string | null;
+  /**
+   * Validate an address against an asset id. Same shape as the
+   * SendWizard's `validateAddress` — returns `null` if valid, a
+   * short human-readable error if not. Called on Confirm in the
+   * QuoteStep so a user pasting a BTC address into an XMR receive
+   * field (or holding a stale refund address from a previous
+   * quote with a different from-asset) doesn't ship a /new_trade
+   * call that the provider may silently accept and refund to a
+   * wrong-network address — irrecoverable. Optional only for
+   * back-compat; consumers SHOULD wire it.
+   */
+  validateAddress?: (assetId: string, address: string) => string | null;
+  /**
+   * Pull the user's recent swaps from the backend. Shown above the
+   * provider list when the wizard is inactive — gives any swap whose
+   * wizard state was destroyed (X-button cancel, popup-close during
+   * confirm, browser restart) a "Resume" affordance instead of
+   * stranding the user. Optional only for back-compat; consumers
+   * SHOULD wire it for v0.3.0 ship.
+   */
+  onListRecentSwaps?: () => Promise<SwapSummary[]>;
+  /**
+   * Resume a backend-known swap in the wizard. The consumer is
+   * responsible for the store write — rehydrate the wizard with
+   * `inFlight` set + `step=3` so the user lands directly on
+   * StatusStep with live polling. SwapTab fires this on a recent-
+   * swap row click; consumer's job to map SwapSummary onto the
+   * SwapInFlight shape, including initial state mapping.
+   */
+  onResumeSwap?: (swap: SwapSummary) => Promise<void> | void;
   resolveIcon?: (iconKey: string) => string | undefined;
 }
 
@@ -225,17 +282,40 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
 // Trocador wizard fields (persisted via useWizard)
 // ============================================================================
 
-const TROCADOR_WIZARD_ID = 'swap-trocador';
+/** Stable wizard id for the Trocador swap flow. Exported so the
+ *  popup can write into the same slot before the wizard's own
+ *  patchFields callback runs (e.g. mid-`onConfirm` preserve of the
+ *  inFlight trade before awaiting backend mirror), without
+ *  duplicating the magic string. */
+export const TROCADOR_WIZARD_ID = 'swap-trocador';
 
 interface TrocadorFields extends Record<string, unknown> {
   step: 0 | 1 | 2 | 3;
   fromAsset?: string;
   toAsset?: string;
   amountText?: string;
-  /** Set after step 0 advances to step 1 (quote returned). */
-  quote?: SwapQuoteSummary;
+  /**
+   * Set after step 0 advances to step 1 (quote returned). Widened
+   * with `| undefined` so the wizard's `patchFields` can explicitly
+   * clear it via `{ quote: undefined }` on the re-quote path —
+   * `exactOptionalPropertyTypes` doesn't let an `optional T` accept
+   * undefined.
+   */
+  quote?: SwapQuoteSummary | undefined;
   toAddress?: string;
   refundAddress?: string;
+  /**
+   * The from-asset id the QuoteStep auto-filled `refundAddress`
+   * against. Used to detect the "back to PairStep, switch
+   * fromAsset, re-quote" loop in which the persisted refundAddress
+   * is for the OLD fromAsset's network — a refund to that address
+   * routes funds to oblivion. Cleared on user edit, compared on
+   * mount; mismatch nukes refundAddress so it re-fills fresh.
+   * Pre-2026-06-13 the autofill was mount-only with no re-trigger.
+   * Widened to `| undefined` for the same exactOptionalPropertyTypes
+   * reason as `quote`.
+   */
+  refundAddressAutoFilledFor?: string | undefined;
   /** Set after step 1 advances to step 2 (trade created on Trocador). */
   inFlight?: SwapInFlight;
 }
@@ -255,6 +335,19 @@ export function SwapTab(props: SwapTabProps) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <SwapHeader />
+        {/* Recent swaps surface — surfaces any swap whose wizard
+            state was destroyed but whose backend row is still
+            non-terminal (or recently completed). The user can
+            re-enter the StatusStep from here. Pre-2026-06-13 the
+            wallet had zero consumer for listSwaps, so cancelling
+            the wizard mid-flight orphaned the user. */}
+        {props.onListRecentSwaps && props.onResumeSwap && (
+          <RecentSwaps
+            onList={props.onListRecentSwaps}
+            onResume={props.onResumeSwap}
+            {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
+          />
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {PROVIDERS.map((p) => {
             const activate =
@@ -276,13 +369,38 @@ export function SwapTab(props: SwapTabProps) {
 
   // Trocador is the only provider with an active wizard in v0.3.
   const trocadorCard = PROVIDERS.find((p) => p.id === 'trocador')!;
+  // Step-aware cancel. When the wizard already holds a real Trocador
+  // trade (step ≥ 2 and a non-terminal inFlight), destroying the
+  // wizard state strands the user — no recovery surface for the
+  // trade_id, no breadcrumb back to the deposit address. Confirm
+  // before deleting, and tell the user the swap still continues at
+  // the provider. The Recent-swaps surface (when wired) will
+  // resurface non-terminal swaps for re-entry.
+  const stepFromFields = (wizard.fields.step ?? 0) as 0 | 1 | 2 | 3;
+  const inFlight = wizard.fields.inFlight;
+  const inFlightNonTerminal =
+    inFlight !== undefined &&
+    (inFlight.state.state === 'pending' || inFlight.state.state === 'failed' /* keep recoverable */);
+  const cancel = () => {
+    if (stepFromFields >= 2 && inFlight && inFlightNonTerminal) {
+      // window.confirm in a popup is jank but it's available and
+      // blocks the click — adequate for v0.3.0 ship. A future fix
+      // can drop in an in-tree modal that matches the wallet's
+      // visual language.
+      const ok = window.confirm(
+        `Close this view? Your swap (${inFlight.id}) continues at the provider — recover it from "Recent swaps" or the Activity row.`,
+      );
+      if (!ok) return;
+    }
+    void wizard.cancel();
+  };
   return (
     <TrocadorWizard
       provider={trocadorCard}
       fields={wizard.fields}
-      step={(wizard.fields.step ?? 0) as 0 | 1 | 2 | 3}
+      step={stepFromFields}
       patchFields={wizard.patchFields}
-      cancel={() => void wizard.cancel()}
+      cancel={cancel}
       fromAssets={props.fromAssets}
       toAssets={props.toAssets}
       resolveBalance={props.resolveBalance}
@@ -294,10 +412,99 @@ export function SwapTab(props: SwapTabProps) {
         ? { onFetchStatus: props.onTrocadorFetchStatus }
         : {})}
       {...(props.resolveAddress ? { resolveAddress: props.resolveAddress } : {})}
+      {...(props.validateAddress ? { validateAddress: props.validateAddress } : {})}
       {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
     />
   );
 }
+
+// ----- Recent swaps surface ----------------------------------------
+
+function RecentSwaps({
+  onList,
+  onResume,
+}: {
+  onList: () => Promise<SwapSummary[]>;
+  onResume: (swap: SwapSummary) => Promise<void> | void;
+  resolveIcon?: (iconKey: string) => string | undefined;
+}) {
+  const [rows, setRows] = useState<SwapSummary[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    onList().then(
+      (xs) => {
+        if (!alive) return;
+        // Only surface non-terminal swaps. Terminal rows belong on a
+        // future swaps-history page; pinning them here would crowd
+        // the provider list and add noise the user can't act on.
+        const live = xs.filter((s) => {
+          return !TERMINAL_STATUS_STRINGS.includes(s.status);
+        });
+        live.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+        setRows(live);
+      },
+      (e: unknown) => {
+        if (alive) setErr(e instanceof Error ? e.message : String(e));
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [onList]);
+  if (err) {
+    // Don't block the provider list on a backend hiccup — silently
+    // hide the section and log. The user can still create a fresh
+    // swap; the resume affordance is best-effort.
+    console.warn('[swap] RecentSwaps fetch failed', err);
+    return null;
+  }
+  if (rows === null || rows.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--smirk-fg-muted)' }}>
+        Resume in-flight swap
+      </div>
+      {rows.map((s) => (
+        <button
+          key={s.id}
+          onClick={() => void onResume(s)}
+          data-testid={`swap-recent-resume-${s.fromAsset.toLowerCase()}-${s.toAsset.toLowerCase()}`}
+          style={{
+            textAlign: 'left',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 10px',
+            background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            color: 'inherit',
+            fontSize: 12,
+          }}
+        >
+          <span>
+            {s.fromAsset.toUpperCase()} → {s.toAsset.toUpperCase()}{' '}
+            <span style={{ color: 'var(--smirk-fg-muted)' }}>· {s.status}</span>
+          </span>
+          <span style={{ color: 'var(--smirk-accent)' }}>Resume ›</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Mirrors backend `TERMINAL_STATUSES`. Kept inline so the UI doesn't
+ *  reach into @smirk/core for a 4-entry array. */
+const TERMINAL_STATUS_STRINGS: ReadonlyArray<string> = [
+  'finished',
+  'refunded',
+  'expired',
+  'error',
+];
 
 function SwapHeader() {
   return (
@@ -333,6 +540,7 @@ function ProviderRow({
       onClick={onActivate}
       disabled={!interactive}
       title={provider.statusNote}
+      {...(provider.id === 'trocador' ? { 'data-testid': 'swap-provider-trocador' } : {})}
       style={{
         textAlign: 'left',
         display: 'flex',
@@ -445,6 +653,7 @@ interface TrocadorWizardProps {
   onOpenSend: (deposit: SwapInFlight) => void;
   onFetchStatus?: (id: string) => Promise<SwapInFlight>;
   resolveAddress?: (assetId: string) => string | null;
+  validateAddress?: (assetId: string, address: string) => string | null;
   resolveIcon?: (iconKey: string) => string | undefined;
 }
 
@@ -471,6 +680,7 @@ function TrocadorWizard(props: TrocadorWizardProps) {
           <button
             onClick={() => setStep((step - 1) as 0 | 1 | 2 | 3)}
             aria-label="Back"
+            data-testid="swap-wizard-back"
             style={iconHeaderBtn()}
           >
             ‹
@@ -492,13 +702,14 @@ function TrocadorWizard(props: TrocadorWizardProps) {
           CEX
         </span>
         <h2 style={{ margin: 0, fontSize: 16, flex: 1 }}>Trocador</h2>
-        <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)' }}>
+        <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)' }} data-testid="swap-wizard-step">
           {step + 1}/4
         </span>
         <button
           onClick={props.cancel}
           aria-label="Cancel swap"
           title="Cancel swap"
+          data-testid="swap-wizard-cancel"
           style={iconHeaderBtn()}
         >
           ✕
@@ -526,8 +737,18 @@ function TrocadorWizard(props: TrocadorWizardProps) {
           quote={fields.quote}
           toAddress={fields.toAddress ?? ''}
           refundAddress={fields.refundAddress ?? ''}
+          refundAddressAutoFilledFor={fields.refundAddressAutoFilledFor}
           {...(props.resolveAddress ? { resolveAddress: props.resolveAddress } : {})}
+          {...(props.validateAddress ? { validateAddress: props.validateAddress } : {})}
           onPatch={(p) => void props.patchFields(p)}
+          onReQuote={() => {
+            // Quote expired (or user pressed the explicit re-quote
+            // path). Clear the quote so PairStep re-quotes fresh,
+            // and bounce back to step 0. fromAsset/toAsset/
+            // amountText/toAddress/refundAddress survive in fields
+            // so the user just re-confirms a fresh rate.
+            void props.patchFields({ quote: undefined, step: 0 });
+          }}
           onConfirm={async (args) => {
             const sw = await props.onConfirm(args);
             await props.patchFields({ inFlight: sw, step: 2 });
@@ -668,6 +889,7 @@ function PairStep({
           value={amountText}
           onInput={(e) => onPatch({ amountText: (e.target as HTMLInputElement).value })}
           placeholder="0.0"
+          data-testid="swap-pair-amount"
           style={{
             display: 'block',
             width: '100%',
@@ -711,6 +933,7 @@ function PairStep({
       <button
         onClick={() => void handleGetQuote()}
         disabled={busy || insufficient || !fromAsset || !toAsset || !amountText.trim()}
+        data-testid="swap-pair-get-quote"
         style={primaryBtnStyle(
           busy || insufficient || !fromAsset || !toAsset || !amountText.trim(),
           busy,
@@ -735,6 +958,9 @@ function AssetRow({
   onChange: (id: string) => void;
   resolveIcon?: (k: string) => string | undefined;
 }) {
+  // Row discriminator so the From and To pill rows emit distinct
+  // testids (swap-pair-from-<ticker> vs swap-pair-to-<ticker>).
+  const rowSlug = label.toLowerCase();
   return (
     <div>
       <label style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>{label}</label>
@@ -753,6 +979,7 @@ function AssetRow({
             <button
               key={id}
               onClick={() => onChange(id)}
+              data-testid={`swap-pair-${rowSlug}-${asset.ticker}`}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -788,15 +1015,25 @@ function QuoteStep({
   quote,
   toAddress,
   refundAddress,
+  refundAddressAutoFilledFor,
   resolveAddress,
+  validateAddress,
   onPatch,
+  onReQuote,
   onConfirm,
 }: {
   quote: SwapQuoteSummary;
   toAddress: string;
   refundAddress: string;
+  refundAddressAutoFilledFor: string | undefined;
   resolveAddress?: (assetId: string) => string | null;
+  validateAddress?: (assetId: string, address: string) => string | null;
   onPatch: (p: Partial<TrocadorFields>) => void;
+  /** Called when the user wants a fresh quote — either explicitly via
+   *  the "Quote expired — re-quote" CTA or implicitly when the wizard
+   *  needs to bounce back to step 0. Consumer clears `quote` and
+   *  resets step so PairStep can re-fetch. */
+  onReQuote: () => void;
   onConfirm: (args: {
     quote: SwapQuoteSummary;
     toAddress: string;
@@ -828,34 +1065,86 @@ function QuoteStep({
   const myToAddress = resolveAddress?.(quote.toAsset) ?? null;
 
   // Auto-fill refund address with the user's own from-asset address
-  // on first mount when the field is empty. Only fires once per
-  // wizard-instance — after that the user can edit freely without
-  // having their edits stomped on each render.
+  // whenever (a) the field is empty AND we have a fresh address to
+  // offer, OR (b) the persisted refund address was previously
+  // auto-filled for a DIFFERENT from-asset. Case (b) is the silent
+  // funds-loss bug pre-2026-06-13: the user reached QuoteStep with
+  // fromAsset=BTC (BTC address auto-fills), back-navigated to
+  // PairStep, changed fromAsset to XMR, re-quoted — and the stale
+  // BTC refund address survived because the original effect only
+  // fired once per mount with an empty-check that the persisted
+  // value defeated. On a refund event the provider would then send
+  // XMR to a BTC address. We rebind the autofill to `quote.fromAsset`
+  // and track which asset the autofill was sourced for. The user can
+  // still type a custom value freely — `refundAddressAutoFilledFor`
+  // gets cleared when they edit so the rebind doesn't stomp their
+  // explicit choice.
   useEffect(() => {
-    if (!refundAddress && myFromAddress) {
-      onPatch({ refundAddress: myFromAddress });
+    if (myFromAddress && refundAddressAutoFilledFor !== quote.fromAsset) {
+      // Either no autofill has happened yet, or it was for a previous
+      // from-asset — refresh.
+      if (
+        !refundAddress ||
+        (refundAddressAutoFilledFor &&
+          refundAddressAutoFilledFor !== quote.fromAsset)
+      ) {
+        onPatch({
+          refundAddress: myFromAddress,
+          refundAddressAutoFilledFor: quote.fromAsset,
+        });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [quote.fromAsset, myFromAddress]);
 
   const handleConfirm = async () => {
     setError(null);
-    if (!toAddress.trim()) {
+    const trimmedTo = toAddress.trim();
+    const trimmedRefund = refundAddress.trim();
+    if (!trimmedTo) {
       setError('Enter the address where you want to receive the swap.');
       return;
     }
-    if (!refundAddress.trim()) {
+    if (!trimmedRefund) {
       setError(
         `Enter a ${from.ticker} refund address. Required by the provider.`,
       );
+      return;
+    }
+    // Per-asset address validation. The receive address must match
+    // the to-asset network or the user is sending funds to a place
+    // they can't receive at; the refund address must match the
+    // from-asset network or any refund event is irrecoverable. Pre-
+    // 2026-06-13 the QuoteStep did neither check — the SendWizard
+    // had `validateAddress` but the swap surface ignored it.
+    if (validateAddress) {
+      const toErr = validateAddress(quote.toAsset, trimmedTo);
+      if (toErr) {
+        setError(`Receive address: ${toErr}`);
+        return;
+      }
+      const refundErr = validateAddress(quote.fromAsset, trimmedRefund);
+      if (refundErr) {
+        setError(`Refund address: ${refundErr}`);
+        return;
+      }
+    }
+    // Last-second expiry check between the click and the network
+    // round-trip — a `setBusy(true)` race could otherwise let an
+    // expired quote through and the wizard advances to DepositStep
+    // with a stale rate. Trocador is the server-side authority but
+    // the wallet should refuse to call /new_trade with what it
+    // knows is expired.
+    if (Date.now() >= quote.expiresAtMs) {
+      setError('Quote expired. Re-quote to confirm at the current rate.');
       return;
     }
     setBusy(true);
     try {
       await onConfirm({
         quote,
-        toAddress: toAddress.trim(),
-        refundAddress: refundAddress.trim(),
+        toAddress: trimmedTo,
+        refundAddress: trimmedRefund,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start swap');
@@ -909,6 +1198,7 @@ function QuoteStep({
             <button
               type="button"
               onClick={() => onPatch({ toAddress: myToAddress })}
+              data-testid="swap-quote-use-my-to-address"
               style={inlineLinkBtn()}
             >
               Use my {to.ticker} address
@@ -920,6 +1210,7 @@ function QuoteStep({
           value={toAddress}
           onInput={(e) => onPatch({ toAddress: (e.target as HTMLInputElement).value })}
           placeholder={`Where to send ${to.ticker}`}
+          data-testid="swap-quote-to-address"
           style={addrInputStyle()}
         />
       </div>
@@ -933,6 +1224,7 @@ function QuoteStep({
             <button
               type="button"
               onClick={() => onPatch({ refundAddress: myFromAddress })}
+              data-testid="swap-quote-use-my-refund-address"
               style={inlineLinkBtn()}
             >
               Use my {from.ticker} address
@@ -942,8 +1234,17 @@ function QuoteStep({
         <input
           type="text"
           value={refundAddress}
-          onInput={(e) => onPatch({ refundAddress: (e.target as HTMLInputElement).value })}
+          onInput={(e) =>
+            onPatch({
+              refundAddress: (e.target as HTMLInputElement).value,
+              // User edited — drop the autofill provenance so the
+              // mount effect doesn't stomp their explicit choice on
+              // the next re-quote.
+              refundAddressAutoFilledFor: undefined,
+            })
+          }
           placeholder={`Where to return ${from.ticker} on failure`}
+          data-testid="swap-quote-refund-address"
           style={addrInputStyle()}
         />
         <div style={helperTextStyle()}>
@@ -956,11 +1257,29 @@ function QuoteStep({
         <div style={{ fontSize: 12, color: 'var(--smirk-negative, #ff6b6b)' }}>{error}</div>
       )}
 
+      {/*
+        When the quote is live, the CTA is "Confirm swap" and runs
+        the address-validating, expiry-rechecking confirm flow.
+        When the quote has expired, the CTA flips to "Quote expired
+        — re-quote" and routes to the parent's re-quote handler
+        (clears quote + step=0). Pre-2026-06-13 the expired button
+        kept its `onClick=handleConfirm` and stayed disabled — the
+        label promised an action and the button refused. The
+        chevron back-arrow in the header was the only escape and
+        users didn't read it as "restart the quote".
+      */}
       <button
-        onClick={() => void handleConfirm()}
-        disabled={busy || expired || !toAddress.trim() || !refundAddress.trim()}
+        onClick={() => {
+          if (expired) {
+            onReQuote();
+            return;
+          }
+          void handleConfirm();
+        }}
+        disabled={busy || (!expired && (!toAddress.trim() || !refundAddress.trim()))}
+        data-testid="swap-quote-confirm"
         style={primaryBtnStyle(
-          busy || expired || !toAddress.trim() || !refundAddress.trim(),
+          busy || (!expired && (!toAddress.trim() || !refundAddress.trim())),
           busy,
         )}
       >
@@ -998,19 +1317,42 @@ function DepositStep({
       >
         <div style={{ fontSize: 13, fontWeight: 600 }}>Send to the deposit address</div>
         <Row label="Amount">
-          {formatAmountWithTicker(BigInt(swap.fromAmountAtomic), from.id)}
+          {(() => {
+            const a = safeAtomicBigInt(swap.fromAmountAtomic, 'DepositStep.fromAmountAtomic');
+            return a !== null ? formatAmountWithTicker(a, from.id) : '—';
+          })()}
         </Row>
         <Row label="Address" mono>
-          {swap.depositAddress}
+          <span data-testid="swap-deposit-address">{swap.depositAddress}</span>
         </Row>
+        {/* Deposit window warning. Trocador (and the providers it
+            aggregates) honor deposits within ~15-30 minutes of
+            /new_trade. A user who hands off to Send, closes the
+            popup, and broadcasts hours later may land at a stale
+            trade that the provider refuses to honor at the quoted
+            rate — refund flow at best, off-quote forced fill at
+            worst. The warning is generic because Trocador doesn't
+            return an explicit deposit_window field. */}
+        <div
+          style={{
+            fontSize: 11,
+            color: 'var(--smirk-fg-muted)',
+            lineHeight: 1.45,
+            marginTop: 4,
+          }}
+        >
+          Send within ~15-30 minutes. Providers may not honor stale
+          deposits at the quoted rate.
+        </div>
       </div>
 
-      <button onClick={onOpenSend} style={primaryBtnStyle(false, false)}>
+      <button onClick={onOpenSend} data-testid="swap-deposit-open-send" style={primaryBtnStyle(false, false)}>
         Open Send → pre-filled
       </button>
 
       <button
         onClick={onContinue}
+        data-testid="swap-deposit-show-status"
         style={{
           padding: '8px 12px',
           background: 'transparent',
@@ -1045,14 +1387,32 @@ function StatusStep({
   onUpdate: (next: SwapInFlight) => void;
   onReset: () => void;
 }) {
+  // Ref-based polling so the interval doesn't restart on every
+  // parent render. Pre-2026-06-13 the effect deps included
+  // `onUpdate` and `onFetchStatus`, both inline closures recreated
+  // on each TrocadorWizard render — sibling state changes (balance
+  // refresh, theme apply) tore down the 10s timer and started a
+  // fresh one, perpetually delaying the first poll. Reading the
+  // latest callbacks from refs lets the timer survive renders and
+  // still pick up the freshest closures.
+  const onUpdateRef = useRef(onUpdate);
+  const onFetchStatusRef = useRef(onFetchStatus);
   useEffect(() => {
-    if (!onFetchStatus) return;
+    onUpdateRef.current = onUpdate;
+  }, [onUpdate]);
+  useEffect(() => {
+    onFetchStatusRef.current = onFetchStatus;
+  }, [onFetchStatus]);
+  useEffect(() => {
+    if (!onFetchStatusRef.current) return;
     if (swap.state.state !== 'pending') return;
     let alive = true;
     const tick = async () => {
+      const fetcher = onFetchStatusRef.current;
+      if (!fetcher) return;
       try {
-        const next = await onFetchStatus(swap.id);
-        if (alive) onUpdate(next);
+        const next = await fetcher(swap.id);
+        if (alive) onUpdateRef.current(next);
       } catch {
         // Transient — retry next tick.
       }
@@ -1062,7 +1422,7 @@ function StatusStep({
       alive = false;
       window.clearInterval(handle);
     };
-  }, [swap.id, swap.state.state, onFetchStatus, onUpdate]);
+  }, [swap.id, swap.state.state]);
 
   const from = mustGetAsset(swap.fromAsset);
   const to = mustGetAsset(swap.toAsset);
@@ -1094,12 +1454,20 @@ function StatusStep({
           gap: 4,
         }}
       >
-        <Row label="Status">{statusLabel(swap.state, swap.toAsset)}</Row>
+        <Row label="Status">
+          <span data-testid="swap-status-state">{statusLabel(swap.state, swap.toAsset)}</span>
+        </Row>
         <Row label="From">
-          {formatAmountWithTicker(BigInt(swap.fromAmountAtomic), from.id)}
+          {(() => {
+            const a = safeAtomicBigInt(swap.fromAmountAtomic, 'fromAmountAtomic');
+            return a !== null ? formatAmountWithTicker(a, from.id) : '—';
+          })()}
         </Row>
         <Row label="To (est.)">
-          {formatAmountWithTicker(BigInt(swap.toAmountEstimateAtomic), to.id)}
+          {(() => {
+            const a = safeAtomicBigInt(swap.toAmountEstimateAtomic, 'toAmountEstimateAtomic');
+            return a !== null ? formatAmountWithTicker(a, to.id) : '—';
+          })()}
         </Row>
         <Row label="Trade id" mono>
           {tradeUrl ? (
@@ -1175,12 +1543,31 @@ function StatusStep({
       )}
 
       {terminal && (
-        <button onClick={onReset} style={primaryBtnStyle(false, false)}>
+        <button onClick={onReset} data-testid="swap-status-start-another" style={primaryBtnStyle(false, false)}>
           Start another swap
         </button>
       )}
     </div>
   );
+}
+
+/** Defensive parse of an atomic-units string into BigInt. Returns
+ *  null when the input doesn't parse — most commonly when a
+ *  decimal-string slipped past a backend/SDK boundary that was
+ *  supposed to do the decimal→atomic conversion. Pre-2026-06-13 a
+ *  bare BigInt() call here would throw on Trocador's "0.025…"
+ *  amount_to once it landed in the column labelled atomic, white-
+ *  screening the entire StatusStep render. This helper keeps the
+ *  fallback path local: show "—" instead of crashing the wizard.
+ *  Callers log so the upstream bug is still visible to ops. */
+function safeAtomicBigInt(raw: string | undefined | null, label: string): bigint | null {
+  if (!raw) return null;
+  try {
+    return BigInt(raw);
+  } catch (e) {
+    console.warn(`[swap] ${label}: BigInt(${JSON.stringify(raw)}) threw — using fallback`, e);
+    return null;
+  }
 }
 
 function statusLabel(state: SwapInFlight['state'], toAssetId: string): string {
@@ -1199,9 +1586,12 @@ function statusLabel(state: SwapInFlight['state'], toAssetId: string): string {
       // `state.toAmount` is an atomic-units string from the
       // underlying Trocador response; format with the to-asset's
       // decimals so the user sees "0.0139 LTC" instead of
-      // "139900946". Empty-string defends against missing data.
-      const formatted = state.toAmount
-        ? formatAmountWithTicker(BigInt(state.toAmount), toAssetId)
+      // "139900946". Defensive parse — a decimal-string here used
+      // to white-screen the wizard before the 2026-06-13 backend
+      // decimal→atomic conversion fix.
+      const parsed = safeAtomicBigInt(state.toAmount, 'completed.toAmount');
+      const formatted = parsed !== null
+        ? formatAmountWithTicker(parsed, toAssetId)
         : 'output';
       return `Completed — ${formatted} sent`;
     }

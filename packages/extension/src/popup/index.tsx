@@ -84,6 +84,7 @@ import {
   HomeTab,
   InboxTab,
   SwapTab,
+  TROCADOR_WIZARD_ID,
   type SwapInFlight,
   type SwapQuoteSummary,
   LockScreen,
@@ -785,6 +786,7 @@ function BootstrappingPlaceholder({
 }) {
   return (
     <div
+      data-testid="bootstrapping-placeholder"
       style={{
         padding: '48px 16px 16px',
         textAlign: 'center',
@@ -2035,10 +2037,39 @@ function HomeRouter({
             // → XMR (CDNQ…)" and taps back to the right surface.
             // Vanilla sends from the Home action bar default to
             // `{kind: 'send'}` at render time.
-            const ctx = (await store.load()).wizards.send?.fields
-              ?.pendingContext as
-              | import('@smirk/core').PendingOutgoingContext
+            // Pull pendingContext + its seed. The seed is what the
+            // prefill entry-point (e.g. Trocador "Open Send →
+            // pre-filled") captured at the moment it wrote the
+            // wizard. If the user has since back-navigated and
+            // changed fromAsset / toAddress to something unrelated,
+            // applying the swap-deposit context to the resulting
+            // pendingOutgoing entry would mis-tag a vanilla send
+            // as "Swap deposit → XMR (trade …)" and deep-link to
+            // the wrong swap. Verify match; drop ctx on mismatch.
+            const sendFields = (await store.load()).wizards.send?.fields as
+              | {
+                  pendingContext?: import('@smirk/core').PendingOutgoingContext;
+                  pendingContextSeed?: { fromAssetId?: string; toAddress?: string };
+                }
               | undefined;
+            const rawCtx = sendFields?.pendingContext;
+            const seed = sendFields?.pendingContextSeed;
+            const seedMatches =
+              !seed ||
+              (seed.fromAssetId === fields.fromAssetId &&
+                seed.toAddress === fields.toAddress);
+            const ctx: import('@smirk/core').PendingOutgoingContext | undefined =
+              rawCtx && seedMatches ? rawCtx : undefined;
+            if (rawCtx && !seedMatches) {
+              console.info(
+                '[send] dropping stale pendingContext — user diverged from the prefill seed',
+                {
+                  seed,
+                  fromAssetId: fields.fromAssetId,
+                  toAddress: fields.toAddress,
+                },
+              );
+            }
             // One atomic store.update writes both the pendingOutgoing
             // entry AND the wizard's lastTxid. The wizard's inner
             // onSubmit *also* writes lastTxid via patchFields, but
@@ -3575,6 +3606,61 @@ function SwapRouter({
           assetId
         ] ?? null
       }
+      // Reuse the SendWizard's validator. The swap surface ignored
+      // address format pre-2026-06-13 — any address the user pasted
+      // was forwarded to /new_trade unchanged, opening the wrong-
+      // chain refund hazard (XMR refunded to a BTC address, etc.).
+      // `validateAddress` is the same helper SendWizard uses.
+      validateAddress={validateAddress}
+      onListRecentSwaps={async () => {
+        // Surface any non-terminal swap whose wizard state was lost
+        // (X-button cancel, popup-close during confirm, browser
+        // restart). listSwaps already shipped in @smirk/core but
+        // had zero consumers before today.
+        const res = await api.listSwaps().catch(() => null);
+        if (!res || res.error || !res.data) return [];
+        return res.data.swaps.map((r) => ({
+          id: r.trade_id,
+          fromAsset: r.from_asset,
+          toAsset: r.to_asset,
+          fromAmountAtomic: r.amount_from_atomic,
+          toAmountEstimateAtomic: r.amount_to_atomic ?? '0',
+          depositAddress: r.deposit_address,
+          status: r.status,
+          createdAt: r.created_at,
+        }));
+      }}
+      onResumeSwap={async (summary) => {
+        // Rehydrate the trocador wizard state in one atomic write so
+        // the user lands directly on StatusStep with live polling.
+        // The state is set from the cached backend summary; the
+        // real-time merge happens via onTrocadorFetchStatus on the
+        // first 10s tick. Step is 3 (Status), not 2 (Deposit),
+        // because resuming means "I already sent" — DepositStep
+        // would offer to re-pre-fill the Send wizard, which is
+        // wrong for a resumed swap.
+        await store.update((s) => {
+          const w = s.wizards[TROCADOR_WIZARD_ID];
+          const inFlight: SwapInFlight = {
+            id: summary.id,
+            fromAsset: summary.fromAsset,
+            toAsset: summary.toAsset,
+            fromAmountAtomic: summary.fromAmountAtomic,
+            toAmountEstimateAtomic: summary.toAmountEstimateAtomic,
+            depositAddress: summary.depositAddress,
+            state: { state: 'pending', reason: 'awaiting_deposit' },
+          };
+          if (w) {
+            w.fields = { ...w.fields, inFlight, step: 3 };
+          } else {
+            s.wizards[TROCADOR_WIZARD_ID] = {
+              step: 0,
+              fields: { step: 3, inFlight },
+              startedAt: Date.now(),
+            };
+          }
+        });
+      }}
       onTrocadorQuote={async (req) => {
         const q = await trocador.quote({
           fromAsset: req.fromAsset,
@@ -3630,7 +3716,38 @@ function SwapRouter({
           quote: rebuiltQuote,
           toAddress,
           refundAddress,
+          // Per-trade webhook secret. Without this, Trocador delivers
+          // every webhook with passthrough=null and the backend
+          // rejects every one as a token mismatch — the 60s backup
+          // poller would be the only finalization path. See the
+          // 2026-06-13 swap-e2e review ship-blocker write-up.
+          passthrough: webhookToken,
         });
+
+        // Build the SwapInFlight up front so we can persist it to
+        // the trocador wizard BEFORE awaiting backend createSwap.
+        // Trocador's /new_trade is non-idempotent network state —
+        // an MV3 popup-close between /new_trade success and the
+        // wizard write strands the trade with no recovery
+        // affordance. Writing inFlight first means the user always
+        // has the deposit address + trade_id locally even if
+        // backend createSwap fails or the popup closes mid-handler.
+        const sw: SwapInFlight = {
+          id: started.id,
+          fromAsset: quote.fromAsset,
+          toAsset: quote.toAsset,
+          fromAmountAtomic: quote.fromAmountAtomic,
+          toAmountEstimateAtomic: quote.toAmountEstimateAtomic,
+          depositAddress: started.depositAddress,
+          state: { state: 'pending', reason: 'awaiting_deposit' },
+        };
+        await store.update((s) => {
+          const w = s.wizards[TROCADOR_WIZARD_ID];
+          if (w) {
+            w.fields = { ...w.fields, inFlight: sw, step: 2 };
+          }
+        });
+
         // Persist to backend so the webhook receiver knows the token.
         // Best-effort — failure here means status updates from the
         // webhook won't be authenticated (rejected as 404), but the
@@ -3657,15 +3774,6 @@ function SwapRouter({
           console.warn('[swap] backend createSwap threw (non-fatal)', e);
         }
         void backendTrackingOk;
-        const sw: SwapInFlight = {
-          id: started.id,
-          fromAsset: quote.fromAsset,
-          toAsset: quote.toAsset,
-          fromAmountAtomic: quote.fromAmountAtomic,
-          toAmountEstimateAtomic: quote.toAmountEstimateAtomic,
-          depositAddress: started.depositAddress,
-          state: { state: 'pending', reason: 'awaiting_deposit' },
-        };
         return sw;
       }}
       onOpenSend={(deposit) => {
@@ -3676,8 +3784,37 @@ function SwapRouter({
         // AssetDetail Activity row then renders "Swap deposit → XMR
         // (CDNQ…)" with a tap-link back to the swap status, instead
         // of a generic "Sending to LTC1Q…".
-        void store
-          .update((s) => {
+        //
+        // Guard against silently destroying an in-progress send
+        // draft: pre-2026-06-13 this handler unconditionally
+        // overwrote s.wizards.send, so a user with a half-typed
+        // send to a friend would lose their draft on the prefill
+        // click. Other update sites at lines 2067, 2454, 4321 all
+        // use the safe `const w = s.wizards.send; if (w)` pattern;
+        // only this handler nuked the slot. Now we check, prompt,
+        // and bail if the user wants to keep their draft.
+        void (async () => {
+          const current = await store.load();
+          const existing = current.wizards.send;
+          // Heuristic: a populated draft has at least one of the
+          // user-typed fields (fromAssetId at non-empty, toAddress,
+          // amountText). An empty step=0 wizard from a previous
+          // visit doesn't count.
+          const f = existing?.fields as
+            | { fromAssetId?: string; toAddress?: string; amountText?: string }
+            | undefined;
+          const isPopulated =
+            !!f &&
+            (!!f.toAddress ||
+              !!f.amountText ||
+              (!!f.fromAssetId && (existing?.step ?? 0) > 0));
+          if (isPopulated) {
+            const ok = window.confirm(
+              'You have a Send draft in progress — replace it with this swap deposit?',
+            );
+            if (!ok) return;
+          }
+          await store.update((s) => {
             s.wizards.send = {
               step: 2, // skip Pick + Address; jump to Compose
               startedAt: Date.now(),
@@ -3694,10 +3831,22 @@ function SwapRouter({
                   toAsset: deposit.toAsset,
                   provider: 'trocador',
                 },
+                // Stash the original prefill seed so the
+                // popup-level onSubmit cross-checker (below) can
+                // verify the user didn't mutate fromAsset/toAddress
+                // mid-flow into something unrelated. Mismatch =
+                // drop the pendingContext at write time so the
+                // resulting Activity row says "Send" not the wrong
+                // "Swap deposit → XMR (trade …)".
+                pendingContextSeed: {
+                  fromAssetId: deposit.fromAsset,
+                  toAddress: deposit.depositAddress,
+                },
               },
             };
-          })
-          .then(() => navigate('home/send'));
+          });
+          await navigate('home/send');
+        })();
       }}
       onTrocadorFetchStatus={async (id) => {
         // Hybrid: backend for identities (from/to/amount/address),
@@ -3725,8 +3874,13 @@ function SwapRouter({
             r.status === 'expired' ||
             r.status === 'error';
           // Take the backend's identities + last-known state as the
-          // baseline.
-          let state = mapBackendStatus(r.status);
+          // baseline. `mapBackendStatus` uses these to render real
+          // copy on terminal states (final to-amount on `finished`,
+          // refund-address hint on `refunded`/`expired`).
+          let state = mapBackendStatus(r.status, {
+            ...(r.amount_to_atomic ? { amountToAtomic: r.amount_to_atomic } : {}),
+            ...(r.refund_address ? { refundAddress: r.refund_address } : {}),
+          });
           if (!backendTerminal) {
             // Augment with Trocador direct. Best-effort: a Trocador
             // outage shouldn't tank the polling loop — keep the
@@ -3774,8 +3928,21 @@ function SwapRouter({
 /** Translate the backend's status string (a verbatim mirror of
  *  Trocador's lifecycle) into the SwapInFlight discriminated union
  *  the UI renders. Kept here so the popup is the only place that
- *  knows the Trocador-string ↔ structured-state mapping. */
-function mapBackendStatus(status: string): SwapInFlight['state'] {
+ *  knows the Trocador-string ↔ structured-state mapping.
+ *
+ *  `extra` carries the parts of the persisted SwapRecord that the
+ *  status alone can't supply — the final to-amount (Trocador stores
+ *  this on the row at terminal-transition; pre-2026-06-13 the
+ *  mapper hardcoded '0' so every completed swap showed
+ *  "Completed — 0 LTC sent"), and the refund address (needed so the
+ *  'expired' state can tell the user where their deposit will return
+ *  to if they did broadcast). Both are optional — the caller may
+ *  not have them yet — and the mapper falls back to neutral copy
+ *  when they're absent. */
+function mapBackendStatus(
+  status: string,
+  extra?: { amountToAtomic?: string; refundAddress?: string },
+): SwapInFlight['state'] {
   switch (status) {
     case 'new':
     case 'waiting':
@@ -3786,11 +3953,40 @@ function mapBackendStatus(status: string): SwapInFlight['state'] {
     case 'sending':
       return { state: 'pending', reason: 'in_progress' };
     case 'finished':
-      return { state: 'completed', outboundTxId: '', toAmount: '0' };
-    case 'refunded':
-      return { state: 'refunded', refundTxId: '', reason: 'Refunded by provider' };
-    case 'expired':
-      return { state: 'failed', reason: 'Quote expired before deposit' };
+      return {
+        state: 'completed',
+        outboundTxId: '',
+        toAmount: extra?.amountToAtomic ?? '0',
+      };
+    case 'refunded': {
+      // Surface the refund destination when we have it — gives the
+      // user a chain address to watch instead of "trust us, it's on
+      // its way back."
+      const reason = extra?.refundAddress
+        ? `Refunded by provider to ${extra.refundAddress}`
+        : 'Refunded by provider';
+      return { state: 'refunded', refundTxId: '', reason };
+    }
+    case 'expired': {
+      // Trocador's `expired` covers TWO real-world cases: (a) the
+      // quote validity window elapsed before any deposit arrived —
+      // no money moved — and (b) deposit landed but the underlying
+      // provider couldn't complete in time, refund in flight. We
+      // don't have a reliable backend signal to discriminate (we'd
+      // need historical state transitions or amount-observed
+      // logging), so the copy here informs both cases honestly
+      // rather than asserting "Quote expired before deposit" which
+      // is actively wrong half the time. Refund address is surfaced
+      // when we know it, so case (b) users can watch the right
+      // chain.
+      const refundHint = extra?.refundAddress
+        ? ` If you deposited, funds will be returned to ${extra.refundAddress}.`
+        : ' If you deposited, funds will be returned to your refund address.';
+      return {
+        state: 'failed',
+        reason: `Quote expired or provider could not complete in time.${refundHint}`,
+      };
+    }
     case 'error':
       return { state: 'failed', reason: 'Provider reported error' };
     default:
@@ -5251,15 +5447,18 @@ function SettingsNavRow({
   label,
   hint,
   onClick,
+  testid,
 }: {
   label: string;
   hint: string;
   onClick: () => void;
+  testid?: string;
 }) {
   return (
     <section style={{ marginTop: 20 }}>
       <button
         onClick={onClick}
+        data-testid={testid}
         style={{
           width: '100%',
           display: 'flex',
@@ -5385,7 +5584,11 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           }}
         >
           {AUTO_LOCK_OPTIONS.map((o) => (
-            <option key={o.value} value={String(o.value)}>
+            <option
+              key={o.value}
+              value={String(o.value)}
+              data-testid={o.value === 0 ? 'settings-autolock-immediately' : undefined}
+            >
               {o.label}
             </option>
           ))}
@@ -5559,10 +5762,12 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         label="Sent Tips"
         hint="Cross-asset list of every tip you've sent + inline clawback"
         onClick={() => void navigate('settings/sent-tips')}
+        testid="settings-sent-tips-nav"
       />
 
       <button
         onClick={() => void onLock()}
+        data-testid="settings-lock-now-btn"
         style={{
           marginTop: 20,
           padding: '8px 14px',

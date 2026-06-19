@@ -84,6 +84,19 @@ export interface SwapStartParams {
    *  (provider needs a return address); DEX derives it from the
    *  deposit chain; native atomic uses a refund timelock. */
   refundAddress?: string;
+  /**
+   * Per-trade correlation token the provider echoes back on webhook
+   * deliveries to authenticate them. Aggregators (Trocador) pass this
+   * verbatim as their `passthrough` query param and POST it on every
+   * status webhook; the wallet's backend matches it against the
+   * `webhook_token` it persisted on `createSwap`. Without per-trade
+   * tokens, webhook auth degrades to "any caller knowing the
+   * trade_id can move the status" — the constant-time comparison on
+   * the backend stops mattering. Constructor-time `opts.passthrough`
+   * is preserved for back-compat, but a per-trade token passed here
+   * takes precedence (see `TrocadorSwap.start`).
+   */
+  passthrough?: string;
   /** Counterparty exchange data for native atomic swaps (slate,
    *  adaptor commitment, etc.). Untyped here; each native impl
    *  narrows it. */

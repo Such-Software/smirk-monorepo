@@ -355,6 +355,7 @@ export function TipMaker(props: TipMakerProps) {
             <Label>{PLATFORM_LABEL[platform]} username</Label>
             <input
               type="text"
+              data-testid="tip-username-input"
               value={username}
               onInput={(e) => setUsername((e.target as HTMLInputElement).value)}
               placeholder={PLATFORM_PLACEHOLDER[platform]}
@@ -364,6 +365,7 @@ export function TipMaker(props: TipMakerProps) {
           </div>
           {lookupStatus && (
             <div
+              data-testid="tip-lookup-status"
               style={{
                 fontSize: 11,
                 color:
@@ -423,6 +425,7 @@ export function TipMaker(props: TipMakerProps) {
           <input
             type="text"
             inputMode="decimal"
+            data-testid="tip-amount-input"
             value={amountText}
             onInput={(e) => setAmountText((e.target as HTMLInputElement).value)}
             placeholder="0.00"
@@ -471,12 +474,14 @@ export function TipMaker(props: TipMakerProps) {
           onChange={setIsPublic}
           label="Anyone with the link can claim"
           hint="Generates a share URL; anyone who opens it first claims the tip."
+          testid="tip-public-toggle"
         />
         <Toggle
           checked={senderAnonymous}
           onChange={setSenderAnonymous}
           label="Send anonymously"
           hint="Hide your Smirk username from the recipient."
+          testid="tip-anonymous-toggle"
         />
       </div>
 
@@ -501,6 +506,7 @@ export function TipMaker(props: TipMakerProps) {
       <button
         onClick={() => void submit()}
         disabled={!canSubmit}
+        data-testid="tip-submit-btn"
         style={{
           ...primaryBtnStyle,
           opacity: canSubmit ? 1 : 0.5,
@@ -547,7 +553,7 @@ function TipSuccess({
   return (
     <div style={{ textAlign: 'center', padding: '32px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ fontSize: 48 }}>🎁</div>
-      <h2 style={{ margin: 0, fontSize: 18 }}>Tip sent!</h2>
+      <h2 data-testid="tip-success-heading" style={{ margin: 0, fontSize: 18 }}>Tip sent!</h2>
       <div style={{ fontSize: 14 }}>
         {amount} {ticker}
       </div>
@@ -568,6 +574,7 @@ function TipSuccess({
       {isPublic && shareUrl && !shareUrlPending && (
         <div>
           <div
+            data-testid="tip-share-url"
             style={{
               fontSize: 11,
               fontFamily: 'monospace',
@@ -580,7 +587,7 @@ function TipSuccess({
           >
             {shareUrl}
           </div>
-          <button onClick={() => copy(shareUrl)} style={{ ...secondaryBtnStyle, marginTop: 8 }}>
+          <button onClick={() => copy(shareUrl)} data-testid="tip-copy-link-btn" style={{ ...secondaryBtnStyle, marginTop: 8 }}>
             {copied ? '✓ Copied' : '⧉ Copy link'}
           </button>
         </div>
@@ -588,6 +595,7 @@ function TipSuccess({
 
       {isPublic && shareUrlPending && (
         <div
+          data-testid="tip-share-pending"
           style={{
             fontSize: 12,
             color: 'var(--smirk-fg-muted)',
@@ -612,11 +620,11 @@ function TipSuccess({
         </div>
       )}
 
-      <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)' }}>
+      <div data-testid="tip-id-label" style={{ fontSize: 10, color: 'var(--smirk-fg-muted)' }}>
         tip id: <code>{tipId.slice(0, 12)}…</code>
       </div>
 
-      <button onClick={onClose} style={primaryBtnStyle}>
+      <button onClick={onClose} data-testid="tip-success-done-btn" style={primaryBtnStyle}>
         Done
       </button>
     </div>
@@ -667,6 +675,7 @@ function PlatformDropdown({
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
+        data-testid="tip-platform-dropdown"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -708,6 +717,7 @@ function PlatformDropdown({
                 key={p}
                 role="option"
                 aria-selected={active}
+                data-testid={`tip-platform-option-${p}`}
                 onClick={() => {
                   onChange(p);
                   setOpen(false);
@@ -747,11 +757,13 @@ function Toggle({
   onChange,
   label,
   hint,
+  testid,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
   hint: string;
+  testid?: string;
 }) {
   return (
     <label
@@ -765,6 +777,7 @@ function Toggle({
     >
       <input
         type="checkbox"
+        {...(testid ? { 'data-testid': testid } : {})}
         checked={checked}
         onChange={(e) => onChange((e.target as HTMLInputElement).checked)}
         style={{ marginTop: 2 }}
@@ -821,6 +834,7 @@ function AssetDropdown({
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
+        data-testid="tip-asset-dropdown"
         style={assetChipStyle}
       >
         <AssetIcon
@@ -858,6 +872,7 @@ function AssetDropdown({
                 key={id}
                 role="option"
                 aria-selected={active}
+                data-testid={`tip-asset-option-${id}`}
                 onClick={() => {
                   onChange(id);
                   setOpen(false);

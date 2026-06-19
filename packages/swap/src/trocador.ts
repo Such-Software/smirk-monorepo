@@ -348,7 +348,16 @@ export class TrocadorSwap implements Swap {
     if (extra.addressMemo) tradeParams.set('address_memo', extra.addressMemo);
     if (this.markup) tradeParams.set('markup', this.markup);
     if (this.opts.webhookUrl) tradeParams.set('webhook', this.opts.webhookUrl);
-    if (this.opts.passthrough) tradeParams.set('passthrough', this.opts.passthrough);
+    // Per-trade passthrough takes precedence over the constructor
+    // default. The wallet generates a fresh random token per swap so
+    // each trade has its own webhook secret — pre-2026-06-13 this was
+    // generated and persisted to the backend but never threaded into
+    // /new_trade, so every webhook delivery arrived with passthrough
+    // empty and was rejected by the backend's constant-time check.
+    // The 60s backup poller silently masked it; the primary push
+    // path was dead end-to-end. See SwapStartParams.passthrough.
+    const passthrough = params.passthrough ?? this.opts.passthrough;
+    if (passthrough) tradeParams.set('passthrough', passthrough);
 
     const res = await this.get<TrocadorTradeResponse>('/new_trade', tradeParams);
     if (!res.trade_id) {
