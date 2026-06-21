@@ -117,9 +117,9 @@ export interface GrinChainProvider extends BaseChainProvider {
   }): Promise<ApiResponse<GrinBroadcastResult>>;
   /** Seed-only recovery: paginated walk of the unspent MMR with rangeproofs. */
   scanUnspent(params: {
-    startIndex?: number;
-    startHeight?: number;
-    max?: number;
+    startIndex?: number | undefined;
+    startHeight?: number | undefined;
+    max?: number | undefined;
   }): Promise<ApiResponse<GrinScanResult>>;
   recordOutput(params: {
     userId: string;

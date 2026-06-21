@@ -937,7 +937,7 @@ async function sweepGrin(
   // mint via the sweep occupies that slot. Backend's atomic
   // broadcast records the change row in the same call so a partial
   // failure doesn't leak an unspendable output.
-  const grinOutputs = await api.getGrinOutputs(userId);
+  const grinOutputs = await chainProviders.grin().listOutputs(userId);
   if (grinOutputs.error || !grinOutputs.data) {
     return {
       ok: false,
@@ -999,7 +999,7 @@ async function sweepGrin(
   // (Earlier this passed `kernel_excess_hex` which is a 66-char hex
   // string — never parses as UUID — and every Grin claim 500'd at
   // the validation gate.)
-  const broadcast = await api.broadcastGrinTransaction({
+  const broadcast = await chainProviders.grin().broadcast({
     userId,
     slateId: uuidV4(),
     // wasm tx_json is typed `unknown` because the JSON.parse boundary

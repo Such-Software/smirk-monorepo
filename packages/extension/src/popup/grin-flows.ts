@@ -29,7 +29,7 @@
  * always uses the armored binary form.
  */
 
-import { api } from '@smirk/core';
+import { api, chainProviders } from '@smirk/core';
 import { grin as wasmGrin } from '@smirk/wasm';
 import type {
   GrinChangeOutputInfo,
@@ -469,7 +469,7 @@ export async function startGrinSend(args: {
   // Lock MUST succeed before the user can finalize/broadcast: an unchecked lock
   // failure leaves these inputs spendable by a later send, opening a double-spend
   // window until confirmation. Abort the build here on lock failure.
-  const lockRes = await api.lockGrinOutputs({
+  const lockRes = await chainProviders.grin().lockOutputs({
     userId: args.userId,
     outputIds: selected.map((o) => o.id),
     txSlateId: sendResult.slate_id,
@@ -574,7 +574,7 @@ export async function processGrinS2(args: {
   // so the backend atomically records the change row alongside the
   // broadcast — replaces the v0.2.4 pre-record pattern that leaked
   // orphans on cancel.
-  const broadcastRes = await api.broadcastGrinTransaction({
+  const broadcastRes = await chainProviders.grin().broadcast({
     userId: args.userId,
     slateId: JSON.parse(finalize.slate_json).id,
     // Grin's /v2/foreign push_transaction expects a JSON Transaction
@@ -621,7 +621,7 @@ export async function processGrinS2(args: {
 
   // Cleanup: mark inputs spent + tx finalized + stamp kernel excess.
   const slateId = JSON.parse(finalize.slate_json).id;
-  await api.spendGrinOutputs({ userId: args.userId, txSlateId: slateId });
+  await chainProviders.grin().spendOutputs({ userId: args.userId, txSlateId: slateId });
   await api.updateGrinTransaction({
     userId: args.userId,
     slateId,
@@ -654,7 +654,7 @@ export async function cancelGrinSend(args: {
       .cancelGrinSlatepack({ relayId: args.relay_id, userId: args.userId })
       .catch(() => undefined);
   }
-  await api.unlockGrinOutputs({ userId: args.userId, txSlateId: args.slate_id });
+  await chainProviders.grin().unlockOutputs({ userId: args.userId, txSlateId: args.slate_id });
   await api.updateGrinTransaction({
     userId: args.userId,
     slateId: args.slate_id,
@@ -808,13 +808,13 @@ export async function signGrinInvoice(args: {
     fee,
     direction: 'send',
   });
-  await api.lockGrinOutputs({
+  await chainProviders.grin().lockOutputs({
     userId: args.userId,
     outputIds: selected.map((o) => o.id),
     txSlateId: parsed.id,
   });
   if (signed.change_output) {
-    await api.recordGrinOutput({
+    await chainProviders.grin().recordOutput({
       userId: args.userId,
       keyId: pathToKeyId(signed.change_output.path),
       nChild: signed.change_output.path[2],
@@ -880,7 +880,7 @@ export async function processGrinI2(args: {
     sender_inputs,
   });
   const slateId = JSON.parse(finalize.slate_json).id;
-  const broadcastRes = await api.broadcastGrinTransaction({
+  const broadcastRes = await chainProviders.grin().broadcast({
     userId: args.userId,
     slateId,
     // Grin's /v2/foreign push_transaction expects a JSON Transaction
@@ -991,7 +991,7 @@ export async function signIncomingGrinSlate(args: {
     fee: 0, // receiver doesn't pay fee
     direction: 'receive',
   });
-  await api.recordGrinOutput({
+  await chainProviders.grin().recordOutput({
     userId: args.userId,
     keyId: pathToKeyId(signed.output.path),
     nChild: signed.output.path[2],
@@ -1178,7 +1178,7 @@ export async function recoverGrinOutputs(
   let pages = 0;
 
   for (; pages < maxPages; pages++) {
-    const res = await api.scanGrinUnspentOutputs({
+    const res = await chainProviders.grin().scanUnspent({
       // Birthday height on the first page only; index thereafter (the
       // backend prefers start_index when both are present).
       startIndex,
@@ -1215,7 +1215,7 @@ export async function recoverGrinOutputs(
         );
         continue;
       }
-      const r = await api.recordGrinOutput({
+      const r = await chainProviders.grin().recordOutput({
         userId,
         keyId: rec.key_id_hex,
         nChild,

@@ -30,6 +30,7 @@ import { ed25519 } from '@noble/curves/ed25519';
 import type { UnlockedWallet } from '@smirk/core';
 import {
   api,
+  chainProviders,
   btcAddress,
   ltcAddress,
   xmrAddress,
@@ -650,7 +651,7 @@ async function createGrinTip(
   // 2. Fetch sender's spendable Grin outputs and pick inputs to cover
   //    voucher_amount + fee. Same greedy-with-fee-iteration scheme as
   //    startGrinSend in grin-flows.ts.
-  const outputsResp = await api.getGrinOutputs(senderUserId);
+  const outputsResp = await chainProviders.grin().listOutputs(senderUserId);
   if (outputsResp.error || !outputsResp.data) {
     return {
       ok: false,
@@ -831,7 +832,7 @@ async function createGrinTip(
   // Lock MUST succeed before broadcast: if we broadcast while the backend still
   // treats these inputs as unlocked, a later send can reselect them, opening a
   // double-spend window until confirmation. Abort on lock failure.
-  const lockRes = await api.lockGrinOutputs({
+  const lockRes = await chainProviders.grin().lockOutputs({
     userId: senderUserId,
     outputIds: selected.map((o) => o.id),
     txSlateId: slateId,
@@ -854,7 +855,7 @@ async function createGrinTip(
   // that bit the regular Grin send + the voucher claim path.
   // `voucherResult.tx_json` is the canonical shape, emitted by
   // `crates/grin-ext/src/voucher.rs::serialize_voucher_tx_json`.
-  const broadcast = await api.broadcastGrinTransaction({
+  const broadcast = await chainProviders.grin().broadcast({
     userId: senderUserId,
     slateId,
     tx: voucherResult.tx_json as object,

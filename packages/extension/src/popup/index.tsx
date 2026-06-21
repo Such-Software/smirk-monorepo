@@ -1237,7 +1237,7 @@ function App() {
       const visible = visibleAssetIds(await store.load(), listAssets()).map(
         (a) => a.id,
       );
-      const balances = await fetchAllBalances(api, wallet, bootstrap, {
+      const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         visibleAssetIds: visible,
         onAssetBalance: (assetId, balance) => {
@@ -1302,7 +1302,7 @@ function App() {
       const visible = visibleAssetIds(await store.load(), listAssets()).map(
         (a) => a.id,
       );
-      const balances = await fetchAllBalances(api, wallet, bootstrap, {
+      const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         visibleAssetIds: visible,
         onAssetBalance: (assetId, balance) => {
@@ -2005,7 +2005,7 @@ function HomeRouter({
             if (!options?.amountAtomic) return null;
             const grinUserId = session?.bootstrap?.userId;
             if (!grinUserId) return null;
-            const outs = await api.getGrinOutputs(grinUserId);
+            const outs = await chainProviders.grin().listOutputs(grinUserId);
             if (outs.error || !outs.data) return null;
             const spendable = outs.data.outputs
               .filter((o) => o.status === 'unspent')
@@ -2163,7 +2163,7 @@ function HomeRouter({
               amount: Number(amountAtomic),
               resolver: {
                 fetchSpendable: async () => {
-                  const r = await api.getGrinOutputs(grinUserId);
+                  const r = await chainProviders.grin().listOutputs(grinUserId);
                   if (r.error || !r.data) {
                     throw new Error(r.error ?? 'Failed to fetch Grin outputs');
                   }
@@ -2304,7 +2304,7 @@ function HomeRouter({
               fee: Number(feeAtomic),
               resolver: {
                 fetchSpendable: async () => {
-                  const r = await api.getGrinOutputs(grinUserId);
+                  const r = await chainProviders.grin().listOutputs(grinUserId);
                   if (r.error || !r.data) {
                     throw new Error(r.error ?? 'Failed to fetch Grin outputs');
                   }
@@ -2394,7 +2394,7 @@ function HomeRouter({
               s1Armored,
               resolver: {
                 fetchSpendable: async () => {
-                  const r = await api.getGrinOutputs(grinUserId);
+                  const r = await chainProviders.grin().listOutputs(grinUserId);
                   if (r.error || !r.data) {
                     throw new Error(r.error ?? 'Failed to fetch Grin outputs');
                   }
@@ -2649,7 +2649,7 @@ function HomeRouter({
               i1Armored,
               resolver: {
                 fetchSpendable: async () => {
-                  const r = await api.getGrinOutputs(grinUserId);
+                  const r = await chainProviders.grin().listOutputs(grinUserId);
                   if (r.error || !r.data) {
                     throw new Error(r.error ?? 'Failed to fetch Grin outputs');
                   }
@@ -4449,7 +4449,7 @@ async function loadAssetHistory(
   }
   if (assetId === 'grin') {
     if (!userId) return [];
-    const r = await api.getGrinUserHistory(userId);
+    const r = await chainProviders.grin().getHistory(userId);
     if (r.error || !r.data) return [];
     return r.data.transactions.map(
       (t): AssetDetailTxRow => ({

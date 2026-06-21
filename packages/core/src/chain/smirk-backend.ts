@@ -161,7 +161,7 @@ export class SmirkGrinProvider implements GrinChainProvider {
   }) {
     return this.api.broadcastGrinTransaction(params);
   }
-  scanUnspent(params: { startIndex?: number; startHeight?: number; max?: number }) {
+  scanUnspent(params: { startIndex?: number | undefined; startHeight?: number | undefined; max?: number | undefined }) {
     return this.api.scanGrinUnspentOutputs(params);
   }
   recordOutput(params: {

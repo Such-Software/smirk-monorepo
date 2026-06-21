@@ -92,7 +92,7 @@ test('fetchAllBalances reads a swapped-in (non-backend) provider: bring-your-own
   providers.setUtxo('btc', fakeElectrumBtc(4242)); // user points btc at their own electrum
 
   const bootstrap: BootstrapAuthResult = { userId: 'u1', isNew: false };
-  const balances = await fetchAllBalances(poison, makeWallet(), bootstrap, {
+  const balances = await fetchAllBalances(makeWallet(), bootstrap, {
     providers,
     visibleAssetIds: ['btc'], // self-sovereign shape: only the configured coin is shown
   });
@@ -172,7 +172,7 @@ test('fetchAllBalances uses a swapped-in lws provider and registers the view key
   providers.setLws('xmr', fakeLws('xmr', 9999, calls)); // user points xmr at their own lws
 
   const bootstrap: BootstrapAuthResult = { userId: 'u1', isNew: false };
-  const balances = await fetchAllBalances(poison, makeWallet(), bootstrap, {
+  const balances = await fetchAllBalances(makeWallet(), bootstrap, {
     providers,
     visibleAssetIds: ['xmr'],
   });

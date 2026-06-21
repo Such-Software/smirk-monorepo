@@ -380,7 +380,6 @@ export interface FetchBalancesOptions {
 }
 
 export async function fetchAllBalances(
-  api: SmirkApi,
   wallet: UnlockedWallet,
   bootstrap: BootstrapAuthResult,
   options: FetchBalancesOptions = {},
@@ -473,7 +472,7 @@ export async function fetchAllBalances(
     tap(
       'grin',
       visible('grin')
-        ? fetchGrinBalance(api, bootstrap.userId)
+        ? fetchGrinBalance(providers, bootstrap.userId)
         : Promise.resolve(zero),
     ),
   ]);
@@ -621,8 +620,11 @@ async function fetchLwsBalance(
   };
 }
 
-async function fetchGrinBalance(api: SmirkApi, userId: string): Promise<AssetBalance> {
-  const result = await api.getGrinUserBalance(userId);
+async function fetchGrinBalance(
+  providers: ChainProviderRegistry,
+  userId: string,
+): Promise<AssetBalance> {
+  const result = await providers.grin().getBalance(userId);
   if (result.error || !result.data) {
     return { confirmed: 0n, pending: 0n, error: result.error ?? 'Network error' };
   }
