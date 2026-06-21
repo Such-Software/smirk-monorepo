@@ -1,0 +1,39 @@
+name: docs
+
+# Keeps the public docs honest: the generated API client cannot drift from the
+# committed OpenAPI contract, no secrets/infra identifiers reach the tree, and
+# doc links resolve.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api-client-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      # Regenerates src/api/schema.d.ts from openapi.json and fails if it differs
+      # from what is committed (i.e. the spec changed but the client was not regenerated).
+      - run: npm run check:api -w @smirk/core
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/secret-scan.sh
+
+  doc-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --no-color './**/*.md'
+        # Existing docs may carry stale links; surface them without blocking
+        # until the backlog is cleared, then drop continue-on-error.
+        continue-on-error: true
