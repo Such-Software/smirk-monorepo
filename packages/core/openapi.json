@@ -1,0 +1,3848 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Smirk Backend API",
+    "description": "Public wallet-facing API: authentication and per-chain wallet access.",
+    "contact": {
+      "name": "John Winter Murphy",
+      "email": "jw@such.software"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.3.0"
+  },
+  "paths": {
+    "/api/v1/auth/check-restore": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Check if a wallet restore is valid.",
+        "description": "This endpoint is called BEFORE restore to verify:\n1. The wallet was previously created in Smirk (fingerprint exists)\n2. The mnemonic is correct (all 5 derived keys match stored keys)\n\nIf fingerprint doesn't exist, the extension should redirect to onboarding\nwith a message that this wallet was not created in Smirk.\n\n# Rate Limiting\n\nIn addition to per-IP rate limiting (5/min), this endpoint tracks failed\nrestore attempts per fingerprint. If there are more than 3 failed attempts\nfor a fingerprint in the last hour, the request is rejected.",
+        "operationId": "check_restore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet restore validation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckRestoreResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/extension": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register a new extension wallet or authenticate an existing one.",
+        "description": "Uses the BTC public key hash as the unique identity.\nIf the pubkey_hash already exists, returns tokens for that user.\nIf new, creates a user and registers all provided keys.\n\n# Security\n\nRequires a signed timestamp to prove ownership of the BTC private key.\nThis prevents registration with stolen public keys.",
+        "operationId": "extension_register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Extension wallet registered or authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAuthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session revoked successfully"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get current user info from JWT.",
+        "description": "Extracts the user ID from the Bearer token and returns user info.",
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "Current authenticated user info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/pow-challenge": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Issue a fresh proof-of-work challenge for the wallet to solve\nbefore calling `/auth/extension`. The wallet POSTs the solved\npayload as the `altcha_solution` field of its registration\nrequest.",
+        "description": "Stateless: the challenge embeds an HMAC signature over its own\nfields plus an expiry timestamp, so we don't track issued\nchallenges anywhere. Verification re-derives the HMAC at registration\ntime. See `core::pow` for the protocol details.\n\n# Rate limiting\n\nThis endpoint is on the strict 5/min governor (same as\n`/auth/extension`). An attacker can't generate unlimited\nchallenges to brute-force later; each one expires in 10 minutes\nand is single-shot against the rate-limited register endpoint.",
+        "operationId": "pow_challenge",
+        "responses": {
+          "200": {
+            "description": "Proof-of-work challenge for wallet registration"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Refresh an access token using a refresh token.",
+        "operationId": "refresh_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Token refreshed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/website/challenge": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Generate a challenge for website authentication.",
+        "description": "The challenge is stored in memory and expires after 5 minutes.\nThe client signs with their preferred asset key.",
+        "operationId": "website_challenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebsiteChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Website authentication challenge created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebsiteChallengeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/website/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify website auth signature and issue JWT.",
+        "description": "User signs with their preferred asset key. We look up the user\nby that asset's public key and verify the signature.",
+        "operationId": "website_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebsiteVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Website authentication verified, tokens issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/debug/pending/{asset}": {
+      "get": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Debug endpoint to check pending transaction detection status.",
+        "description": "Returns diagnostic info about the pending tx pipeline: how many unconfirmed\ntxs are in the database, whether webhooks exist, and whether ZMQ is configured.",
+        "operationId": "debug_pending_status",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "path",
+            "description": "Asset type: 'xmr' or 'wow'",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending transaction detection pipeline status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingDebugResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/grin/relay": {
+      "post": {
+        "tags": [
+          "grin_relay"
+        ],
+        "summary": "Create a slatepack relay entry for a send transaction.",
+        "description": "The sender creates an S1 slate and stores it here for the recipient to pick up.\nThe relay entry expires after 24 hours.\n\n# Recipient Identification\n\nEither `recipient_user_id` or `recipient_address` should be provided:\n- `recipient_user_id`: For sending to a known Smirk user\n- `recipient_address`: For sending to a slatepack address\n\nIf both are empty, the relay is essentially a \"public\" offer that\nwon't be automatically matched to any recipient (not recommended).",
+        "operationId": "create_grin_relay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGrinRelayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Relay entry created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateGrinRelayResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/grin/relay/cancel": {
+      "post": {
+        "tags": [
+          "grin_relay"
+        ],
+        "summary": "Cancel a pending slatepack relay.",
+        "description": "Either the sender or recipient can cancel a pending relay. After cancellation:\n- The relay status becomes 'cancelled'\n- Locked outputs should be unlocked (client's responsibility)\n- The transaction will not complete\n\n# When to Cancel\n\n- Transaction expired (24 hours)\n- User changed their mind\n- Counterparty is unresponsive\n\n# Notes\n\n- Cannot cancel a finalized transaction (already broadcast)\n- The client should call `unlock_grin_outputs` after cancelling to restore funds",
+        "operationId": "cancel_grin_relay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelGrinRelayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Relay cancelled successfully"
+          }
+        }
+      }
+    },
+    "/api/v1/grin/relay/finalize": {
+      "post": {
+        "tags": [
+          "grin_relay"
+        ],
+        "summary": "Finalize the transaction and broadcast it to the Grin network.",
+        "description": "The sender finalizes the slate locally with WASM and submits the finalized\nslatepack here. The backend:\n1. Decodes the slatepack to extract the transaction\n2. Broadcasts to the Grin node\n3. Updates relay status to 'finalized'\n4. Updates all related grin_transactions to 'finalized'\n\n# Authorization\n\nOnly the original sender can finalize their transaction.",
+        "operationId": "finalize_grin_relay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinalizeGrinRelayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction finalized and broadcast successfully"
+          }
+        }
+      }
+    },
+    "/api/v1/grin/relay/pending/{user_id}": {
+      "get": {
+        "tags": [
+          "grin_relay"
+        ],
+        "summary": "Get pending slatepacks for a user.",
+        "description": "Returns two lists:\n- `pending_to_sign`: Slates where this user is the recipient and needs to sign\n- `pending_to_finalize`: Slates where this user is the sender and the recipient has signed\n\n# Recipient Matching\n\nA slate is matched to a recipient if:\n- `recipient_user_id` matches, OR\n- `recipient_address` matches the user's registered Grin wallet address\n\nBoth conditions are checked to support different sending methods.",
+        "operationId": "get_grin_pending",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User ID (UUID)",
+            "required": true,
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending slatepacks for the user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetGrinPendingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/grin/relay/sign": {
+      "post": {
+        "tags": [
+          "grin_relay"
+        ],
+        "summary": "Store the signed slatepack (S2) from the recipient.",
+        "description": "After the recipient signs the slate locally with WASM, they submit the\nsigned slatepack here. The status changes from 'pending_recipient' to\n'pending_sender', and the sender can retrieve it to finalize.\n\n# Authorization\n\nOnly the intended recipient can sign:\n- Either `recipient_user_id` matches, OR\n- `recipient_address` matches the user's registered Grin wallet address",
+        "operationId": "sign_grin_relay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignGrinRelayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Slatepack signed successfully"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/balance": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Get balance for a BTC or LTC address via Electrum.",
+        "description": "This queries Electrum servers to get the balance for a given address.\nThe balance is split into confirmed (in blocks) and unconfirmed (in mempool).\n\n# Notes\n\n- Unconfirmed balance can be negative if there's a pending outgoing transaction\n- Total = confirmed + unconfirmed",
+        "operationId": "get_utxo_balance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetUtxoBalanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "UTXO balance for BTC or LTC address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UtxoBalanceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/broadcast": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Broadcast a signed BTC or LTC transaction.",
+        "description": "The transaction must be fully signed and valid. This endpoint\nsubmits it to the network via either local node or Electrum servers,\ndepending on configuration (BTC_USE_LOCAL_NODE / LTC_USE_LOCAL_NODE).\n\n# Configuration\n\n- `BTC_USE_LOCAL_NODE=true`: Use local Bitcoin Core RPC\n- `LTC_USE_LOCAL_NODE=true`: Use local Litecoin Core RPC\n- Otherwise: Use Electrum servers\n\n# Security\n\nThe backend cannot modify or sign transactions - it only broadcasts\nwhat the client provides. The private key never leaves the client.",
+        "operationId": "broadcast_tx",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BroadcastTxRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Broadcast signed BTC or LTC transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BroadcastTxResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/fees": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Estimate fee rates for BTC or LTC.",
+        "description": "Returns fee rates for different confirmation speeds:\n- **fast**: Target 1-2 blocks (~10-20 min for BTC, ~2.5-5 min for LTC)\n- **normal**: Target 3-6 blocks (~30-60 min for BTC, ~7.5-15 min for LTC)\n- **slow**: Target 12-24 blocks (~2-4 hours for BTC, ~30-60 min for LTC)\n\n# Transaction Size Estimation\n\nTo calculate total fee:\n`fee = size_in_vbytes * fee_rate`\n\nTypical sizes:\n- P2WPKH input: ~68 vB\n- P2WPKH output: ~31 vB\n- Overhead: ~10 vB\n\nExample: 1-in-2-out transaction ≈ 68 + 31*2 + 10 = 140 vB",
+        "operationId": "estimate_fee",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimateFeeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fee rate estimates for BTC or LTC",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateFeeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/address/register": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Register (or update) the authenticated user's Grin slatepack\naddress. Idempotent — re-registers from the same wallet are\nno-ops via the `(user_id, asset)` unique constraint's\n`ON CONFLICT DO UPDATE`.",
+        "description": "POST /api/v1/wallet/grin/address/register",
+        "operationId": "register_grin_address",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterGrinAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Address registered or updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterGrinAddressResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bech32 address"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/address/{address}/user": {
+      "get": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Look up whether a Grin slatepack address is registered to any\nSmirk user. Returns only a boolean — no user_id exposure.",
+        "operationId": "lookup_slatepack_address",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "description": "Slatepack address (grin1.../tgrin1...)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether address is registered (pre-login restore endpoint)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlatepackAddressLookupResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/broadcast": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Broadcast a finalized Grin transaction to the network.",
+        "description": "The client finalizes the transaction locally and sends the transaction\nJSON here. The backend submits it to the Grin node via the Foreign API.\n\nAfter successful broadcast:\n- Transaction status is updated to 'finalized'\n- Locked outputs are marked as 'spent'\n\n# Why use Foreign API\n\nWe use the Grin node's Foreign API push_transaction endpoint rather than\nthe wallet API. This avoids slatepack format compatibility issues between\nthe extension's WASM wallet library and the backend's grin-wallet daemon.",
+        "operationId": "broadcast_grin_transaction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BroadcastGrinTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction broadcast successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BroadcastGrinTransactionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid IDs"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match body user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/outputs": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Record a new Grin output (called after signing a receive transaction).",
+        "description": "When a user signs an incoming slate (S1 -> S2), they create a new output.\nThis endpoint records that output so it can be spent later.\n\n# Idempotency\n\nIf an output with the same commitment already exists, returns the existing\nrecord without modification. This allows safe retry of the recording.",
+        "operationId": "record_grin_output",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordGrinOutputRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Output recorded or returned existing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordGrinOutputResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_id or output data"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match body user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/outputs/lock": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Lock outputs for a pending send transaction.",
+        "description": "When initiating a send, outputs are locked to prevent double-spend.\nLocked outputs are excluded from balance calculations and future sends.\n\nIf the transaction fails or is cancelled, call [`unlock_grin_outputs`] to\nrestore the outputs to spendable status.",
+        "operationId": "lock_grin_outputs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LockGrinOutputsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Outputs locked for pending send"
+          },
+          "400": {
+            "description": "Invalid IDs"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match body user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/outputs/spend": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Mark locked outputs as spent after transaction finalization.",
+        "description": "Called after a transaction is successfully broadcast to the network.\nSpent outputs are permanently marked and cannot be respent.",
+        "operationId": "spend_grin_outputs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpendGrinOutputsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Outputs marked as spent"
+          },
+          "400": {
+            "description": "Invalid IDs"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match body user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/outputs/unlock": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Unlock outputs when a send transaction is cancelled.",
+        "description": "Restores previously locked outputs to spendable status.\nCalled when a transaction fails or is explicitly cancelled.",
+        "operationId": "unlock_grin_outputs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlockGrinOutputsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Outputs unlocked and unconfirmed change cleaned"
+          },
+          "400": {
+            "description": "Invalid IDs"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match body user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/scan": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Scan for commitments on the Grin blockchain.",
+        "description": "Takes a list of commitments and checks which ones exist on-chain.\nUsed for wallet restore via bulletproof rewind - the extension\ngenerates possible commitments and we check which ones are real.\n\nUses the Grin node's Foreign API get_outputs endpoint.",
+        "operationId": "scan_grin_commitments",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrinScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Commitment scan results (pre-login wallet restore)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrinScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid commitments or exceeds 1000 limit"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/transactions": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Record a Grin transaction for history tracking.",
+        "description": "Called when initiating or receiving a transaction. Creates a record\nin the grin_transactions table with 'pending' status.\n\n# Idempotency\n\nUses ON CONFLICT to handle duplicate (user_id, slate_id, direction) tuples.\nDuplicate calls return the existing transaction ID.",
+        "operationId": "record_grin_transaction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordGrinTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction recorded or existing returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordGrinTransactionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid IDs or direction"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match body user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/transactions/update": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Update a Grin transaction status.",
+        "description": "Status progression:\n- **pending** → signed: After recipient signs (receive) or sender creates slate (send)\n- **signed** → finalized: After sender finalizes and broadcasts\n- **finalized** → confirmed: After transaction is mined (optional, not always tracked)\n- Any → cancelled: If transaction is cancelled before finalization",
+        "operationId": "update_grin_transaction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGrinTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction status updated"
+          },
+          "400": {
+            "description": "Invalid IDs or status"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match body user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/unspent-outputs": {
+      "post": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Page the Grin node's UNSPENT (UTXO) set WITH rangeproofs, for seed-only\noutput recovery (the client rewinds each proof with its view key).",
+        "description": "Authenticated: rangeproofs are ~676 bytes/output across the whole UTXO\nset, so this must not be open like `scan_grin_commitments`. Bounded by\n`start_height` (the wallet birthday → start MMR index) and paginated by\n`start_index`. Returns the node's OutputListing\n(`{highest_index, last_retrieved_index, outputs:[{commit, block_height,\nmmr_index, proof}]}`); the client pages until `last_retrieved_index`\nreaches `highest_index`.",
+        "operationId": "get_grin_unspent_outputs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrinUnspentOutputsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Paginated UTXO set with rangeproofs (seed-only recovery)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrinOutputListing"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/user/{user_id}/balance": {
+      "get": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Get a user's Grin balance from transaction history.",
+        "description": "Balance is calculated from the grin_transactions table:\n- **confirmed** = 10+ confirmations, spendable\n- **locked** = has block_height but not yet confirmed (1-9 confirmations)\n- **pending** = no block_height yet (0 confirmations, any non-confirmed status)\n\nNote: Unlike XMR/BTC, Grin balance is tracked by the backend because the\nblockchain doesn't support address-based queries.",
+        "operationId": "get_grin_user_balance",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User's Grin balance with confirmed/locked/pending amounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrinUserBalanceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_id"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match path user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/user/{user_id}/history": {
+      "get": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Get a user's Grin transaction history.",
+        "description": "Returns the most recent 100 transactions, newest first.\nIncludes both pending and completed transactions.",
+        "operationId": "get_grin_user_history",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User's Grin transaction history (most recent 100)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrinTransactionHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_id"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match path user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/user/{user_id}/outputs": {
+      "get": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Get a user's spendable Grin outputs.",
+        "description": "Returns all outputs that can be used as inputs for a send transaction.\nOutputs are sorted by amount (smallest first) for efficient coin selection.\n\nThe `next_child_index` ensures key derivation paths are never reused,\nwhich is critical for Mimblewimble privacy (reusing paths leaks information).\n\n**On-chain verification**: For outputs marked as 'unspent', we verify they\nstill exist on-chain via the Grin node. This prevents selecting stale outputs\nthat were spent by transactions not properly tracked in the database.",
+        "operationId": "get_grin_outputs",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User's spendable Grin outputs with verification against blockchain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrinOutputsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_id"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match path user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/grin/user/{user_id}/sync": {
+      "get": {
+        "tags": [
+          "grin"
+        ],
+        "summary": "Sync a user's Grin wallet from backend database.",
+        "description": "Returns ALL outputs (including spent) and transaction history.\nUsed for wallet restore when the user is a known Smirk user.\n\nThe `next_child_index` ensures key derivation paths are never reused,\neven if some outputs have been spent.",
+        "operationId": "sync_grin_wallet",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full wallet sync (all outputs, transactions, next key index)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrinSyncResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_id"
+          },
+          "401": {
+            "description": "Missing or invalid JWT"
+          },
+          "403": {
+            "description": "JWT user_id does not match path user_id"
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/heights": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "Get current blockchain heights for all supported networks.",
+        "description": "This is useful for wallet creation to determine the start height for LWS,\nand for displaying sync status in the extension.\n\nHeights are fetched in parallel - any failures are logged but don't fail the request.",
+        "operationId": "get_blockchain_heights",
+        "responses": {
+          "200": {
+            "description": "Current block height for each supported network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockchainHeightsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/history": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Get transaction history for a BTC or LTC address.",
+        "description": "Returns all transactions touching this address, both confirmed and mempool.\nTransactions are sorted newest first. Includes amount data (received/sent)\nfor the most recent transactions.",
+        "operationId": "get_history",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetHistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction history for BTC or LTC address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/lws/balance": {
+      "post": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Get wallet balance from LWS.",
+        "description": "Returns balance components and spent output candidates for client-side verification.\nThe client uses WASM to verify which outputs are actually spent by computing key images.\n\n# Balance Calculation\n\nThe client should compute: `true_balance = total_received - verified_spent_total`\n\nWhere `verified_spent_total` is the sum of amounts from `spent_outputs` where the\nclient-computed key image matches the server-provided `key_image`.",
+        "operationId": "get_lws_balance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetBalanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Balance retrieved from LWS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/lws/deactivate": {
+      "post": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Deactivate a wallet from LWS scanning.",
+        "description": "This stops LWS from scanning the specified address, saving server resources.\nThe account is set to \"inactive\" status and webhooks are removed.\n\nUse this after claiming a tip to clean up temporary tip addresses.\n\n# Security\n\nRequires authentication. User must own the address (either as a wallet\nor as a tip sender/recipient) to prevent DoS attacks on other users' addresses.",
+        "operationId": "deactivate_lws",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeactivateLwsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet deactivated from LWS scanning",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeactivateLwsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/lws/decoys": {
+      "post": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Get random outputs for decoy selection in ring signatures.",
+        "description": "Returns random outputs from the blockchain that can be used as decoys\nwhen constructing transactions. The count should typically be 15\n(for ring size 16 = 15 decoys + 1 real input).\n\n# Privacy Note\n\nThe LWS selects outputs using a gamma distribution to mimic real spending\npatterns, providing better privacy than uniform random selection.",
+        "operationId": "get_random_outs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetRandomOutsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Random outputs for ring signature decoys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetRandomOutsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/lws/history": {
+      "post": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Get transaction history from LWS.",
+        "description": "Returns transaction history for XMR/WOW wallets. LWS maintains the full history\nfrom the wallet's registration start_height (birthday).\n\nTransactions are sorted newest first, with pending (mempool) transactions at the top.",
+        "operationId": "get_lws_history",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetLwsHistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction history retrieved from LWS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetLwsHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/lws/register": {
+      "post": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Register a wallet with the Light Wallet Server.",
+        "description": "This enables the backend to scan for incoming transactions and provide balance\ninformation to the extension. For XMR, this registers with the Monero LWS.\nFor WOW, this registers with the Wownero LWS.\n\nThe endpoint also:\n- Stores the wallet in the database for user association\n- Registers HTTP webhooks for 0-conf notifications (backup to ZMQ)\n\n# Idempotency\n\nIf the wallet is already registered with LWS, this endpoint succeeds silently.\nThe database record and webhooks are updated regardless.",
+        "operationId": "register_lws",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterLwsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet registered with LWS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterLwsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/lws/submit": {
+      "post": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Submit a signed XMR/WOW transaction for broadcast.",
+        "description": "The transaction should be fully constructed and signed client-side\nusing smirk-wasm. This endpoint simply relays it to the daemon\nvia the LWS.\n\n# Security\n\nThe backend cannot modify or sign transactions - it only broadcasts\nwhat the client provides. The spend key never leaves the client.",
+        "operationId": "submit_raw_tx",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitRawTxRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction submitted for broadcast",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitRawTxResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/lws/unspent": {
+      "post": {
+        "tags": [
+          "xmr_wow"
+        ],
+        "summary": "Get unspent outputs for transaction construction.",
+        "description": "Returns outputs owned by this wallet that can be spent, along with\nfee information needed for transaction construction.\n\n# Confirmation Requirements\n\nOnly returns outputs with enough confirmations to be spendable:\n- XMR: 10 confirmations\n- WOW: 4 confirmations\n\nMempool (unconfirmed) outputs are excluded.",
+        "operationId": "get_unspent_outs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetUnspentOutsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Unspent outputs for transaction construction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetUnspentOutsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/utxos": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Get UTXOs for a BTC or LTC address.",
+        "description": "Returns all unspent outputs for the address, which can be used\nto construct transactions client-side.\n\n# Transaction Construction\n\nWhen building a transaction, the client:\n1. Selects UTXOs whose total value >= amount + fee\n2. Creates inputs referencing each selected UTXO (txid:vout)\n3. Creates outputs for recipient and change\n4. Signs each input with the private key",
+        "operationId": "get_utxos",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetUtxosRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Unspent transaction outputs for BTC or LTC address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetUtxosResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AssetPublicKey": {
+        "type": "object",
+        "description": "Public key for a specific asset.",
+        "required": [
+          "asset",
+          "public_key"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "public_spend_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For XMR/WOW: public spend key (view key derived from main key)"
+          }
+        }
+      },
+      "AssetSignature": {
+        "type": "object",
+        "description": "Signature for a single asset.",
+        "required": [
+          "asset",
+          "signature",
+          "public_key"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "description": "Response for successful authentication.",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "expires_in",
+          "user"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserInfo"
+          }
+        }
+      },
+      "BalanceResponse": {
+        "type": "object",
+        "description": "Response for balance query.\n\nThe returned data requires client-side verification to compute true balance:\n`true_balance = total_received - sum(verified spent_outputs amounts)`\n\nThis design ensures the server cannot lie about the balance.",
+        "required": [
+          "total_received",
+          "locked_balance",
+          "pending_balance",
+          "transaction_count",
+          "blockchain_height",
+          "start_height",
+          "scanned_height",
+          "spent_outputs"
+        ],
+        "properties": {
+          "blockchain_height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Current blockchain height",
+            "minimum": 0
+          },
+          "locked_balance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Locked balance in atomic units (10-block protocol lock after confirmation)",
+            "minimum": 0
+          },
+          "pending_balance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pending/unconfirmed balance in atomic units (0-conf mempool txs)\nThis can be NEGATIVE for outgoing transactions (spent more than received as change)"
+          },
+          "scanned_height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Last scanned height",
+            "minimum": 0
+          },
+          "spent_outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpentOutputCandidate"
+            },
+            "description": "Spent output candidates - client must verify with spend key to compute true balance\nTrue balance = total_received - sum(verified spent_outputs amounts)\nIncludes both confirmed AND mempool spent outputs"
+          },
+          "start_height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Height at which wallet was registered",
+            "minimum": 0
+          },
+          "total_received": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total received in atomic units (view-only balance, doesn't account for spends)",
+            "minimum": 0
+          },
+          "transaction_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of transactions",
+            "minimum": 0
+          }
+        }
+      },
+      "BlockchainHeightsResponse": {
+        "type": "object",
+        "description": "Response for blockchain heights query.\n\nProvides current block heights for all supported networks in one request.\nUseful for wallet creation (determining start heights) and sync status.",
+        "properties": {
+          "btc": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bitcoin block height (None if unavailable)",
+            "minimum": 0
+          },
+          "grin": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Grin block height (None if unavailable)",
+            "minimum": 0
+          },
+          "ltc": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Litecoin block height (None if unavailable)",
+            "minimum": 0
+          },
+          "wow": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Wownero block height (None if unavailable)",
+            "minimum": 0
+          },
+          "xmr": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Monero block height (None if unavailable)",
+            "minimum": 0
+          }
+        }
+      },
+      "BroadcastGrinTransactionRequest": {
+        "type": "object",
+        "description": "Request to broadcast a finalized Grin transaction.",
+        "required": [
+          "user_id",
+          "slate_id",
+          "tx"
+        ],
+        "properties": {
+          "change_output": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChangeOutputRecord",
+                "description": "Optional change output details. When present, the handler\natomically inserts the change row alongside the broadcast +\nstatus updates — eliminating the orphan-on-cancel window\nwhere the v0.2.4 / pre-2026-05-14 v0.3 flow recorded the\nchange at S1-build time and left it stranded on cancel.\n\nv0.2.4 clients DO NOT send this field (they record via the\nseparate `record_grin_output` endpoint pre-broadcast).\nv0.3+ clients (post-fix) skip the early record and rely on\nthis field instead. The INSERT uses ON CONFLICT (commitment)\nDO NOTHING so a v0.2.4 client that DOES record early still\nworks if they ever send change_output here too."
+              }
+            ]
+          },
+          "slate_id": {
+            "type": "string",
+            "description": "Slate ID"
+          },
+          "tx": {
+            "description": "The transaction JSON (from client's finalized slate)"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "BroadcastGrinTransactionResponse": {
+        "type": "object",
+        "description": "Response from broadcasting a Grin transaction.",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether broadcast was successful"
+          }
+        }
+      },
+      "BroadcastTxRequest": {
+        "type": "object",
+        "description": "Request to broadcast a signed transaction.",
+        "required": [
+          "asset",
+          "tx_hex"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset type (btc or ltc)"
+          },
+          "tx_hex": {
+            "type": "string",
+            "description": "The signed raw transaction hex"
+          }
+        }
+      },
+      "BroadcastTxResponse": {
+        "type": "object",
+        "description": "Response from broadcasting a transaction.",
+        "required": [
+          "asset",
+          "txid"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset type"
+          },
+          "txid": {
+            "type": "string",
+            "description": "The transaction ID (hash)"
+          }
+        }
+      },
+      "CancelGrinRelayRequest": {
+        "type": "object",
+        "description": "Request to cancel a relay.",
+        "required": [
+          "relay_id",
+          "user_id"
+        ],
+        "properties": {
+          "relay_id": {
+            "type": "string",
+            "description": "Relay entry ID"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID of the requester"
+          }
+        }
+      },
+      "ChangeOutputRecord": {
+        "type": "object",
+        "description": "Change-output details forwarded by v0.3+ clients on broadcast.\nSchema mirrors `record_grin_output` request, minus tx_slate_id\n(we already have it on the request).",
+        "required": [
+          "key_id",
+          "n_child",
+          "amount",
+          "commitment"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "commitment": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "n_child": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "CheckRestoreRequest": {
+        "type": "object",
+        "description": "Request body for checking if a restore is valid.",
+        "required": [
+          "fingerprint",
+          "keys"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "Seed fingerprint: hex(SHA256(SHA256(bip39_seed))[0:8])"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetPublicKey"
+            },
+            "description": "Public keys for all 5 assets (for verification)"
+          }
+        }
+      },
+      "CheckRestoreResponse": {
+        "type": "object",
+        "description": "Response for restore check.",
+        "required": [
+          "exists"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Error message if keys don't match"
+          },
+          "exists": {
+            "type": "boolean",
+            "description": "Whether the fingerprint exists in the database"
+          },
+          "keys_valid": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether all submitted keys match stored keys"
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User ID - always None for security (prevents enumeration attacks)"
+          },
+          "wow_start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "WOW blockchain start height for LWS registration (if wallet was created in Smirk)"
+          },
+          "xmr_start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "XMR blockchain start height for LWS registration (if wallet was created in Smirk)"
+          }
+        }
+      },
+      "CreateGrinRelayRequest": {
+        "type": "object",
+        "description": "Request to create a slatepack relay entry.",
+        "required": [
+          "sender_user_id",
+          "slatepack",
+          "slate_id",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin (accepts integer, float, or string for JS compatibility)"
+          },
+          "recipient_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Recipient's slatepack address (for address-based transfers)"
+          },
+          "recipient_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Recipient's user ID (for Smirk-to-Smirk transfers)"
+          },
+          "sender_user_id": {
+            "type": "string",
+            "description": "Sender's user ID"
+          },
+          "slate_id": {
+            "type": "string",
+            "description": "Slate ID from the transaction"
+          },
+          "slatepack": {
+            "type": "string",
+            "description": "The slatepack content (armored slate)"
+          }
+        }
+      },
+      "CreateGrinRelayResponse": {
+        "type": "object",
+        "description": "Response for creating a relay entry.",
+        "required": [
+          "id",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "description": "When this relay expires (ISO 8601)"
+          },
+          "id": {
+            "type": "string",
+            "description": "Relay entry ID"
+          }
+        }
+      },
+      "DeactivateLwsRequest": {
+        "type": "object",
+        "description": "Request to deactivate a wallet from LWS scanning.\n\nUse this to stop LWS from scanning an address that is no longer needed,\nsuch as a tip address after funds have been claimed.",
+        "required": [
+          "asset",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The primary address to deactivate"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (xmr or wow)"
+          }
+        }
+      },
+      "DeactivateLwsResponse": {
+        "type": "object",
+        "description": "Response for LWS deactivation.",
+        "required": [
+          "success",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EstimateFeeRequest": {
+        "type": "object",
+        "description": "Request to estimate fee rate.",
+        "required": [
+          "asset"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset type (btc or ltc)"
+          },
+          "blocks": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Target confirmation blocks (default: 6)",
+            "minimum": 0
+          }
+        }
+      },
+      "EstimateFeeResponse": {
+        "type": "object",
+        "description": "Response containing fee estimates.\n\nFee rates are in satoshis per virtual byte (sat/vB).\nVirtual bytes account for SegWit's weight calculation.",
+        "required": [
+          "asset"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset type"
+          },
+          "fast": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Fee rate in sat/vB for fast confirmation (1-2 blocks)"
+          },
+          "normal": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Fee rate in sat/vB for normal confirmation (3-6 blocks)"
+          },
+          "slow": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Fee rate in sat/vB for slow confirmation (12-24 blocks)"
+          }
+        }
+      },
+      "ExtensionAuthResponse": {
+        "type": "object",
+        "description": "Response for extension registration.",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "expires_in",
+          "user"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/ExtensionUserInfo"
+          }
+        }
+      },
+      "ExtensionRegisterRequest": {
+        "type": "object",
+        "description": "Request body for extension registration.",
+        "required": [
+          "keys",
+          "signed_timestamp",
+          "signature"
+        ],
+        "properties": {
+          "altcha_solution": {
+            "type": "object",
+            "description": "Optional proof-of-work solution. Required when `POW_REQUIRED=true`\nin the backend config; ignored otherwise (graceful-migration\nwindow for v0.2.x clients). v0.3.0 clients always send one so\nflipping `POW_REQUIRED=true` later doesn't break them. See\n`core::pow` for the protocol and rollout strategy."
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetPublicKey"
+            },
+            "description": "Public keys for each supported asset"
+          },
+          "seed_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seed fingerprint: hex(SHA256(SHA256(bip39_seed))[0:8])\nRequired for new wallet creation, used for restore validation"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Bitcoin message signature of \"smirk-auth-{timestamp}\" using BTC private key\nFormat: 64 bytes compact (r || s) hex encoded (128 chars)"
+          },
+          "signed_timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp (seconds) that was signed"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional username (must be unique, 3-32 chars, lowercase alphanumeric + underscore)"
+          },
+          "wallet_birthday": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Wallet creation timestamp (for sync optimization)"
+          },
+          "wow_start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "WOW blockchain height at wallet creation (for LWS restore optimization)"
+          },
+          "xmr_start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "XMR blockchain height at wallet creation (for LWS restore optimization)"
+          }
+        }
+      },
+      "ExtensionUserInfo": {
+        "type": "object",
+        "description": "User info for extension auth response.",
+        "required": [
+          "id",
+          "is_new"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "is_new": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "FinalizeGrinRelayRequest": {
+        "type": "object",
+        "description": "Request to finalize and broadcast a transaction.",
+        "required": [
+          "relay_id",
+          "user_id",
+          "finalized_slatepack"
+        ],
+        "properties": {
+          "finalized_slatepack": {
+            "type": "string",
+            "description": "The finalized slatepack (S3)"
+          },
+          "relay_id": {
+            "type": "string",
+            "description": "Relay entry ID"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID of the finalizer (sender)"
+          }
+        }
+      },
+      "GetBalanceRequest": {
+        "type": "object",
+        "description": "Request to get wallet balance.",
+        "required": [
+          "asset",
+          "address",
+          "view_key"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The primary address"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (xmr or wow)"
+          },
+          "view_key": {
+            "type": "string",
+            "description": "The private view key (hex encoded)"
+          }
+        }
+      },
+      "GetGrinPendingResponse": {
+        "type": "object",
+        "description": "Response for getting pending slatepacks.",
+        "required": [
+          "pending_to_sign",
+          "pending_to_finalize"
+        ],
+        "properties": {
+          "pending_to_finalize": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingSlatepackEntry"
+            },
+            "description": "Slates waiting for this user to finalize (they are the sender)"
+          },
+          "pending_to_sign": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingSlatepackEntry"
+            },
+            "description": "Slates waiting for this user to sign (they are the recipient)"
+          }
+        }
+      },
+      "GetHistoryRequest": {
+        "type": "object",
+        "description": "Request to get transaction history for an address.",
+        "required": [
+          "asset",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address to query"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (btc or ltc)"
+          }
+        }
+      },
+      "GetHistoryResponse": {
+        "type": "object",
+        "description": "Response containing transaction history.",
+        "required": [
+          "asset",
+          "address",
+          "transactions"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address queried"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type"
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntry"
+            },
+            "description": "List of transactions (newest first)"
+          }
+        }
+      },
+      "GetLwsHistoryRequest": {
+        "type": "object",
+        "description": "Request to get transaction history from LWS.",
+        "required": [
+          "asset",
+          "address",
+          "view_key"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The primary address"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (xmr or wow)"
+          },
+          "view_key": {
+            "type": "string",
+            "description": "The private view key (hex encoded)"
+          }
+        }
+      },
+      "GetLwsHistoryResponse": {
+        "type": "object",
+        "description": "Response for transaction history.",
+        "required": [
+          "asset",
+          "transactions",
+          "scanned_height",
+          "blockchain_height"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset type"
+          },
+          "blockchain_height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Current blockchain height",
+            "minimum": 0
+          },
+          "scanned_height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Height up to which wallet has been scanned",
+            "minimum": 0
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LwsHistoryEntry"
+            },
+            "description": "Transaction history (newest first)"
+          }
+        }
+      },
+      "GetRandomOutsRequest": {
+        "type": "object",
+        "description": "Request to get random outputs for decoy selection.",
+        "required": [
+          "asset",
+          "count"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset type (xmr or wow)"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of decoys needed per input (typically 15 for ring size 16)",
+            "minimum": 0
+          }
+        }
+      },
+      "GetRandomOutsResponse": {
+        "type": "object",
+        "description": "Response for random outputs query.",
+        "required": [
+          "outputs"
+        ],
+        "properties": {
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RandomOutput"
+            },
+            "description": "List of random outputs (decoys)"
+          }
+        }
+      },
+      "GetUnspentOutsRequest": {
+        "type": "object",
+        "description": "Request to get unspent outputs for transaction construction.",
+        "required": [
+          "asset",
+          "address",
+          "view_key"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The primary address"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (xmr or wow)"
+          },
+          "view_key": {
+            "type": "string",
+            "description": "The private view key (hex encoded)"
+          }
+        }
+      },
+      "GetUnspentOutsResponse": {
+        "type": "object",
+        "description": "Response for unspent outputs query.",
+        "required": [
+          "outputs",
+          "per_byte_fee",
+          "fee_mask",
+          "fork_version"
+        ],
+        "properties": {
+          "fee_mask": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fee mask for rounding",
+            "minimum": 0
+          },
+          "fork_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fork version",
+            "minimum": 0
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnspentOutput"
+            },
+            "description": "List of unspent outputs"
+          },
+          "per_byte_fee": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fee per byte (for tx construction)",
+            "minimum": 0
+          }
+        }
+      },
+      "GetUtxoBalanceRequest": {
+        "type": "object",
+        "description": "Request to get UTXO balance via Electrum.",
+        "required": [
+          "asset",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address to query"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (btc or ltc)"
+          }
+        }
+      },
+      "GetUtxosRequest": {
+        "type": "object",
+        "description": "Request to get UTXOs for an address.",
+        "required": [
+          "asset",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address to query"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (btc or ltc)"
+          }
+        }
+      },
+      "GetUtxosResponse": {
+        "type": "object",
+        "description": "Response containing UTXOs for an address.",
+        "required": [
+          "asset",
+          "address",
+          "utxos"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address queried"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type"
+          },
+          "utxos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Utxo"
+            },
+            "description": "List of UTXOs"
+          }
+        }
+      },
+      "GrinOutput": {
+        "type": "object",
+        "description": "A Grin output (similar to UTXO) for spending.\n\nIn Mimblewimble, outputs are Pedersen commitments that encode:\n- A value (hidden by blinding factor)\n- A blinding factor (known only to owner)\n\nThe client uses the key derivation path to recover the blinding factor\nneeded to spend this output.",
+        "required": [
+          "id",
+          "key_id",
+          "n_child",
+          "amount",
+          "commitment",
+          "lock_height",
+          "status"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin"
+          },
+          "block_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Block height (if confirmed)"
+          },
+          "commitment": {
+            "type": "string",
+            "description": "Pedersen commitment (hex) - the on-chain identifier for this output"
+          },
+          "id": {
+            "type": "string",
+            "description": "Output ID (internal database ID)"
+          },
+          "key_id": {
+            "type": "string",
+            "description": "Key derivation path (e.g., \"m/0/1/0\")"
+          },
+          "lock_height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lock height (0 = no timelock)"
+          },
+          "mmr_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "MMR index (if confirmed) - position in the output MMR"
+          },
+          "n_child": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Derivation index (n_child in path)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status: unconfirmed, unspent, locked, spent"
+          },
+          "tx_slate_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slate ID that created this output"
+          }
+        }
+      },
+      "GrinOutputListing": {
+        "type": "object",
+        "description": "Result of get_unspent_outputs / get_pmmr_indices (node OutputListing).",
+        "required": [
+          "highest_index",
+          "last_retrieved_index"
+        ],
+        "properties": {
+          "highest_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest (last available) output MMR index on-chain.",
+            "minimum": 0
+          },
+          "last_retrieved_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last insertion index retrieved — pass this+1 as the next\n`start_index` to page forward; for get_pmmr_indices it is the start\nindex corresponding to the requested block height.",
+            "minimum": 0
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrinUnspentOutput"
+            },
+            "description": "The outputs in this page (empty for get_pmmr_indices)."
+          }
+        }
+      },
+      "GrinOutputsResponse": {
+        "type": "object",
+        "description": "Response for getting user's Grin outputs.",
+        "required": [
+          "outputs",
+          "total_spendable",
+          "next_child_index"
+        ],
+        "properties": {
+          "next_child_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Next available child index for key derivation\n(ensures we never reuse a derivation path)"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrinOutput"
+            },
+            "description": "Spendable outputs (unspent + unconfirmed)"
+          },
+          "total_spendable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total spendable amount in nanogrin"
+          }
+        }
+      },
+      "GrinScanFoundOutput": {
+        "type": "object",
+        "description": "A found output from the blockchain scan.",
+        "required": [
+          "commit",
+          "height",
+          "mmr_index"
+        ],
+        "properties": {
+          "commit": {
+            "type": "string",
+            "description": "The commitment that was found"
+          },
+          "height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block height where the output was included",
+            "minimum": 0
+          },
+          "mmr_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "MMR index position",
+            "minimum": 0
+          }
+        }
+      },
+      "GrinScanRequest": {
+        "type": "object",
+        "description": "Request to scan for commitments on-chain.",
+        "required": [
+          "commitments"
+        ],
+        "properties": {
+          "commitments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of commitment hex strings to check"
+          }
+        }
+      },
+      "GrinScanResponse": {
+        "type": "object",
+        "description": "Response for commitment scan.",
+        "required": [
+          "found",
+          "not_found"
+        ],
+        "properties": {
+          "found": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrinScanFoundOutput"
+            },
+            "description": "Outputs that were found on-chain"
+          },
+          "not_found": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Commitments that were not found"
+          }
+        }
+      },
+      "GrinSyncOutput": {
+        "type": "object",
+        "description": "A Grin output for sync response (includes all states, not just spendable).",
+        "required": [
+          "id",
+          "key_id",
+          "n_child",
+          "amount",
+          "commitment",
+          "lock_height",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin"
+          },
+          "block_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Block height (if confirmed)"
+          },
+          "commitment": {
+            "type": "string",
+            "description": "Pedersen commitment (hex)"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When created"
+          },
+          "id": {
+            "type": "string",
+            "description": "Output ID (internal database ID)"
+          },
+          "key_id": {
+            "type": "string",
+            "description": "Key derivation path (e.g., \"m/0/1/0\")"
+          },
+          "lock_height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lock height (0 = no timelock)"
+          },
+          "mmr_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "MMR index (if confirmed)"
+          },
+          "n_child": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Derivation index (n_child in path)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status: unconfirmed, unspent, locked, spent"
+          }
+        }
+      },
+      "GrinSyncResponse": {
+        "type": "object",
+        "description": "Response for wallet sync (restore from backend DB).",
+        "required": [
+          "outputs",
+          "transactions",
+          "next_child_index"
+        ],
+        "properties": {
+          "next_child_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Next available child index for key derivation"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrinSyncOutput"
+            },
+            "description": "All outputs (including spent, for n_child tracking)"
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrinSyncTransaction"
+            },
+            "description": "Transaction history"
+          }
+        }
+      },
+      "GrinSyncTransaction": {
+        "type": "object",
+        "description": "A Grin transaction for sync response.",
+        "required": [
+          "id",
+          "slate_id",
+          "amount",
+          "fee",
+          "direction",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin"
+          },
+          "block_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Block height (if confirmed)"
+          },
+          "counterparty_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Counterparty slatepack address (if known)"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When created"
+          },
+          "direction": {
+            "type": "string",
+            "description": "Direction: \"send\" or \"receive\""
+          },
+          "fee": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fee in nanogrin (0 for receives)"
+          },
+          "id": {
+            "type": "string",
+            "description": "Transaction ID (internal database ID)"
+          },
+          "kernel_excess": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Kernel excess (on-chain tx identifier, available after finalization)"
+          },
+          "slate_id": {
+            "type": "string",
+            "description": "Slate ID (Grin's transaction identifier)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status: pending, signed, finalized, confirmed, cancelled"
+          }
+        }
+      },
+      "GrinTransactionEntry": {
+        "type": "object",
+        "description": "A transaction history entry for display.",
+        "required": [
+          "id",
+          "slate_id",
+          "amount",
+          "fee",
+          "direction",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin"
+          },
+          "counterparty_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Counterparty user ID if known"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When created"
+          },
+          "direction": {
+            "type": "string",
+            "description": "Direction: \"send\" or \"receive\""
+          },
+          "fee": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fee in nanogrin (0 for receives)"
+          },
+          "id": {
+            "type": "string",
+            "description": "Transaction ID (our internal ID)"
+          },
+          "kernel_excess": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Kernel excess (on-chain tx identifier, available after finalization)\nThis can be used to look up the transaction in a Grin block explorer"
+          },
+          "slate_id": {
+            "type": "string",
+            "description": "Slate ID (Grin's transaction identifier)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status: pending, signed, finalized, confirmed, cancelled"
+          }
+        }
+      },
+      "GrinTransactionHistoryResponse": {
+        "type": "object",
+        "description": "Response for user's Grin transaction history.",
+        "required": [
+          "transactions"
+        ],
+        "properties": {
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrinTransactionEntry"
+            }
+          }
+        }
+      },
+      "GrinUnspentOutput": {
+        "type": "object",
+        "description": "One unspent output from the node's get_unspent_outputs Foreign API\n(OutputPrintable). Unlike `GrinOutputInfo`, `block_height` is\n`Option<u64>` (matching the node's type) and `proof` carries the\nrangeproof bytes (hex) when the query is made with include_proof=true —\nrequired for seed-only recovery via bulletproof rewind.",
+        "required": [
+          "commit",
+          "mmr_index"
+        ],
+        "properties": {
+          "block_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Block height the output was included at (None if not yet on a block).",
+            "minimum": 0
+          },
+          "commit": {
+            "type": "string",
+            "description": "The Pedersen commitment (hex)."
+          },
+          "mmr_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Output MMR index.",
+            "minimum": 0
+          },
+          "proof": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rangeproof bytes (hex), present only when include_proof=true."
+          }
+        }
+      },
+      "GrinUnspentOutputsRequest": {
+        "type": "object",
+        "description": "Request to page the node's UNSPENT output set (with rangeproofs) for\nseed-only wallet recovery.",
+        "properties": {
+          "max": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Max outputs per page (capped server-side).",
+            "minimum": 0
+          },
+          "start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Wallet birthday block height — converted to a start index so the\nscan is bounded (not from genesis). Ignored if `start_index` set.",
+            "minimum": 0
+          },
+          "start_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Output-MMR index to start from. Wins over `start_height` — used to\npage forward (`last_retrieved_index + 1` from the previous page).",
+            "minimum": 0
+          }
+        }
+      },
+      "GrinUserBalanceResponse": {
+        "type": "object",
+        "description": "Response for user's Grin balance.\n\nBalance is calculated from the grin_transactions table, not by querying\nthe blockchain directly (Grin doesn't support address-based queries).\n\nStates mirror XMR/WOW behavior:\n- **confirmed**: 10+ confirmations, fully spendable\n- **locked**: 1-9 confirmations, on-chain but not yet spendable\n- **pending**: broadcast but not yet in a block (0 confirmations)",
+        "required": [
+          "confirmed",
+          "locked",
+          "pending",
+          "total"
+        ],
+        "properties": {
+          "confirmed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Spendable balance (10+ confirmations) in nanogrin"
+          },
+          "locked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Locked balance (1-9 confirmations, on-chain but not spendable) in nanogrin"
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pending balance (broadcast but not yet in a block) in nanogrin"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total balance in nanogrin"
+          }
+        }
+      },
+      "HistoryEntry": {
+        "type": "object",
+        "description": "A single transaction in history.",
+        "required": [
+          "txid",
+          "height"
+        ],
+        "properties": {
+          "fee": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fee in satoshis (only for mempool txs, if known)",
+            "minimum": 0
+          },
+          "height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block height (-1 or 0 if unconfirmed/mempool)"
+          },
+          "total_received": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Total satoshis received at the queried address in this tx",
+            "minimum": 0
+          },
+          "total_sent": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Total satoshis sent from the queried address in this tx (requires prevout data)",
+            "minimum": 0
+          },
+          "txid": {
+            "type": "string",
+            "description": "Transaction ID"
+          }
+        }
+      },
+      "HistorySpentOutput": {
+        "type": "object",
+        "description": "A spent output candidate in transaction history.\n\nThese are outputs that MAY have been spent - the client must verify\nby computing key images using the spend key and comparing to `key_image`.",
+        "required": [
+          "amount",
+          "key_image",
+          "tx_pub_key",
+          "out_index"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in atomic units",
+            "minimum": 0
+          },
+          "key_image": {
+            "type": "string",
+            "description": "Key image found on chain (client verifies this matches locally computed key image)"
+          },
+          "out_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Output index within the original receive transaction",
+            "minimum": 0
+          },
+          "tx_pub_key": {
+            "type": "string",
+            "description": "Transaction public key (needed for key image computation)"
+          }
+        }
+      },
+      "LockGrinOutputsRequest": {
+        "type": "object",
+        "description": "Request to lock outputs for spending.",
+        "required": [
+          "user_id",
+          "output_ids",
+          "tx_slate_id"
+        ],
+        "properties": {
+          "output_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Output IDs to lock"
+          },
+          "tx_slate_id": {
+            "type": "string",
+            "description": "Slate ID of the send transaction"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "LogoutRequest": {
+        "type": "object",
+        "description": "Logout (revoke refresh token).",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        }
+      },
+      "LwsHistoryEntry": {
+        "type": "object",
+        "description": "A transaction entry for history display.",
+        "required": [
+          "txid",
+          "height",
+          "timestamp",
+          "is_pending",
+          "total_received",
+          "spent_outputs"
+        ],
+        "properties": {
+          "height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block height (0 for mempool/unconfirmed)",
+            "minimum": 0
+          },
+          "is_pending": {
+            "type": "boolean",
+            "description": "Whether this transaction is pending (in mempool)"
+          },
+          "payment_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Payment ID if present"
+          },
+          "spent_outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistorySpentOutput"
+            },
+            "description": "Spent output candidates - client must verify with spend key\nClient computes: verified_sent = sum(outputs where computed_key_image matches key_image)"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "Timestamp (ISO 8601 string, empty for mempool)"
+          },
+          "total_received": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount received in this tx (atomic units) - verified by view key",
+            "minimum": 0
+          },
+          "txid": {
+            "type": "string",
+            "description": "Transaction hash"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "description": "User info for /auth/me response.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "telegram_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "telegram_username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PendingDebugResponse": {
+        "type": "object",
+        "description": "Debug info for pending transaction detection pipeline.",
+        "required": [
+          "asset",
+          "pending_tx_count",
+          "webhook_count",
+          "zmq_configured"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "last_pending_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pending_tx_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "webhook_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "zmq_configured": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PendingSlatepackEntry": {
+        "type": "object",
+        "description": "A pending slatepack entry for API response.",
+        "required": [
+          "id",
+          "slate_id",
+          "sender_user_id",
+          "amount",
+          "slatepack",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When created (ISO 8601)"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When this expires (ISO 8601)"
+          },
+          "id": {
+            "type": "string",
+            "description": "Relay entry ID"
+          },
+          "sender_user_id": {
+            "type": "string",
+            "description": "Sender's user ID"
+          },
+          "slate_id": {
+            "type": "string",
+            "description": "Slate ID"
+          },
+          "slatepack": {
+            "type": "string",
+            "description": "Slatepack content (S1 for pending_to_sign, S2 for pending_to_finalize)"
+          }
+        }
+      },
+      "RandomOutput": {
+        "type": "object",
+        "description": "A random output for use as a decoy.\n\nDecoys are included in ring signatures to provide privacy. The verifier\ncannot determine which output in the ring is the real input.",
+        "required": [
+          "global_index",
+          "public_key",
+          "rct"
+        ],
+        "properties": {
+          "global_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Global output index",
+            "minimum": 0
+          },
+          "public_key": {
+            "type": "string",
+            "description": "Output public key (hex)"
+          },
+          "rct": {
+            "type": "string",
+            "description": "RingCT commitment (hex)"
+          }
+        }
+      },
+      "RecordGrinOutputRequest": {
+        "type": "object",
+        "description": "Request to record a new Grin output (when receiving).",
+        "required": [
+          "user_id",
+          "key_id",
+          "n_child",
+          "amount",
+          "commitment"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin (accepts integer, float, or string)"
+          },
+          "commitment": {
+            "type": "string",
+            "description": "Pedersen commitment (hex)"
+          },
+          "key_id": {
+            "type": "string",
+            "description": "Key derivation path"
+          },
+          "n_child": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Derivation index"
+          },
+          "tx_slate_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slate ID that created this output"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "RecordGrinOutputResponse": {
+        "type": "object",
+        "description": "Response for recording a Grin output.",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RecordGrinTransactionRequest": {
+        "type": "object",
+        "description": "Request to record a Grin transaction.",
+        "required": [
+          "user_id",
+          "slate_id",
+          "amount",
+          "fee",
+          "direction"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in nanogrin (accepts integer, float, or string)"
+          },
+          "counterparty_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Counterparty slatepack address (if known)"
+          },
+          "counterparty_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Counterparty user ID (if known)"
+          },
+          "direction": {
+            "type": "string",
+            "description": "Direction: \"send\" or \"receive\""
+          },
+          "fee": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fee in nanogrin (accepts integer, float, or string)"
+          },
+          "slate_id": {
+            "type": "string",
+            "description": "Slate ID"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "RecordGrinTransactionResponse": {
+        "type": "object",
+        "description": "Response for recording a Grin transaction.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshTokenRequest": {
+        "type": "object",
+        "description": "Request body for token refresh.",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterGrinAddressRequest": {
+        "type": "object",
+        "description": "Request body for registering a Grin slatepack address.",
+        "required": [
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Slatepack address (bech32, e.g. `grin1...` on mainnet or\n`tgrin1...` on testnet)."
+          }
+        }
+      },
+      "RegisterGrinAddressResponse": {
+        "type": "object",
+        "description": "Response — echoes the stored address so the client can verify.",
+        "required": [
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterLwsRequest": {
+        "type": "object",
+        "description": "Request to register a wallet with LWS for balance scanning.\n\nAfter registration, the LWS will begin scanning the blockchain for transactions\nto this address. The `start_height` parameter controls where scanning begins:\n- For new wallets: Omit to start from current height (instant sync)\n- For restored wallets: Provide the wallet birthday to scan historical transactions",
+        "required": [
+          "user_id",
+          "asset",
+          "address",
+          "view_key"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The primary address"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (xmr or wow)"
+          },
+          "start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional start height for scanning (block height).\nIf not provided, scanning starts from current blockchain height.\nFor wallets created in the past, this should be set to avoid scanning\nthe entire blockchain (which can take hours/days).",
+            "minimum": 0
+          },
+          "user_id": {
+            "type": "string",
+            "description": "The user ID (from /auth/extension registration)"
+          },
+          "view_key": {
+            "type": "string",
+            "description": "The private view key (hex encoded)"
+          }
+        }
+      },
+      "RegisterLwsResponse": {
+        "type": "object",
+        "description": "Response for LWS registration.",
+        "required": [
+          "success",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The start height used for scanning",
+            "minimum": 0
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SignGrinRelayRequest": {
+        "type": "object",
+        "description": "Request to submit a signed slatepack.",
+        "required": [
+          "relay_id",
+          "user_id",
+          "signed_slatepack"
+        ],
+        "properties": {
+          "relay_id": {
+            "type": "string",
+            "description": "Relay entry ID"
+          },
+          "signed_slatepack": {
+            "type": "string",
+            "description": "The signed slatepack (S2)"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID of the signer (recipient)"
+          }
+        }
+      },
+      "SlatepackAddressLookupResponse": {
+        "type": "object",
+        "description": "Response for slatepack address lookup.\n\nPre-2026-06-13 this also carried `user_id: Option<String>` for\nthe Grin recipient-restore flow's convenience. The 2026-06-13\nindependent reviewer flagged it as a pre-login enumeration vector\n— anonymous callers could pump `lookup_slatepack_address` to\nbuild an address↔user_id map. The follow-up pass (this commit)\nstrips the field entirely: the restore flow doesn't actually\nneed the user_id pre-authentication; the boolean `found` is\nenough to gate \"should I prompt for password to restore\" vs\n\"treat as new wallet.\" Authenticated user_id lookups for Grin\ncontinue via `/wallet/grin/relay/*` which all require a JWT.",
+        "required": [
+          "found"
+        ],
+        "properties": {
+          "found": {
+            "type": "boolean",
+            "description": "Whether the address was found"
+          }
+        }
+      },
+      "SpendGrinOutputsRequest": {
+        "type": "object",
+        "description": "Request to mark outputs as spent.",
+        "required": [
+          "user_id",
+          "tx_slate_id"
+        ],
+        "properties": {
+          "tx_slate_id": {
+            "type": "string",
+            "description": "Slate ID of the finalized transaction"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "SpentOutputCandidate": {
+        "type": "object",
+        "description": "A spent output candidate for client-side verification.\n\nThe server reports outputs it believes are spent based on key images seen on chain.\nThe client must verify each one by:\n1. Computing the key image using spend key + tx_pub_key + out_index\n2. Checking if computed key image matches `key_image` field\n3. Only counting verified matches as spent\n\nThis prevents the server from lying about spent outputs (which would inflate balance).",
+        "required": [
+          "amount",
+          "key_image",
+          "tx_pub_key",
+          "out_index"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in atomic units",
+            "minimum": 0
+          },
+          "key_image": {
+            "type": "string",
+            "description": "Key image found on chain (client verifies this matches locally computed key image)"
+          },
+          "out_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Output index within the original receive transaction",
+            "minimum": 0
+          },
+          "tx_pub_key": {
+            "type": "string",
+            "description": "Transaction public key (needed for key image computation)"
+          }
+        }
+      },
+      "SubmitRawTxRequest": {
+        "type": "object",
+        "description": "Request to broadcast a signed XMR/WOW transaction.",
+        "required": [
+          "asset",
+          "tx_hex"
+        ],
+        "properties": {
+          "amount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional: amount in atomic units"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type (xmr or wow)"
+          },
+          "recipient_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional: recipient address (for instant pending detection on smirk-to-smirk sends)"
+          },
+          "tx_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional: transaction hash"
+          },
+          "tx_hex": {
+            "type": "string",
+            "description": "The signed raw transaction hex"
+          }
+        }
+      },
+      "SubmitRawTxResponse": {
+        "type": "object",
+        "description": "Response from submitting a transaction.",
+        "required": [
+          "success",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Status message"
+          },
+          "success": {
+            "type": "boolean",
+            "description": "Whether the transaction was accepted"
+          }
+        }
+      },
+      "UnlockGrinOutputsRequest": {
+        "type": "object",
+        "description": "Request to unlock outputs (on send failure/cancel).",
+        "required": [
+          "user_id",
+          "tx_slate_id"
+        ],
+        "properties": {
+          "tx_slate_id": {
+            "type": "string",
+            "description": "Slate ID of the cancelled transaction"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "UnspentOutput": {
+        "type": "object",
+        "description": "An unspent output from LWS.\n\nThese outputs can be used as inputs when constructing a transaction.\nThe client must filter out any that are actually spent (using key image verification)\nbefore including them as transaction inputs.",
+        "required": [
+          "amount",
+          "public_key",
+          "tx_pub_key",
+          "index",
+          "global_index",
+          "height",
+          "timestamp",
+          "tx_hash",
+          "rct"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in atomic units",
+            "minimum": 0
+          },
+          "global_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Global output index on blockchain",
+            "minimum": 0
+          },
+          "height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block height",
+            "minimum": 0
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Output index within transaction",
+            "minimum": 0
+          },
+          "public_key": {
+            "type": "string",
+            "description": "Output public key (hex)"
+          },
+          "rct": {
+            "type": "string",
+            "description": "RingCT commitment (hex)"
+          },
+          "spend_key_images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Key images seen on-chain that might indicate this output is spent.\nClient must compute actual key image and check if it's in this list."
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "Timestamp (ISO 8601 string)"
+          },
+          "tx_hash": {
+            "type": "string",
+            "description": "Transaction hash"
+          },
+          "tx_pub_key": {
+            "type": "string",
+            "description": "Transaction public key (hex)"
+          }
+        }
+      },
+      "UpdateGrinTransactionRequest": {
+        "type": "object",
+        "description": "Request to update transaction status.",
+        "required": [
+          "user_id",
+          "slate_id",
+          "status"
+        ],
+        "properties": {
+          "kernel_excess": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Kernel excess (if finalizing) - the on-chain transaction identifier"
+          },
+          "slate_id": {
+            "type": "string",
+            "description": "Slate ID"
+          },
+          "status": {
+            "type": "string",
+            "description": "New status: pending, signed, finalized, confirmed, cancelled"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "UserInfo": {
+        "type": "object",
+        "description": "User info included in auth response.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "telegram_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "telegram_username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Utxo": {
+        "type": "object",
+        "description": "A single UTXO (Unspent Transaction Output).\n\nUTXOs are the fundamental building blocks of Bitcoin transactions.\nEach UTXO represents a specific amount of coins that can be spent\nexactly once in a future transaction.",
+        "required": [
+          "txid",
+          "vout",
+          "value",
+          "height"
+        ],
+        "properties": {
+          "height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block height (0 if unconfirmed)",
+            "minimum": 0
+          },
+          "txid": {
+            "type": "string",
+            "description": "Transaction ID that created this output"
+          },
+          "value": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Value in satoshis",
+            "minimum": 0
+          },
+          "vout": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Output index within the transaction (vout)",
+            "minimum": 0
+          }
+        }
+      },
+      "UtxoBalanceResponse": {
+        "type": "object",
+        "description": "Response for UTXO balance query.",
+        "required": [
+          "asset",
+          "address",
+          "confirmed",
+          "unconfirmed",
+          "total"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address queried"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset type"
+          },
+          "confirmed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Confirmed balance in satoshis",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total balance (confirmed + unconfirmed) in satoshis"
+          },
+          "unconfirmed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unconfirmed balance in satoshis (can be negative for outgoing)"
+          }
+        }
+      },
+      "WebsiteChallengeRequest": {
+        "type": "object",
+        "description": "Request for generating a website auth challenge.",
+        "required": [
+          "origin"
+        ],
+        "properties": {
+          "origin": {
+            "type": "string",
+            "description": "Origin of the requesting website (e.g., \"https://smirk.to\")"
+          }
+        }
+      },
+      "WebsiteChallengeResponse": {
+        "type": "object",
+        "description": "Response containing the challenge to sign.",
+        "required": [
+          "challenge",
+          "challenge_id",
+          "expires_at"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "The challenge message to sign with all keys"
+          },
+          "challenge_id": {
+            "type": "string",
+            "description": "Challenge ID for verification"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When the challenge expires (ISO 8601)"
+          }
+        }
+      },
+      "WebsiteVerifyRequest": {
+        "type": "object",
+        "description": "Request to verify website auth.",
+        "required": [
+          "challenge_id",
+          "signature"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "description": "Challenge ID from challenge response"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/AssetSignature",
+            "description": "Single signature from user's chosen asset"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "wallet",
+      "description": "Blockchain info: per-network block heights."
+    },
+    {
+      "name": "grin",
+      "description": "Non-custodial Grin wallet: balances, outputs, transactions, relay."
+    },
+    {
+      "name": "btc_ltc",
+      "description": "Bitcoin and Litecoin wallet: balance, UTXOs, history, fees, broadcast."
+    },
+    {
+      "name": "grin_relay",
+      "description": "Grin slatepack relay for Smirk-to-Smirk transfers."
+    },
+    {
+      "name": "xmr_wow",
+      "description": "Monero and Wownero light-wallet-server access."
+    },
+    {
+      "name": "auth",
+      "description": "Wallet authentication: registration, restore, refresh, sessions."
+    }
+  ]
+}
