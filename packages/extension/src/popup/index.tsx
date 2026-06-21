@@ -62,6 +62,7 @@ import {
   isPendingOutgoingStale,
   recentlySpentInputs,
   reconcilePendingOutgoing,
+  initSmirkApi,
   type Balances,
   type BootstrapAuthResult,
   type Prices,
@@ -6173,6 +6174,10 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
 // signMessage logic moved to `../dapp-popup/signers.ts` and is
 // invoked by `executeApproval`. Same code, single source of truth,
 // reused by the desktop BrowseTab modal.
+
+// Configure the API backend (staging / local / self-hosted) before the UI
+// bootstraps; no-op for default production builds (VITE_SMIRK_BACKEND_URL unset).
+initSmirkApi({ baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL });
 
 const root = document.getElementById('root');
 if (root) {

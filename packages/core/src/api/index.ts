@@ -287,3 +287,17 @@ export class SmirkApi
 
 /** Default API instance pointing at production. */
 export const api = new SmirkApi();
+
+/**
+ * Configure the shared `api` singleton at shell startup, before the first
+ * request. Pass `baseUrl` (e.g. from `VITE_SMIRK_BACKEND_URL`) to target a
+ * non-production backend: staging, local, or a self-hosted one. No-op when
+ * `baseUrl` is empty, so default production builds are unaffected.
+ *
+ * This is the seam the ChainProvider work builds on: today it swaps the backend
+ * URL; later it selects per-chain data sources (a bundled backend vs direct
+ * electrum / lws / grin-lws).
+ */
+export function initSmirkApi(config: { baseUrl?: string | undefined }): void {
+  if (config.baseUrl) api.setBaseUrl(config.baseUrl);
+}

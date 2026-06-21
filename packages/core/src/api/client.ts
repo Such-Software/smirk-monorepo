@@ -54,6 +54,14 @@ export class ApiClient {
     this.baseUrl = baseUrl;
   }
 
+  /** Point the client at a different backend. Call once at shell startup via
+   *  `initSmirkApi` (before the first request) so the wallet is not locked to
+   *  the production default and can target staging, local, or a self-hosted
+   *  backend. */
+  setBaseUrl(baseUrl: string): void {
+    this.baseUrl = baseUrl;
+  }
+
   setAccessToken(token: string | null): void {
     setGlobalToken(token);
   }

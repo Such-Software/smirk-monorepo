@@ -16,10 +16,14 @@
  * follow that pattern.
  */
 
-import { api, CORE_PACKAGE_VERSION } from '@smirk/core';
+import { api, CORE_PACKAGE_VERSION, initSmirkApi } from '@smirk/core';
 
 import { installDappBridge } from './dapp/dispatch';
 import { installJobsCoordinator } from './jobs/coordinator';
+
+// Point the API at a configured backend (staging / local / self-hosted) before
+// any request; no-op for default production builds (VITE_SMIRK_BACKEND_URL unset).
+initSmirkApi({ baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL });
 
 // Diagnostic breadcrumbs at SW startup + install. `console.debug`
 // keeps these out of the default extension console view; developers
