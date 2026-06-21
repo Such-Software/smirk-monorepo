@@ -62,6 +62,12 @@ export class ApiClient {
     this.baseUrl = baseUrl;
   }
 
+  /** The configured backend base URL. Callers that must build an absolute URL
+   *  (e.g. the NIP-98 `u` tag) read it here. */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   setAccessToken(token: string | null): void {
     setGlobalToken(token);
   }
@@ -77,7 +83,9 @@ export class ApiClient {
       ...(options.headers as Record<string, string>),
     };
 
-    if (accessToken) {
+    // A caller-supplied Authorization (e.g. the NIP-98 `Nostr <token>` used for
+    // sign-in) takes precedence over the session Bearer.
+    if (accessToken && !headers['Authorization']) {
       headers['Authorization'] = `Bearer ${accessToken}`;
     }
 

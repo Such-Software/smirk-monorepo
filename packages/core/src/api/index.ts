@@ -68,6 +68,8 @@ export class SmirkApi
   extensionRegister: AuthMethods['extensionRegister'];
   checkRestore: AuthMethods['checkRestore'];
   powChallenge: AuthMethods['powChallenge'];
+  nostrLogin: AuthMethods['nostrLogin'];
+  linkNostr: AuthMethods['linkNostr'];
 
   // Keys
   registerKey: KeysMethods['registerKey'];
@@ -158,6 +160,8 @@ export class SmirkApi
     this.extensionRegister = auth.extensionRegister;
     this.checkRestore = auth.checkRestore;
     this.powChallenge = auth.powChallenge;
+    this.nostrLogin = auth.nostrLogin;
+    this.linkNostr = auth.linkNostr;
 
     this.registerKey = keys.registerKey;
     this.getUserKeys = keys.getUserKeys;

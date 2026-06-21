@@ -5,6 +5,7 @@
 import { ApiClient, ApiResponse } from './client';
 import { snakeToCamel } from './parse';
 import type { AltchaPayload } from '../pow';
+import { buildNip98Event, nip98AuthHeader, type NostrIdentity } from '../nostr';
 
 export interface AuthMethods {
   telegramLogin(initData: string): Promise<
@@ -86,6 +87,28 @@ export interface AuthMethods {
       wowStartHeight?: number;
     }>
   >;
+
+  /**
+   * Sign in with a seed-derived Nostr identity (NIP-98). Builds + signs the auth
+   * event for POST /auth/nostr and returns a session. The npub must already be
+   * linked (see `linkNostr`); 401 otherwise. Shell-agnostic (extension / desktop
+   * / mobile) — the logic lives here in core.
+   */
+  nostrLogin(identity: NostrIdentity): Promise<
+    ApiResponse<{
+      accessToken: string;
+      refreshToken: string;
+      expiresIn: number;
+      user: { id: string; telegramId?: number; telegramUsername?: string };
+    }>
+  >;
+
+  /**
+   * Link a Nostr identity (npub) to the CURRENT authenticated user: the JWT on
+   * the request identifies them; the NIP-98 proof in the body proves npub
+   * control. Stores it so `nostrLogin` resolves to the same wallet.
+   */
+  linkNostr(identity: NostrIdentity): Promise<ApiResponse<{ nostrPubkey: string }>>;
 }
 
 interface AuthResponseCamel {
@@ -195,6 +218,30 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
         },
       );
       return transformResponse(result, snakeToCamel<CheckRestoreResponseCamel>);
+    },
+
+    async nostrLogin(identity) {
+      // NIP-98: the signed event rides in the Authorization header; the `u` tag
+      // must match the absolute URL (baseUrl + path) the backend validates.
+      const url = `${client.getBaseUrl()}/auth/nostr`;
+      const token = nip98AuthHeader(buildNip98Event({ url, method: 'POST' }, identity));
+      const result = await client.request<Record<string, unknown>>('/auth/nostr', {
+        method: 'POST',
+        headers: { Authorization: token },
+      });
+      return transformResponse(result, snakeToCamel<AuthResponseCamel>);
+    },
+
+    async linkNostr(identity) {
+      // Authed call (the session JWT is added automatically); the NIP-98 proof
+      // of npub control rides in the body.
+      const url = `${client.getBaseUrl()}/auth/nostr/link`;
+      const nostrToken = nip98AuthHeader(buildNip98Event({ url, method: 'POST' }, identity));
+      const result = await client.request<Record<string, unknown>>('/auth/nostr/link', {
+        method: 'POST',
+        body: JSON.stringify({ nostr_token: nostrToken }),
+      });
+      return transformResponse(result, snakeToCamel<{ nostrPubkey: string }>);
     },
   };
 }
