@@ -126,6 +126,7 @@ export class SmirkApi
   getGrinUserBalance: GrinMethods['getGrinUserBalance'];
   getGrinUserHistory: GrinMethods['getGrinUserHistory'];
   getGrinOutputs: GrinMethods['getGrinOutputs'];
+  scanGrinUnspentOutputs: GrinMethods['scanGrinUnspentOutputs'];
   recordGrinOutput: GrinMethods['recordGrinOutput'];
   lockGrinOutputs: GrinMethods['lockGrinOutputs'];
   unlockGrinOutputs: GrinMethods['unlockGrinOutputs'];
@@ -207,6 +208,7 @@ export class SmirkApi
     this.getGrinUserBalance = grin.getGrinUserBalance;
     this.getGrinUserHistory = grin.getGrinUserHistory;
     this.getGrinOutputs = grin.getGrinOutputs;
+    this.scanGrinUnspentOutputs = grin.scanGrinUnspentOutputs;
     this.recordGrinOutput = grin.recordGrinOutput;
     this.lockGrinOutputs = grin.lockGrinOutputs;
     this.unlockGrinOutputs = grin.unlockGrinOutputs;

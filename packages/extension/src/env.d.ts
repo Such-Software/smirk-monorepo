@@ -22,6 +22,17 @@ interface ImportMetaEnv {
    * smirk-backend URL when unset.
    */
   readonly VITE_SMIRK_BACKEND_URL?: string;
+  /**
+   * Seed-only Grin recovery, build-time gated (OFF in public builds):
+   * - `VITE_RECOVER_GRIN_DEFAULT="true"` enables it for every wallet.
+   * - `VITE_RECOVER_GRIN_ALLOWLIST` is a comma-separated list of canonical
+   *   Grin slatepack addresses allowed to recover even when the default is off.
+   * - `VITE_RECOVER_GRIN_BIRTHDAY` is the block-height floor for the scan
+   *   (unset = full scan from genesis).
+   */
+  readonly VITE_RECOVER_GRIN_DEFAULT?: string;
+  readonly VITE_RECOVER_GRIN_ALLOWLIST?: string;
+  readonly VITE_RECOVER_GRIN_BIRTHDAY?: string;
 }
 
 interface ImportMeta {

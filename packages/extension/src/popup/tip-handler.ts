@@ -716,14 +716,17 @@ async function createGrinTip(
     : undefined;
   const changeAmount = hasChange ? totalSelected - voucherAmount - fee : 0;
 
-  // 4. Derive extended private key from mnemonic.
+  // 4. Derive extended private key from mnemonic (v3 + legacy fallback so a
+  //    recovered legacy/Grim depth-3 input can be tipped).
   const extKey = JSON.parse(wasmGrin.deriveExtendedKey(wallet.mnemonic)) as {
     extended_private_key_hex: string;
   };
+  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(wallet.mnemonic);
 
   // 5. Build the single-party voucher transaction.
   const voucherResult = wasmGrin.createGrinVoucher({
     extended_private_key_hex: extKey.extended_private_key_hex,
+    legacy_extended_private_key_hex: legacyExtKeyHex,
     inputs: selected.map((o) => ({
       path: [0, 0, o.n_child, 0] as [number, number, number, number],
       amount: o.amount,
@@ -812,18 +815,33 @@ async function createGrinTip(
   // 8. Record the on-chain tx + lock inputs (Grin-side bookkeeping).
   //    Different from the broader two-phase tip flow — this is the
   //    grin-specific output-locking we already do in regular sends.
-  await api.recordGrinTransaction({
+  const recordRes = await api.recordGrinTransaction({
     userId: senderUserId,
     slateId,
     amount: voucherAmount,
     fee,
     direction: 'send',
   });
-  await api.lockGrinOutputs({
+  if (recordRes.error) {
+    return {
+      ok: false,
+      error: `Failed to record Grin transaction (${recordRes.error}); no broadcast attempted. The voucher is registered server-side; retry from the tip row.`,
+    };
+  }
+  // Lock MUST succeed before broadcast: if we broadcast while the backend still
+  // treats these inputs as unlocked, a later send can reselect them, opening a
+  // double-spend window until confirmation. Abort on lock failure.
+  const lockRes = await api.lockGrinOutputs({
     userId: senderUserId,
     outputIds: selected.map((o) => o.id),
     txSlateId: slateId,
   });
+  if (lockRes.error) {
+    return {
+      ok: false,
+      error: `Failed to lock Grin inputs (${lockRes.error}); no broadcast attempted to avoid a double-spend. The voucher is registered server-side; retry from the tip row.`,
+    };
+  }
 
   // 9. Broadcast the voucher tx via the backend's broadcast endpoint.
   //    Includes change_output for atomic record-on-broadcast (per

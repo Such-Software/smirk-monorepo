@@ -124,6 +124,9 @@ import {
   inspectSlatepack,
   canonicalGrinSlatepackAddress,
   calcGrinFee,
+  recoverGrinOutputs,
+  shouldRecoverGrin,
+  RECOVER_GRIN_BIRTHDAY_HEIGHT,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
 import {
@@ -1414,6 +1417,9 @@ function App() {
     if (!session?.bootstrap?.userId) return;
     if (!api.getAccessToken()) return;
     const mnemonic = walletState.wallet.mnemonic;
+    const userId = session.bootstrap.userId;
+    const wallet = walletState.wallet;
+    const bootstrap = session.bootstrap;
     void (async () => {
       await ensureWasmInit();
       try {
@@ -1423,6 +1429,35 @@ function App() {
           console.warn('[smirk-popup] register canonical grin address rejected:', res.error);
         } else {
           console.info('[smirk-popup] registered canonical grin address:', canonical);
+        }
+        // STEP 4: seed-only Grin recovery (off by default; opt-in via build config).
+        // Idempotent (backend dedupes by commitment) + best-effort, so it's
+        // safe to run on every unlock and never blocks the wallet.
+        if (shouldRecoverGrin(canonical)) {
+          try {
+            // Coalesce mid-scan refreshes: while one is in flight, skip — the
+            // post-scan refresh below catches anything missed. Keeps the
+            // balance live during the (minutes-long) full scan to the tip.
+            let recoveryRefreshing = false;
+            const recovery = await recoverGrinOutputs(mnemonic, userId, {
+              startHeight: RECOVER_GRIN_BIRTHDAY_HEIGHT,
+              onRecovered: () => {
+                if (recoveryRefreshing) return;
+                recoveryRefreshing = true;
+                void refreshBalances(wallet, bootstrap).finally(() => {
+                  recoveryRefreshing = false;
+                });
+              },
+            });
+            console.info('[smirk-popup] grin recovery:', recovery);
+            // Final refresh to settle the full recovered total once the scan
+            // completes (the mid-scan refreshes are best-effort/coalesced).
+            if (recovery.recovered > 0) {
+              await refreshBalances(wallet, bootstrap);
+            }
+          } catch (e) {
+            console.warn('[smirk-popup] grin recovery threw:', e);
+          }
         }
       } catch (e) {
         console.warn('[smirk-popup] register canonical grin address threw:', e);

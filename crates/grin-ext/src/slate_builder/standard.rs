@@ -7,7 +7,9 @@
 use uuid::Uuid;
 
 use crate::bulletproof::{bullet_proof_create, pedersen_commit};
+use crate::keychain::SwitchCommitmentType;
 use crate::kernel::KernelFeatures;
+use crate::recovery::create_recoverable_output;
 use crate::schnorr::{
     aggregate_partials, final_signature, partial_sign, partial_verify, point_add, verify,
 };
@@ -150,13 +152,22 @@ pub struct ReceiverRoundParams {
     /// bytes that must NEVER be reused across slates.
     pub receiver_kernel_nonce: [u8; 32],
 
-    /// Rewind nonce for the bulletproof. Lets the receiver later recover
-    /// the value from the rangeproof using their seed-derived nonce.
-    /// Typically `BLAKE2b(seed_secret_key, commitment)` or similar.
+    /// Legacy random rewind nonce — used ONLY when `extended_private_key`
+    /// is `None` (the unused low-level binding path). High-level flows set
+    /// the ext key + path below for a deterministic, seed-recoverable nonce.
     pub bp_rewind_nonce: [u8; 32],
 
     /// Private (one-time) nonce for bulletproof creation.
     pub bp_private_nonce: [u8; 32],
+
+    /// Wallet 64-byte extended private key. When set (all high-level flows),
+    /// the receiver output is created **seed-recoverable**: deterministic
+    /// view-key rewind nonce + embedded v3 identifier message.
+    pub extended_private_key: Option<[u8; 64]>,
+
+    /// The receiver output's depth-4 derivation path (`[0, 0, n, 0]`).
+    /// Required alongside `extended_private_key` for a recoverable output.
+    pub output_path: Option<[u32; 4]>,
 }
 
 /// Output of the receiver round. The slate is what gets returned to the
@@ -223,15 +234,33 @@ pub fn receiver_round_s2(params: &ReceiverRoundParams) -> Result<ReceiverRoundOu
         return Err("receiver partial signature failed self-verification".to_string());
     }
 
-    // Build the receiver's output: Pedersen commitment + bulletproof.
+    // Build the receiver's output: Pedersen commitment + bulletproof. With
+    // the wallet ext key + output path (all high-level flows), the output is
+    // seed-recoverable (deterministic view-key nonce + embedded identifier
+    // message). The unused low-level binding leaves them None and falls back
+    // to the caller-supplied random rewind nonce.
     let amount = params.s1_slate.amt;
-    let commitment = pedersen_commit(amount, &params.receiver_output_blind)?;
-    let proof = bullet_proof_create(
-        amount,
-        &params.receiver_output_blind,
-        &params.bp_rewind_nonce,
-        &params.bp_private_nonce,
-    )?;
+    let (commitment, proof, rewind_nonce_used) =
+        match (&params.extended_private_key, &params.output_path) {
+            (Some(ext), Some(path)) => create_recoverable_output(
+                ext,
+                amount,
+                &params.receiver_output_blind,
+                path,
+                SwitchCommitmentType::Regular,
+                &params.bp_private_nonce,
+            )?,
+            _ => {
+                let commitment = pedersen_commit(amount, &params.receiver_output_blind)?;
+                let proof = bullet_proof_create(
+                    amount,
+                    &params.receiver_output_blind,
+                    &params.bp_rewind_nonce,
+                    &params.bp_private_nonce,
+                )?;
+                (commitment, proof, params.bp_rewind_nonce)
+            }
+        };
 
     // Append receiver's commitment + proof to the slate's coms list.
     let mut coms = params.s1_slate.coms.clone().unwrap_or_default();
@@ -261,7 +290,7 @@ pub fn receiver_round_s2(params: &ReceiverRoundParams) -> Result<ReceiverRoundOu
         output_blind: params.receiver_output_blind,
         kernel_nonce: params.receiver_kernel_nonce,
         commitment,
-        rewind_nonce: params.bp_rewind_nonce,
+        rewind_nonce: rewind_nonce_used,
     };
 
     Ok(ReceiverRoundOutput { slate: s2, context })

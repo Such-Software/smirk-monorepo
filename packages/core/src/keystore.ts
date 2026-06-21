@@ -411,6 +411,14 @@ export function parseSessionCache(raw: unknown): SessionCachePayload | null {
   }
   if (!r.keys || typeof r.keys !== 'object') return null;
   if (!r.addresses || typeof r.addresses !== 'object') return null;
+  // Validate each asset is actually present. A corrupted {keys:{}, addresses:{}}
+  // would otherwise pass and crash downstream on keys.btc.publicKey etc.
+  const keys = r.keys as Record<string, unknown>;
+  const addresses = r.addresses as Record<string, unknown>;
+  for (const asset of ['btc', 'ltc', 'xmr', 'wow', 'grin'] as const) {
+    if (!keys[asset] || typeof keys[asset] !== 'object') return null;
+    if (typeof addresses[asset] !== 'string') return null;
+  }
   return r as unknown as SessionCachePayload;
 }
 

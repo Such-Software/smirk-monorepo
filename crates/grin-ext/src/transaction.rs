@@ -502,6 +502,8 @@ mod tests {
             receiver_kernel_nonce: det(102),
             bp_rewind_nonce: det(103),
             bp_private_nonce: det(104),
+            extended_private_key: None,
+            output_path: None,
         })
         .unwrap();
         let s3 = sender_finalize_s3(&SenderFinalizeParams {
@@ -653,6 +655,8 @@ mod tests {
             receiver_kernel_nonce: det(102),
             bp_rewind_nonce: det(103),
             bp_private_nonce: det(104),
+            extended_private_key: None,
+            output_path: None,
         })
         .unwrap();
         let s3 = sender_finalize_s3(&SenderFinalizeParams {

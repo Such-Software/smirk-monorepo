@@ -53,7 +53,7 @@
 use blake2::digest::{consts::U32, FixedOutput, Update, VariableOutput};
 use blake2::{Blake2bMac, Blake2bVar};
 
-use crate::bulletproof::COMMITMENT_LEN;
+use crate::bulletproof::{bullet_proof_create_with_message, pedersen_commit, COMMITMENT_LEN};
 use crate::keychain::{derive_blind, SwitchCommitmentType};
 use crate::secp256k1::public_key_from_secret_key;
 
@@ -193,6 +193,81 @@ pub fn bullet_proof_rewind_with_message(
         }
         Err(_) => Ok(None),
     }
+}
+
+/// Build the v3 20-byte proof message that [`check_output`] parses — the
+/// inverse of the parser, and the same layout grin's `ProofBuilder` emits
+/// (`grin/core/src/libtx/proof.rs::proof_message`):
+///
+/// ```text
+/// [0]    = 0           (reserved)
+/// [1]    = 0           (wallet type: standard)
+/// [2]    = switch      (None=0, Regular=1)
+/// [3]    = depth
+/// [4..20]= 4 × u32 BE  (the derivation path)
+/// ```
+///
+/// `path` is the full 4-element path and `depth` is how many elements are
+/// meaningful. Smirk outputs use `depth = 4` with `path = [0, 0, n, 0]`, so
+/// the spendable child index `n` lives in `path[2]` (NOT `path[depth-1]`).
+/// Path elements are big-endian to match the parser (`u32::from_be_bytes`).
+///
+/// The output of this function must be passed to
+/// [`crate::bullet_proof_create_with_message`] so the created output is
+/// recoverable by [`recover_output`].
+pub fn build_v3_proof_message(
+    depth: u8,
+    path: &[u32; 4],
+    switch: SwitchCommitmentType,
+) -> [u8; 20] {
+    let mut msg = [0u8; 20];
+    msg[2] = match switch {
+        SwitchCommitmentType::None => 0,
+        SwitchCommitmentType::Regular => 1,
+    };
+    msg[3] = depth;
+    msg[4..8].copy_from_slice(&path[0].to_be_bytes());
+    msg[8..12].copy_from_slice(&path[1].to_be_bytes());
+    msg[12..16].copy_from_slice(&path[2].to_be_bytes());
+    msg[16..20].copy_from_slice(&path[3].to_be_bytes());
+    msg
+}
+
+/// Mint a fully **seed-recoverable** Grin output in one place: deterministic
+/// view-key rewind nonce + embedded v3 identifier message. EVERY Grin output
+/// Smirk creates routes through this, so every new output can be rediscovered
+/// by [`recover_output`] from the seed alone (matching grin's `ProofBuilder`
+/// in `grin/core/src/libtx/proof.rs::create`).
+///
+/// - `path` is the output's depth-4 derivation path (`[0, 0, n, 0]`, Smirk's
+///   convention; depth is always 4).
+/// - `blinding_factor` MUST equal `derive_blind(ext, path, amount, switch)`
+///   (the same blind used for the commitment) — otherwise recovery's
+///   recomputed commitment won't match and the output is silently dropped.
+///
+/// Returns `(commitment, proof_bytes, rewind_nonce)`. The rewind nonce is
+/// returned for callers that retain it (e.g. the receiver context); most
+/// callers ignore it.
+pub fn create_recoverable_output(
+    extended_private_key: &[u8; 64],
+    amount: u64,
+    blinding_factor: &[u8; 32],
+    path: &[u32; 4],
+    switch: SwitchCommitmentType,
+    private_nonce: &[u8; 32],
+) -> Result<([u8; COMMITMENT_LEN], Vec<u8>, [u8; 32]), String> {
+    let commitment = pedersen_commit(amount, blinding_factor)?;
+    let rh = rewind_hash(extended_private_key)?;
+    let rewind_nonce = output_rewind_nonce(&rh, &commitment)?;
+    let message = build_v3_proof_message(4, path, switch);
+    let proof = bullet_proof_create_with_message(
+        amount,
+        blinding_factor,
+        &rewind_nonce,
+        private_nonce,
+        &message,
+    )?;
+    Ok((commitment, proof, rewind_nonce))
 }
 
 /// Parse a recovered proof message and confirm the output belongs to this
@@ -388,5 +463,99 @@ mod tests {
 
         let keyed = keyed_blake2b_256(&[0xCDu8; 33], &data).unwrap();
         assert_ne!(u, keyed);
+    }
+
+    // ---- create → recover round-trip (the local proof of step 6) ----
+    //
+    // These build an output exactly as step 6 wires the 6 grin-ext
+    // creation sites (derive_blind → commit → deterministic rewind nonce →
+    // build_v3_proof_message → bullet_proof_create_with_message) and assert
+    // recover_output finds it. Unlike the grin_recovery_vectors.rs vectors
+    // (which use grin's own ProofBuilder and a [0,0,3,9] path), this proves
+    // Smirk's create side recovers Smirk's create side, on Smirk's ACTUAL
+    // [0,0,n,0] depth-4 path layout.
+
+    use crate::bulletproof::{bullet_proof_create_with_message, pedersen_commit};
+
+    #[test]
+    fn smirk_create_recover_roundtrip_depth4_0_0_n_0() {
+        let ext = [0x11u8; 64];
+        let amount: u64 = 1_000_000_000; // 1 GRIN
+        let n: u32 = 7;
+        let path = [0u32, 0, n, 0]; // Smirk's real path layout
+        let switch = SwitchCommitmentType::Regular;
+
+        // CREATE side (mirrors the 6 step-6 sites exactly).
+        let blind = derive_blind(&ext, &path, amount, switch).unwrap();
+        let commit = pedersen_commit(amount, &blind).unwrap();
+        let rh = rewind_hash(&ext).unwrap();
+        let rewind_nonce = output_rewind_nonce(&rh, &commit).unwrap();
+        let private_nonce = [0x33u8; 32]; // random in prod; irrelevant to recovery
+        let msg = build_v3_proof_message(4, &path, switch);
+        let proof =
+            bullet_proof_create_with_message(amount, &blind, &rewind_nonce, &private_nonce, &msg)
+                .unwrap();
+
+        // RECOVER side.
+        let rec = recover_output(&ext, &commit, &proof)
+            .unwrap()
+            .expect("a Smirk-created output MUST be recoverable from the seed alone");
+
+        assert_eq!(rec.value, amount, "recovered value");
+        assert_eq!(rec.path, vec![0, 0, n, 0], "full depth-4 path");
+        assert_eq!(rec.path[2], n, "spendable child index lives in path[2]");
+        assert_eq!(rec.n_child, 0, "grin n_child = path[depth-1] = trailing 0");
+        assert_eq!(rec.identifier[0], 4, "depth byte");
+        assert_eq!(rec.switch, SwitchCommitmentType::Regular);
+        // The re-derived spendable blind reproduces the commitment (no false
+        // positive, and the output is actually spendable post-recovery).
+        let recommit = pedersen_commit(rec.value, &rec.blinding_factor).unwrap();
+        assert_eq!(recommit, commit, "re-derived blind must reproduce the commitment");
+    }
+
+    #[test]
+    fn smirk_create_recover_roundtrip_switch_none() {
+        // Lock the switch-byte mapping (None → 0) end-to-end.
+        let ext = [0x11u8; 64];
+        let amount: u64 = 42_000_000;
+        let path = [0u32, 0, 3, 0];
+        let switch = SwitchCommitmentType::None;
+
+        let blind = derive_blind(&ext, &path, amount, switch).unwrap();
+        let commit = pedersen_commit(amount, &blind).unwrap();
+        let rewind_nonce = output_rewind_nonce(&rewind_hash(&ext).unwrap(), &commit).unwrap();
+        let msg = build_v3_proof_message(4, &path, switch);
+        let proof =
+            bullet_proof_create_with_message(amount, &blind, &rewind_nonce, &[0x55u8; 32], &msg)
+                .unwrap();
+
+        let rec = recover_output(&ext, &commit, &proof)
+            .unwrap()
+            .expect("recoverable with switch=None");
+        assert_eq!(rec.switch, SwitchCommitmentType::None);
+        assert_eq!(rec.value, amount);
+        assert_eq!(rec.path[2], 3);
+    }
+
+    #[test]
+    fn smirk_created_output_not_recovered_by_wrong_seed() {
+        let ext = [0x11u8; 64];
+        let other = [0x22u8; 64];
+        let path = [0u32, 0, 5, 0];
+        let amount: u64 = 500_000_000;
+        let switch = SwitchCommitmentType::Regular;
+
+        let blind = derive_blind(&ext, &path, amount, switch).unwrap();
+        let commit = pedersen_commit(amount, &blind).unwrap();
+        let rewind_nonce = output_rewind_nonce(&rewind_hash(&ext).unwrap(), &commit).unwrap();
+        let msg = build_v3_proof_message(4, &path, switch);
+        let proof =
+            bullet_proof_create_with_message(amount, &blind, &rewind_nonce, &[0x44u8; 32], &msg)
+                .unwrap();
+
+        assert!(
+            recover_output(&other, &commit, &proof).unwrap().is_none(),
+            "a different wallet must NOT recover this output"
+        );
     }
 }

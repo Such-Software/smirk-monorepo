@@ -127,10 +127,21 @@ pub fn grin_recover_output(
                 grin_ext::SwitchCommitmentType::Regular => "Regular",
                 grin_ext::SwitchCommitmentType::None => "None",
             };
+            // Full derivation path, e.g. [0,0,n,0]. The spendable child index
+            // is path[2] for Smirk's depth-4 layout, NOT `n_child` (which is
+            // grin's path[depth-1] = the trailing 0). Recovery callers must
+            // record path[2].
+            let path_json = r
+                .path
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             Ok(format!(
-                r#"{{"value":"{}","key_id_hex":"{}","n_child":{},"depth":{},"switch":"{}","blinding_factor_hex":"{}"}}"#,
+                r#"{{"value":"{}","key_id_hex":"{}","path":[{}],"n_child":{},"depth":{},"switch":"{}","blinding_factor_hex":"{}"}}"#,
                 r.value,
                 hex::encode(r.identifier),
+                path_json,
                 r.n_child,
                 r.identifier[0],
                 switch,

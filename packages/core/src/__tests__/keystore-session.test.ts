@@ -62,14 +62,17 @@ test('clampAutoLockMinutes: floors fractional inputs', () => {
 // --- parseSessionCache -------------------------------------------
 
 function makePayload(): SessionCachePayload {
-  // Minimal but type-compliant. The keys/addresses bags are opaque
-  // to the parser — it only checks they're objects.
+  // Type-compliant and structurally complete: parseSessionCache validates the
+  // envelope AND that every asset key/address is present, so a corrupt empty
+  // bag ({keys:{}, addresses:{}}) is rejected rather than accepted and then
+  // crashed on downstream (keys.btc.publicKey). Per-asset key contents stay
+  // opaque to the parser; only presence + type are checked.
   return {
     version: 2,
     _noMnemonic: true,
     fingerprint: 'fp-abcd',
-    keys: {} as SessionCachePayload['keys'],
-    addresses: {} as SessionCachePayload['addresses'],
+    keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {} } as unknown as SessionCachePayload['keys'],
+    addresses: { btc: 'b', ltc: 'l', xmr: 'x', wow: 'w', grin: 'g' } as SessionCachePayload['addresses'],
     expiresAtMs: 1_700_000_000_000,
   };
 }

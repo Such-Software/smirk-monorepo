@@ -168,6 +168,8 @@ fn receiver_round_produces_valid_s2() {
         receiver_kernel_nonce: det(102),
         bp_rewind_nonce: det(103),
         bp_private_nonce: det(104),
+        extended_private_key: None,
+        output_path: None,
     })
     .expect("receiver round succeeds");
 
@@ -182,6 +184,48 @@ fn receiver_round_produces_valid_s2() {
 }
 
 #[test]
+fn receiver_round_deterministic_output_is_seed_recoverable() {
+    // End-to-end proof of the high-level receiver path
+    // (`sign_incoming_send_slate`): derive the receiver blind from the wallet
+    // ext key + output path, run the receiver round on its DETERMINISTIC
+    // branch (ext key + path set), then prove the output it placed on the
+    // slate recovers from the seed alone. Catches any path/blind mismatch in
+    // the slate-builder threading (the unit round-trip only covers the helper).
+    use crate::keychain::{derive_blind, SwitchCommitmentType};
+
+    let amount = 60_000_000_000u64;
+    let ext = [0x11u8; 64];
+    let path = [0u32, 0, 7, 0];
+    let blind = derive_blind(&ext, &path, amount, SwitchCommitmentType::Regular).unwrap();
+
+    let s1 = build_s1(amount, 7_000_000, KernelFeatures::Plain { fee: 7_000_000 });
+    let out = receiver_round_s2(&ReceiverRoundParams {
+        s1_slate: s1.slate,
+        receiver_output_blind: blind,
+        receiver_kernel_nonce: det(102),
+        bp_rewind_nonce: det(103), // ignored on the deterministic path
+        bp_private_nonce: det(104),
+        extended_private_key: Some(ext),
+        output_path: Some(path),
+    })
+    .expect("receiver round succeeds");
+
+    let coms = out.slate.coms.as_ref().expect("S2 has coms");
+    let commitment = coms[0].c;
+    let proof = coms[0].p.clone().expect("rangeproof present");
+
+    let rec = crate::recover_output(&ext, &commitment, &proof)
+        .unwrap()
+        .expect("the receiver output MUST be recoverable from the seed alone");
+    assert_eq!(rec.value, amount, "recovered amount");
+    assert_eq!(rec.path, vec![0, 0, 7, 0], "recovered path matches output_path");
+    assert_eq!(rec.path[2], 7, "spendable child index");
+    // The context's stored rewind nonce is the deterministic one, not the
+    // random bp_rewind_nonce we passed.
+    assert_ne!(out.context.rewind_nonce, det(103));
+}
+
+#[test]
 fn receiver_round_rejects_non_s1() {
     let mut s1_with_wrong_state =
         build_s1(100, 5, KernelFeatures::Plain { fee: 5 }).slate;
@@ -193,6 +237,8 @@ fn receiver_round_rejects_non_s1() {
         receiver_kernel_nonce: det(2),
         bp_rewind_nonce: det(3),
         bp_private_nonce: det(4),
+        extended_private_key: None,
+        output_path: None,
     });
     assert!(result.is_err());
 }
@@ -224,6 +270,8 @@ fn run_full_ceremony(
         receiver_kernel_nonce: det(102),
         bp_rewind_nonce: det(103),
         bp_private_nonce: det(104),
+        extended_private_key: None,
+        output_path: None,
     })
     .unwrap();
 
@@ -317,6 +365,8 @@ fn finalize_rejects_tampered_receiver_partial() {
         receiver_kernel_nonce: det(102),
         bp_rewind_nonce: det(103),
         bp_private_nonce: det(104),
+        extended_private_key: None,
+        output_path: None,
     })
     .unwrap();
 
@@ -358,6 +408,8 @@ fn finalize_rejects_mismatched_slate_id() {
         receiver_kernel_nonce: det(102),
         bp_rewind_nonce: det(103),
         bp_private_nonce: det(104),
+        extended_private_key: None,
+        output_path: None,
     })
     .unwrap();
 
@@ -383,6 +435,8 @@ fn receiver_init_i1_produces_valid_invoice() {
         receiver_kernel_nonce: det(102),
         bp_rewind_nonce: det(103),
         bp_private_nonce: det(104),
+        extended_private_key: None,
+        output_path: None,
         kernel_offset: [0u8; 32], // typical for invoices
     })
     .unwrap();
@@ -412,6 +466,8 @@ fn full_invoice_ceremony_produces_verifiable_aggregate_signature() {
         receiver_kernel_nonce: det(102),
         bp_rewind_nonce: det(103),
         bp_private_nonce: det(104),
+        extended_private_key: None,
+        output_path: None,
         kernel_offset: [0u8; 32],
     })
     .unwrap();
@@ -479,6 +535,8 @@ fn invoice_finalize_rejects_tampered_sender_partial() {
         receiver_kernel_nonce: det(102),
         bp_rewind_nonce: det(103),
         bp_private_nonce: det(104),
+        extended_private_key: None,
+        output_path: None,
         kernel_offset: [0u8; 32],
     })
     .unwrap();

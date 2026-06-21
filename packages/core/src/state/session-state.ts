@@ -289,16 +289,30 @@ export class SessionStateStore {
     // Skip writes that originated here so we don't double-notify.
     this.platformUnsub = this.storage.subscribe((changedKey) => {
       if (changedKey !== this.key) return;
-      void this.storage.get<unknown>(this.key).then((raw) => {
-        const incomingJson = raw === null ? '' : JSON.stringify(raw);
-        if (incomingJson === this.lastWrittenJson) {
-          // Echo of our own write — skip.
-          return;
-        }
-        const next = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
-        this.cached = next;
-        for (const l of this.listeners) l(next);
-      });
+      void this.storage
+        .get<unknown>(this.key)
+        .then((raw) => {
+          // JSON.stringify can throw on a circular/corrupt payload; a serialize
+          // failure is treated as "not our echo" so we still re-read and notify.
+          let incomingJson: string | null = null;
+          try {
+            incomingJson = raw === null ? '' : JSON.stringify(raw);
+          } catch {
+            incomingJson = null;
+          }
+          if (incomingJson !== null && incomingJson === this.lastWrittenJson) {
+            // Echo of our own write — skip.
+            return;
+          }
+          const next = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
+          this.cached = next;
+          for (const l of this.listeners) l(next);
+        })
+        .catch((e) => {
+          // A failed cross-context sync must not become an unhandled rejection;
+          // the cache stays as-is until the next read.
+          console.warn('[session-state] cross-context sync failed:', e);
+        });
     });
   }
 

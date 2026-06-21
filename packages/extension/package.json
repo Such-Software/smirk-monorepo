@@ -13,6 +13,7 @@
     "build:chrome": "vite build && cp manifest.json dist/manifest.json",
     "build:firefox": "vite build && cp manifest.firefox.json dist/manifest.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx 'src/**/*.test.ts'",
     "clean": "rm -rf dist"
   },
   "dependencies": {

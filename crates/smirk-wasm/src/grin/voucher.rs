@@ -78,6 +78,10 @@ mod dto {
         pub change_bp_rewind_nonce_hex: Option<String>,
         #[serde(default)]
         pub change_bp_private_nonce_hex: Option<String>,
+        /// LEGACY ext key for input-blind fallback (tip a recovered Grim/
+        /// legacy depth-3 output). Absent on older callers → None.
+        #[serde(default)]
+        pub legacy_extended_private_key_hex: Option<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -172,6 +176,10 @@ pub fn grin_create_grin_voucher(params_json: &str) -> Result<String, JsValue> {
     let zero32 = [0u8; 32];
     let params = CreateVoucherParams {
         extended_private_key: hex_to_64(&d.extended_private_key_hex, "extended_private_key_hex")?,
+        legacy_extended_private_key: match d.legacy_extended_private_key_hex {
+            Some(s) => Some(hex_to_64(&s, "legacy_extended_private_key_hex")?),
+            None => None,
+        },
         inputs,
         voucher_amount: d.voucher_amount,
         fee: d.fee,

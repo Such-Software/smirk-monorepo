@@ -23,7 +23,7 @@
 //! them, this crate can parse and forward existing slates but cannot
 //! construct new outputs.
 
-use secp256k1zkp::pedersen::{Commitment, RangeProof};
+use secp256k1zkp::pedersen::{Commitment, ProofMessage, RangeProof};
 use secp256k1zkp::{ContextFlag, Secp256k1, SecretKey};
 
 /// Length of a Pedersen commitment in bytes.
@@ -71,6 +71,37 @@ pub fn bullet_proof_create(
         .map_err(|e| format!("invalid private nonce: {e:?}"))?;
 
     let proof = secp.bullet_proof(value, blind, rewind, private, None, None);
+    Ok(proof.proof[..proof.plen].to_vec())
+}
+
+/// Create a Bulletproof that embeds a 20-byte proof `message` — the v3
+/// identifier message produced by [`crate::build_v3_proof_message`].
+///
+/// Identical to [`bullet_proof_create`] except the proof carries the
+/// message that [`crate::recover_output`] parses to recover the output's
+/// derivation path. **Without the message, a recovered output yields a
+/// value but no spendable path** (`check_output` can't re-derive the
+/// commitment). This mirrors grin's `ProofBuilder` create flow in
+/// `grin/core/src/libtx/proof.rs` (`secp.bullet_proof(.., Some(message))`).
+/// The underlying lib pads/truncates the message to `BULLET_PROOF_MSG_SIZE`
+/// (20); we always pass exactly 20.
+pub fn bullet_proof_create_with_message(
+    value: u64,
+    blinding_factor: &[u8; 32],
+    rewind_nonce: &[u8; 32],
+    private_nonce: &[u8; 32],
+    message: &[u8; 20],
+) -> Result<Vec<u8>, String> {
+    let secp = Secp256k1::with_caps(ContextFlag::Commit);
+    let blind = SecretKey::from_slice(&secp, blinding_factor)
+        .map_err(|e| format!("invalid blinding factor: {e:?}"))?;
+    let rewind = SecretKey::from_slice(&secp, rewind_nonce)
+        .map_err(|e| format!("invalid rewind nonce: {e:?}"))?;
+    let private = SecretKey::from_slice(&secp, private_nonce)
+        .map_err(|e| format!("invalid private nonce: {e:?}"))?;
+
+    let msg = ProofMessage::from_bytes(message);
+    let proof = secp.bullet_proof(value, blind, rewind, private, None, Some(msg));
     Ok(proof.proof[..proof.plen].to_vec())
 }
 

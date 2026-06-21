@@ -30,7 +30,7 @@ pub struct AddressInfo {
 // Base58 first character mapping (approximate):
 // - Standard (4146): starts with "Wo"
 // - Subaddress (12208): starts with "Ww" or similar
-// - Integrated (6810): starts with "Wi"
+// - Integrated (4148): starts with "Wi"
 
 /// Validate a Wownero address by decoding base58 and checking the varint prefix.
 fn validate_wownero_address(address: &str) -> Result<AddressInfo, String> {
@@ -53,7 +53,7 @@ fn validate_wownero_address(address: &str) -> Result<AddressInfo, String> {
     // is acceptable.
     let (network, is_subaddress, has_payment_id) = match prefix {
         4146 => ("mainnet", false, false),   // Standard
-        6810 => ("mainnet", false, true),    // Integrated
+        4148 => ("mainnet", false, true),    // Integrated (upstream cryptonote_config.h; was 6810)
         12208 => ("mainnet", true, false),   // Subaddress
         _ => return Err(format!("Unknown Wownero prefix: {}", prefix)),
     };
@@ -150,5 +150,50 @@ pub fn validate_address(address: &str) -> String {
     match validate_wownero_address(address) {
         Ok(info) => WasmResult::ok(info),
         Err(e) => WasmResult::err(&format!("Invalid address: {}", e)),
+    }
+}
+
+#[cfg(test)]
+mod wownero_prefix_tests {
+    use super::*;
+    use monero_base58::encode_check;
+
+    // Standard ed25519 basepoint (compressed): a valid curve point, reused for
+    // both spend and view keys in synthetic test addresses.
+    const POINT: [u8; 32] = [
+        0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66,
+    ];
+
+    /// Base58check Wownero address: varint `prefix` + spend + view (+ 8-byte
+    /// payment id when integrated).
+    fn wow_addr(prefix: &[u8], has_payment_id: bool) -> String {
+        let mut raw = Vec::from(prefix);
+        raw.extend_from_slice(&POINT);
+        raw.extend_from_slice(&POINT);
+        if has_payment_id {
+            raw.extend_from_slice(&[0u8; 8]);
+        }
+        encode_check(raw)
+    }
+
+    // Regression: the validator carried the phantom integrated prefix 6810
+    // instead of upstream 4148, so valid integrated addresses were rejected.
+    // Lock the correct mapping; 6810 must now be unknown.
+    #[test]
+    fn wownero_integrated_prefix_is_4148_not_6810() {
+        let integrated = validate_wownero_address(&wow_addr(&[0xB4, 0x20], true))
+            .expect("4148 integrated must validate");
+        assert!(integrated.has_payment_id);
+        assert!(!integrated.is_subaddress);
+
+        assert!(validate_wownero_address(&wow_addr(&[0xB2, 0x20], false)).is_ok()); // 4146 standard
+        let sub = validate_wownero_address(&wow_addr(&[0xB0, 0x5F], false))
+            .expect("12208 subaddress must validate");
+        assert!(sub.is_subaddress);
+
+        // Obsolete 6810 (varint [0x9A, 0x35]) must be rejected.
+        assert!(validate_wownero_address(&wow_addr(&[0x9A, 0x35], true)).is_err());
     }
 }

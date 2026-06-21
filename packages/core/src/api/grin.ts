@@ -103,13 +103,40 @@ export interface GrinMethods {
     }>
   >;
 
+  /**
+   * Page the node's UNSPENT output set WITH rangeproofs, for seed-only
+   * recovery (the client rewinds each proof with its view key). Bounded
+   * from the wallet birthday (`startHeight` is mapped to a start MMR index
+   * server-side) and paginated by `startIndex` (pass `lastRetrievedIndex +
+   * 1` from the previous page; stop when `lastRetrievedIndex` reaches
+   * `highestIndex`). JWT-required. Response is raw snake_case.
+   */
+  scanGrinUnspentOutputs(params: {
+    startIndex?: number | undefined;
+    startHeight?: number | undefined;
+    max?: number | undefined;
+  }): Promise<
+    ApiResponse<{
+      highest_index: number;
+      last_retrieved_index: number;
+      outputs: Array<{
+        commit: string;
+        block_height: number | null;
+        mmr_index: number;
+        proof: string | null;
+      }>;
+    }>
+  >;
+
   recordGrinOutput(params: {
     userId: string;
     keyId: string;
     nChild: number;
     amount: number;
     commitment: string;
-    txSlateId: string;
+    /** Originating slate UUID. Omit for recovered outputs (no slate); the
+     *  backend stores NULL. Sending "" yields a 400 (invalid UUID). */
+    txSlateId?: string;
     blockHeight?: number;
     lockHeight?: number;
   }): Promise<ApiResponse<{ id: string }>>;
@@ -247,6 +274,18 @@ export function createGrinMethods(client: ApiClient): GrinMethods {
       return client.retryableRequest(`/wallet/grin/user/${userId}/outputs`, { method: 'GET' });
     },
 
+    async scanGrinUnspentOutputs(params) {
+      // Idempotent read (paging the UTXO set) → retryable.
+      return client.retryableRequest('/wallet/grin/unspent-outputs', {
+        method: 'POST',
+        body: JSON.stringify({
+          start_index: params.startIndex,
+          start_height: params.startHeight,
+          max: params.max,
+        }),
+      });
+    },
+
     async recordGrinOutput(params) {
       return client.request('/wallet/grin/outputs', {
         method: 'POST',
@@ -256,7 +295,9 @@ export function createGrinMethods(client: ApiClient): GrinMethods {
           n_child: params.nChild,
           amount: params.amount,
           commitment: params.commitment,
-          tx_slate_id: params.txSlateId,
+          // Omit (→ JSON drops undefined → backend None → NULL) when empty;
+          // recovered outputs have no slate and "" is an invalid UUID (400).
+          tx_slate_id: params.txSlateId || undefined,
           block_height: params.blockHeight,
           lock_height: params.lockHeight,
         }),

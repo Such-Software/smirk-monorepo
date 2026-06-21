@@ -42,19 +42,25 @@
 //! their own new-output blind from their keychain).
 
 use crate::blind::{sub as scalar_sub, sum as scalar_sum};
-use crate::bulletproof::{bullet_proof_create, pedersen_commit};
+use crate::bulletproof::pedersen_commit;
 use crate::kernel::KernelFeatures;
 use crate::keychain::{derive_blind, SwitchCommitmentType};
+use crate::recovery::create_recoverable_output;
 use crate::schnorr::sign_with_nonce as schnorr_sign;
 use crate::secp256k1::public_key_from_secret_key;
 use crate::transaction::pubkey_to_commitment;
-use crate::wallet_flows::{ChangeOutputInfo, UnspentOutput};
+use crate::wallet_flows::{derive_input_blind_with_fallback, ChangeOutputInfo, UnspentOutput};
 
 /// Inputs to [`create_grin_voucher`] — sender-side.
 #[derive(Debug, Clone)]
 pub struct CreateVoucherParams {
     /// Wallet's 64-byte BIP32 root (secret_key || chain_code).
     pub extended_private_key: [u8; 64],
+    /// LEGACY (pre-2026-05 / Grim) ext key for input-blind fallback — same
+    /// semantics as `CreateSendTxParams::legacy_extended_private_key`.
+    /// Required to TIP a recovered legacy/Grim (depth-3) output; without it
+    /// such an input derives the wrong blind → wrong excess → network reject.
+    pub legacy_extended_private_key: Option<[u8; 64]>,
     /// Inputs the sender is spending. Caller already selected (orchestrator
     /// doesn't pick UTXOs).
     pub inputs: Vec<UnspentOutput>,
@@ -183,11 +189,14 @@ pub fn create_grin_voucher(
     // path + switch-commitment-adjusted scheme (HF2 consensus).
     let mut input_blinds: Vec<[u8; 32]> = Vec::with_capacity(params.inputs.len());
     for inp in &params.inputs {
-        let blind = derive_blind(
+        // Same cross-derivation fallback as the standard send path: tries v3
+        // and legacy ext keys at depth-4 and depth-3, picking the candidate
+        // whose commitment matches on-chain. Lets recovered legacy/Grim
+        // (depth-3) outputs be tipped, and verifies the input commitment.
+        let (blind, _label) = derive_input_blind_with_fallback(
             &params.extended_private_key,
-            &inp.path,
-            inp.amount,
-            SwitchCommitmentType::Regular,
+            params.legacy_extended_private_key.as_ref(),
+            inp,
         )?;
         input_blinds.push(blind);
     }
@@ -199,11 +208,13 @@ pub fn create_grin_voucher(
         params.voucher_amount,
         SwitchCommitmentType::Regular,
     )?;
-    let voucher_commit = pedersen_commit(params.voucher_amount, &voucher_blind)?;
-    let voucher_proof = bullet_proof_create(
+    // Seed-recoverable voucher output (deterministic nonce + identifier msg).
+    let (voucher_commit, voucher_proof, _) = create_recoverable_output(
+        &params.extended_private_key,
         params.voucher_amount,
         &voucher_blind,
-        &params.bp_rewind_nonce,
+        &params.voucher_path,
+        SwitchCommitmentType::Regular,
         &params.bp_private_nonce,
     )?;
 
@@ -224,11 +235,12 @@ pub fn create_grin_voucher(
                 ch.amount,
                 SwitchCommitmentType::Regular,
             )?;
-            let commit = pedersen_commit(ch.amount, &blind)?;
-            let proof = bullet_proof_create(
+            let (commit, proof, _) = create_recoverable_output(
+                &params.extended_private_key,
                 ch.amount,
                 &blind,
-                &params.change_bp_rewind_nonce,
+                &ch.path,
+                SwitchCommitmentType::Regular,
                 &params.change_bp_private_nonce,
             )?;
             (
@@ -324,11 +336,13 @@ pub fn sweep_grin_voucher(
         claimer_amount,
         SwitchCommitmentType::Regular,
     )?;
-    let claimer_commit = pedersen_commit(claimer_amount, &claimer_blind)?;
-    let claimer_proof = bullet_proof_create(
+    // Seed-recoverable claimer output (deterministic nonce + identifier msg).
+    let (claimer_commit, claimer_proof, _) = create_recoverable_output(
+        &params.extended_private_key,
         claimer_amount,
         &claimer_blind,
-        &params.bp_rewind_nonce,
+        &params.claimer_path,
+        SwitchCommitmentType::Regular,
         &params.bp_private_nonce,
     )?;
 
@@ -596,6 +610,7 @@ mod tests {
 
         let params = CreateVoucherParams {
             extended_private_key: extk,
+            legacy_extended_private_key: None,
             inputs: vec![input],
             voucher_amount: 5_000_000_000, // 5 GRIN
             fee: 25_000_000,                // 0.025 GRIN
@@ -632,6 +647,7 @@ mod tests {
 
         let params = CreateVoucherParams {
             extended_private_key: extk,
+            legacy_extended_private_key: None,
             inputs: vec![input],
             voucher_amount: 1_000_000_000, // 1 GRIN voucher
             fee: 25_000_000,                // 0.025 fee
@@ -663,6 +679,7 @@ mod tests {
 
         let voucher = create_grin_voucher(&CreateVoucherParams {
             extended_private_key: extk,
+            legacy_extended_private_key: None,
             inputs: vec![input],
             voucher_amount: 5_000_000_000,
             fee: 25_000_000,

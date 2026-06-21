@@ -118,6 +118,11 @@ pub fn grin_receiver_round_s2(
         receiver_kernel_nonce: kernel_nonce,
         bp_rewind_nonce: rewind,
         bp_private_nonce: priv_nonce,
+        // Low-level binding (unused by the wallet): legacy random-nonce path.
+        // The high-level orchestrators (grin_create_send_transaction etc.)
+        // set these for seed-recoverable outputs.
+        extended_private_key: None,
+        output_path: None,
     })
     .map_err(|e| JsValue::from_str(&e))?;
 
@@ -263,6 +268,11 @@ pub fn grin_receiver_init_i1(
             bp_rewind_nonce: rewind,
             bp_private_nonce: priv_nonce,
             kernel_offset: offset,
+            // Low-level binding (unused by the wallet): legacy random-nonce
+            // path. The high-level grin_create_invoice sets these for a
+            // seed-recoverable output.
+            extended_private_key: None,
+            output_path: None,
         },
         slate_id.to_string(),
     )

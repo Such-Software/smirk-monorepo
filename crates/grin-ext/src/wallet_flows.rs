@@ -13,9 +13,10 @@
 //! key derivation against `grin_keychain` and the slate format against
 //! `grin_wallet_libwallet`'s parser.
 
-use crate::bulletproof::{bullet_proof_create, pedersen_commit};
+use crate::bulletproof::pedersen_commit;
 use crate::keychain::{derive_blind, SwitchCommitmentType};
 use crate::kernel::KernelFeatures;
+use crate::recovery::create_recoverable_output;
 use crate::schnorr::point_add;
 use crate::slate::{
     add_input_commitment, add_output_commitment, SlateStateV4, SlateV4,
@@ -190,11 +191,14 @@ pub fn create_send_transaction(
             change_amount,
             SwitchCommitmentType::Regular,
         )?;
-        let change_commit = pedersen_commit(change_amount, &change_blind)?;
-        let change_proof = bullet_proof_create(
+        // Seed-recoverable change output: deterministic view-key rewind
+        // nonce + embedded identifier message (see create_recoverable_output).
+        let (change_commit, change_proof, _) = create_recoverable_output(
+            &params.extended_private_key,
             change_amount,
             &change_blind,
-            &params.bp_rewind_nonce,
+            &params.change_path,
+            SwitchCommitmentType::Regular,
             &params.bp_private_nonce,
         )?;
         (
@@ -343,6 +347,10 @@ pub fn sign_incoming_send_slate(
         receiver_kernel_nonce: params.receiver_kernel_nonce,
         bp_rewind_nonce: params.bp_rewind_nonce,
         bp_private_nonce: params.bp_private_nonce,
+        // Make the receiver output seed-recoverable (deterministic nonce +
+        // embedded identifier message).
+        extended_private_key: Some(params.extended_private_key),
+        output_path: Some(params.output_path),
     })?;
     let s2_slate = s2_out.slate;
 
@@ -598,6 +606,10 @@ pub fn create_invoice(params: &CreateInvoiceParams) -> Result<CreateInvoiceOutpu
         bp_rewind_nonce: params.bp_rewind_nonce,
         bp_private_nonce: params.bp_private_nonce,
         kernel_offset: params.kernel_offset,
+        // Make the invoice output seed-recoverable (deterministic nonce +
+        // embedded identifier message).
+        extended_private_key: Some(params.extended_private_key),
+        output_path: Some(params.output_path),
     };
     let init_out = match &params.slate_id {
         Some(id) => {
@@ -727,11 +739,14 @@ pub fn sign_invoice(params: &SignInvoiceParams) -> Result<SignInvoiceOutput, Str
             change_amount,
             SwitchCommitmentType::Regular,
         )?;
-        let change_commit = pedersen_commit(change_amount, &change_blind)?;
-        let change_proof = bullet_proof_create(
+        // Seed-recoverable change output: deterministic view-key rewind
+        // nonce + embedded identifier message (see create_recoverable_output).
+        let (change_commit, change_proof, _) = create_recoverable_output(
+            &params.extended_private_key,
             change_amount,
             &change_blind,
-            &params.bp_rewind_nonce,
+            &params.change_path,
+            SwitchCommitmentType::Regular,
             &params.bp_private_nonce,
         )?;
         (
@@ -900,7 +915,7 @@ pub fn finalize_invoice(
 /// On total miss: returns a diagnostic listing each attempted blind's
 /// computed commitment alongside the on-chain target so the surfaced
 /// label points at the failure mode (key vs switch vs depth).
-fn derive_input_blind_with_fallback(
+pub(crate) fn derive_input_blind_with_fallback(
     v3_ext_key: &[u8; 64],
     legacy_ext_key: Option<&[u8; 64]>,
     input: &UnspentOutput,

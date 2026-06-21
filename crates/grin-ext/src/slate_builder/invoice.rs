@@ -16,7 +16,9 @@
 use uuid::Uuid;
 
 use crate::bulletproof::{bullet_proof_create, pedersen_commit};
+use crate::keychain::SwitchCommitmentType;
 use crate::kernel::KernelFeatures;
+use crate::recovery::create_recoverable_output;
 use crate::schnorr::{
     aggregate_partials, final_signature, partial_sign, partial_verify, point_add, verify,
 };
@@ -42,11 +44,20 @@ pub struct ReceiverInitI1Params {
     pub kernel_features: KernelFeatures,
     pub receiver_output_blind: [u8; 32],
     pub receiver_kernel_nonce: [u8; 32],
+    /// Legacy random rewind nonce — used ONLY when `extended_private_key` is
+    /// `None` (the unused low-level binding path).
     pub bp_rewind_nonce: [u8; 32],
     pub bp_private_nonce: [u8; 32],
     /// Kernel offset — typically zero for invoices (receiver has no inputs
     /// to balance against), but caller may provide a random value.
     pub kernel_offset: [u8; 32],
+    /// Wallet 64-byte extended private key. When set (the high-level
+    /// `create_invoice` flow), the invoice output is **seed-recoverable**:
+    /// deterministic view-key rewind nonce + embedded v3 identifier message.
+    pub extended_private_key: Option<[u8; 64]>,
+    /// The invoice output's depth-4 derivation path (`[0, 0, n, 0]`).
+    /// Required alongside `extended_private_key` for a recoverable output.
+    pub output_path: Option<[u32; 4]>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,14 +85,31 @@ pub fn receiver_init_i1_with_id(
     let nonce = public_key_from_secret_key(&params.receiver_kernel_nonce)
         .map_err(|e| format!("invalid receiver kernel nonce: {e}"))?;
 
-    // Receiver creates their output (commit + bulletproof).
-    let commitment = pedersen_commit(params.amount, &params.receiver_output_blind)?;
-    let proof = bullet_proof_create(
-        params.amount,
-        &params.receiver_output_blind,
-        &params.bp_rewind_nonce,
-        &params.bp_private_nonce,
-    )?;
+    // Receiver creates their output (commit + bulletproof). With the wallet
+    // ext key + output path (the high-level create_invoice flow), the output
+    // is seed-recoverable; the unused low-level binding falls back to the
+    // caller-supplied random rewind nonce.
+    let (commitment, proof, rewind_nonce_used) =
+        match (&params.extended_private_key, &params.output_path) {
+            (Some(ext), Some(path)) => create_recoverable_output(
+                ext,
+                params.amount,
+                &params.receiver_output_blind,
+                path,
+                SwitchCommitmentType::Regular,
+                &params.bp_private_nonce,
+            )?,
+            _ => {
+                let commitment = pedersen_commit(params.amount, &params.receiver_output_blind)?;
+                let proof = bullet_proof_create(
+                    params.amount,
+                    &params.receiver_output_blind,
+                    &params.bp_rewind_nonce,
+                    &params.bp_private_nonce,
+                )?;
+                (commitment, proof, params.bp_rewind_nonce)
+            }
+        };
 
     let feat_args = match params.kernel_features {
         KernelFeatures::HeightLocked { lock_height, .. } => Some(KernelFeaturesArgsV4 {
@@ -128,7 +156,7 @@ pub fn receiver_init_i1_with_id(
         output_blind: params.receiver_output_blind,
         kernel_nonce: params.receiver_kernel_nonce,
         commitment,
-        rewind_nonce: params.bp_rewind_nonce,
+        rewind_nonce: rewind_nonce_used,
     };
 
     Ok(ReceiverInitI1Output { slate, context })

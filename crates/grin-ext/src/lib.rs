@@ -54,12 +54,14 @@ pub use wallet_flows::{
 };
 
 pub use bulletproof::{
-    bullet_proof_create, bullet_proof_rewind, bullet_proof_verify, pedersen_commit,
+    bullet_proof_create, bullet_proof_create_with_message, bullet_proof_rewind,
+    bullet_proof_verify, pedersen_commit,
 };
 
 pub use recovery::{
-    bullet_proof_rewind_with_message, check_output, legacy_output_rewind_nonce, legacy_root_hash,
-    output_rewind_nonce, recover_output, rewind_hash, RecoveredOutput, IDENTIFIER_LEN,
+    build_v3_proof_message, bullet_proof_rewind_with_message, check_output,
+    create_recoverable_output, legacy_output_rewind_nonce, legacy_root_hash, output_rewind_nonce,
+    recover_output, rewind_hash, RecoveredOutput, IDENTIFIER_LEN,
 };
 
 pub use schnorr::{

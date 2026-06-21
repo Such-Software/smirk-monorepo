@@ -387,9 +387,11 @@ export const grin = {
   /**
    * Seed-only output recovery (view-key scheme). Given the 64-byte
    * extended private key and an on-chain output (commitment + rangeproof),
-   * returns JSON `{value, key_id_hex, n_child, depth, switch,
+   * returns JSON `{value, key_id_hex, path, n_child, depth, switch,
    * blinding_factor_hex}` if the output belongs to this wallet, or the
-   * string `"null"` otherwise. Used by the Grin restore-discovery flow.
+   * string `"null"` otherwise. NOTE: for Smirk's depth-4 `[0,0,n,0]` layout
+   * the spendable child index is `path[2]`, NOT `n_child` (which is grin's
+   * `path[depth-1]` = the trailing 0). Used by the Grin recovery flow.
    */
   recoverOutput: (
     extKeyHex: string,
@@ -705,6 +707,9 @@ export interface GrinVoucherChangePath {
 
 export interface GrinCreateVoucherParams {
   extended_private_key_hex: string;
+  /** LEGACY (pre-2026-05 / Grim) ext key for input-blind fallback — needed
+   *  to tip a recovered legacy/depth-3 output. Omit for v3-only wallets. */
+  legacy_extended_private_key_hex?: string;
   inputs: GrinUnspentOutput[];
   voucher_amount: number;
   fee: number;

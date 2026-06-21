@@ -453,7 +453,7 @@ export async function startGrinSend(args: {
   console.debug('[grin-send] input derivations:', sendResult.input_derivations);
 
   // 5. Backend bookkeeping — record + lock + relay drop.
-  await api.recordGrinTransaction({
+  const recordRes = await api.recordGrinTransaction({
     userId: args.userId,
     slateId: sendResult.slate_id,
     amount: args.amount,
@@ -463,11 +463,20 @@ export async function startGrinSend(args: {
       ? { counterpartyAddress: args.recipientSlatepackAddress }
       : {}),
   });
-  await api.lockGrinOutputs({
+  if (recordRes.error) {
+    throw new Error(`Failed to record Grin transaction: ${recordRes.error}`);
+  }
+  // Lock MUST succeed before the user can finalize/broadcast: an unchecked lock
+  // failure leaves these inputs spendable by a later send, opening a double-spend
+  // window until confirmation. Abort the build here on lock failure.
+  const lockRes = await api.lockGrinOutputs({
     userId: args.userId,
     outputIds: selected.map((o) => o.id),
     txSlateId: sendResult.slate_id,
   });
+  if (lockRes.error) {
+    throw new Error(`Failed to lock Grin inputs: ${lockRes.error}`);
+  }
   // NOTE: change_output is NOT recorded here in v0.3. We forward it
   // through wizard state and the backend `broadcast_grin_transaction`
   // handler inserts it atomically with the broadcast. Recording the
@@ -1050,4 +1059,186 @@ function pathToKeyId(path: [number, number, number, number]): string {
 
 function looksArmored(s: string): boolean {
   return s.trimStart().startsWith('BEGINSLATEPACK');
+}
+
+// ===========================================================================
+// Grin seed-only recovery (STEP 4 / view-key scan)
+// ===========================================================================
+//
+// Pages the node's UNSPENT output set (with rangeproofs) and rewinds each
+// proof with the wallet's view key to rediscover + record the outputs that
+// belong to this wallet — recovering balance from the seed alone, without a
+// stored output list. Requires the wasm build that ships the deterministic
+// create path (so new Smirk outputs are recoverable) and the `path` array on
+// `recoverOutput`. Legacy random-nonce Smirk outputs are NOT found (they
+// remain backend-recorded; see docs/grin.md "Output recovery").
+//
+// Gating: external-seed recovery is OFF by default. It is enabled at build
+// time, either globally (VITE_RECOVER_GRIN_DEFAULT=true) or per-wallet via an
+// allowlist of canonical Grin slatepack addresses (VITE_RECOVER_GRIN_ALLOWLIST,
+// comma-separated). Public builds ship with recovery inert. Allowlist entries
+// are public slatepack addresses (derived from the seed, never the mnemonic).
+
+const RECOVER_GRIN_DEFAULT = import.meta.env?.VITE_RECOVER_GRIN_DEFAULT === 'true';
+
+/** Canonical Grin slatepack addresses allowed to run seed-only recovery even
+ *  when `RECOVER_GRIN_DEFAULT` is false. Sourced from build-time config; empty
+ *  in public builds, so recovery stays inert unless an operator opts a wallet
+ *  in. */
+const RECOVER_GRIN_ALLOWLIST = new Set<string>(
+  (import.meta.env?.VITE_RECOVER_GRIN_ALLOWLIST ?? '')
+    .split(',')
+    .map((addr) => addr.trim())
+    .filter(Boolean),
+);
+
+/** Grin block-height floor for the recovery scan, from build-time config.
+ *  `undefined` scans from genesis; setting it to a wallet's birthday height
+ *  makes the first scan far faster. Err LOW: too high silently skips real
+ *  outputs, too low only costs scan time. */
+export const RECOVER_GRIN_BIRTHDAY_HEIGHT: number | undefined = (() => {
+  const raw = import.meta.env?.VITE_RECOVER_GRIN_BIRTHDAY;
+  if (raw == null || raw === '') return undefined;
+  const height = Number(raw);
+  return Number.isFinite(height) ? height : undefined;
+})();
+
+/** Whether to run seed-only Grin recovery for the wallet with this canonical
+ *  slatepack address. */
+export function shouldRecoverGrin(canonicalSlatepackAddress: string): boolean {
+  return RECOVER_GRIN_DEFAULT || RECOVER_GRIN_ALLOWLIST.has(canonicalSlatepackAddress);
+}
+
+/** Result of a recovery sweep. */
+export interface GrinRecoveryResult {
+  scanned: number;
+  recovered: number;
+  pages: number;
+}
+
+interface RecoveredGrinOutput {
+  value: string; // decimal nanogrin
+  key_id_hex: string;
+  path?: number[];
+  n_child: number;
+  depth: number;
+  switch: string;
+  blinding_factor_hex: string;
+}
+
+function tryRecoverGrinOutput(
+  extKeyHex: string,
+  commitHex: string,
+  proofHex: string,
+): RecoveredGrinOutput | null {
+  try {
+    const json = wasmGrin.recoverOutput(extKeyHex, commitHex, proofHex);
+    if (json === 'null') return null;
+    return JSON.parse(json) as RecoveredGrinOutput;
+  } catch (e) {
+    console.warn('[smirk-grin-recovery] recoverOutput threw:', e);
+    return null;
+  }
+}
+
+/**
+ * Seed-only Grin output recovery. Pages the unspent output set from
+ * `opts.startHeight` (the wallet birthday; `undefined` = genesis), rewinds
+ * each proof with the v3 then legacy ext key, and records the hits.
+ *
+ * Idempotent + best-effort: the backend dedupes recorded outputs by
+ * commitment (`ON CONFLICT (commitment) DO NOTHING`), so re-running on every
+ * unlock is safe; any scan/record error aborts the sweep without throwing so
+ * recovery never blocks the wallet.
+ */
+export async function recoverGrinOutputs(
+  mnemonic: string,
+  userId: string,
+  opts?: {
+    startHeight?: number | undefined;
+    maxPages?: number | undefined;
+    /** Called after each output is successfully recorded, so the caller can
+     *  surface recovered funds mid-scan (the full scan-to-tip takes minutes).
+     *  Receives the running recovered count. */
+    onRecovered?: ((recovered: number) => void) | undefined;
+  },
+): Promise<GrinRecoveryResult> {
+  const extKeyHex = (
+    JSON.parse(wasmGrin.deriveExtendedKey(mnemonic)) as { extended_private_key_hex: string }
+  ).extended_private_key_hex;
+  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(mnemonic);
+
+  console.info(
+    `[smirk-grin-recovery] start: startHeight=${opts?.startHeight ?? 'genesis'} user=${userId.slice(0, 8)}`,
+  );
+  const maxPages = opts?.maxPages ?? 10_000; // backstop for a genesis scan
+  let startIndex: number | undefined;
+  let scanned = 0;
+  let recovered = 0;
+  let pages = 0;
+
+  for (; pages < maxPages; pages++) {
+    const res = await api.scanGrinUnspentOutputs({
+      // Birthday height on the first page only; index thereafter (the
+      // backend prefers start_index when both are present).
+      startIndex,
+      startHeight: startIndex === undefined ? opts?.startHeight : undefined,
+      max: 1000,
+    });
+    if (res.error || !res.data) {
+      console.warn('[smirk-grin-recovery] scan page failed:', res.error ?? res.code);
+      break;
+    }
+    const { highest_index: highestIndex, last_retrieved_index: lastIndex, outputs } = res.data;
+    console.info(
+      `[smirk-grin-recovery] page ${pages}: ${outputs.length} outs, index ${lastIndex}/${highestIndex}, recovered=${recovered}`,
+    );
+
+    for (const o of outputs) {
+      scanned++;
+      if (!o.proof) continue; // need the rangeproof to rewind
+      const rec =
+        tryRecoverGrinOutput(extKeyHex, o.commit, o.proof) ??
+        tryRecoverGrinOutput(legacyExtKeyHex, o.commit, o.proof);
+      if (!rec) continue;
+      // Smirk's spendable child index is path[2] (= path[depth-1] for both
+      // depth-3 Grim and depth-4 [0,0,n,0] Smirk layouts). Do NOT fall back
+      // to rec.n_child: for depth-4 that's path[3] = 0, which would record the
+      // output under the [0,0,0,0] bricking layout. If path is somehow absent
+      // (e.g. a wasm build predating the `path` field), skip + warn — better
+      // an unrecovered output than one recorded with an unspendable index.
+      const nChild = rec.path?.[2];
+      if (nChild === undefined) {
+        console.warn(
+          '[smirk-grin-recovery] recovered output missing path[2]; skipping (avoids bricking-layout record):',
+          o.commit,
+        );
+        continue;
+      }
+      const r = await api.recordGrinOutput({
+        userId,
+        keyId: rec.key_id_hex,
+        nChild,
+        amount: Number(rec.value),
+        commitment: o.commit,
+        // Recovered outputs have NO originating slate — omit tx_slate_id so the
+        // backend stores NULL. Sending "" is an invalid UUID → 400 (this was
+        // the bug that silently dropped every recovered output).
+        // Only include when known (exactOptionalPropertyTypes).
+        ...(o.block_height != null ? { blockHeight: o.block_height } : {}),
+      });
+      if (!r.error) {
+        recovered++;
+        opts?.onRecovered?.(recovered);
+      } else console.warn('[smirk-grin-recovery] record failed:', r.error);
+    }
+
+    if (lastIndex >= highestIndex) break; // reached the tip
+    startIndex = lastIndex + 1;
+  }
+
+  console.info(
+    `[smirk-grin-recovery] done: scanned=${scanned} recovered=${recovered} pages=${pages}`,
+  );
+  return { scanned, recovered, pages };
 }
