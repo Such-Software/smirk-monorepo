@@ -4,3 +4,4 @@
  * resolution, and NIP-17 delivery build on this. See docs/private IDENTITY_PHASE1.
  */
 export * from './identity';
+export * from './nip98';
