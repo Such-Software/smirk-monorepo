@@ -574,11 +574,12 @@ async function sweepUtxo(
   // For a sweep we can size the tx exactly: 1 P2WPKH input vsize ≈
   // 68 vB, 1 output ≈ 31 vB, base overhead ≈ 11 vB → ~110 vB per
   // input + 31 vB header + output for any input count.
-  const feeRates = await api.estimateFee(asset);
+  const feeRates = await chainProviders.utxo(asset).estimateFee();
+  const tiers = feeRates.data?.model === 'rate-estimate' ? feeRates.data : undefined;
   // Clamp to the relay floor — an at-floor estimate (1.0 sat/vB) would
   // make the sweep tx "rejected by network rules" (same bug that broke
   // tip funding). See applyRelayFloor.
-  const feeRate = applyRelayFloor(feeRates.data?.normal ?? 10);
+  const feeRate = applyRelayFloor(tiers?.normal ?? 10);
   const estimatedVsize = 11 + 68 * utxos.length + 31;
   const feeSat = Math.max(
     Math.ceil(estimatedVsize * feeRate) + 1, // +1 to clear minrelaytxfee rounding

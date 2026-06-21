@@ -1986,8 +1986,8 @@ function HomeRouter({
             // with nulls — Compose will surface "Loading…" / error.
             return { fast: null, normal: null, slow: null };
           }
-          const r = await api.estimateFee(assetId);
-          if (r.error || !r.data) {
+          const r = await chainProviders.utxo(assetId).estimateFee();
+          if (r.error || r.data?.model !== 'rate-estimate') {
             throw new Error(r.error ?? 'Failed to fetch fee rates');
           }
           return { fast: r.data.fast, normal: r.data.normal, slow: r.data.slow };

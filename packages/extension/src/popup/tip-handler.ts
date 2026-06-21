@@ -263,8 +263,8 @@ async function createBtcLtcTip(
 
   // 5. Estimate fee. We use the `normal` tier; users wanting custom
   //    fee control should use Send (not Tip).
-  const feeRates = await api.estimateFee(asset);
-  if (feeRates.error || !feeRates.data) {
+  const feeRates = await chainProviders.utxo(asset).estimateFee();
+  if (feeRates.error || feeRates.data?.model !== 'rate-estimate') {
     await api.cancelSocialTip(tipId).catch(() => undefined);
     return {
       ok: false,

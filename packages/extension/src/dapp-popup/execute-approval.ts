@@ -18,6 +18,7 @@
  */
 
 import {
+  chainProviders,
   recentlySpentInputs,
   type SessionState,
   type UnlockedWallet,
@@ -80,9 +81,6 @@ export interface ExecuteApprovalDeps {
   ) => Promise<{ accessToken: string; bootstrap: { userId: string } } | null>;
   api: {
     setAccessToken(token: string): void;
-    estimateFee(
-      asset: 'btc' | 'ltc',
-    ): Promise<{ data?: { normal: number | null } | null | undefined }>;
   };
   loadState: () => Promise<SessionState>;
   /** Return type is `unknown` because callers vary — popup's
@@ -152,10 +150,10 @@ export async function executeApproval(
       // BTC and LTC) so the tx still has a chance to land.
       let feeRateSatPerVb = 1;
       if (req.asset === 'btc' || req.asset === 'ltc') {
-        const tiers = await deps.api.estimateFee(req.asset).catch(() => null);
-        const normal = tiers?.data?.normal;
-        if (typeof normal === 'number' && normal > 0) {
-          feeRateSatPerVb = normal;
+        const tiers = await chainProviders.utxo(req.asset).estimateFee().catch(() => null);
+        const fee = tiers?.data?.model === 'rate-estimate' ? tiers.data : null;
+        if (typeof fee?.normal === 'number' && fee.normal > 0) {
+          feeRateSatPerVb = fee.normal;
         }
       }
 
