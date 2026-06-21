@@ -63,6 +63,7 @@ import {
   recentlySpentInputs,
   reconcilePendingOutgoing,
   initSmirkApi,
+  chainProviders,
   type Balances,
   type BootstrapAuthResult,
   type Prices,
@@ -4403,7 +4404,7 @@ async function loadAssetHistory(
   if (assetId === 'btc' || assetId === 'ltc') {
     const addr = wallet.addresses[assetId];
     if (!addr) return [];
-    const r = await api.getHistory(assetId, addr);
+    const r = await chainProviders.utxo(assetId).getHistory(addr);
     if (r.error || !r.data) return [];
     return r.data.transactions.map(
       (t): AssetDetailTxRow => ({

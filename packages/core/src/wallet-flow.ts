@@ -36,6 +36,7 @@
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
+import { chainProviders, type ChainProviderRegistry } from './chain';
 import { solvePowChallenge, type AltchaPayload } from './pow';
 
 export interface BootstrapAuthResult {
@@ -340,6 +341,14 @@ export interface FetchBalancesOptions {
   verifyKeyImage?: KeyImageVerifier;
 
   /**
+   * The chain-provider registry. Defaults to the global `chainProviders`
+   * (which targets the Smirk backend). When a server-options config swaps a
+   * chain to a direct source (electrum, lws), balance reads for that chain
+   * come from there instead. Injectable so tests can supply a mock registry.
+   */
+  providers?: ChainProviderRegistry;
+
+  /**
    * Optional whitelist of asset ids to actually fetch. When omitted,
    * every supported asset is fetched (legacy behavior). When set,
    * any asset NOT in the list gets a zeroed `AssetBalance` returned
@@ -390,6 +399,7 @@ export async function fetchAllBalances(
   const visible = (id: string): boolean =>
     !(options.visibleAssetIds && !options.visibleAssetIds.includes(id));
   const zero: AssetBalance = { confirmed: 0n, pending: 0n };
+  const providers = options.providers ?? chainProviders;
 
   // Wrap each fetch so its callback fires as soon as the underlying
   // promise resolves — independent of the slowest sibling. The
@@ -421,13 +431,13 @@ export async function fetchAllBalances(
     tap(
       'btc',
       visible('btc')
-        ? fetchUtxoBalance(api, 'btc', wallet.addresses.btc)
+        ? fetchUtxoBalance(providers, 'btc', wallet.addresses.btc)
         : Promise.resolve(zero),
     ),
     tap(
       'ltc',
       visible('ltc')
-        ? fetchUtxoBalance(api, 'ltc', wallet.addresses.ltc)
+        ? fetchUtxoBalance(providers, 'ltc', wallet.addresses.ltc)
         : Promise.resolve(zero),
     ),
     tap(
@@ -472,11 +482,11 @@ export async function fetchAllBalances(
 }
 
 async function fetchUtxoBalance(
-  api: SmirkApi,
+  providers: ChainProviderRegistry,
   asset: 'btc' | 'ltc',
   address: string,
 ): Promise<AssetBalance> {
-  const result = await api.getUtxoBalance(asset, address);
+  const result = await providers.utxo(asset).getBalance(address);
   if (result.error || !result.data) {
     return { confirmed: 0n, pending: 0n, error: result.error ?? 'Network error' };
   }

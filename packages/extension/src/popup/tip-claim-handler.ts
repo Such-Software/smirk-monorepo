@@ -42,6 +42,7 @@ import {
   bytesToHex,
   hexToBytes,
   randomBytes,
+  chainProviders,
   type UnlockedWallet,
 } from '@smirk/core';
 import {
@@ -554,7 +555,7 @@ async function sweepUtxo(
     return { ok: false, error: `No ${asset.toUpperCase()} address in wallet` };
   }
 
-  const utxosResp = await api.getUtxos(asset, tipAddress);
+  const utxosResp = await chainProviders.utxo(asset).listOutputs(tipAddress);
   if (utxosResp.error || !utxosResp.data) {
     return {
       ok: false,
@@ -615,7 +616,7 @@ async function sweepUtxo(
   tx.finalize();
 
   const txHex = hex.encode(tx.extract());
-  const broadcast = await api.broadcastTx(asset, txHex);
+  const broadcast = await chainProviders.utxo(asset).broadcast(txHex);
   if (broadcast.error || !broadcast.data) {
     return {
       ok: false,

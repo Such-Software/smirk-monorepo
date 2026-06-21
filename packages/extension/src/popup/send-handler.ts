@@ -19,6 +19,7 @@
 
 import {
   api,
+  chainProviders,
   applyRelayFloor,
   type UnlockedWallet,
 } from '@smirk/core';
@@ -236,7 +237,7 @@ async function sendBtcLtc(
   //    yet). Without this filter, a fast second-send picks the
   //    largest UTXO, which is the one we just spent — Electrum
   //    rejects with "missing inputs / already in mempool".
-  const utxosResp = await api.getUtxos(asset, fromAddress);
+  const utxosResp = await chainProviders.utxo(asset).listOutputs(fromAddress);
   if (utxosResp.error || !utxosResp.data) {
     return { ok: false, error: utxosResp.error ?? 'Failed to fetch UTXOs' };
   }
@@ -336,7 +337,7 @@ async function sendBtcLtc(
   //    (`bitcoin-cli decoderawtransaction <hex>` or
   //    https://blockstream.info/tools/tx-decoder) and find the exact
   //    rejection reason. Diagnostic-only; the hex carries no private data.
-  const broadcast = await api.broadcastTx(asset, txHex);
+  const broadcast = await chainProviders.utxo(asset).broadcast(txHex);
   if (broadcast.error || !broadcast.data) {
     console.error('[smirk send] broadcast failed', {
       asset,
