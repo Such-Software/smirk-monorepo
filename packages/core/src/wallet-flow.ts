@@ -444,7 +444,7 @@ export async function fetchAllBalances(
       'xmr',
       visible('xmr')
         ? fetchLwsBalance(
-            api,
+            providers,
             bootstrap.userId,
             'xmr',
             wallet.addresses.xmr,
@@ -459,7 +459,7 @@ export async function fetchAllBalances(
       'wow',
       visible('wow')
         ? fetchLwsBalance(
-            api,
+            providers,
             bootstrap.userId,
             'wow',
             wallet.addresses.wow,
@@ -497,7 +497,7 @@ async function fetchUtxoBalance(
 }
 
 async function fetchLwsBalance(
-  api: SmirkApi,
+  providers: ChainProviderRegistry,
   userId: string,
   asset: 'xmr' | 'wow',
   address: string,
@@ -516,11 +516,12 @@ async function fetchLwsBalance(
   // not found" — surfacing that as a one-tick error is the kind of
   // jank we shouldn't ship. The ~100-200 ms savings for returning
   // wallets aren't worth the first-use UX cliff.
-  await api
-    .registerLws(userId, asset, address, viewKeyHex, startHeight)
+  await providers
+    .lws(asset)
+    .registerAccount(userId, address, viewKeyHex, startHeight)
     .catch(() => undefined);
 
-  const result = await api.getLwsBalance(asset, address, viewKeyHex);
+  const result = await providers.lws(asset).getBalance(address, viewKeyHex);
   if (result.error || !result.data) {
     return { confirmed: 0n, pending: 0n, error: result.error ?? 'Network error' };
   }

@@ -2043,7 +2043,7 @@ function HomeRouter({
           const fromAddress = wallet.addresses[assetId];
           if (!fromAddress) return null;
           const viewKeyHex = bytesToHex(wallet.keys[assetId].privateViewKey);
-          const unspent = await api.getUnspentOuts(assetId, fromAddress, viewKeyHex);
+          const unspent = await chainProviders.lws(assetId).listOutputs(fromAddress, viewKeyHex);
           if (unspent.error || !unspent.data) return null;
           const { per_byte_fee, fee_mask, outputs } = unspent.data;
           const numInputs = options?.sweep && outputs.length > 0 ? outputs.length : 1;
@@ -4427,7 +4427,7 @@ async function loadAssetHistory(
     const addr = wallet.addresses[assetId];
     const viewKeyHex = bytesToHex(wallet.keys[assetId].privateViewKey);
     if (!addr) return [];
-    const r = await api.getLwsHistory(assetId, addr, viewKeyHex);
+    const r = await chainProviders.lws(assetId).getHistory(addr, viewKeyHex);
     if (r.error || !r.data) return [];
     return r.data.transactions.map(
       (t): AssetDetailTxRow => ({

@@ -18,7 +18,6 @@
  */
 
 import {
-  api,
   chainProviders,
   applyRelayFloor,
   type UnlockedWallet,
@@ -426,7 +425,7 @@ async function sendXmrWow(
   //    that look spendable to it without the spend key — including ones
   //    we've already spent (the spend-key-images list ships candidates
   //    the daemon flagged, and we have to verify them ourselves).
-  const unspentResp = await api.getUnspentOuts(asset, fromAddress, viewKeyHex);
+  const unspentResp = await chainProviders.lws(asset).listOutputs(fromAddress, viewKeyHex);
   if (unspentResp.error || !unspentResp.data) {
     return { ok: false, error: unspentResp.error ?? 'Failed to fetch unspent outputs' };
   }
@@ -572,7 +571,7 @@ async function sendXmrWow(
   const ringSize = asset === 'wow' ? 22 : 16;
   const decoysPerInput = ringSize - 1;
   const totalDecoys = decoysPerInput * selected.length;
-  const decoysResp = await api.getRandomOuts(asset, totalDecoys);
+  const decoysResp = await chainProviders.lws(asset).getRandomOutputs(totalDecoys);
   if (decoysResp.error || !decoysResp.data) {
     return { ok: false, error: decoysResp.error ?? 'Failed to fetch decoys' };
   }
@@ -626,7 +625,7 @@ async function sendXmrWow(
   //    Smirk user (per legacy commit `3afce50`). For external sends the
   //    backend silently skips the insert. The recipient sees pending
   //    balance immediately; sender's own pending tracking is Phase 2.
-  const submit = await api.submitLwsTx(asset, signed.tx_hex, toAddress, amountNum, signed.tx_hash);
+  const submit = await chainProviders.lws(asset).broadcast(signed.tx_hex, toAddress, amountNum, signed.tx_hash);
   if (submit.error || !submit.data) {
     console.error('[smirk send xmr/wow] submit failed', {
       asset,

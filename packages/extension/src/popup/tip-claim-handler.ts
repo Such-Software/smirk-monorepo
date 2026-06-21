@@ -670,7 +670,7 @@ async function sweepXmrWow(
   const spendKeyHex = bytesToHex(tipSpendKey);
 
   // Fetch unspent outputs from LWS at the tip address.
-  const unspentResp = await api.getUnspentOuts(asset, tipAddress, viewKeyHex);
+  const unspentResp = await chainProviders.lws(asset).listOutputs(tipAddress, viewKeyHex);
   if (unspentResp.error || !unspentResp.data) {
     return {
       ok: false,
@@ -749,7 +749,7 @@ async function sweepXmrWow(
   // Decoy fetch — ring-size − 1 per input. WOW ringSize=22, XMR=16.
   const ringSize = asset === 'wow' ? 22 : 16;
   const decoysNeeded = (ringSize - 1) * spendable.length;
-  const decoysResp = await api.getRandomOuts(asset, decoysNeeded);
+  const decoysResp = await chainProviders.lws(asset).getRandomOutputs(decoysNeeded);
   if (decoysResp.error || !decoysResp.data) {
     return {
       ok: false,
@@ -801,8 +801,7 @@ async function sweepXmrWow(
     };
   }
 
-  const submit = await api.submitLwsTx(
-    asset,
+  const submit = await chainProviders.lws(asset).broadcast(
     signed.tx_hex,
     recipientAddress,
     sweepAmountNum,
@@ -817,7 +816,7 @@ async function sweepXmrWow(
 
   // Best-effort LWS cleanup — deactivate the tip address now that
   // it'll never receive again. Server resource hygiene, not safety.
-  api.deactivateLws(asset, tipAddress).catch((e) => {
+  chainProviders.lws(asset).deactivateAccount(tipAddress).catch((e) => {
     console.warn('[tip-claim xmr/wow] deactivateLws failed', e);
   });
 
