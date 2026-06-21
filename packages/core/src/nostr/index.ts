@@ -5,3 +5,4 @@
  */
 export * from './identity';
 export * from './nip98';
+export * from './nip05';
