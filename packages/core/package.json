@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "gen:api": "openapi-typescript openapi.json -o src/api/schema.d.ts",
     "check:api": "npm run gen:api && git diff --exit-code -- src/api/schema.d.ts",
-    "test": "node --test --import tsx --import ./src/__tests__/setup.mjs src/state/__tests__/state.test.ts src/__tests__/address.test.ts src/__tests__/keystore.test.ts src/__tests__/crypto.test.ts src/__tests__/pow.test.ts src/__tests__/auth-wire.test.ts src/__tests__/wallet-flow-pow.test.ts src/__tests__/keystore-session.test.ts src/__tests__/session-robustness.test.ts",
+    "test": "node --test --import tsx --import ./src/__tests__/setup.mjs src/state/__tests__/state.test.ts src/__tests__/address.test.ts src/__tests__/keystore.test.ts src/__tests__/crypto.test.ts src/__tests__/pow.test.ts src/__tests__/auth-wire.test.ts src/__tests__/wallet-flow-pow.test.ts src/__tests__/keystore-session.test.ts src/__tests__/session-robustness.test.ts src/chain/__tests__/smirk-backend.test.ts",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

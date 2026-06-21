@@ -26,6 +26,9 @@ export const CORE_PACKAGE_VERSION = '0.0.1';
 // API client
 export * from './api';
 
+// Chain-data plane (provider seam over the API; default = the backend)
+export * from './chain';
+
 // Crypto
 export * from './crypto';
 
