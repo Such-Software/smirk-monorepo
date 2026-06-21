@@ -1,0 +1,88 @@
+/**
+ * Nostr identity derivation (NIP-06) for the Smirk wallet.
+ *
+ * The identity key is derived from the SAME seed as the wallet, at the NIP-06
+ * path m/44'/1237'/<account>'/0/0. The hardened ACCOUNT index is the rotation
+ * counter: account 0 is the default identity; advancing it produces a fresh,
+ * seed-recoverable, externally-unlinkable npub (the account is hardened, so leaf
+ * keys cannot be linked even with a leaked xpub). See docs/private IDENTITY_PHASE1
+ * and P2P_VALUE_PROTOCOL for the rationale.
+ *
+ * The npub is a standard NIP-19 bech32 encoding of the x-only (schnorr) pubkey,
+ * so it interoperates with any Nostr client (e.g. Goblin). This is the identity
+ * layer the MessagingProvider (default: Nostr) and NIP-98 sign-in build on; the
+ * per-coin signing keys are unaffected.
+ */
+import { HDKey } from '@scure/bip32';
+import { schnorr } from '@noble/curves/secp256k1';
+import { bech32 } from '@scure/base';
+import { mnemonicToSeed } from '../hd';
+
+/** SLIP-0044 coin type for Nostr keys (NIP-06). */
+const NOSTR_COIN_TYPE = 1237;
+/** bech32 length cap; npub is ~63 chars, this is generous headroom. */
+const BECH32_LIMIT = 1000;
+
+export interface NostrIdentity {
+  /** Hardened account index = the rotation counter (0 = default identity). */
+  account: number;
+  /** NIP-19 public identity, `npub1...`. */
+  npub: string;
+  /** x-only (schnorr) public key, 32-byte hex — the on-wire Nostr pubkey. */
+  pubkeyHex: string;
+  /** secp256k1 secret key (32 bytes). Stays in core; used to sign events. */
+  privateKey: Uint8Array;
+}
+
+function toHex(b: Uint8Array): string {
+  return Array.from(b)
+    .map((x) => x.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Encode a 32-byte x-only pubkey as a NIP-19 `npub`. */
+export function encodeNpub(pubkeyXOnly: Uint8Array): string {
+  return bech32.encode('npub', bech32.toWords(pubkeyXOnly), BECH32_LIMIT);
+}
+
+/** Decode an `npub` back to its 32-byte x-only pubkey (throws on bad input). */
+export function decodeNpub(npub: string): Uint8Array {
+  const { prefix, words } = bech32.decode(npub as `npub1${string}`, BECH32_LIMIT);
+  if (prefix !== 'npub') throw new Error(`not an npub: ${prefix}`);
+  return new Uint8Array(bech32.fromWords(words));
+}
+
+/**
+ * Derive the Nostr identity at a hardened account (default 0). Rotation is just
+ * `deriveNostrIdentity(mnemonic, account + 1)`.
+ */
+export function deriveNostrIdentity(mnemonic: string, account = 0, passphrase = ''): NostrIdentity {
+  if (!Number.isInteger(account) || account < 0) {
+    throw new Error(`invalid nostr account index: ${account}`);
+  }
+  const seed = mnemonicToSeed(mnemonic, passphrase);
+  const node = HDKey.fromMasterSeed(seed).derive(`m/44'/${NOSTR_COIN_TYPE}'/${account}'/0/0`);
+  if (!node.privateKey) throw new Error('failed to derive nostr key');
+  const privateKey = node.privateKey;
+  const pubkeyXOnly = schnorr.getPublicKey(privateKey);
+  return {
+    account,
+    npub: encodeNpub(pubkeyXOnly),
+    pubkeyHex: toHex(pubkeyXOnly),
+    privateKey,
+  };
+}
+
+/**
+ * Schnorr-sign a Nostr event id (the 32-byte sha256 of the serialized event,
+ * as hex) with the identity key. Returns the 64-byte signature as hex. This is
+ * the primitive NIP-01 events and NIP-98 auth sign over.
+ */
+export function signNostrEventId(eventIdHex: string, privateKey: Uint8Array): string {
+  return toHex(schnorr.sign(eventIdHex, privateKey));
+}
+
+/** Verify a 64-byte hex signature over an event id against an x-only pubkey hex. */
+export function verifyNostrEventId(sigHex: string, eventIdHex: string, pubkeyHex: string): boolean {
+  return schnorr.verify(sigHex, eventIdHex, pubkeyHex);
+}

@@ -29,6 +29,9 @@ export * from './api';
 // Chain-data plane (provider seam over the API; default = the backend)
 export * from './chain';
 
+// Nostr identity (seed-derived npub, NIP-06; the identity-plane foundation)
+export * from './nostr';
+
 // Crypto
 export * from './crypto';
 
