@@ -245,11 +245,10 @@ async function createBtcLtcTip(
 
   // 4a. Third-layer backup: encrypt the tip private key with the
   //     wallet's BTC key and stash in chrome.storage.local. The
-  //     backend is already backed up off-host (such-backup pulls
-  //     daily full + 6-hourly db-only via SSH forced command); this
-  //     covers the failure modes those snapshots can't (corruption
-  //     between snapshots, user offline during incident, cross-
-  //     device migration via seed re-import). See tip-key-backup.ts.
+  //     backend is already backed up off-host (daily full + 6-hourly
+  //     db-only); this covers the failure modes those snapshots can't
+  //     (corruption between snapshots, user offline during incident,
+  //     cross-device migration via seed re-import). See tip-key-backup.ts.
   await storeTipKeyBackup({
     tipId,
     asset,

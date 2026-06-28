@@ -5,10 +5,8 @@
  * persists each tip's encrypted key on the backend BEFORE the sender
  * broadcasts on-chain (see `tip-handler.ts`). That closes the
  * atomicity hole that bit us in the May 2026 dogfooding session.
- * The backend itself is also backed up — daily full + every-6-hours
- * db-only — pulled off-host to `such-backup` via SSH forced command,
- * 30-day retention with SHA256 checksums (see
- * `~/src/such-backup-and-nodes/backup-jobs/smirk-backup.md`).
+ * The backend itself is also backed up off-host (daily full +
+ * every-6-hours db-only, with checksums + retention).
  *
  * This module is a third layer of defense on top of those: encrypt
  * the raw tip private key (or Grin voucher JSON) with a wallet-
