@@ -23,10 +23,12 @@ import { createWalletUtxoMethods, WalletUtxoMethods } from './wallet-utxo';
 import { createWalletLwsMethods, WalletLwsMethods } from './wallet-lws';
 import { createGrinMethods, GrinMethods } from './grin';
 import { createSwapMethods, SwapMethods } from './swap';
+import type { BackendCapabilities } from './capabilities';
 
 export type { ApiResponse } from './client';
 export { ApiClient } from './client';
 export * from './parse';
+export * from './capabilities';
 
 export type { AuthMethods } from './auth';
 export type { KeysMethods } from './keys';
@@ -243,6 +245,16 @@ export class SmirkApi
   /** Backend health check. */
   healthCheck(): Promise<ApiResponse<{ status: string }>> {
     return this.request('/health', { method: 'GET' });
+  }
+
+  /**
+   * This backend instance's capabilities — enabled chains, features, and the
+   * wallet-restore policy. The wallet reads this to adapt per-instance: grey out
+   * disabled chains/features and shape the import-restore UX to the policy (see
+   * `earliestRestoreDate`).
+   */
+  getCapabilities(): Promise<ApiResponse<BackendCapabilities>> {
+    return this.request('/capabilities', { method: 'GET' });
   }
 
   /** Current cryptocurrency prices. */
