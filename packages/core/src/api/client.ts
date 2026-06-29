@@ -47,8 +47,14 @@ const RETRY_BASE_MS = 500;
  * (test fixtures, local dev) — most callers should use the singleton
  * `api` exported from `./index.ts`.
  */
+/** Wallet UTXO route dialect. `flat` (default) targets the legacy backend
+ *  (`/wallet/balance`); `namespaced` targets smirk-backend-core
+ *  (`/wallet/utxo/balance`). LWS and Grin routes are identical across both. */
+export type WalletApiStyle = 'flat' | 'namespaced';
+
 export class ApiClient {
   protected baseUrl: string;
+  protected walletApiStyle: WalletApiStyle = 'flat';
 
   constructor(baseUrl: string = DEFAULT_API_BASE) {
     this.baseUrl = baseUrl;
@@ -66,6 +72,16 @@ export class ApiClient {
    *  (e.g. the NIP-98 `u` tag) read it here. */
   getBaseUrl(): string {
     return this.baseUrl;
+  }
+
+  /** Select the wallet UTXO route dialect (see {@link WalletApiStyle}). Set
+   *  once at startup when targeting a smirk-backend-core instance. */
+  setWalletApiStyle(style: WalletApiStyle): void {
+    this.walletApiStyle = style;
+  }
+
+  getWalletApiStyle(): WalletApiStyle {
+    return this.walletApiStyle;
   }
 
   setAccessToken(token: string | null): void {

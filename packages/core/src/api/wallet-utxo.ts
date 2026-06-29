@@ -66,17 +66,40 @@ export interface WalletUtxoMethods {
   >;
 }
 
+// UTXO route paths per backend dialect. `flat` = legacy backend; `namespaced`
+// = smirk-backend-core. Note `fees`→`fee` (plural→singular) on the namespaced
+// side — not a clean prefix swap, hence the explicit table.
+const UTXO_PATHS = {
+  flat: {
+    balance: '/wallet/balance',
+    utxos: '/wallet/utxos',
+    broadcast: '/wallet/broadcast',
+    history: '/wallet/history',
+    fee: '/wallet/fees',
+  },
+  namespaced: {
+    balance: '/wallet/utxo/balance',
+    utxos: '/wallet/utxo/utxos',
+    broadcast: '/wallet/utxo/broadcast',
+    history: '/wallet/utxo/history',
+    fee: '/wallet/utxo/fee',
+  },
+} as const;
+
+const utxoPath = (client: ApiClient, key: keyof (typeof UTXO_PATHS)['flat']): string =>
+  UTXO_PATHS[client.getWalletApiStyle()][key];
+
 export function createWalletUtxoMethods(client: ApiClient): WalletUtxoMethods {
   return {
     async getUtxoBalance(asset, address) {
-      return client.request('/wallet/balance', {
+      return client.request(utxoPath(client, 'balance'), {
         method: 'POST',
         body: JSON.stringify({ asset, address }),
       });
     },
 
     async getUtxos(asset, address) {
-      return client.request('/wallet/utxos', {
+      return client.request(utxoPath(client, 'utxos'), {
         method: 'POST',
         body: JSON.stringify({ asset, address }),
       });
@@ -85,21 +108,21 @@ export function createWalletUtxoMethods(client: ApiClient): WalletUtxoMethods {
     async broadcastTx(asset, txHex) {
       // POST — no retry. Broadcasting twice could double-spend in theory
       // (the server dedupes by txid, but better safe).
-      return client.request('/wallet/broadcast', {
+      return client.request(utxoPath(client, 'broadcast'), {
         method: 'POST',
         body: JSON.stringify({ asset, tx_hex: txHex }),
       });
     },
 
     async getHistory(asset, address) {
-      return client.request('/wallet/history', {
+      return client.request(utxoPath(client, 'history'), {
         method: 'POST',
         body: JSON.stringify({ asset, address }),
       });
     },
 
     async estimateFee(asset) {
-      return client.request('/wallet/fees', {
+      return client.request(utxoPath(client, 'fee'), {
         method: 'POST',
         body: JSON.stringify({ asset }),
       });
