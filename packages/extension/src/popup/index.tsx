@@ -6178,7 +6178,10 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
 
 // Configure the API backend (staging / local / self-hosted) before the UI
 // bootstraps; no-op for default production builds (VITE_SMIRK_BACKEND_URL unset).
-initSmirkApi({ baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL });
+initSmirkApi({
+  baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL,
+  walletApiStyle: import.meta.env.VITE_SMIRK_API_STYLE as 'flat' | 'namespaced' | undefined,
+});
 
 const root = document.getElementById('root');
 if (root) {

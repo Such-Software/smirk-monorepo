@@ -23,7 +23,10 @@ import { installJobsCoordinator } from './jobs/coordinator';
 
 // Point the API at a configured backend (staging / local / self-hosted) before
 // any request; no-op for default production builds (VITE_SMIRK_BACKEND_URL unset).
-initSmirkApi({ baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL });
+initSmirkApi({
+  baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL,
+  walletApiStyle: import.meta.env.VITE_SMIRK_API_STYLE as 'flat' | 'namespaced' | undefined,
+});
 
 // Diagnostic breadcrumbs at SW startup + install. `console.debug`
 // keeps these out of the default extension console view; developers

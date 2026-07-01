@@ -314,6 +314,16 @@ export const api = new SmirkApi();
  * URL; later it selects per-chain data sources (a bundled backend vs direct
  * electrum / lws / grin-lws).
  */
-export function initSmirkApi(config: { baseUrl?: string | undefined }): void {
+export function initSmirkApi(config: {
+  baseUrl?: string | undefined;
+  /**
+   * Wallet route dialect: `flat` (legacy `/wallet/balance`) or `namespaced`
+   * (`/wallet/utxo/*`, smirk-backend-core). Defaults to the client default
+   * (`flat`) when omitted; a v0.3 shell targeting a v0.3 backend passes
+   * `namespaced` (e.g. from `VITE_SMIRK_API_STYLE`).
+   */
+  walletApiStyle?: 'flat' | 'namespaced' | undefined;
+}): void {
   if (config.baseUrl) api.setBaseUrl(config.baseUrl);
+  if (config.walletApiStyle) api.setWalletApiStyle(config.walletApiStyle);
 }

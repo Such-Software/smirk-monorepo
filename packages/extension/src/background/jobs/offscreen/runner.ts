@@ -21,6 +21,8 @@
  * own DevTools is the only way to debug a stuck solve.
  */
 
+import { initSmirkApi } from '@smirk/core';
+
 import { HANDLERS } from '../handlers/registry';
 import type {
   JobContext,
@@ -28,6 +30,19 @@ import type {
   OffscreenJobRequest,
   OffscreenJobResponse,
 } from '../types';
+
+// The offscreen document is a SEPARATE JS context with its own `@smirk/core`
+// `api` singleton, so it must be pointed at the configured backend exactly like
+// the SW (background/index.ts) and the popup (popup/index.tsx). Without this,
+// bootstrap-auth — which runs HERE — registers/authenticates against the
+// production default (backend.smirk.cash) regardless of VITE_SMIRK_BACKEND_URL,
+// which silently breaks every self-hosted / non-production deployment (the token
+// it returns is then rejected by the actual configured backend). It happens to
+// be masked in production only because the default already IS production.
+initSmirkApi({
+  baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL,
+  walletApiStyle: import.meta.env.VITE_SMIRK_API_STYLE as 'flat' | 'namespaced' | undefined,
+});
 
 // Track in-flight aborts so a 'cancel' from the SW (via a future
 // message, not implemented today) can stop a running job.
