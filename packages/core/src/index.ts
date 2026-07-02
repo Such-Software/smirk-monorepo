@@ -32,6 +32,9 @@ export * from './chain';
 // Nostr identity (seed-derived npub, NIP-06; the identity-plane foundation)
 export * from './nostr';
 
+// Messaging plane (NIP-17 encrypted DMs over the relay, via a swappable seam)
+export * from './messaging';
+
 // Crypto
 export * from './crypto';
 
