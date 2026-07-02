@@ -3,10 +3,12 @@
  * shells call `sendDm` / `subscribeDms` without threading relays through.
  */
 
-import { decodeNpub, type NostrIdentity } from '../nostr';
-import { messagingProvider, messagingRelays } from './registry';
+import { decodeNpub, resolveNip05, type NostrIdentity } from '../nostr';
+import { DEFAULT_PUBLIC_RELAYS, messagingProvider, messagingRelays } from './registry';
 import { wrapToDirectMessage } from './nostr';
 import type { DirectMessage, DmSubscription, GiftWrapEvent } from './types';
+
+const dedup = (a: string[]): string[] => [...new Set(a.filter(Boolean))];
 
 /** Accept an npub (bech32) or a raw x-only hex; return x-only hex. */
 export function recipientToHex(recipient: string): string {
@@ -20,17 +22,54 @@ export function recipientToHex(recipient: string): string {
   throw new Error('recipient must be an npub or 64-char hex pubkey');
 }
 
-/** Send a direct message to an npub or hex pubkey over the active relay set. */
+/**
+ * Resolve a recipient (npub, hex, or `name@domain`) to their x-only pubkey + the
+ * relays to DELIVER to: their NIP-17 DM inbox (kind 10050), falling back to their
+ * NIP-05 relay hints, then the public interop relays. This is what makes DMs
+ * reach non-Smirk (e.g. Goblin) users — you must publish where they read.
+ */
+export async function resolveDmRelays(
+  recipient: string,
+): Promise<{ pubkeyHex: string; relays: string[] }> {
+  let pubkeyHex: string;
+  let hintRelays: string[] = [];
+  if (recipient.includes('@')) {
+    const r = await resolveNip05(recipient);
+    if (!r.ok) throw new Error(`could not resolve ${recipient}: ${r.error}`);
+    pubkeyHex = r.resolution.pubkeyHex;
+    hintRelays = r.resolution.relays ?? [];
+  } else {
+    pubkeyHex = recipientToHex(recipient);
+  }
+  // Look for their kind-10050 across their hint relays + ours + the public set.
+  const lookupRelays = dedup([...hintRelays, ...messagingRelays(), ...DEFAULT_PUBLIC_RELAYS]);
+  let inbox: string[] = [];
+  try {
+    inbox = await messagingProvider().queryDmRelayList({ pubkeyHex, relays: lookupRelays });
+  } catch {
+    /* no kind-10050 / unreachable — fall back to the NIP-05 hints */
+  }
+  const relays = dedup([...inbox, ...hintRelays]);
+  return { pubkeyHex, relays: relays.length ? relays : DEFAULT_PUBLIC_RELAYS };
+}
+
+/**
+ * Send a direct message to a recipient (npub, hex, or `name@domain`). Resolves
+ * their inbox relays and publishes there PLUS our own relay (so a copy lands
+ * where we read too).
+ */
 export async function sendDm(
   identity: NostrIdentity,
   recipient: string,
   text: string,
 ): Promise<void> {
+  const { pubkeyHex, relays } = await resolveDmRelays(recipient);
+  const deliveryRelays = dedup([...relays, ...messagingRelays()]);
   await messagingProvider().sendDm({
     identity,
-    recipientPubkeyHex: recipientToHex(recipient),
+    recipientPubkeyHex: pubkeyHex,
     text,
-    relays: messagingRelays(),
+    relays: deliveryRelays,
   });
 }
 

@@ -153,6 +153,29 @@ export class NostrMessagingProvider implements MessagingProvider {
     return events as unknown as GiftWrapEvent[];
   }
 
+  async queryDmRelayList({
+    pubkeyHex,
+    relays,
+  }: {
+    pubkeyHex: string;
+    relays: string[];
+  }): Promise<string[]> {
+    relays.forEach((r) => this.relaysSeen.add(r));
+    // The recipient's most recent kind-10050; its `relay` tags are their inbox.
+    const events = await this.pool.querySync(relays, {
+      kinds: [DM_RELAY_LIST_KIND],
+      authors: [pubkeyHex],
+    });
+    let latest: { created_at: number; tags: string[][] } | undefined;
+    for (const e of events as unknown as { created_at: number; tags: string[][] }[]) {
+      if (!latest || e.created_at > latest.created_at) latest = e;
+    }
+    if (!latest) return [];
+    return latest.tags
+      .filter((t) => t[0] === 'relay' && typeof t[1] === 'string' && t[1])
+      .map((t) => t[1] as string);
+  }
+
   async publishDmRelayList({
     identity,
     relays,

@@ -44,6 +44,13 @@ export interface MessagingProvider {
   }): Promise<GiftWrapEvent[]>;
 
   /**
+   * Read a recipient's DM-inbox relay list (NIP-17 / kind 10050) — the `relay`
+   * tags of their latest kind-10050 event. Used to route a DM to where the
+   * recipient actually reads (cross-wallet delivery). Empty if they publish none.
+   */
+  queryDmRelayList(params: { pubkeyHex: string; relays: string[] }): Promise<string[]>;
+
+  /**
    * Publish our DM-inbox relay list (NIP-17 / kind 10050) so senders know where
    * to deliver — advertising `inboxRelays` as our preferred inbox.
    */
