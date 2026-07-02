@@ -6,7 +6,7 @@
  */
 
 import type { NostrIdentity } from '../nostr';
-import type { DirectMessage, DmSubscription } from './types';
+import type { DirectMessage, DmSubscription, GiftWrapEvent } from './types';
 
 export interface MessagingProvider {
   /** Adapter kind, e.g. `nostr`. */
@@ -30,6 +30,18 @@ export interface MessagingProvider {
     relays: string[];
     onMessage: (dm: DirectMessage) => void;
   }): DmSubscription;
+
+  /**
+   * Fetch (poll) the raw, still-ENCRYPTED gift-wraps addressed to `pubkeyHex` —
+   * a one-shot query (not a live subscription). The background poller uses this
+   * without the private key (collecting wraps needs only the public npub); the
+   * caller decrypts later. `sinceSec` bounds the window.
+   */
+  queryDmWraps(params: {
+    pubkeyHex: string;
+    relays: string[];
+    sinceSec?: number | undefined;
+  }): Promise<GiftWrapEvent[]>;
 
   /**
    * Publish our DM-inbox relay list (NIP-17 / kind 10050) so senders know where

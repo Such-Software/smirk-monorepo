@@ -11,7 +11,7 @@ import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 
 import { deriveNostrIdentity } from '../../nostr';
 import { recipientToHex } from '../dm';
-import { unwrapDmSecurely } from '../nostr';
+import { unwrapDmSecurely, wrapToDirectMessage } from '../nostr';
 
 const MNEMONIC =
   'leader monkey parrot ring guide accident before fence cannon height naive bean';
@@ -81,6 +81,19 @@ test('rejects a forged gift-wrap where the seal signer != claimed sender (impers
   // sender; our verifying unwrap rejects it (seal author = attacker != rumor
   // author = victim).
   assert.equal(unwrapDmSecurely(wrap, recipient.privateKey), null, 'impersonation rejected');
+});
+
+test('wrapToDirectMessage decrypts a stored wrap into a display message (or null)', () => {
+  const a = alice();
+  const b = bob();
+  const wrap = wrapEvent(a.privateKey, { publicKey: b.pubkeyHex }, 'stored + delivered');
+  const dm = wrapToDirectMessage(wrap, b.privateKey);
+  assert.ok(dm, 'decrypts');
+  assert.equal(dm!.text, 'stored + delivered');
+  assert.equal(dm!.fromNpub, a.npub, 'sender npub for display');
+  assert.equal(dm!.fromPubkeyHex, a.pubkeyHex);
+  // A wrap not for us → null (the background poller stores it but we skip it).
+  assert.equal(wrapToDirectMessage(wrap, eve().privateKey), null);
 });
 
 test('recipientToHex accepts npub and hex, rejects junk', () => {

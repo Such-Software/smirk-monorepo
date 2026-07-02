@@ -15,7 +15,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 
 import type { NostrIdentity } from '../nostr';
 import type { MessagingProvider } from './provider';
-import type { DirectMessage, DmSubscription } from './types';
+import type { DirectMessage, DmSubscription, GiftWrapEvent } from './types';
 
 /** NIP-59 gift-wrap. */
 const GIFT_WRAP_KIND = 1059;
@@ -58,6 +58,26 @@ export function unwrapDmSecurely(
   } catch {
     return null;
   }
+}
+
+/**
+ * Verifying-decrypt a raw gift-wrap into a display DirectMessage, or null if it
+ * can't be securely opened. Shared by the live subscription and the background
+ * poller's stored-wrap decryption in the popup.
+ */
+export function wrapToDirectMessage(
+  wrap: { id?: string; pubkey: string; content: string },
+  recipientSk: Uint8Array,
+): DirectMessage | null {
+  const rumor = unwrapDmSecurely(wrap, recipientSk);
+  if (!rumor) return null;
+  return {
+    id: rumor.id ?? wrap.id ?? '',
+    fromPubkeyHex: rumor.pubkey,
+    fromNpub: npubEncode(rumor.pubkey),
+    text: rumor.content,
+    createdAt: rumor.created_at,
+  };
 }
 
 export class NostrMessagingProvider implements MessagingProvider {
@@ -106,19 +126,31 @@ export class NostrMessagingProvider implements MessagingProvider {
         onevent: (evt: { id?: string; pubkey: string; content: string }) => {
           // Verifying unwrap: skips anything with a bad seal sig or a
           // seal/rumor author mismatch (impersonation) — see unwrapDmSecurely.
-          const rumor = unwrapDmSecurely(evt, identity.privateKey);
-          if (!rumor) return;
-          onMessage({
-            id: rumor.id ?? evt.id ?? '',
-            fromPubkeyHex: rumor.pubkey,
-            fromNpub: npubEncode(rumor.pubkey),
-            text: rumor.content,
-            createdAt: rumor.created_at,
-          });
+          const dm = wrapToDirectMessage(evt, identity.privateKey);
+          if (dm) onMessage(dm);
         },
       },
     );
     return { close: () => sub.close() };
+  }
+
+  async queryDmWraps({
+    pubkeyHex,
+    relays,
+    sinceSec,
+  }: {
+    pubkeyHex: string;
+    relays: string[];
+    sinceSec?: number | undefined;
+  }): Promise<GiftWrapEvent[]> {
+    relays.forEach((r) => this.relaysSeen.add(r));
+    const filter: { kinds: number[]; '#p': string[]; since?: number } = {
+      kinds: [GIFT_WRAP_KIND],
+      '#p': [pubkeyHex],
+    };
+    if (sinceSec) filter.since = sinceSec;
+    const events = await this.pool.querySync(relays, filter);
+    return events as unknown as GiftWrapEvent[];
   }
 
   async publishDmRelayList({

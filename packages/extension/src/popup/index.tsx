@@ -68,10 +68,12 @@ import {
   initSmirkMessaging,
   sendDm,
   subscribeDms,
+  decryptWrap,
   type Balances,
   type BootstrapAuthResult,
   type DirectMessage,
   type DmSubscription,
+  type GiftWrapEvent,
   type NostrIdentity,
   type Prices,
   type UnlockedWallet,
@@ -5062,6 +5064,28 @@ function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBack: () 
       const id = deriveNostrIdentity(wallet.mnemonic, 0);
       if (cancelled) return;
       setIdentity(id);
+
+      // Kick off background delivery (persists after this screen closes) and load
+      // any encrypted wraps the background poller already collected while away.
+      void chrome.runtime
+        .sendMessage({ type: 'DM_WATCH_SET', npubHex: id.pubkeyHex, relayUrl })
+        .catch(() => {});
+      void chrome.runtime
+        .sendMessage({ type: 'DM_WRAPS_GET' })
+        .then((res: { wraps?: GiftWrapEvent[] } | undefined) => {
+          if (cancelled || !res?.wraps?.length) return;
+          const decrypted = res.wraps
+            .map((w) => decryptWrap(id, w))
+            .filter((m): m is DirectMessage => !!m);
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            return [...prev, ...decrypted.filter((m) => !seen.has(m.id))].sort(
+              (a, b) => b.createdAt - a.createdAt,
+            );
+          });
+        })
+        .catch(() => {});
+
       sub = subscribeDms(id, (dm) => {
         if (cancelled) return;
         setMessages((prev) =>

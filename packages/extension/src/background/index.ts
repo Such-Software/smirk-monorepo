@@ -19,6 +19,7 @@
 import { api, CORE_PACKAGE_VERSION, initSmirkApi } from '@smirk/core';
 
 import { installDappBridge } from './dapp/dispatch';
+import { installDmWatcher } from './dm-watch';
 import { installJobsCoordinator } from './jobs/coordinator';
 
 // Point the API at a configured backend (staging / local / self-hosted) before
@@ -59,3 +60,8 @@ installDappBridge();
 // future Grin finalize, swap polls, etc.). Installs message + Port
 // listeners; no synchronous side effects until a popup connects.
 installJobsCoordinator();
+
+// Background DM delivery — alarm-driven poll of the Nostr relay for encrypted
+// gift-wraps (+ notifications). No key here; the popup decrypts. No-op until the
+// popup sets a watch config on unlock.
+installDmWatcher();

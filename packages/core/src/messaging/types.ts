@@ -21,3 +21,18 @@ export interface DirectMessage {
 export interface DmSubscription {
   close(): void;
 }
+
+/**
+ * A raw NIP-59 gift-wrap event (kind 1059), still ENCRYPTED. The background
+ * poller stores these (no key needed to collect them); the popup decrypts them
+ * with the in-memory identity. Plain-object shape so it survives JSON storage.
+ */
+export interface GiftWrapEvent {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+}

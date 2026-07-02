@@ -5,7 +5,8 @@
 
 import { decodeNpub, type NostrIdentity } from '../nostr';
 import { messagingProvider, messagingRelays } from './registry';
-import type { DirectMessage, DmSubscription } from './types';
+import { wrapToDirectMessage } from './nostr';
+import type { DirectMessage, DmSubscription, GiftWrapEvent } from './types';
 
 /** Accept an npub (bech32) or a raw x-only hex; return x-only hex. */
 export function recipientToHex(recipient: string): string {
@@ -52,4 +53,21 @@ export async function publishDmInbox(identity: NostrIdentity): Promise<void> {
     relays: messagingRelays(),
     inboxRelays: messagingRelays(),
   });
+}
+
+/**
+ * Poll the active relays for raw (encrypted) gift-wraps addressed to `pubkeyHex`
+ * — needs only the PUBLIC npub, so the background service worker calls this
+ * without the seed. Decrypt later with [`decryptWrap`] in an unlocked context.
+ */
+export async function fetchDmWraps(
+  pubkeyHex: string,
+  sinceSec?: number,
+): Promise<GiftWrapEvent[]> {
+  return messagingProvider().queryDmWraps({ pubkeyHex, relays: messagingRelays(), sinceSec });
+}
+
+/** Verifying-decrypt a stored gift-wrap into a display message, or null. */
+export function decryptWrap(identity: NostrIdentity, wrap: GiftWrapEvent): DirectMessage | null {
+  return wrapToDirectMessage(wrap, identity.privateKey);
 }
