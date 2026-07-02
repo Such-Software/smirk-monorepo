@@ -26,9 +26,26 @@ export interface BackendCapabilities {
     grin_relay: boolean;
     prices: boolean;
     nostr_identity: boolean;
+    /** First-party Nostr relay (encrypted DM inbox). See `messaging`. */
+    nostr_relay: boolean;
     tips: boolean;
   };
   restore: RestoreCapability;
+  /** First-party Nostr relay details; present only when `features.nostr_relay`. */
+  messaging?: MessagingCapability;
+}
+
+/** First-party Nostr relay this instance runs — the wallet's DM inbox, used
+ *  alongside the public interop relays. */
+export interface MessagingCapability {
+  /** ws(s):// relay URL to connect to. */
+  relay_url: string;
+  /** `inbox-outbox` | `author-allowlist` | `open`. */
+  write_policy: string;
+  /** NIP-13 PoW bits required on cross-ecosystem inbound (0 = off). */
+  inbound_pow_bits: number;
+  /** NIPs the relay speaks, e.g. [1, 17, 44, 59]. */
+  supported_nips: number[];
 }
 
 /**
