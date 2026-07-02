@@ -238,7 +238,10 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
     async nostrLogin(identity) {
       // NIP-98: the signed event rides in the Authorization header; the `u` tag
       // must match the absolute URL (baseUrl + path) the backend validates.
-      const url = `${client.getBaseUrl()}/auth/nostr`;
+      // Trim a trailing slash so the `u` tag matches the server's expected URL,
+      // which trims too (a self-hoster's baseUrl ending in '/' would otherwise
+      // sign a double-slash path the backend rejects).
+      const url = `${client.getBaseUrl().replace(/\/+$/, '')}/auth/nostr`;
       const token = nip98AuthHeader(buildNip98Event({ url, method: 'POST' }, identity));
       const result = await client.request<Record<string, unknown>>('/auth/nostr', {
         method: 'POST',
@@ -267,7 +270,7 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
       // `nostr_link` purpose, and the EMPTY-body request descriptor. The path is
       // a fixed cross-impl contract string (matches the server + the pinned KAT),
       // NOT derived from the base URL.
-      const url = `${client.getBaseUrl()}/auth/nostr/link`;
+      const url = `${client.getBaseUrl().replace(/\/+$/, '')}/auth/nostr/link`;
       const payloadSha256Hex = descriptorSha256(
         requestDescriptor('POST', '/api/v1/auth/nostr/link', '', ''),
       );

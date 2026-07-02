@@ -4834,6 +4834,9 @@ function NostrIdentityRoute({
   useEffect(() => {
     const mnemonic = wallet.mnemonic;
     if (!mnemonic) {
+      // Cleared, not stale: if the wallet locks while this screen is open, drop
+      // the derived identity so the npub/badge don't linger next to the error.
+      setIdentity(null);
       setError('Wallet is locked — unlock to view your Nostr identity');
       return;
     }
@@ -4845,14 +4848,24 @@ function NostrIdentityRoute({
     }
   }, [wallet.mnemonic, account]);
 
-  // Detect an already-linked npub so the linked badge shows on open.
+  // Detect an already-linked npub so the linked badge shows on open. Race-guard:
+  // ignore this result if the component unmounted, and never clobber a value a
+  // concurrent link() already set (functional update keeps the non-null one).
   useEffect(() => {
+    let stale = false;
     void api.getMe().then((r) => {
-      if (r.data?.nostrPubkey) setLinkedPubkey(r.data.nostrPubkey);
+      const pk = r.data?.nostrPubkey;
+      if (!stale && pk) setLinkedPubkey((prev) => prev ?? pk);
     });
+    return () => {
+      stale = true;
+    };
   }, []);
 
   const isLinked = !!identity && linkedPubkey === identity.pubkeyHex;
+  // The backend stores exactly ONE npub per account: a different linked key means
+  // linking the selected one REPLACES it (rotation), not accumulates.
+  const replacesExisting = !!linkedPubkey && !isLinked;
 
   const link = async () => {
     if (!identity) return;
@@ -4862,6 +4875,10 @@ function NostrIdentityRoute({
     setStatus('idle');
     if (r.data?.nostrPubkey) {
       setLinkedPubkey(r.data.nostrPubkey);
+    } else if (r.status === 409) {
+      setError('This Nostr identity is already linked to a different Smirk account.');
+    } else if (r.status === 401) {
+      setError('Your session expired — unlock and try again.');
     } else {
       setError(r.error ?? 'Link failed');
     }
@@ -4930,8 +4947,20 @@ function NostrIdentityRoute({
             </option>
           ))}
         </select>
-        <span style={{ fontSize: 10, opacity: 0.5 }}>rotate to a fresh identity</span>
+        <span style={{ fontSize: 10, opacity: 0.5 }}>
+          one linked identity — changing account replaces it
+        </span>
       </label>
+
+      {replacesExisting && (
+        <p
+          data-testid="nostr-replaces-note"
+          style={{ fontSize: 11, color: '#f59e0b', marginTop: 10, lineHeight: 1.4 }}
+        >
+          A different Nostr identity is already linked to this account. Linking this
+          one replaces it — you keep a single linked identity.
+        </p>
+      )}
 
       <div style={{ marginTop: 16 }}>
         {isLinked ? (
@@ -4968,7 +4997,11 @@ function NostrIdentityRoute({
               opacity: status === 'linking' ? 0.7 : 1,
             }}
           >
-            {status === 'linking' ? 'Linking…' : 'Link this identity'}
+            {status === 'linking'
+              ? 'Linking…'
+              : replacesExisting
+                ? 'Replace linked identity'
+                : 'Link this identity'}
           </button>
         )}
       </div>
