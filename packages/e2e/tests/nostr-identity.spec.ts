@@ -22,23 +22,17 @@ import { getCapabilities } from '../fixtures/capabilities.js';
  * valid on THIS backend. Any response we DO assert on must originate
  * from the POPUP page (e.g. the wallet balance route), never offscreen.
  *
- * Feature status (Identity Phase 1): the backend (/auth/nostr[/link],
- * NIP-98 verify) and @smirk/core (api.linkNostr / api.nostrLogin,
- * buildNip98Event, deriveNostrIdentity) are complete, but the
- * per-shell Settings link/login/rotation UI is the documented REMAINING
- * client work that rides with v0.3.0 — as of this writing NO Nostr
- * identity entry point exists in packages/extension/src or packages/ui/src
- * (the only "Nostr" string in the client is the SwapTab P2P orderbook
- * provider, which is NOT this feature). We therefore:
- *   - assert the Settings surface (the account/identity home) is reachable
- *     and renders, then
- *   - detect the Nostr identity entry point and, when it is present,
- *     assert the identity UI renders in its expected state — WITHOUT
- *     asserting a successful link round-trip, because the backend's
- *     /auth/nostr/link currently fails closed (nonce store stubbed).
- *   - when the entry point has not landed yet, test.skip() at runtime
- *     with a clear message (a truthful pass, not a false green), so this
- *     spec exercises the real screen automatically once it ships.
+ * Feature status (Identity Phase 1 — COMPLETE): the backend
+ * (/auth/nostr/link-challenge + /auth/nostr/link with an atomic single-use
+ * nonce, /auth/nostr login, NIP-98 verify) and @smirk/core (api.linkNostr /
+ * api.nostrLogin / api.getMe, buildSignedActionEvent, deriveNostrIdentity) are
+ * wired, and the Settings → Nostr identity screen has landed
+ * (settings-nostr-nav → settings-nostr-screen with nostr-npub / nostr-link-btn /
+ * nostr-linked-badge / account rotation). This spec now drives a REAL link
+ * round-trip: import alice → Settings → Nostr identity → Link → linked badge.
+ * It requires FEATURE_NOSTR_IDENTITY=on and PUBLIC_API_URL set to the same
+ * origin the extension is built against (so the NIP-98 `u` tag validates); it
+ * self-skips via /capabilities when the feature is off.
  */
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
 
@@ -85,54 +79,25 @@ test('Settings → Nostr identity screen is reachable and renders', async ({
     timeout: 10_000,
   });
 
-  // ── 3. reach the Nostr-identity entry point ─────────────────────────────
-  // Expected testids once the client UI lands (mirroring the existing
-  // settings-sent-tips-nav / settings-lock-now-btn conventions):
-  //   settings-nostr-nav   — SettingsNavRow opening the Nostr identity screen
-  //   nostr-link-btn       — "Link Nostr identity" action
-  //   nostr-npub           — element showing the derived/linked npub
-  //   nostr-linked-badge   — confirmation the npub is linked
-  // The SwapTab "P2P (Nostr orderbook)" provider is a swap surface, NOT the
-  // identity feature — so we key off the Settings-scoped testids/text, not a
-  // bare /Nostr/ page match, to avoid a false positive from that provider.
-  const nostrNav = page.getByTestId('settings-nostr-nav');
-  const nostrHeading = page.getByRole('heading', { name: /Nostr|npub|identity/i });
-  const hasNostrEntry =
-    (await nostrNav.count()) > 0 || (await nostrHeading.count()) > 0;
+  // ── 3. open the Nostr-identity screen (Settings → Nostr identity) ────────
+  await page.getByTestId('settings-nostr-nav').click();
+  await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({
+    timeout: 10_000,
+  });
 
-  test.skip(
-    !hasNostrEntry,
-    'Settings → Nostr link/login identity UI not present in this build ' +
-      '(Identity Phase 1 client UI not yet landed; backend + @smirk/core are ' +
-      'ready). Rebuild once the settings-nostr-* entry point ships.',
-  );
+  // The seed-derived npub renders (client-side derivation, no network).
+  await expect(page.getByTestId('nostr-npub')).toContainText(/npub1[0-9a-z]{20,}/i, {
+    timeout: 10_000,
+  });
 
-  // Entry point present → open the identity screen.
-  if ((await nostrNav.count()) > 0) {
-    await nostrNav.click();
-  }
-
-  // ── 4. assert the identity UI renders in its EXPECTED state ─────────────
-  // Assert on the UI, NOT a link round-trip: the backend /auth/nostr/link
-  // currently fails closed (nonce store stubbed), so a link attempt does
-  // not succeed. What we CAN assert is that the identity screen renders and
-  // surfaces the seed-derived identity (npub / link affordance).
-  const npub = page.getByTestId('nostr-npub');
-  const linkBtn = page.getByTestId('nostr-link-btn');
+  // ── 4. exercise a REAL link round-trip against the backend ───────────────
+  // linkNostr: GET /auth/nostr/link-challenge → sign the action over the empty-
+  // body request descriptor → POST /auth/nostr/link. On success the linked badge
+  // renders. Idempotent across runs: if alice's npub is already linked, getMe
+  // surfaces it and the badge is already present (no button to click).
   const badge = page.getByTestId('nostr-linked-badge');
-
-  if ((await npub.count()) > 0) {
-    await expect(npub).toContainText(/npub1[0-9a-z]{20,}/i, { timeout: 10_000 });
-  } else if ((await linkBtn.count()) > 0) {
-    await expect(linkBtn).toBeVisible({ timeout: 10_000 });
-  } else if ((await badge.count()) > 0) {
-    await expect(badge).toBeVisible({ timeout: 10_000 });
-  } else {
-    // Screen rendered under different testids — assert the derived npub or a
-    // recognizable identity affordance is on screen.
-    await expect(page.locator('#root')).toContainText(
-      /npub1[0-9a-z]{20,}|Link.*Nostr|Nostr.*identity/i,
-      { timeout: 10_000 },
-    );
+  if ((await badge.count()) === 0) {
+    await page.getByTestId('nostr-link-btn').click();
   }
+  await expect(badge).toBeVisible({ timeout: 20_000 });
 });

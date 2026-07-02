@@ -116,6 +116,14 @@ export interface AuthMethods {
    * control. Stores it so `nostrLogin` resolves to the same wallet.
    */
   linkNostr(identity: NostrIdentity): Promise<ApiResponse<{ nostrPubkey: string }>>;
+
+  /**
+   * The authenticated user (GET /auth/me). Used by the Settings identity screen
+   * to detect whether an npub is already linked. Requires a session token.
+   */
+  getMe(): Promise<
+    ApiResponse<{ id: string; username?: string; nostrPubkey?: string }>
+  >;
 }
 
 interface AuthResponseCamel {
@@ -276,6 +284,17 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
         body: JSON.stringify({ nostr_token: nostrToken, nonce }),
       });
       return transformResponse(result, snakeToCamel<{ nostrPubkey: string }>);
+    },
+
+    async getMe() {
+      // Read-only; safe to retry.
+      const result = await client.retryableRequest<Record<string, unknown>>('/auth/me', {
+        method: 'GET',
+      });
+      return transformResponse(
+        result,
+        snakeToCamel<{ id: string; username?: string; nostrPubkey?: string }>,
+      );
     },
   };
 }

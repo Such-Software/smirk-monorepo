@@ -72,6 +72,7 @@ export class SmirkApi
   powChallenge: AuthMethods['powChallenge'];
   nostrLogin: AuthMethods['nostrLogin'];
   linkNostr: AuthMethods['linkNostr'];
+  getMe: AuthMethods['getMe'];
 
   // Keys
   registerKey: KeysMethods['registerKey'];
@@ -164,6 +165,7 @@ export class SmirkApi
     this.powChallenge = auth.powChallenge;
     this.nostrLogin = auth.nostrLogin;
     this.linkNostr = auth.linkNostr;
+    this.getMe = auth.getMe;
 
     this.registerKey = keys.registerKey;
     this.getUserKeys = keys.getUserKeys;
