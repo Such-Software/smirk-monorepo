@@ -114,7 +114,12 @@ function PickAsset({
       {assetIds.map((id) => {
         const asset = mustGetAsset(id);
         return (
-          <button key={id} onClick={() => onPick(id)} style={rowButtonStyle()}>
+          <button
+            key={id}
+            data-testid={`receive-asset-${id}`}
+            onClick={() => onPick(id)}
+            style={rowButtonStyle()}
+          >
             <AssetIcon assetId={id} size={32} {...(resolveIcon ? { resolveIcon } : {})} />
             <span style={{ marginLeft: 12, flex: 1, textAlign: 'left' }}>
               <div style={{ fontWeight: 600 }}>{asset.ticker}</div>
@@ -198,6 +203,7 @@ function ShowAddress({
           )}
 
           <div
+            data-testid="receive-address"
             style={{
               fontFamily: 'monospace',
               fontSize: 12,
@@ -216,6 +222,7 @@ function ShowAddress({
 
           {onCopy && (
             <ActionButton
+              testid="receive-copy-btn"
               label={copied ? 'Copied' : 'Copy address'}
               icon={copied ? '✓' : '📋'}
               onClick={handleCopy}

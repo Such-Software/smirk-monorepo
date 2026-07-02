@@ -160,7 +160,7 @@ export function InboxTab(props: InboxTabProps) {
     tipsClaimable.length === 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div data-testid="inbox-tab" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Header
         loading={props.loading ?? false}
         {...(props.onRefresh ? { onRefresh: props.onRefresh } : {})}

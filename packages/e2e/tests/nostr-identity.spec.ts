@@ -1,5 +1,6 @@
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import { getCapabilities } from '../fixtures/capabilities.js';
 
 /**
  * nostr-identity — Settings → link / login-with-Nostr identity screen.
@@ -47,6 +48,15 @@ test('Settings → Nostr identity screen is reachable and renders', async ({
   context,
   extensionId,
 }) => {
+  // Self-adapt: the link/login round-trip needs the backend's nostr_identity
+  // feature ON. When it's off, skip early (before any onboarding work) with an
+  // accurate reason instead of relying on the downstream UI-presence skip.
+  const caps = await getCapabilities();
+  test.skip(
+    !caps.features.nostr_identity,
+    'backend feature nostr_identity is off (/capabilities features.nostr_identity=false) — Nostr link/login N/A on this config',
+  );
+
   const page = await context.newPage();
 
   // Log backend traffic that ORIGINATES FROM THE POPUP PAGE (balance,

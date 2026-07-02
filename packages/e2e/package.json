@@ -5,8 +5,10 @@
   "description": "Playwright end-to-end suite: drives the real extension (and later desktop) UI against a running backend. The client-release gate.",
   "type": "module",
   "scripts": {
+    "build:ext": "bash scripts/build-extension.sh",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
+    "e2e": "bash scripts/build-extension.sh && playwright test",
     "report": "playwright show-report"
   },
   "devDependencies": {

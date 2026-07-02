@@ -283,7 +283,7 @@ function Welcome({ onCreate, onImport }: { onCreate: () => void; onImport: () =>
         </p>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
-        <Button onClick={onCreate}>Create new wallet</Button>
+        <Button onClick={onCreate} testid="onboarding-create-btn">Create new wallet</Button>
         <Button variant="secondary" onClick={onImport} testid="onboarding-import-btn">
           Import existing
         </Button>
@@ -352,7 +352,7 @@ function ShowMnemonic({
             >
               {(i + 1).toString().padStart(2, '0')}
             </span>
-            <span>{w}</span>
+            <span data-testid={`onboarding-create-seed-word-${i}`}>{w}</span>
           </li>
         ))}
       </ol>
@@ -375,7 +375,11 @@ function ShowMnemonic({
         />
         <span>I have written it down somewhere safe.</span>
       </label>
-      <Button disabled={!acknowledged} onClick={onContinue}>
+      <Button
+        disabled={!acknowledged}
+        onClick={onContinue}
+        testid="onboarding-create-backed-up-continue"
+      >
         Continue
       </Button>
     </div>
@@ -431,6 +435,7 @@ function VerifyMnemonic({
               autoFocus={idx === 0}
               spellcheck={false}
               value={entries[i] ?? ''}
+              data-testid={`onboarding-verify-word-${i}`}
               onInput={(e) =>
                 setEntries({ ...entries, [i]: (e.target as HTMLInputElement).value })
               }
@@ -440,7 +445,7 @@ function VerifyMnemonic({
         ))}
       </div>
       {error && <FieldError>{error}</FieldError>}
-      <Button onClick={handleSubmit}>Continue</Button>
+      <Button onClick={handleSubmit} testid="onboarding-create-continue">Continue</Button>
     </div>
   );
 }
