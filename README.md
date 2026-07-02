@@ -26,6 +26,10 @@ Open-source client code for the Smirk multi-currency wallet — Rust crates for 
 
 The legacy browser extension at [Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension) is frozen at v0.2.x; `packages/extension/` here is the canonical v0.3+ client.
 
+### Backend
+
+v0.3 clients are **backend-agnostic**: they speak to an open, self-hostable server — [`smirk-backend-core`](https://github.com/Such-Software/smirk-backend-core) (chain access + Nostr-native identity / NIP-05 + an optional relay), non-custodial throughout. Run your own, or use the reference public instance at `api.smirk.cash`, where a Smirk username doubles as your `name@smirk.cash` NIP-05 handle. Self-hosting bypasses every registration gate; see that repo's `docs/operations/`.
+
 ## Layout
 
 ```
