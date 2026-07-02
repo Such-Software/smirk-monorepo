@@ -6,4 +6,4 @@ export * from './types';
 export * from './provider';
 export * from './registry';
 export * from './dm';
-export { NostrMessagingProvider } from './nostr';
+export { NostrMessagingProvider, unwrapDmSecurely } from './nostr';
