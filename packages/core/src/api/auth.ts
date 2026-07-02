@@ -5,7 +5,14 @@
 import { ApiClient, ApiResponse } from './client';
 import { snakeToCamel } from './parse';
 import type { AltchaPayload } from '../pow';
-import { buildNip98Event, nip98AuthHeader, type NostrIdentity } from '../nostr';
+import {
+  buildNip98Event,
+  buildSignedActionEvent,
+  descriptorSha256,
+  nip98AuthHeader,
+  requestDescriptor,
+  type NostrIdentity,
+} from '../nostr';
 
 export interface AuthMethods {
   telegramLogin(initData: string): Promise<
@@ -233,13 +240,40 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
     },
 
     async linkNostr(identity) {
-      // Authed call (the session JWT is added automatically); the NIP-98 proof
-      // of npub control rides in the body.
+      // 1. Fetch a single-use server nonce (authed — the session JWT is added
+      // automatically). The server binds it to THIS account, so a nonce minted
+      // for another user cannot be spent here.
+      const challenge = await client.request<{ nonce: string }>(
+        '/auth/nostr/link-challenge',
+        { method: 'GET' },
+      );
+      if (!challenge.data?.nonce) {
+        // Surface the challenge error (auth / feature-off) unchanged. The failed
+        // response carries no `data`, only { error, status, code }, so the shape
+        // is compatible once the phantom data type is erased.
+        return challenge as unknown as ApiResponse<{ nostrPubkey: string }>;
+      }
+      const nonce = challenge.data.nonce;
+
+      // 2. Build the signed-action proof of npub control, binding the nonce, the
+      // `nostr_link` purpose, and the EMPTY-body request descriptor. The path is
+      // a fixed cross-impl contract string (matches the server + the pinned KAT),
+      // NOT derived from the base URL.
       const url = `${client.getBaseUrl()}/auth/nostr/link`;
-      const nostrToken = nip98AuthHeader(buildNip98Event({ url, method: 'POST' }, identity));
+      const payloadSha256Hex = descriptorSha256(
+        requestDescriptor('POST', '/api/v1/auth/nostr/link', '', ''),
+      );
+      const nostrToken = nip98AuthHeader(
+        buildSignedActionEvent(
+          { url, method: 'POST', purpose: 'nostr_link', challenge: nonce, payloadSha256Hex },
+          identity,
+        ),
+      );
+
+      // 3. Submit the proof + the nonce it commits to.
       const result = await client.request<Record<string, unknown>>('/auth/nostr/link', {
         method: 'POST',
-        body: JSON.stringify({ nostr_token: nostrToken }),
+        body: JSON.stringify({ nostr_token: nostrToken, nonce }),
       });
       return transformResponse(result, snakeToCamel<{ nostrPubkey: string }>);
     },

@@ -78,3 +78,66 @@ export function payloadHashHex(body: string | Uint8Array): string {
   const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
   return toHex(sha256(bytes));
 }
+
+/**
+ * Canonical request descriptor bound into a STATE-CHANGE (signed action). MUST
+ * byte-for-byte match the server's `request_descriptor` (smirk-backend-core
+ * `core::crypto::nip98`): method (upper) ⏎ path ⏎ sorted query ⏎ hex(sha256(body)).
+ * `path` is the ABSOLUTE path the server sees (e.g. `/api/v1/auth/nostr/link`), a
+ * fixed cross-impl contract — NOT derived from the client base URL.
+ */
+export function requestDescriptor(
+  method: string,
+  path: string,
+  canonicalQuery: string,
+  body: string | Uint8Array = '',
+): string {
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  const bodyHash = toHex(sha256(bytes));
+  return `${method.toUpperCase()}\n${path}\n${canonicalQuery}\n${bodyHash}`;
+}
+
+/** Hex sha256 of a request descriptor — the value bound in the `payload` tag. */
+export function descriptorSha256(descriptor: string): string {
+  return toHex(sha256(new TextEncoder().encode(descriptor)));
+}
+
+export interface SignedActionParams {
+  /** Absolute request URL (the server validates it against the `u` tag). */
+  url: string;
+  /** HTTP method; normalized to upper-case. */
+  method: string;
+  /** Action purpose the server pins (e.g. `nostr_link`). */
+  purpose: string;
+  /** Server-issued single-use nonce (the `challenge` tag). */
+  challenge: string;
+  /** `descriptorSha256(requestDescriptor(...))` — the `payload` tag. */
+  payloadSha256Hex: string;
+  /** Unix seconds; defaults to now. Injectable for tests. */
+  createdAt?: number;
+}
+
+/**
+ * Build + sign a STATE-CHANGE (signed-action) NIP-98 event. Unlike a login event
+ * ([`buildNip98Event`]), it additionally binds `purpose`, `challenge` (the server
+ * nonce), and `payload` (the request-descriptor hash), matching the server's
+ * `verify_signed_action`.
+ */
+export function buildSignedActionEvent(
+  params: SignedActionParams,
+  identity: NostrIdentity,
+): NostrEvent {
+  const created_at = params.createdAt ?? Math.floor(Date.now() / 1000);
+  const tags: string[][] = [
+    ['u', params.url],
+    ['method', params.method.toUpperCase()],
+    ['purpose', params.purpose],
+    ['challenge', params.challenge],
+    ['payload', params.payloadSha256Hex],
+  ];
+  const pubkey = identity.pubkeyHex;
+  const content = '';
+  const id = eventId(pubkey, created_at, NIP98_KIND, tags, content);
+  const sig = signNostrEventId(id, identity.privateKey);
+  return { id, pubkey, created_at, kind: NIP98_KIND, tags, content, sig };
+}
