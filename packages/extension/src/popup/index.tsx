@@ -62,7 +62,6 @@ import {
   isPendingOutgoingStale,
   recentlySpentInputs,
   reconcilePendingOutgoing,
-  initSmirkApi,
   chainProviders,
   deriveNostrIdentity,
   initSmirkMessaging,
@@ -79,6 +78,7 @@ import {
   type UnlockedWallet,
   type WalletState,
 } from '@smirk/core';
+import { bootBackendSelection } from '../backend-boot';
 import {
   AppShell,
   BrowserShell,
@@ -6630,12 +6630,9 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
 // invoked by `executeApproval`. Same code, single source of truth,
 // reused by the desktop BrowseTab modal.
 
-// Configure the API backend (staging / local / self-hosted) before the UI
-// bootstraps; no-op for default production builds (VITE_SMIRK_BACKEND_URL unset).
-initSmirkApi({
-  baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL,
-  walletApiStyle: import.meta.env.VITE_SMIRK_API_STYLE as 'flat' | 'namespaced' | undefined,
-});
+// Configure the API backend before the UI bootstraps: build default → durable
+// user selection → re-applied on a cross-context switch. See backend-boot.ts.
+bootBackendSelection();
 
 const root = document.getElementById('root');
 if (root) {

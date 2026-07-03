@@ -16,18 +16,16 @@
  * follow that pattern.
  */
 
-import { api, CORE_PACKAGE_VERSION, initSmirkApi } from '@smirk/core';
+import { api, CORE_PACKAGE_VERSION } from '@smirk/core';
 
+import { bootBackendSelection } from '../backend-boot';
 import { installDappBridge } from './dapp/dispatch';
 import { installDmWatcher } from './dm-watch';
 import { installJobsCoordinator } from './jobs/coordinator';
 
-// Point the API at a configured backend (staging / local / self-hosted) before
-// any request; no-op for default production builds (VITE_SMIRK_BACKEND_URL unset).
-initSmirkApi({
-  baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL,
-  walletApiStyle: import.meta.env.VITE_SMIRK_API_STYLE as 'flat' | 'namespaced' | undefined,
-});
+// Point the API at the configured backend: build default → durable user
+// selection → re-applied on a cross-context switch. See backend-boot.ts.
+bootBackendSelection();
 
 // Diagnostic breadcrumbs at SW startup + install. `console.debug`
 // keeps these out of the default extension console view; developers

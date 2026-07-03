@@ -21,7 +21,7 @@
  * own DevTools is the only way to debug a stuck solve.
  */
 
-import { initSmirkApi } from '@smirk/core';
+import { bootBackendSelection } from '../../../backend-boot';
 
 import { HANDLERS } from '../handlers/registry';
 import type {
@@ -39,10 +39,7 @@ import type {
 // which silently breaks every self-hosted / non-production deployment (the token
 // it returns is then rejected by the actual configured backend). It happens to
 // be masked in production only because the default already IS production.
-initSmirkApi({
-  baseUrl: import.meta.env.VITE_SMIRK_BACKEND_URL,
-  walletApiStyle: import.meta.env.VITE_SMIRK_API_STYLE as 'flat' | 'namespaced' | undefined,
-});
+bootBackendSelection();
 
 // Track in-flight aborts so a 'cancel' from the SW (via a future
 // message, not implemented today) can stop a running job.
