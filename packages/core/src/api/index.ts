@@ -25,10 +25,11 @@ import { createGrinMethods, GrinMethods } from './grin';
 import { createSwapMethods, SwapMethods } from './swap';
 import type { BackendCapabilities } from './capabilities';
 
-export type { ApiResponse } from './client';
+export type { ApiResponse, WalletApiStyle } from './client';
 export { ApiClient } from './client';
 export * from './parse';
 export * from './capabilities';
+export * from './backend-config';
 
 export type { AuthMethods } from './auth';
 export type { KeysMethods } from './keys';

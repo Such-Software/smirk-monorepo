@@ -2,7 +2,9 @@
  * Base API client with request handling, retry policy, and bearer-token auth.
  */
 
-const DEFAULT_API_BASE = 'https://backend.smirk.cash/api/v1';
+// Canonical public v0.3 backend. Real builds pass VITE_SMIRK_BACKEND_URL and a
+// stored selection overrides this; it is only the last-resort fallback.
+const DEFAULT_API_BASE = 'https://api.smirk.cash/api/v1';
 
 // Use globalThis to store the access token so it's shared across all module
 // instances. This is needed because Vite's chunking can create multiple
