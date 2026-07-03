@@ -21,6 +21,10 @@ export interface OriginPermission {
   /** Assets the user authorized the origin to read. Order is not
    *  significant; consumers should treat it as a set. */
   assets: SmirkAsset[];
+  /** Whether the origin may read the user's Nostr identity (npub) and request
+   *  Nostr-event signatures. Separate from chain `assets` because exposing the
+   *  npub is a distinct, cross-site-correlatable grant. */
+  nostr?: boolean;
   /** Display name from the dapp's `<title>` at approval time. Stored
    *  so Settings → Connected Sites can show something friendlier than
    *  the bare origin. */
@@ -64,4 +68,9 @@ export function hasAssetsAuthorized(
   if (wanted.length === 0) return perm.assets.length > 0;
   const authorized = new Set(perm.assets);
   return wanted.every((a) => authorized.has(a));
+}
+
+/** True iff the origin has been granted the Nostr scope (npub + signing). */
+export function hasNostrAuthorized(perm: OriginPermission | null): boolean {
+  return !!perm?.nostr;
 }

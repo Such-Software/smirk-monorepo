@@ -54,6 +54,13 @@ export interface DappPublicCache {
   fingerprint: string;
   addresses: SmirkAddresses;
   publicKeys: SmirkPublicKeys;
+  /** Seed-derived Nostr public key (x-only hex) for the active identity. Public
+   *  material — lets the dapp bridge answer getNostrPublicKey() without the seed.
+   *  Optional for backward compat with pre-nostr cache entries. */
+  nostrPublicKey?: string;
+  /** Backend API base URL the wallet is pointed at, so a page can discover the
+   *  user's chosen backend via getBackend(). Optional for backward compat. */
+  backendUrl?: string;
   /** Unix ms when the popup last wrote this. Used as a coarse
    *  "wallet is currently unlocked" signal — see file header. */
   unlockedAt: number;
@@ -86,6 +93,16 @@ export function chromePublicCacheProvider(): WalletProvider {
       const cache = await readCache();
       if (!cache) return emptyAddresses();
       return projectAddresses(cache.addresses, assets);
+    },
+
+    async getNostrPublicKey(): Promise<string | null> {
+      const cache = await readCache();
+      return cache?.nostrPublicKey ?? null;
+    },
+
+    async getBackendUrl(): Promise<string> {
+      const cache = await readCache();
+      return cache?.backendUrl ?? '';
     },
   };
 }

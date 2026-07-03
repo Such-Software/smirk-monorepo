@@ -77,6 +77,35 @@ export interface SmirkClaimResult {
   error?: string;
 }
 
+/** The backend this wallet is pointed at. A page (e.g. a checkout) reads it so
+ *  it talks to the user's CHOSEN backend instead of hardcoding one. */
+export interface SmirkBackend {
+  /** Absolute API base URL, e.g. `https://api.smirk.cash/api/v1`. */
+  url: string;
+}
+
+/** An unsigned Nostr event (NIP-01) the page asks the wallet to sign. The
+ *  wallet stamps `created_at`/`pubkey`, computes the id, and schnorr-signs it.
+ *  General-purpose: covers NIP-98 auth (kind 27235), notes (kind 1), etc. */
+export interface SmirkNostrUnsignedEvent {
+  kind: number;
+  content: string;
+  tags: string[][];
+  /** Optional; the wallet stamps `now` when omitted. */
+  created_at?: number;
+}
+
+/** A signed Nostr event (NIP-01). */
+export interface SmirkNostrSignedEvent {
+  id: string;
+  pubkey: string;
+  kind: number;
+  content: string;
+  tags: string[][];
+  created_at: number;
+  sig: string;
+}
+
 // ============================================================================
 // Method dispatch table — single source of truth for what the page-side
 // surface and wallet-side handler agree on.
@@ -114,6 +143,19 @@ export type SmirkMethodMap = {
   claimPublicTip: {
     params: { tipId: string; fragmentKey: string };
     result: SmirkClaimResult;
+  };
+  getBackend: {
+    params: Record<string, never>;
+    result: SmirkBackend;
+  };
+  getNostrPublicKey: {
+    params: Record<string, never>;
+    /** x-only hex pubkey; `null` if the origin lacks/declines the nostr scope. */
+    result: string | null;
+  };
+  signNostrEvent: {
+    params: { event: SmirkNostrUnsignedEvent };
+    result: SmirkNostrSignedEvent;
   };
 };
 

@@ -15,6 +15,7 @@
  */
 import { HDKey } from '@scure/bip32';
 import { schnorr } from '@noble/curves/secp256k1';
+import { sha256 } from '@noble/hashes/sha256';
 import { bech32 } from '@scure/base';
 import { mnemonicToSeed } from '../hd';
 
@@ -85,4 +86,52 @@ export function signNostrEventId(eventIdHex: string, privateKey: Uint8Array): st
 /** Verify a 64-byte hex signature over an event id against an x-only pubkey hex. */
 export function verifyNostrEventId(sigHex: string, eventIdHex: string, pubkeyHex: string): boolean {
   return schnorr.verify(sigHex, eventIdHex, pubkeyHex);
+}
+
+export interface UnsignedNostrEvent {
+  kind: number;
+  content: string;
+  tags: string[][];
+  /** Unix seconds; the wallet stamps `now` when omitted. */
+  created_at?: number;
+}
+
+export interface SignedNostrEvent {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+}
+
+/** NIP-01 event id: sha256 of the canonical array serialization. */
+function nostrEventIdHex(
+  pubkey: string,
+  created_at: number,
+  kind: number,
+  tags: string[][],
+  content: string,
+): string {
+  const serial = JSON.stringify([0, pubkey, created_at, kind, tags, content]);
+  return toHex(sha256(new TextEncoder().encode(serial)));
+}
+
+/**
+ * Finalize + schnorr-sign an arbitrary Nostr event (NIP-01) with the identity:
+ * stamp pubkey + created_at (now when omitted), compute the id, sign it. The
+ * general primitive general dapp signing (NIP-98 login, kind-1 notes) builds on.
+ */
+export function signNostrEvent(
+  unsigned: UnsignedNostrEvent,
+  identity: NostrIdentity,
+): SignedNostrEvent {
+  const created_at = unsigned.created_at ?? Math.floor(Date.now() / 1000);
+  const pubkey = identity.pubkeyHex;
+  const tags = unsigned.tags ?? [];
+  const content = unsigned.content ?? '';
+  const id = nostrEventIdHex(pubkey, created_at, unsigned.kind, tags, content);
+  const sig = signNostrEventId(id, identity.privateKey);
+  return { id, pubkey, created_at, kind: unsigned.kind, tags, content, sig };
 }

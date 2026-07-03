@@ -24,7 +24,7 @@
  */
 
 import { bytesToHex } from '@noble/hashes/utils';
-import type { UnlockedWallet } from '@smirk/core';
+import { api, deriveNostrIdentity, type UnlockedWallet } from '@smirk/core';
 import {
   emptyPublicKeys,
   type SmirkAddresses,
@@ -76,6 +76,18 @@ export function createLiveWalletProvider(
       const out = emptyAddresses();
       for (const a of assets) out[a] = wallet.addresses[a];
       return out;
+    },
+
+    async getNostrPublicKey(): Promise<string | null> {
+      const wallet = getWallet();
+      // Default (account 0) identity from the unlocked mnemonic. Session-cache
+      // restores carry no mnemonic → no npub available.
+      if (!wallet?.mnemonic) return null;
+      return deriveNostrIdentity(wallet.mnemonic, 0).pubkeyHex;
+    },
+
+    async getBackendUrl(): Promise<string> {
+      return api.getBaseUrl();
     },
   };
 }

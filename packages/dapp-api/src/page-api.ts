@@ -17,8 +17,11 @@ import {
   PROTOCOL_VERSION,
   SmirkAddresses,
   SmirkAsset,
+  SmirkBackend,
   SmirkMethod,
   SmirkMethodMap,
+  SmirkNostrSignedEvent,
+  SmirkNostrUnsignedEvent,
   SmirkPaymentRequest,
   SmirkPaymentResult,
   SmirkPublicKeys,
@@ -57,6 +60,15 @@ export interface SmirkPageApi {
   signMessage(message: string): Promise<SmirkSignResult>;
   requestPayment(request: SmirkPaymentRequest): Promise<SmirkPaymentResult>;
   claimPublicTip(tipId: string, fragmentKey: string): Promise<SmirkClaimResult>;
+  /** The backend the wallet is pointed at (so a page talks to the user's
+   *  chosen backend instead of hardcoding one). */
+  getBackend(): Promise<SmirkBackend>;
+  /** The user's Nostr public key (x-only hex). Prompts a one-time grant the
+   *  first time an origin asks (npub disclosure is opt-in per origin). */
+  getNostrPublicKey(): Promise<string | null>;
+  /** Ask the wallet to schnorr-sign a Nostr event (NIP-98 login, a note, …).
+   *  Requires the Nostr scope; prompts per signature. */
+  signNostrEvent(event: SmirkNostrUnsignedEvent): Promise<SmirkNostrSignedEvent>;
 }
 
 let nextRequestId = 0;
@@ -113,6 +125,10 @@ export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi 
       call('requestPayment', request),
     claimPublicTip: (tipId: string, fragmentKey: string) =>
       call('claimPublicTip', { tipId, fragmentKey }),
+    getBackend: () => call('getBackend', {}),
+    getNostrPublicKey: () => call('getNostrPublicKey', {}),
+    signNostrEvent: (event: SmirkNostrUnsignedEvent) =>
+      call('signNostrEvent', { event }),
   });
 
   return api;

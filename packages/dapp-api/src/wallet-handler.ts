@@ -22,6 +22,7 @@
 import { ApprovalHandler, OriginContext } from './approval';
 import {
   hasAssetsAuthorized,
+  hasNostrAuthorized,
   OriginPermission,
   OriginPermissionStore,
 } from './permissions';
@@ -32,6 +33,7 @@ import {
   SmirkAsset,
   SmirkErrorCode,
   SmirkMethod,
+  SmirkNostrUnsignedEvent,
   SmirkPublicKeys,
   SmirkWireRequest,
   SmirkWireResponse,
@@ -246,6 +248,62 @@ async function dispatchInner<M extends SmirkMethod>(
           `Approval handler returned wrong kind: ${decision.kind}`,
         );
       }
+      return decision.result;
+    }
+
+    case 'getBackend': {
+      // Non-secret config (which backend the wallet targets). Requires a
+      // connection so random pages can't probe it, but no per-call prompt.
+      await assertUnlocked(deps.provider);
+      await requireOriginPermission(deps.permissions, origin.origin);
+      return { url: await deps.provider.getBackendUrl() };
+    }
+
+    case 'getNostrPublicKey': {
+      await assertUnlocked(deps.provider);
+      const perm = await requireOriginPermission(deps.permissions, origin.origin);
+      if (!hasNostrAuthorized(perm)) {
+        // First npub read prompts a DEDICATED grant — the npub is a distinct,
+        // cross-site-correlatable disclosure, never bundled into connect().
+        const decision = await deps.approval({ kind: 'nostrGrant', origin });
+        if (!decision.approved) {
+          throw new HandlerError('USER_REJECTED', 'User declined to share their Nostr identity');
+        }
+        if (decision.kind !== 'nostrGrant') {
+          throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
+        }
+        await deps.permissions.set({ ...perm, nostr: true, lastUsedAt: Date.now() });
+      } else {
+        await touch(deps.permissions, perm);
+      }
+      return await deps.provider.getNostrPublicKey();
+    }
+
+    case 'signNostrEvent': {
+      await assertUnlocked(deps.provider);
+      const perm = await requireOriginPermission(deps.permissions, origin.origin);
+      if (!hasNostrAuthorized(perm)) {
+        throw new HandlerError(
+          'NOT_AUTHORIZED',
+          'Origin lacks the Nostr scope — call getNostrPublicKey() first',
+        );
+      }
+      const params = req.params as { event: SmirkNostrUnsignedEvent };
+      // Prompt per-signature (like signMessage) — a Nostr signature is an
+      // auth/publish credential; auto-signing would let a connected origin act
+      // as the user without a fresh prompt.
+      const decision = await deps.approval({
+        kind: 'signNostrEvent',
+        origin,
+        event: params.event,
+      });
+      if (!decision.approved) {
+        throw new HandlerError('USER_REJECTED', 'User rejected the Nostr signature request');
+      }
+      if (decision.kind !== 'signNostrEvent') {
+        throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
+      }
+      await touch(deps.permissions, perm);
       return decision.result;
     }
 

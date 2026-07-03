@@ -25,6 +25,8 @@
 import {
   SmirkAsset,
   SmirkClaimResult,
+  SmirkNostrSignedEvent,
+  SmirkNostrUnsignedEvent,
   SmirkPaymentResult,
   SmirkSignResult,
 } from './protocol';
@@ -75,6 +77,17 @@ export type ApprovalRequest =
       origin: OriginContext;
       tipId: string;
       fragmentKey: string;
+    }
+  | {
+      kind: 'nostrGrant';
+      origin: OriginContext;
+    }
+  | {
+      kind: 'signNostrEvent';
+      origin: OriginContext;
+      /** The unsigned event the page wants signed. The wallet renders a human
+       *  summary (NIP-98 login to <url>, a note, …) from kind + tags. */
+      event: SmirkNostrUnsignedEvent;
     };
 
 /** Approval result. Each non-rejected branch carries the computed
@@ -102,6 +115,15 @@ export type ApprovalResult =
       kind: 'claimPublicTip';
       approved: true;
       result: SmirkClaimResult;
+    }
+  | {
+      kind: 'nostrGrant';
+      approved: true;
+    }
+  | {
+      kind: 'signNostrEvent';
+      approved: true;
+      result: SmirkNostrSignedEvent;
     }
   | { approved: false };
 

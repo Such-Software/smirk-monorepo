@@ -36,4 +36,9 @@ export interface WalletProvider {
   /** Receive addresses for the given asset set. Same null-for-missing
    *  semantics as `getPublicKeys`. */
   getAddresses(assets: SmirkAsset[]): Promise<SmirkAddresses>;
+  /** The user's Nostr public key (x-only hex), or `null` if the wallet has
+   *  none. Public material (the npub), so it belongs in the provider. */
+  getNostrPublicKey(): Promise<string | null>;
+  /** The backend API base URL this wallet is pointed at. Public config. */
+  getBackendUrl(): Promise<string>;
 }
