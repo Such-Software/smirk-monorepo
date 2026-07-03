@@ -65,6 +65,20 @@ export type ApprovalRequest =
       origin: ApprovalOrigin;
       tipId: string;
       fragmentKey: string;
+    }
+  | {
+      kind: 'nostrGrant';
+      origin: ApprovalOrigin;
+    }
+  | {
+      kind: 'signNostrEvent';
+      origin: ApprovalOrigin;
+      event: {
+        kind: number;
+        content: string;
+        tags: string[][];
+        created_at?: number;
+      };
     };
 
 export interface ApprovalScreenProps {
@@ -95,7 +109,9 @@ export type ApprovalApproval =
   | { kind: 'connect'; approvedAssets: ApprovalAsset[] }
   | { kind: 'signMessage' }
   | { kind: 'requestPayment' }
-  | { kind: 'claimPublicTip' };
+  | { kind: 'claimPublicTip' }
+  | { kind: 'nostrGrant' }
+  | { kind: 'signNostrEvent' };
 
 export function ApprovalScreen({
   request,
@@ -240,6 +256,10 @@ function ApprovalBody({
       );
     case 'claimPublicTip':
       return <ClaimTipBody />;
+    case 'nostrGrant':
+      return <NostrGrantBody />;
+    case 'signNostrEvent':
+      return <SignNostrEventBody event={request.event} />;
   }
 }
 
@@ -377,6 +397,89 @@ function ClaimTipBody() {
   );
 }
 
+function NostrGrantBody() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h2 style={{ margin: 0, fontSize: 18, color: 'var(--smirk-fg)' }}>
+        Share your Nostr identity?
+      </h2>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
+        The site is requesting your public Nostr key (npub) so it can recognize
+        you. This reveals your identity to the site — it can never move funds.
+      </p>
+    </div>
+  );
+}
+
+/** Human summary of an unsigned Nostr event for the sign prompt. */
+function nostrEventSummary(event: { kind: number; tags: string[][] }): {
+  title: string;
+  detail: string;
+} {
+  if (event.kind === 27235) {
+    const u = event.tags.find((t) => t[0] === 'u')?.[1];
+    let host = 'this site';
+    try {
+      if (u) host = new URL(u).host;
+    } catch {
+      // keep the fallback
+    }
+    return {
+      title: 'Sign in with Nostr?',
+      detail: `Prove your identity to ${host}. This is a login credential — it moves no funds.`,
+    };
+  }
+  if (event.kind === 1) {
+    return {
+      title: 'Publish a note?',
+      detail: 'The site will publish this note to Nostr as you.',
+    };
+  }
+  return {
+    title: 'Sign a Nostr event?',
+    detail: `The site wants a signature over a kind-${event.kind} Nostr event.`,
+  };
+}
+
+function SignNostrEventBody({
+  event,
+}: {
+  event: { kind: number; content: string; tags: string[][] };
+}) {
+  const { title, detail } = nostrEventSummary(event);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h2 style={{ margin: 0, fontSize: 18, color: 'var(--smirk-fg)' }}>{title}</h2>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
+        {detail}
+      </p>
+      {event.content ? (
+        <Section title="Content">
+          <pre
+            style={{
+              margin: 0,
+              padding: 12,
+              background: 'var(--smirk-bg-sunken)',
+              color: 'var(--smirk-fg)',
+              border: '1px solid var(--smirk-border)',
+              borderRadius: 8,
+              fontSize: 12,
+              fontFamily:
+                'var(--smirk-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+              maxHeight: 200,
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+          >
+            {event.content}
+          </pre>
+        </Section>
+      ) : null}
+    </div>
+  );
+}
+
 function AssetChip({ asset }: { asset: ApprovalAsset }) {
   // Use the accent color for asset chips so they're high-contrast
   // against every theme background (light, dark, retro). Earlier
@@ -436,6 +539,10 @@ function ApprovalActions({
               return onApprove({ kind: 'requestPayment' });
             case 'claimPublicTip':
               return onApprove({ kind: 'claimPublicTip' });
+            case 'nostrGrant':
+              return onApprove({ kind: 'nostrGrant' });
+            case 'signNostrEvent':
+              return onApprove({ kind: 'signNostrEvent' });
           }
         }}
       >

@@ -464,10 +464,18 @@ function dappPublicCacheFor(
     clampedAutoLock === 0
       ? Date.now() // immediate lock: cache is stale the moment we write it
       : Date.now() + clampedAutoLock * 60_000;
+  // Public material for the dapp bridge's getNostrPublicKey() / getBackend()
+  // (SW provider reads these from the cache; no seed in the SW). npub is absent
+  // on a session-cache restore (no mnemonic to derive from).
+  const nostrPublicKey = wallet.mnemonic
+    ? deriveNostrIdentity(wallet.mnemonic, 0).pubkeyHex
+    : undefined;
   return {
     fingerprint: wallet.fingerprint,
     addresses,
     publicKeys,
+    ...(nostrPublicKey ? { nostrPublicKey } : {}),
+    backendUrl: api.getBaseUrl(),
     unlockedAt: Date.now(),
     sessionExpiresAtMs,
   };

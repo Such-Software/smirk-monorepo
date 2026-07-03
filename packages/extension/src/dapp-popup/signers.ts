@@ -22,9 +22,13 @@
 
 import { bytesToHex } from '@noble/hashes/utils';
 import {
+  deriveNostrIdentity,
   signBitcoinMessage,
   signEd25519WithScalar,
+  signNostrEvent,
+  type SignedNostrEvent,
   type UnlockedWallet,
+  type UnsignedNostrEvent,
 } from '@smirk/core';
 import type { SmirkAsset, SmirkSignResult } from '@such-software/smirk-dapp-api';
 
@@ -93,4 +97,21 @@ export function signMessageWithUnlocked(
     }
   }
   return { message, signatures };
+}
+
+/**
+ * Schnorr-sign an arbitrary Nostr event with the wallet's default (account 0)
+ * seed-derived identity — NIP-98 login, kind-1 notes, etc. Requires the
+ * unlocked mnemonic (absent on a session-cache restore).
+ */
+export function signNostrEventWithUnlocked(
+  wallet: UnlockedWallet,
+  event: UnsignedNostrEvent,
+): SignedNostrEvent {
+  if (!wallet.mnemonic) {
+    throw new Error(
+      'Nostr signing needs the unlocked mnemonic — re-unlock the wallet',
+    );
+  }
+  return signNostrEvent(event, deriveNostrIdentity(wallet.mnemonic, 0));
 }

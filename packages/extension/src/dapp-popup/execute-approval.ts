@@ -29,7 +29,7 @@ import type {
   SmirkAsset,
 } from '@such-software/smirk-dapp-api';
 import type { ApprovalApproval } from '@smirk/ui';
-import { signMessageWithUnlocked } from './signers';
+import { signMessageWithUnlocked, signNostrEventWithUnlocked } from './signers';
 
 /**
  * The popup-side dependencies the executor needs. We pass these in
@@ -241,6 +241,20 @@ export async function executeApproval(
           ? { success: true, txid: outcome.txid ?? '' }
           : { success: false, error: outcome.error ?? 'claim failed' },
       };
+    }
+
+    case 'nostrGrant': {
+      // The grant IS the approval — no signing. getNostrPublicKey then reads
+      // the (public) npub from the provider.
+      return { kind: 'nostrGrant', approved: true };
+    }
+
+    case 'signNostrEvent': {
+      if (request.kind !== 'signNostrEvent') {
+        throw new Error('Pending request kind mismatch (expected signNostrEvent)');
+      }
+      const result = signNostrEventWithUnlocked(deps.wallet, request.event);
+      return { kind: 'signNostrEvent', approved: true, result };
     }
 
     default: {
