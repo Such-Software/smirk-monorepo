@@ -32,6 +32,9 @@ export * from './chain';
 // Nostr identity (seed-derived npub, NIP-06; the identity-plane foundation)
 export * from './nostr';
 
+// v0.2 -> v0.3 migration (detect / decrypt legacy seed / legacy BTC-LTC keys)
+export * from './migration';
+
 // Messaging plane (NIP-17 encrypted DMs over the relay, via a swappable seam)
 export * from './messaging';
 

@@ -194,7 +194,7 @@ function deriveBip84Key(
  * for migration purposes. Not used by the current `deriveAllKeys` v3
  * code path — use `deriveBip84Key` for new derivations.
  */
-function deriveLegacyBtcLtcKey(
+export function deriveLegacyBtcLtcKey(
   masterSeed: Uint8Array,
   coinType: number,
 ): { privateKey: Uint8Array; publicKey: Uint8Array } {
