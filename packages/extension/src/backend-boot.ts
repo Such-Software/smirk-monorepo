@@ -24,7 +24,9 @@ import {
   type WalletApiStyle,
 } from '@smirk/core';
 
-const FALLBACK = {
+/** The build-time default backend. Exported so the Settings -> Backend screen
+ *  can display it and offer "reset to default". */
+export const DEFAULT_BACKEND: { url: string; apiStyle: WalletApiStyle } = {
   url:
     (import.meta.env.VITE_SMIRK_BACKEND_URL as string | undefined) ||
     'https://api.smirk.cash/api/v1',
@@ -32,6 +34,8 @@ const FALLBACK = {
     ((import.meta.env.VITE_SMIRK_API_STYLE as WalletApiStyle | undefined) ||
       'namespaced') as WalletApiStyle,
 };
+
+const FALLBACK = DEFAULT_BACKEND;
 
 /**
  * Point THIS context's api singleton at the configured backend. Call once at

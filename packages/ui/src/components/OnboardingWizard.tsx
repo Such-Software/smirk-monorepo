@@ -26,6 +26,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Button } from './Button';
+import { BackendPicker, type BackendProbeInfo } from './BackendPicker';
 
 /**
  * One linked third-party social (Telegram, Discord, Matrix, …).
@@ -114,11 +115,27 @@ export interface OnboardingWizardProps {
    * the Capacitor mobile build) maps it to its own runtime path.
    */
   dogeMiningImageUrl?: string;
+  /**
+   * Optional "run your own backend" opt-in. When provided, the welcome screen
+   * shows a subtle link to a backend picker BEFORE create/import, so a
+   * self-hoster's very first bootstrap hits their own backend (never the public
+   * default). `probe`/`onUse` wrap core `connectBackend` + `writeBackendConfig`;
+   * omit the whole prop to hide the affordance (the default one-tap path).
+   */
+  backendPicker?: {
+    probe: (
+      url: string,
+    ) => Promise<{ ok: boolean; info?: BackendProbeInfo; error?: string }>;
+    onUse: (info: BackendProbeInfo) => Promise<void>;
+    current?: { url: string; instanceName?: string; isDefault: boolean };
+    defaultUrl?: string;
+  };
   class?: string;
 }
 
 type Step =
   | { kind: 'welcome' }
+  | { kind: 'backend-picker' }
   | { kind: 'show'; mnemonic: string }
   | { kind: 'verify'; mnemonic: string; indices: number[] }
   | { kind: 'import-warning' }
@@ -190,7 +207,31 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         minHeight: 0,
       }}
     >
-      {step.kind === 'welcome' && <Welcome onCreate={startCreate} onImport={startImport} />}
+      {step.kind === 'welcome' && (
+        <Welcome
+          onCreate={startCreate}
+          onImport={startImport}
+          {...(props.backendPicker
+            ? { onChooseBackend: () => setStep({ kind: 'backend-picker' }) }
+            : {})}
+        />
+      )}
+
+      {step.kind === 'backend-picker' && props.backendPicker && (
+        <BackendPicker
+          context="onboarding"
+          {...(props.backendPicker.current ? { current: props.backendPicker.current } : {})}
+          {...(props.backendPicker.defaultUrl
+            ? { defaultUrl: props.backendPicker.defaultUrl }
+            : {})}
+          probe={props.backendPicker.probe}
+          onUse={async (info) => {
+            await props.backendPicker!.onUse(info);
+            setStep({ kind: 'welcome' });
+          }}
+          onBack={() => setStep({ kind: 'welcome' })}
+        />
+      )}
 
       {step.kind === 'show' && (
         <ShowMnemonic
@@ -259,7 +300,15 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
 // Step components
 // ============================================================================
 
-function Welcome({ onCreate, onImport }: { onCreate: () => void; onImport: () => void }) {
+function Welcome({
+  onCreate,
+  onImport,
+  onChooseBackend,
+}: {
+  onCreate: () => void;
+  onImport: () => void;
+  onChooseBackend?: () => void;
+}) {
   return (
     <div
       style={{
@@ -288,6 +337,24 @@ function Welcome({ onCreate, onImport }: { onCreate: () => void; onImport: () =>
           Import existing
         </Button>
       </div>
+      {onChooseBackend && (
+        <button
+          onClick={onChooseBackend}
+          data-testid="onboarding-choose-backend"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'inherit',
+            cursor: 'pointer',
+            fontSize: 12,
+            opacity: 0.6,
+            padding: 0,
+            textDecoration: 'underline',
+          }}
+        >
+          Running your own backend? Use it →
+        </button>
+      )}
     </div>
   );
 }
@@ -684,7 +751,9 @@ function ImportWarning({
     <div>
       <ScreenHeader title="Before you import" onBack={onBack} />
       <p style={{ ...bodyTextStyle, margin: '4px 0 14px' }}>
-        Only paste a phrase that was originally generated in Smirk.
+        Paste any 12-word recovery phrase. Smirk derives its own addresses from
+        it, so a phrase from another wallet imports fine but shows empty
+        balances.
       </p>
       <div
         style={{
@@ -724,7 +793,7 @@ function ImportWarning({
           </li>
         </ul>
       </div>
-      <Button onClick={onContinue} testid="onboarding-import-warning-continue">Continue with Smirk seed</Button>
+      <Button onClick={onContinue} testid="onboarding-import-warning-continue">Continue</Button>
     </div>
   );
 }

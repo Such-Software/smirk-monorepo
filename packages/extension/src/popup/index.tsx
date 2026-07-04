@@ -81,11 +81,19 @@ import {
   type Prices,
   type UnlockedWallet,
   type WalletState,
+  connectBackend,
+  readBackendConfig,
+  writeBackendConfig,
+  clearBackendConfig,
+  applyBackendConfig,
+  type WalletApiStyle,
 } from '@smirk/core';
-import { bootBackendSelection } from '../backend-boot';
+import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
 import {
   AppShell,
   BrowserShell,
+  BackendPicker,
+  type BackendProbeInfo,
   IframeBrowserContent,
   SentTipsScreen,
   type SentTipRow,
@@ -1705,6 +1713,21 @@ function App() {
         generateMnemonic={generateMnemonicPhrase}
         isValidMnemonic={isValidMnemonic}
         dogeMiningImageUrl={chrome.runtime.getURL('doge-mining.webp')}
+        backendPicker={{
+          probe: probeBackend,
+          // Pre-wallet: no session/JWT yet, so just persist the choice + re-point
+          // this context. The subsequent create/import bootstraps against it.
+          onUse: async (info) => {
+            const apiStyle = info.apiStyle as WalletApiStyle;
+            await writeBackendConfig(storage, {
+              url: info.url,
+              apiStyle,
+              chosenAt: Date.now(),
+            });
+            applyBackendConfig({ url: info.url, apiStyle });
+          },
+          defaultUrl: DEFAULT_BACKEND.url,
+        }}
         onComplete={async (mnemonic, password) => {
           const wallet = await walletKeystore.createWallet({ mnemonic, password });
           // Respect the user's stored auto-lock preference, if any was
@@ -1972,6 +1995,15 @@ function App() {
                 await clearBootstrapCache();
                 await clearDappPublicCache();
                 await walletKeystore.destroy();
+                await refresh();
+              }}
+              onBackendSwitched={async () => {
+                // The JWT is per-backend; drop it + the caches + the session so
+                // the unlocked-shell effect re-bootstraps against the new backend.
+                api.setAccessToken(null);
+                await clearBootstrapCache();
+                await clearDappPublicCache();
+                setSession(null);
                 await refresh();
               }}
             />
@@ -4875,6 +4907,7 @@ function SettingsRouter({
   onRefresh,
   onLock,
   onForgetComplete,
+  onBackendSwitched,
 }: {
   wallet: UnlockedWallet;
   session: WalletSession | null;
@@ -4883,6 +4916,9 @@ function SettingsRouter({
   onRefresh: () => Promise<void>;
   onLock: () => Promise<void>;
   onForgetComplete: () => Promise<void>;
+  /** Drop the per-backend session + caches so the shell re-bootstraps auth
+   *  against the newly-selected backend. */
+  onBackendSwitched: () => Promise<void>;
 }) {
   const { route, navigate } = useRoute();
   if (route.current === 'settings/sent-tips') {
@@ -4901,12 +4937,121 @@ function SettingsRouter({
   if (route.current === 'settings/messages') {
     return <MessagesRoute wallet={wallet} onBack={() => void navigate('settings')} />;
   }
+  if (route.current === 'settings/backend') {
+    return (
+      <BackendRoute
+        onSwitched={onBackendSwitched}
+        onBack={() => void navigate('settings')}
+      />
+    );
+  }
   return (
     <SettingsStub
       wallet={wallet}
       onLock={onLock}
       onForgetComplete={onForgetComplete}
     />
+  );
+}
+
+/**
+ * Validate + probe a candidate backend, mapping core `connectBackend`
+ * (+ `/capabilities`) into the presentational `BackendProbeInfo` the
+ * `BackendPicker` renders. Shared by the Settings screen and onboarding.
+ */
+async function probeBackend(
+  url: string,
+): Promise<{ ok: boolean; info?: BackendProbeInfo; error?: string }> {
+  const r = await connectBackend(url);
+  if (!r.ok || !r.apiStyle) {
+    return { ok: false, ...(r.error ? { error: r.error } : {}) };
+  }
+  const caps = r.capabilities;
+  const chains = caps
+    ? Object.entries(caps.chains)
+        .filter(([, c]) => c.enabled)
+        .map(([id]) => id)
+    : [];
+  // `/capabilities` advertises no operator instance name yet — leave it unset
+  // (the picker falls back to the URL). A future backend field can populate it.
+  const info: BackendProbeInfo = {
+    url: r.url,
+    apiStyle: r.apiStyle,
+    chains,
+    ...(caps?.restore?.policy ? { restorePolicy: caps.restore.policy } : {}),
+    relay: !!caps?.features?.nostr_relay,
+  };
+  return { ok: true, info };
+}
+
+/**
+ * Settings -> Backend. Reads the durable backend selection, lets the user probe
+ * + switch to another smirk-backend (self-hosted or another operator's), and
+ * re-points every JS context. The probe/commit glue maps core `connectBackend`
+ * (+ `/capabilities`) to the presentational `BackendPicker`.
+ */
+function BackendRoute({
+  onSwitched,
+  onBack,
+}: {
+  onSwitched: () => Promise<void>;
+  onBack: () => void;
+}) {
+  const [current, setCurrent] = useState<
+    { url: string; instanceName?: string; isDefault: boolean } | undefined
+  >(undefined);
+
+  useEffect(() => {
+    let stale = false;
+    void readBackendConfig(storage).then((cfg) => {
+      if (stale) return;
+      setCurrent(
+        cfg
+          ? {
+              url: cfg.url,
+              ...(cfg.instanceName ? { instanceName: cfg.instanceName } : {}),
+              isDefault: cfg.url === DEFAULT_BACKEND.url,
+            }
+          : { url: DEFAULT_BACKEND.url, isDefault: true },
+      );
+    });
+    return () => {
+      stale = true;
+    };
+  }, []);
+
+  const onUse = async (info: BackendProbeInfo) => {
+    const apiStyle = info.apiStyle as WalletApiStyle;
+    await writeBackendConfig(storage, {
+      url: info.url,
+      apiStyle,
+      ...(info.instanceName ? { instanceName: info.instanceName } : {}),
+      chosenAt: Date.now(),
+    });
+    applyBackendConfig({ url: info.url, apiStyle });
+    await onSwitched();
+    onBack();
+  };
+
+  const onResetDefault = async () => {
+    await clearBackendConfig(storage);
+    applyBackendConfig(DEFAULT_BACKEND);
+    await onSwitched();
+    onBack();
+  };
+
+  return (
+    <div data-testid="settings-backend-screen">
+      <BackendPicker
+        context="settings"
+        {...(current ? { current } : {})}
+        defaultUrl={DEFAULT_BACKEND.url}
+        probe={probeBackend}
+        onUse={onUse}
+        onResetDefault={onResetDefault}
+        onBack={onBack}
+      />
+    </div>
   );
 }
 
@@ -6343,6 +6488,15 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         hint="Encrypted direct messages over your backend's Nostr relay"
         onClick={() => void navigate('settings/messages')}
         testid="settings-messages-nav"
+      />
+
+      {/* Backend selection — point the wallet at a self-hosted smirk-backend or
+          another operator's for max privacy (self-sovereign). */}
+      <SettingsNavRow
+        label="Backend"
+        hint="Choose which backend the wallet talks to (run your own for max privacy)"
+        onClick={() => void navigate('settings/backend')}
+        testid="settings-backend-nav"
       />
 
       <button
