@@ -66,6 +66,8 @@ import {
   deriveNostrIdentity,
   detectLegacyWallet,
   migrateLegacyWallet,
+  sweepLegacyBtcLtc,
+  LEGACY_WALLET_KEY,
   initSmirkMessaging,
   sendDm,
   subscribeDms,
@@ -957,6 +959,38 @@ async function writeSessionCache(wallet: UnlockedWallet, minutes: number): Promi
   await sessionStorage.set(SESSION_CACHE_KEY, entry);
 }
 
+/**
+ * Convergent post-unlock sweep of legacy `m/44'` BTC/LTC funds to the v0.3
+ * `m/84'` receive address. v0.2 used `m/44'`, so a migrated wallet's old coins
+ * sit at an address it no longer watches; this moves them over.
+ *
+ * Gated on a legacy `walletState` still being present, so it only ever runs for
+ * wallets that came from v0.2 (a fresh v0.3 wallet has no legacy state → no-op)
+ * and stops once cleanup removes that state. `sweepLegacyBtcLtc` is itself
+ * idempotent (durable per-asset txid record + empty-scan short-circuit), so
+ * repeat calls across unlocks are cheap and never double-broadcast. Fully
+ * non-fatal: any failure just retries on the next unlock — the seed is already
+ * safe in the v0.3 keystore, this only relocates coins.
+ */
+async function convergeLegacySweep(wallet: UnlockedWallet): Promise<void> {
+  try {
+    // Only migrated-from-v0.2 wallets can have legacy m/44' funds.
+    const legacy = await storage.get(LEGACY_WALLET_KEY);
+    if (!legacy) return;
+    // Need the phrase to derive the m/44' key; a session-cache restore drops
+    // it — the sweep then retries after a full password unlock.
+    if (!wallet.mnemonic) return;
+    for (const asset of ['btc', 'ltc'] as const) {
+      const r = await sweepLegacyBtcLtc(asset, wallet, storage);
+      if (r.status === 'swept') {
+        console.info(`[smirk] swept legacy ${asset} → m/84'`, r.txid);
+      }
+    }
+  } catch (e) {
+    console.warn('[smirk] legacy BTC/LTC sweep failed (retries next unlock)', e);
+  }
+}
+
 // ============================================================================
 // Bootstrap (JWT + userId + LWS heights) cache — chrome.storage.session
 // scoped, ~5 min TTL. Skipping the auth round-trip on every popup open
@@ -1656,6 +1690,9 @@ function App() {
           } catch (e) {
             console.warn('[smirk] linkNostr during migration failed', e);
           }
+          // Sweep legacy m/44' BTC/LTC funds to the new m/84' addresses so the
+          // "funds swept" done screen is truthful. Non-fatal + idempotent.
+          await convergeLegacySweep(wallet);
         }}
         onDone={refresh}
       />
@@ -1758,6 +1795,10 @@ function App() {
           const wallet = await walletKeystore.unlock(password);
           const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
           await writeSessionCache(wallet, minutes);
+          // Converge any un-swept legacy m/44' funds (in-between wallets that
+          // migrated the keystore before the sweep shipped). Fire-and-forget so
+          // unlock stays snappy; idempotent + gated on legacy state presence.
+          void convergeLegacySweep(wallet);
           await refresh();
         }}
       />
@@ -6620,6 +6661,10 @@ function ApprovalApp({ approvalId }: ApprovalAppProps) {
           const wallet = await walletKeystore.unlock(password);
           const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
           await writeSessionCache(wallet, minutes);
+          // Converge any un-swept legacy m/44' funds (in-between wallets that
+          // migrated the keystore before the sweep shipped). Fire-and-forget so
+          // unlock stays snappy; idempotent + gated on legacy state presence.
+          void convergeLegacySweep(wallet);
           await refresh();
         }}
       />

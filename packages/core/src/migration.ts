@@ -19,9 +19,14 @@
  * half-migrated wallet, and an intermediate dev-build wallet all converge to the
  * same end state.
  */
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { Transaction, p2wpkh, NETWORK } from '@scure/btc-signer';
+import { hex } from '@scure/base';
 import { decryptPrivateKey, PBKDF2_ITERATIONS_LEGACY } from './crypto';
 import { btcAddress, ltcAddress } from './address';
 import { deriveLegacyBtcLtcKey, isValidMnemonic, mnemonicToSeed } from './hd';
+import { chainProviders } from './chain/registry';
+import { applyRelayFloor } from './fees';
 import type { UnlockedWallet, WalletKeystore } from './keystore';
 import type { PlatformStorage } from './state/platform';
 
@@ -144,4 +149,169 @@ export function legacyBtcLtcKey(
   const address =
     asset === 'btc' ? btcAddress(key.publicKey) : ltcAddress(key.publicKey);
   return { ...key, address };
+}
+
+/** P2WPKH output dust threshold (sats), per Bitcoin Core policy. A single
+ *  output below this is non-standard and broadcast rejects it. Enforced on the
+ *  sole sweep output; the change-drop threshold (294) is irrelevant to a
+ *  no-change sweep. Not exported from the extension, so inlined here. */
+const DUST_SAT = 546;
+
+/** Durable per-asset key recording a completed legacy sweep (its broadcast
+ *  txid). Presence is the re-entry guard that makes the sweep idempotent across
+ *  restarts, so a non-retryable broadcast is never re-issued. */
+const legacySweepKey = (asset: 'btc' | 'ltc') => `smirk_legacy_sweep_${asset}`;
+
+/** @scure/btc-signer ships `NETWORK` = Bitcoin mainnet only. Litecoin needs its
+ *  own network struct (values from litecoin-core). Lifted from the proven
+ *  tip-claim sweep (`sweepUtxo`) so LTC bech32/p2wpkh encode correctly. */
+const LTC_NETWORK = {
+  bech32: 'ltc',
+  pubKeyHash: 0x30,
+  scriptHash: 0x32,
+  wif: 0xb0,
+} as const;
+
+/** Outcome of a legacy BTC/LTC sweep attempt. `swept` = a fresh broadcast this
+ *  call; `already-swept` = a durable txid record existed (no-op); `skipped` =
+ *  nothing to do or a non-fatal precondition failed (retried on a later
+ *  unlock). Never throws for expected states — the migration must never be
+ *  blocked by a dust balance, a locked wallet, or a transient scan error. */
+export interface LegacySweepResult {
+  status: 'swept' | 'skipped' | 'already-swept';
+  txid?: string;
+  reason?: string;
+}
+
+/**
+ * Sweep a v0.2 wallet's legacy `m/44'` BTC/LTC balance to its v0.3 `m/84'`
+ * receive address. The seed is unchanged across the upgrade, so the old coins
+ * are still ours — they just sit at an address the v0.3 wallet doesn't watch.
+ * This packs every UTXO at the `m/44'` address into a single-output tx paying
+ * `wallet.addresses[asset]` (the `m/84'` receive address), fee subtracted from
+ * the swept amount.
+ *
+ * **Idempotent + convergent** (per this file's header): safe to call on every
+ * post-unlock. A durable txid record (`smirk_legacy_sweep_<asset>`) short-
+ * circuits any re-entry so the non-retryable broadcast never double-fires; an
+ * empty legacy address short-circuits before any tx work; a dust or fee-
+ * uncoverable balance returns `skipped` (never throws) so it can't block the
+ * migration. A session-cache-restored wallet (no `.mnemonic`) also returns
+ * `skipped` and is retried after a full password unlock.
+ *
+ * **Signing note (load-bearing):** the m/44' UTXOs are P2WPKH locked to the raw
+ * m/44' secp256k1 key, NOT to the m/84' HD path the WASM signer hardwires — so
+ * this uses pure-JS raw-key signing (`@scure/btc-signer`), exactly like the
+ * proven tip-claim `sweepUtxo`. `p2wpkh(pubKey)` reproduces the exact
+ * scriptPubKey those UTXOs are locked to.
+ *
+ * @param storage MUST be a DURABLE backend (chrome.storage.local / mobile
+ *   preferences / localStorage), NEVER `storage.session` — a session store dies
+ *   on browser close and would defeat the cross-restart double-broadcast guard.
+ */
+export async function sweepLegacyBtcLtc(
+  asset: 'btc' | 'ltc',
+  wallet: UnlockedWallet,
+  storage: PlatformStorage,
+): Promise<LegacySweepResult> {
+  // 1. Re-entry guard: a durable txid record means this already broadcast.
+  //    Never rebuild/rebroadcast (broadcast is a non-retryable POST).
+  const prior = await storage.get<{ txid: string }>(legacySweepKey(asset));
+  if (prior?.txid) {
+    return { status: 'already-swept', txid: prior.txid };
+  }
+
+  // 2. Need the mnemonic to derive the raw m/44' key. A session-cache restore
+  //    drops it (keystore omits the phrase); retry after a full unlock.
+  if (!wallet.mnemonic) {
+    return { status: 'skipped', reason: 'wallet locked; re-unlock required' };
+  }
+
+  // 3. Destination is ALWAYS the v0.3 m/84' receive address — never the m/44'
+  //    legacy address (that would defeat the migration).
+  const recipientAddress = wallet.addresses[asset];
+  if (!recipientAddress) {
+    return { status: 'skipped', reason: 'v0.3 receive address not derived yet' };
+  }
+
+  // 4. Derive the legacy m/44' key + its P2WPKH source address.
+  const legacy = legacyBtcLtcKey(wallet.mnemonic, asset);
+
+  // 5. Scan UTXOs AT the legacy address. Confirmed-only: a one-shot fund move
+  //    must not chase an unconfirmed (reorg/RBF-able) legacy deposit; the
+  //    convergent design sweeps it on a later unlock once it confirms.
+  const utxosResp = await chainProviders.utxo(asset).listOutputs(legacy.address);
+  if (utxosResp.error || !utxosResp.data) {
+    return { status: 'skipped', reason: utxosResp.error ?? 'utxo fetch failed' };
+  }
+  const utxos = utxosResp.data.utxos.filter((u) => u.height > 0);
+  if (utxos.length === 0) {
+    return { status: 'skipped', reason: 'no confirmed legacy funds' };
+  }
+
+  // 6. Fee rate, clamped to the relay floor. applyRelayFloor is MANDATORY: an
+  //    at-floor Electrum estimate (1.0 sat/vB) broadcasts as "rejected by
+  //    network rules" and Smirk has no own BTC/LTC node to fall back on.
+  const feeRates = await chainProviders.utxo(asset).estimateFee();
+  const tiers =
+    feeRates.data?.model === 'rate-estimate' ? feeRates.data : undefined;
+  const feeRate = applyRelayFloor(tiers?.normal ?? 10);
+
+  // 7. Size for ALL inputs -> one output. Fee scales with input count; never
+  //    hardcode a 1-in vsize. 68 vB/P2WPKH input, 31 vB/output, ~11 vB header.
+  const estimatedVsize = 11 + 68 * utxos.length + 31;
+  const feeSat = Math.max(
+    Math.ceil(estimatedVsize * feeRate) + 1, // +1 clears minrelaytxfee rounding
+    estimatedVsize, // floor of 1 sat/vB
+  );
+
+  // 8. Sweep amount + the two sanity gates.
+  const totalSat = utxos.reduce((s, u) => s + u.value, 0);
+  const sweepSat = totalSat - feeSat;
+  if (sweepSat <= 0) {
+    return {
+      status: 'skipped',
+      reason: `total ${totalSat} <= fee ${feeSat} at ${feeRate} sat/vB`,
+    };
+  }
+  if (sweepSat < DUST_SAT) {
+    return {
+      status: 'skipped',
+      reason: `swept ${sweepSat} below dust ${DUST_SAT}`,
+    };
+  }
+
+  // 9. Build the 1-output P2WPKH sweep with the raw m/44' key.
+  const pubKey = secp256k1.getPublicKey(legacy.privateKey, true);
+  const network = asset === 'btc' ? NETWORK : LTC_NETWORK;
+  const payment = p2wpkh(pubKey, network);
+
+  const tx = new Transaction();
+  for (const utxo of utxos) {
+    tx.addInput({
+      txid: utxo.txid,
+      index: utxo.vout,
+      witnessUtxo: { script: payment.script, amount: BigInt(utxo.value) },
+    });
+  }
+  tx.addOutputAddress(recipientAddress, BigInt(sweepSat), network);
+  tx.sign(legacy.privateKey);
+  tx.finalize();
+  const txHex = hex.encode(tx.extract());
+
+  // 10. Broadcast, then PERSIST-FIRST: record the txid durably BEFORE returning
+  //     success so any crash-retry hits the step-1 guard. On broadcast failure
+  //     leave NO record, so a later unlock retries cleanly.
+  const broadcast = await chainProviders.utxo(asset).broadcast(txHex);
+  if (broadcast.error || !broadcast.data) {
+    return {
+      status: 'skipped',
+      reason: `broadcast failed: ${broadcast.error ?? 'unknown'}`,
+    };
+  }
+  await storage.set(legacySweepKey(asset), {
+    txid: broadcast.data.txid,
+    at: Date.now(),
+  });
+  return { status: 'swept', txid: broadcast.data.txid };
 }

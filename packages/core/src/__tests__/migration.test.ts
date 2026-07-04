@@ -1,5 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  Transaction,
+  Address,
+  OutScript,
+  NETWORK,
+} from '@scure/btc-signer';
+import { hex } from '@scure/base';
 
 import { encryptPrivateKey } from '../crypto';
 import {
@@ -7,12 +14,16 @@ import {
   detectLegacyWallet,
   legacyBtcLtcKey,
   migrateLegacyWallet,
+  sweepLegacyBtcLtc,
   LEGACY_WALLET_KEY,
   V03_KEYSTORE_KEY,
   type LegacyWalletState,
 } from '../migration';
-import { WalletKeystore } from '../keystore';
+import { WalletKeystore, type UnlockedWallet } from '../keystore';
 import { InMemoryStorage } from '../state/platform';
+import { chainProviders } from '../chain/registry';
+import type { UtxoChainProvider } from '../chain/provider';
+import type { UtxoEntry } from '../chain/types';
 
 // A well-known BIP-39 test mnemonic (Trezor vector) — NOT a funded wallet.
 const MNEMONIC =
@@ -132,4 +143,273 @@ test('migrateLegacyWallet — reseal a REAL v0.2.4 blob into a v0.3 keystore', a
   assert.notEqual(await storage.get(LEGACY_WALLET_KEY), null);
   // Idempotent: re-migrating throws (a v0.3 keystore already exists).
   await assert.rejects(() => migrateLegacyWallet(keystore, storage, PASSWORD));
+});
+
+// ===========================================================================
+// sweepLegacyBtcLtc — m/44' -> m/84' fund sweep (FUND-CRITICAL)
+// ===========================================================================
+
+/** A real unlocked v0.3 wallet (m/84' addresses) sealed from MNEMONIC. Built
+ *  once — one 600k-PBKDF2 unlock shared across the sweep KATs. */
+const WALLET: UnlockedWallet = await new WalletKeystore(
+  new InMemoryStorage(),
+).createWallet({ mnemonic: MNEMONIC, password: PASSWORD });
+
+const LEGACY_BTC = legacyBtcLtcKey(MNEMONIC, 'btc');
+
+/** A configurable fake UtxoChainProvider that records the address it was asked
+ *  to scan and every tx it was asked to broadcast. */
+function fakeUtxo(cfg: {
+  asset: 'btc' | 'ltc';
+  utxos?: UtxoEntry[];
+  feeNormal?: number | null;
+  listError?: string;
+  broadcastError?: string;
+  broadcastTxid?: string;
+}) {
+  const calls = { scanned: [] as string[], broadcasts: [] as string[] };
+  const provider = {
+    async listOutputs(address: string) {
+      calls.scanned.push(address);
+      if (cfg.listError) return { error: cfg.listError };
+      return { data: { asset: cfg.asset, address, utxos: cfg.utxos ?? [] } };
+    },
+    async estimateFee() {
+      return {
+        data: {
+          model: 'rate-estimate' as const,
+          fast: null,
+          normal: cfg.feeNormal ?? null,
+          slow: null,
+        },
+      };
+    },
+    async broadcast(txHex: string) {
+      calls.broadcasts.push(txHex);
+      if (cfg.broadcastError) return { error: cfg.broadcastError };
+      return { data: { asset: cfg.asset, txid: cfg.broadcastTxid ?? 'f'.repeat(64) } };
+    },
+  } as unknown as UtxoChainProvider;
+  return { provider, calls };
+}
+
+/** Swap in a fake provider for `asset`, run `fn`, always restore the real one. */
+async function withFakeUtxo<T>(
+  asset: 'btc' | 'ltc',
+  fake: UtxoChainProvider,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const real = chainProviders.utxo(asset);
+  chainProviders.setUtxo(asset, fake);
+  try {
+    return await fn();
+  } finally {
+    chainProviders.setUtxo(asset, real);
+  }
+}
+
+/** Decode a broadcast tx: assert exactly one output, return its amount+address. */
+function soleOutput(txHex: string) {
+  const tx = Transaction.fromRaw(hex.decode(txHex), { allowUnknownOutputs: true });
+  assert.equal(tx.outputsLength, 1, 'sweep must be single-output (no change)');
+  const out = tx.getOutput(0);
+  return {
+    amount: out.amount as bigint,
+    address: Address(NETWORK).encode(OutScript.decode(out.script!)),
+  };
+}
+
+const utxo = (txid: string, vout: number, value: number, height: number): UtxoEntry => ({
+  txid,
+  vout,
+  value,
+  height,
+});
+
+test('sweepLegacyBtcLtc — happy path: scans m/44, pays m/84, subtracts fee, persists txid', async () => {
+  const storage = new InMemoryStorage();
+  const { provider, calls } = fakeUtxo({
+    asset: 'btc',
+    utxos: [utxo('a'.repeat(64), 0, 100_000, 100), utxo('b'.repeat(64), 1, 50_000, 101)],
+    feeNormal: 5,
+    broadcastTxid: 'c'.repeat(64),
+  });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'swept');
+  assert.equal(res.txid, 'c'.repeat(64));
+
+  // Scanned the LEGACY m/44' address (not the wallet's m/84' address).
+  assert.deepEqual(calls.scanned, [LEGACY_BTC.address]);
+  assert.notEqual(LEGACY_BTC.address, WALLET.addresses.btc);
+
+  // Fee math: vsize = 11 + 68*2 + 31 = 178; feeSat = ceil(178*5)+1 = 891.
+  const out = soleOutput(calls.broadcasts[0]!);
+  assert.equal(out.amount, BigInt(150_000 - 891));
+  // Destination is the v0.3 m/84' receive address, NEVER the m/44' source.
+  assert.equal(out.address, WALLET.addresses.btc);
+
+  // Durable txid record written — the cross-restart double-broadcast guard.
+  const rec = await storage.get<{ txid: string }>('smirk_legacy_sweep_btc');
+  assert.equal(rec?.txid, 'c'.repeat(64));
+});
+
+test('sweepLegacyBtcLtc — already-swept: durable txid short-circuits, never broadcasts', async () => {
+  const storage = new InMemoryStorage();
+  await storage.set('smirk_legacy_sweep_btc', { txid: 'prior', at: 1 });
+  const { provider, calls } = fakeUtxo({ asset: 'btc', utxos: [utxo('a'.repeat(64), 0, 100_000, 100)], feeNormal: 5 });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'already-swept');
+  assert.equal(res.txid, 'prior');
+  assert.equal(calls.broadcasts.length, 0);
+  assert.equal(calls.scanned.length, 0); // short-circuits before any scan
+});
+
+test('sweepLegacyBtcLtc — confirmed-only: unconfirmed (height 0) UTXOs are skipped', async () => {
+  const storage = new InMemoryStorage();
+  const { provider, calls } = fakeUtxo({
+    asset: 'btc',
+    utxos: [utxo('a'.repeat(64), 0, 100_000, 0)], // height 0 == unconfirmed
+    feeNormal: 5,
+  });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'skipped');
+  assert.match(res.reason ?? '', /no confirmed/);
+  assert.equal(calls.broadcasts.length, 0);
+});
+
+test('sweepLegacyBtcLtc — dust gate: swept amount below 546 sat is skipped, not broadcast', async () => {
+  const storage = new InMemoryStorage();
+  // 1 input: vsize = 11+68+31 = 110; feeNormal 2 => feeSat = ceil(110*2)+1 = 221.
+  // value 700 => sweepSat = 700-221 = 479 (< 546 dust) => skipped.
+  const { provider, calls } = fakeUtxo({
+    asset: 'btc',
+    utxos: [utxo('a'.repeat(64), 0, 700, 100)],
+    feeNormal: 2,
+  });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'skipped');
+  assert.match(res.reason ?? '', /below dust/);
+  assert.equal(calls.broadcasts.length, 0);
+  assert.equal(await storage.get('smirk_legacy_sweep_btc'), null); // no record on skip
+});
+
+test('sweepLegacyBtcLtc — fee-coverage gate: total <= fee is skipped', async () => {
+  const storage = new InMemoryStorage();
+  // value 100 << feeSat => sweepSat <= 0 => skipped.
+  const { provider, calls } = fakeUtxo({
+    asset: 'btc',
+    utxos: [utxo('a'.repeat(64), 0, 100, 100)],
+    feeNormal: 5,
+  });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'skipped');
+  assert.match(res.reason ?? '', /<= fee/);
+  assert.equal(calls.broadcasts.length, 0);
+});
+
+test('sweepLegacyBtcLtc — no legacy funds: empty UTXO set short-circuits', async () => {
+  const storage = new InMemoryStorage();
+  const { provider, calls } = fakeUtxo({ asset: 'btc', utxos: [], feeNormal: 5 });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'skipped');
+  assert.match(res.reason ?? '', /no confirmed legacy funds/);
+  assert.equal(calls.broadcasts.length, 0);
+});
+
+test('sweepLegacyBtcLtc — locked wallet (no mnemonic) skips before any scan', async () => {
+  const storage = new InMemoryStorage();
+  const { provider, calls } = fakeUtxo({ asset: 'btc', utxos: [utxo('a'.repeat(64), 0, 100_000, 100)], feeNormal: 5 });
+  const locked: UnlockedWallet = { ...WALLET, mnemonic: undefined };
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', locked, storage),
+  );
+
+  assert.equal(res.status, 'skipped');
+  assert.match(res.reason ?? '', /unlock/);
+  assert.equal(calls.scanned.length, 0);
+});
+
+test('sweepLegacyBtcLtc — relay floor is applied (1.0 estimate clamps to 1.1)', async () => {
+  const storage = new InMemoryStorage();
+  // 1 input vsize 110; at floored 1.1 => feeSat = ceil(110*1.1)+1 = 123
+  // (110*1.1 = 121.0000…1 in float, so ceil = 122, +1 = 123).
+  // An UNfloored 1.0 would give ceil(110)+1 = 111 — a different output amount,
+  // so this asserts the 1.1 floor was actually applied.
+  const { provider, calls } = fakeUtxo({
+    asset: 'btc',
+    utxos: [utxo('a'.repeat(64), 0, 10_000, 100)],
+    feeNormal: 1.0,
+  });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'swept');
+  assert.equal(soleOutput(calls.broadcasts[0]!).amount, BigInt(10_000 - 123));
+});
+
+test('sweepLegacyBtcLtc — broadcast failure leaves no durable record (retryable)', async () => {
+  const storage = new InMemoryStorage();
+  const { provider } = fakeUtxo({
+    asset: 'btc',
+    utxos: [utxo('a'.repeat(64), 0, 100_000, 100)],
+    feeNormal: 5,
+    broadcastError: 'rejected by network rules',
+  });
+
+  const res = await withFakeUtxo('btc', provider, () =>
+    sweepLegacyBtcLtc('btc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'skipped');
+  assert.match(res.reason ?? '', /broadcast failed/);
+  assert.equal(await storage.get('smirk_legacy_sweep_btc'), null);
+});
+
+test('sweepLegacyBtcLtc — LTC path pays the wallet LTC (ltc1q) address', async () => {
+  const storage = new InMemoryStorage();
+  const legacyLtc = legacyBtcLtcKey(MNEMONIC, 'ltc');
+  const { provider, calls } = fakeUtxo({
+    asset: 'ltc',
+    utxos: [utxo('a'.repeat(64), 0, 200_000, 100)],
+    feeNormal: 4,
+    broadcastTxid: 'e'.repeat(64),
+  });
+
+  const res = await withFakeUtxo('ltc', provider, () =>
+    sweepLegacyBtcLtc('ltc', WALLET, storage),
+  );
+
+  assert.equal(res.status, 'swept');
+  assert.deepEqual(calls.scanned, [legacyLtc.address]);
+  assert.match(WALLET.addresses.ltc, /^ltc1q/);
+  // Durable record is per-asset — LTC record present, BTC untouched.
+  assert.equal((await storage.get<{ txid: string }>('smirk_legacy_sweep_ltc'))?.txid, 'e'.repeat(64));
+  assert.equal(await storage.get('smirk_legacy_sweep_btc'), null);
 });
