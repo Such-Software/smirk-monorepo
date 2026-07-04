@@ -13,6 +13,33 @@ export interface RestoreCapability {
   policy: RestorePolicyName;
   /** Days behind the tip a restore may start; present only for `bounded`. */
   max_depth_days: number | null;
+  /**
+   * Restore-PoW pricing curve: a restore depth (days) free of PoW, then +1
+   * hashcash difficulty bit per `pow_days_per_bit` days beyond it (0 = pricing
+   * off), capped at `pow_max_bits`. Optional — older backends omit it. The
+   * wallet computes its required difficulty from these + the chosen restore date.
+   */
+  pow_free_days?: number;
+  pow_days_per_bit?: number;
+  pow_max_bits?: number;
+}
+
+/**
+ * Registration gates a NEW wallet must clear on this instance (returning wallets
+ * and self-hosting bypass them). Mirrors the backend `RegistrationCapability`.
+ * Optional on `BackendCapabilities` because legacy/older backends don't advertise
+ * it — treat an absent value as "open" (no gates). See {@link summarizeRegistration}.
+ */
+export interface RegistrationCapability {
+  /** A valid operator-minted invite code is required to register. */
+  invite_required: boolean;
+  /** A proof-of-work solution is required (v0.3.0+ clients always send one). */
+  pow_required: boolean;
+  /** A settled payment invoice (from `/auth/payment-invoice`) is required. */
+  payment_required: boolean;
+  /** Registration price; present only when `payment_required`. */
+  payment_amount?: string | null;
+  payment_currency?: string | null;
 }
 
 export interface BackendCapabilities {
@@ -31,8 +58,39 @@ export interface BackendCapabilities {
     tips: boolean;
   };
   restore: RestoreCapability;
+  /** Registration gates for a new wallet. Absent on legacy backends ⇒ treat as open. */
+  registration?: RegistrationCapability;
   /** First-party Nostr relay details; present only when `features.nostr_relay`. */
   messaging?: MessagingCapability;
+}
+
+/** A plain summary of a backend's registration gates for onboarding UI. An
+ *  absent `registration` (legacy backend, or self-hosted with gates off) reads
+ *  as fully open. `pow` is informational: v0.3.0+ always solves it, so it never
+ *  needs a user prompt. `price` is `"<amount> <currency>"` when payment-gated. */
+export function summarizeRegistration(reg?: RegistrationCapability): {
+  open: boolean;
+  invite: boolean;
+  pow: boolean;
+  payment: boolean;
+  price?: string;
+} {
+  const invite = !!reg?.invite_required;
+  const pow = !!reg?.pow_required;
+  const payment = !!reg?.payment_required;
+  const price =
+    payment && reg?.payment_amount
+      ? `${reg.payment_amount}${reg.payment_currency ? ` ${reg.payment_currency}` : ''}`
+      : undefined;
+  return {
+    // "open" = nothing a user must actively supply. PoW is automatic, so it
+    // does not make onboarding non-open.
+    open: !invite && !payment,
+    invite,
+    pow,
+    payment,
+    ...(price ? { price } : {}),
+  };
 }
 
 /** First-party Nostr relay this instance runs — the wallet's DM inbox, used
