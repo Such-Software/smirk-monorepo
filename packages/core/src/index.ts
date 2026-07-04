@@ -35,6 +35,9 @@ export * from './nostr';
 // v0.2 -> v0.3 migration (detect / decrypt legacy seed / legacy BTC-LTC keys)
 export * from './migration';
 
+// Legacy cleanup fund-safety warn-block (gate before deleting the walletState beacon)
+export * from './legacy-cleanup';
+
 // Messaging plane (NIP-17 encrypted DMs over the relay, via a swappable seam)
 export * from './messaging';
 
