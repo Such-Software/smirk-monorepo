@@ -22,6 +22,7 @@
 import { decryptPrivateKey, PBKDF2_ITERATIONS_LEGACY } from './crypto';
 import { btcAddress, ltcAddress } from './address';
 import { deriveLegacyBtcLtcKey, isValidMnemonic, mnemonicToSeed } from './hd';
+import type { UnlockedWallet, WalletKeystore } from './keystore';
 import type { PlatformStorage } from './state/platform';
 
 /** chrome.storage.local key the LEGACY v0.2 wallet persisted under. */
@@ -91,6 +92,36 @@ export async function decryptLegacyMnemonic(
     throw new Error('decrypted data is not a valid BIP-39 mnemonic');
   }
   return mnemonic;
+}
+
+/**
+ * One-shot keystore migration: decrypt the legacy seed and RE-SEAL it under the
+ * v0.3 keystore (600k), returning the unlocked wallet. Fund-critical ordering:
+ *
+ *  - `createWallet` writes `smirk_keystore_v1` and verify-unlocks. That write is
+ *    THE crash-safe commit point — once durable, `detectLegacyWallet` flips
+ *    false, so any crash-retry re-enters as a normal v0.3 wallet and never
+ *    re-migrates. `createWallet` also throws if a v0.3 keystore already exists
+ *    (idempotent guard against a double-seal).
+ *  - The legacy `walletState` is intentionally **kept** — cleanup is a separate
+ *    step after the user confirms the new wallet works AND any pending
+ *    recoverable funds (unclaimed tips / Grin slates) are resolved. Never delete
+ *    it in the same step as the keystore write.
+ *
+ * Reuses the caller's v0.2 password for the reseal (one prompt). Throws on a
+ * wrong password (AEAD verify), a missing legacy wallet, or an existing keystore.
+ */
+export async function migrateLegacyWallet(
+  keystore: WalletKeystore,
+  storage: PlatformStorage,
+  password: string,
+): Promise<UnlockedWallet> {
+  const legacy = await storage.get<LegacyWalletState>(LEGACY_WALLET_KEY);
+  if (!legacy?.encryptedSeed) {
+    throw new Error('no legacy wallet to migrate');
+  }
+  const mnemonic = await decryptLegacyMnemonic(legacy, password);
+  return keystore.createWallet({ mnemonic, password });
 }
 
 /** SLIP-44 coin types for the UTXO chains the sweep touches. */

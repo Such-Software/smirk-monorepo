@@ -6,10 +6,12 @@ import {
   decryptLegacyMnemonic,
   detectLegacyWallet,
   legacyBtcLtcKey,
+  migrateLegacyWallet,
   LEGACY_WALLET_KEY,
   V03_KEYSTORE_KEY,
   type LegacyWalletState,
 } from '../migration';
+import { WalletKeystore } from '../keystore';
 import { InMemoryStorage } from '../state/platform';
 
 // A well-known BIP-39 test mnemonic (Trezor vector) — NOT a funded wallet.
@@ -109,4 +111,25 @@ test('detectLegacyWallet — true only with legacy seed AND no v0.3 keystore', a
   assert.equal(await detectLegacyWallet(storage), true);
   await storage.set(V03_KEYSTORE_KEY, { version: 1 });
   assert.equal(await detectLegacyWallet(storage), false); // already migrated
+});
+
+test('migrateLegacyWallet — reseal a REAL v0.2.4 blob into a v0.3 keystore', async () => {
+  const storage = new InMemoryStorage();
+  await storage.set(LEGACY_WALLET_KEY, {
+    ...REAL_V024.cohort600k,
+    pbkdf2Iterations: 600_000,
+  });
+  const keystore = new WalletKeystore(storage);
+
+  assert.equal(await detectLegacyWallet(storage), true);
+  const wallet = await migrateLegacyWallet(keystore, storage, PASSWORD);
+
+  // Seed preserved end to end (decrypt → reseal → unlock).
+  assert.equal(wallet.mnemonic, MNEMONIC);
+  // The keystore write is the crash-safe commit point — detection flips false.
+  assert.equal(await detectLegacyWallet(storage), false);
+  // Legacy walletState is KEPT (cleanup is a separate, later step).
+  assert.notEqual(await storage.get(LEGACY_WALLET_KEY), null);
+  // Idempotent: re-migrating throws (a v0.3 keystore already exists).
+  await assert.rejects(() => migrateLegacyWallet(keystore, storage, PASSWORD));
 });
