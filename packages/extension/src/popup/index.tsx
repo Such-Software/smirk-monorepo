@@ -64,6 +64,8 @@ import {
   reconcilePendingOutgoing,
   chainProviders,
   deriveNostrIdentity,
+  detectLegacyWallet,
+  migrateLegacyWallet,
   initSmirkMessaging,
   sendDm,
   subscribeDms,
@@ -99,6 +101,7 @@ import {
   type SwapInFlight,
   type SwapQuoteSummary,
   LockScreen,
+  MigrationWizard,
   OnboardingWizard,
   ReceiveScreen,
   SendWizard,
@@ -1158,6 +1161,9 @@ const browserController: BrowserControllerGlobal | undefined =
 
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
+  // True when a legacy v0.2 walletState exists but no v0.3 keystore yet — the
+  // MigrationWizard shows instead of onboarding. Resolved in refresh().
+  const [needsMigration, setNeedsMigration] = useState(false);
   const [session, setSession] = useState<WalletSession | null>(null);
   // Live ref to walletState so async closures (notably the BrowseTab
   // dapp-approval handler) can read the latest unlock status at the
@@ -1187,7 +1193,12 @@ function App() {
   // Also opportunistically restores a non-expired session cache.
   const refresh = async () => {
     await tryRestoreSessionCache();
-    setWalletState(await walletKeystore.getState());
+    const ks = await walletKeystore.getState();
+    setWalletState(ks);
+    // Legacy-wallet detection only matters while there's no v0.3 keystore.
+    setNeedsMigration(
+      ks.kind === 'empty' ? await detectLegacyWallet(storage) : false,
+    );
   };
 
   /**
@@ -1616,6 +1627,38 @@ function App() {
       <div style={{ padding: '40px 16px', textAlign: 'center', opacity: 0.6 }}>
         Loading…
       </div>
+    );
+  }
+
+  if (walletState.kind === 'empty' && needsMigration) {
+    return (
+      <MigrationWizard
+        dogeMiningImageUrl={chrome.runtime.getURL('doge-mining.webp')}
+        onMigrate={async (password) => {
+          // Decrypt the v0.2 seed + re-seal into the v0.3 keystore (the crash-
+          // safe commit point). Throws on a wrong password (wizard retries).
+          const wallet = await migrateLegacyWallet(walletKeystore, storage, password);
+          const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
+          await writeSessionCache(wallet, minutes);
+          // Bootstrap auth; the backend re-points the existing user by
+          // seed_fingerprint (derivation rotation), preserving the @handle.
+          const bootstrap = await bootstrapAuthInExtension(api, wallet);
+          const token = api.getAccessToken();
+          if (token) {
+            await writeBootstrapCache(wallet.fingerprint, token, bootstrap);
+          }
+          // Link the NEW seed-derived Nostr identity (v0.2 had none) to the
+          // re-pointed user. Idempotent: a 409 (already linked) is fine.
+          try {
+            if (wallet.mnemonic) {
+              await api.linkNostr(deriveNostrIdentity(wallet.mnemonic, 0));
+            }
+          } catch (e) {
+            console.warn('[smirk] linkNostr during migration failed', e);
+          }
+        }}
+        onDone={refresh}
+      />
     );
   }
 

@@ -128,6 +128,8 @@ export type {
   ExistingSocial,
   OnboardingWizardProps,
 } from './components/OnboardingWizard';
+export { MigrationWizard } from './components/MigrationWizard';
+export type { MigrationWizardProps } from './components/MigrationWizard';
 
 export { LockScreen } from './components/LockScreen';
 export type { LockScreenProps } from './components/LockScreen';
