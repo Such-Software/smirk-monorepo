@@ -33,6 +33,10 @@ import type { UnlockedWallet } from '@smirk/core';
 import { runBootstrapInBackground } from './bootstrap-auth';
 import type { BootstrapJobResult } from './bootstrap-auth';
 import { PAYMENT_PENDING_SENTINEL } from '../../background/jobs/types';
+import {
+  getPendingRegistrationInvoice,
+  clearPendingRegistrationInvoice,
+} from '../pending-registration-invoice';
 
 function buildKeysList(
   wallet: UnlockedWallet,
@@ -71,6 +75,17 @@ export async function bootstrapAuthInExtension(
 ): Promise<BootstrapJobResult['bootstrap']> {
   const keys = buildKeysList(wallet);
 
+  // Resume a pay-to-register that was interrupted mid-payment: if no invoice was
+  // passed explicitly but one is persisted for this wallet, include it so a plain
+  // unlock completes registration once the operator's processor settles it. A
+  // returning (already-registered) wallet bypasses the gate server-side, so a
+  // stale record is harmless and gets cleared on the success below.
+  let paymentInvoiceId = gate?.paymentInvoiceId;
+  if (!paymentInvoiceId) {
+    paymentInvoiceId = (await getPendingRegistrationInvoice(wallet.fingerprint)) ?? undefined;
+  }
+  const effectiveGate = paymentInvoiceId ? { ...gate, paymentInvoiceId } : gate;
+
   // Capabilities-gated: a backend advertising npub-native auth gets the NIP-98
   // bootstrap (no BTC signature); a legacy backend keeps the BTC offscreen-job
   // path. A failed/absent capabilities read falls back to the legacy path.
@@ -82,7 +97,9 @@ export async function bootstrapAuthInExtension(
     /* treat as a legacy (BTC) backend */
   }
   if (nostrNative && wallet.mnemonic) {
-    return bootstrapViaNostr(api, wallet, keys, gate);
+    const bootstrap = await bootstrapViaNostr(api, wallet, keys, effectiveGate);
+    await clearPendingRegistrationInvoice(wallet.fingerprint);
+    return bootstrap;
   }
 
   // ── Legacy BTC path (offscreen job) ──
@@ -96,13 +113,15 @@ export async function bootstrapAuthInExtension(
       keys,
       signedTimestamp: timestamp,
       signature,
-      ...(gate?.inviteCode ? { inviteCode: gate.inviteCode } : {}),
-      ...(gate?.paymentInvoiceId ? { paymentInvoiceId: gate.paymentInvoiceId } : {}),
+      ...(effectiveGate?.inviteCode ? { inviteCode: effectiveGate.inviteCode } : {}),
+      ...(paymentInvoiceId ? { paymentInvoiceId } : {}),
     },
     gate?.pollAttempt !== undefined ? `pay:${gate.pollAttempt}` : undefined,
   );
 
   api.setAccessToken(result.accessToken);
+  // Registration succeeded: any pending pay-to-register record is now spent.
+  await clearPendingRegistrationInvoice(wallet.fingerprint);
   return result.bootstrap;
 }
 

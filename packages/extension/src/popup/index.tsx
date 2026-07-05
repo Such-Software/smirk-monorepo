@@ -92,6 +92,7 @@ import {
   type WalletApiStyle,
 } from '@smirk/core';
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
+import { setPendingRegistrationInvoice } from './pending-registration-invoice';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
 import {
   AppShell,
@@ -1427,11 +1428,20 @@ function App() {
       // the error so the user sees something rather than a silent
       // empty state.
       await clearBootstrapCache();
+      // A resumed pay-to-register whose invoice has not settled yet throws the
+      // pending sentinel: show a clear status (not the raw sentinel), and keep
+      // the persisted invoice so the next unlock finishes once it confirms.
+      const message =
+        e instanceof Error && e.message === PAYMENT_PENDING_SENTINEL
+          ? 'Your registration payment is still confirming. Reopen Smirk once it clears to finish.'
+          : e instanceof Error
+            ? e.message
+            : 'Failed to connect to backend';
       setSession({
         bootstrap: { userId: '', isNew: false },
         balances: null,
         prices: null,
-        error: e instanceof Error ? e.message : 'Failed to connect to backend',
+        error: message,
         refreshing: false,
         refreshedAt: null,
       });
@@ -1832,6 +1842,12 @@ function App() {
               throw new Error(inv.error ?? 'Could not create a payment invoice.');
             }
             paymentInvoiceRef.current = inv.data.invoiceId;
+            // Persist durably so a popup closed mid-payment resumes on the next
+            // unlock (the fee is never stranded).
+            await setPendingRegistrationInvoice(
+              wallet.fingerprint,
+              inv.data.invoiceId,
+            );
             return {
               payTo: inv.data.payTo,
               amount: inv.data.amount,
