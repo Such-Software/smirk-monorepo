@@ -37,6 +37,24 @@ import { api, solvePowChallenge } from '@smirk/core';
 import type { JobHandler } from '../types';
 
 /**
+ * Stable sentinel thrown when a pay-to-register invoice is not yet Settled. The
+ * popup's payment poll catches this exact message and keeps waiting (re-signing
+ * per attempt for the 5-min signature window); any OTHER thrown message is a
+ * real, user-facing failure. A sentinel (not a translated string) survives the
+ * job-boundary serialization intact.
+ */
+export const PAYMENT_PENDING_SENTINEL = 'SMIRK_PAYMENT_PENDING';
+
+/** The backend returns a 400 with this literal while a pay-to-register invoice
+ *  is minted+bound but not yet Settled (auth.rs enforce_payment). Expected
+ *  during polling — not a failure. */
+function isPaymentPending(result: { error?: string; status?: number }): boolean {
+  return (
+    result.status === 400 && /payment not yet confirmed/i.test(result.error ?? '')
+  );
+}
+
+/**
  * Map a non-2xx `/auth/extension` response to a human-friendly
  * single-line error the OnboardingWizard / popup can show under the
  * password field. The generic surface used to be "Unknown error",
@@ -150,7 +168,7 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
       altchaSolution = await solvePowChallenge(api, { signal: ctx.signal });
     }
 
-    // ---- 3. extensionRegister ----
+    // ---- 3. extensionRegister (+ optional registration-gate credentials) ----
     const result = await api.extensionRegister({
       keys: input.keys as Parameters<
         typeof api.extensionRegister
@@ -162,7 +180,23 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
       ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
       ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
       ...(altchaSolution !== null ? { altchaSolution } : {}),
+      ...(input.inviteCode ? { inviteCode: input.inviteCode } : {}),
+      ...(input.paymentInvoiceId
+        ? { paymentInvoiceId: input.paymentInvoiceId }
+        : {}),
     });
+
+    // Pay-to-register: a not-yet-Settled invoice is EXPECTED while the user is
+    // paying. Surface it as the stable pending sentinel so the popup's poll
+    // keeps waiting (money-safe: the backend consumes only on Settled), rather
+    // than a hard failure. Any other error falls through to the friendly throw.
+    if (
+      input.paymentInvoiceId &&
+      (result.error || !result.data) &&
+      isPaymentPending(result)
+    ) {
+      throw new Error(PAYMENT_PENDING_SENTINEL);
+    }
 
     if (result.error || !result.data) {
       // Log the full failure context to the offscreen-document

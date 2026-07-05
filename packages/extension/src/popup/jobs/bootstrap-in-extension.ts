@@ -51,18 +51,34 @@ function buildKeysList(
 export async function bootstrapAuthInExtension(
   api: SmirkApi,
   wallet: UnlockedWallet,
+  /**
+   * Registration-gate credentials for a gated backend. Sent to `/auth/extension`
+   * only when present. Under `registration_mode: "any"` pass AT MOST ONE. The
+   * `pollAttempt` counter makes each pay-to-register retry a fresh job (fresh
+   * signature) — the payment poll increments it each iteration.
+   */
+  gate?: {
+    inviteCode?: string;
+    paymentInvoiceId?: string;
+    pollAttempt?: number;
+  },
 ): Promise<BootstrapJobResult['bootstrap']> {
   const timestamp = Math.floor(Date.now() / 1000);
   const message = `smirk-auth-${timestamp}`;
   const signature = signBitcoinMessage(message, wallet.keys.btc.privateKey);
   const keys = buildKeysList(wallet);
 
-  const result = await runBootstrapInBackground({
-    fingerprint: wallet.fingerprint,
-    keys,
-    signedTimestamp: timestamp,
-    signature,
-  });
+  const result = await runBootstrapInBackground(
+    {
+      fingerprint: wallet.fingerprint,
+      keys,
+      signedTimestamp: timestamp,
+      signature,
+      ...(gate?.inviteCode ? { inviteCode: gate.inviteCode } : {}),
+      ...(gate?.paymentInvoiceId ? { paymentInvoiceId: gate.paymentInvoiceId } : {}),
+    },
+    gate?.pollAttempt !== undefined ? `pay:${gate.pollAttempt}` : undefined,
+  );
 
   api.setAccessToken(result.accessToken);
   return result.bootstrap;

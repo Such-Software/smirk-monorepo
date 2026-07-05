@@ -55,6 +55,11 @@ export interface JobKindMap {
       keys: ReadonlyArray<{ asset: string; publicKey: string }>;
       signedTimestamp: number;
       signature: string;
+      /** Registration-gate credentials (see `/capabilities` registration).
+       *  Sent to `/auth/extension` only when present; ignored server-side when
+       *  the gate is off or the wallet is returning. */
+      inviteCode?: string;
+      paymentInvoiceId?: string;
     };
     output: {
       bootstrap: {

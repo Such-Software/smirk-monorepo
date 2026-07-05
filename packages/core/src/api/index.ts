@@ -69,6 +69,7 @@ export class SmirkApi
   telegramLogin: AuthMethods['telegramLogin'];
   refreshToken: AuthMethods['refreshToken'];
   extensionRegister: AuthMethods['extensionRegister'];
+  createPaymentInvoice: AuthMethods['createPaymentInvoice'];
   checkRestore: AuthMethods['checkRestore'];
   powChallenge: AuthMethods['powChallenge'];
   nostrLogin: AuthMethods['nostrLogin'];
@@ -162,6 +163,7 @@ export class SmirkApi
     this.telegramLogin = auth.telegramLogin;
     this.refreshToken = auth.refreshToken;
     this.extensionRegister = auth.extensionRegister;
+    this.createPaymentInvoice = auth.createPaymentInvoice;
     this.checkRestore = auth.checkRestore;
     this.powChallenge = auth.powChallenge;
     this.nostrLogin = auth.nostrLogin;

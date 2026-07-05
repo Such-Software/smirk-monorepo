@@ -40,6 +40,48 @@ export interface RegistrationCapability {
   /** Registration price; present only when `payment_required`. */
   payment_amount?: string | null;
   payment_currency?: string | null;
+  /**
+   * How the enabled invite/payment gates combine: `"all"` (satisfy every gate,
+   * the default) or `"any"` (they are alternatives; satisfy one). Absent on
+   * older backends ⇒ treat as `"all"`. PoW is orthogonal regardless.
+   */
+  registration_mode?: 'all' | 'any';
+}
+
+/** The onboarding path for a backend's registration gates, derived from
+ *  {@link RegistrationCapability}. `kind` drives the wizard branch:
+ *  - `free`: no user-facing gate (maybe PoW, auto) — proceed straight to register.
+ *  - `invite` / `payment`: exactly one gate — route straight to it.
+ *  - `choose`: 2+ gates that are ALTERNATIVES (`mode: any`) — show method buttons.
+ *  - `sequential`: 2+ gates ALL required (`mode: all`) — collect each in turn. */
+export interface RegistrationPlan {
+  kind: 'free' | 'invite' | 'payment' | 'choose' | 'sequential';
+  /** Enabled user-facing methods (PoW excluded — it is automatic). */
+  methods: Array<'invite' | 'payment'>;
+  /** Formatted price ("<amount> <ccy>"), when a payment method is involved. */
+  price?: string;
+  /** Whether PoW applies (informational; the client always auto-solves it). */
+  pow: boolean;
+}
+
+/** Plan the onboarding registration branch. Pure; mirrors the backend's
+ *  `plan_gates` composition so the wizard and the server agree on what a given
+ *  backend expects. Absent registration ⇒ fully open (`free`). */
+export function planRegistration(reg?: RegistrationCapability): RegistrationPlan {
+  const s = summarizeRegistration(reg);
+  const methods: Array<'invite' | 'payment'> = [];
+  if (s.invite) methods.push('invite');
+  if (s.payment) methods.push('payment');
+  const base = {
+    methods,
+    pow: s.pow,
+    ...(s.price ? { price: s.price } : {}),
+  };
+  if (methods.length === 0) return { kind: 'free', ...base };
+  if (methods.length === 1) return { kind: methods[0]!, ...base };
+  // 2+ enabled: alternatives (any) => choose; all-required (default) => sequential.
+  const mode = reg?.registration_mode ?? 'all';
+  return { kind: mode === 'any' ? 'choose' : 'sequential', ...base };
 }
 
 export interface BackendCapabilities {

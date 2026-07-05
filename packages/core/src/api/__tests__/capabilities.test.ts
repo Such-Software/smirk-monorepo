@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 import {
   earliestRestoreDate,
   summarizeRegistration,
+  planRegistration,
   type RestoreCapability,
+  type RegistrationCapability,
 } from '../capabilities';
 
 const NOW = new Date('2026-06-28T00:00:00Z');
@@ -84,4 +86,55 @@ test('summarizeRegistration — payment_required but amount missing omits price'
   });
   assert.equal(s.payment, true);
   assert.equal(s.price, undefined);
+});
+
+const reg = (o: Partial<RegistrationCapability>): RegistrationCapability => ({
+  invite_required: false,
+  pow_required: false,
+  payment_required: false,
+  ...o,
+});
+
+test('planRegistration — absent/open backend is free', () => {
+  assert.equal(planRegistration(undefined).kind, 'free');
+  assert.equal(planRegistration(reg({ pow_required: true })).kind, 'free'); // PoW auto
+});
+
+test('planRegistration — single gate routes straight to it', () => {
+  const inv = planRegistration(reg({ invite_required: true }));
+  assert.equal(inv.kind, 'invite');
+  assert.deepEqual(inv.methods, ['invite']);
+  const pay = planRegistration(
+    reg({ payment_required: true, payment_amount: '5', payment_currency: 'XMR' }),
+  );
+  assert.equal(pay.kind, 'payment');
+  assert.equal(pay.price, '5 XMR');
+});
+
+test('planRegistration — 2 gates, mode any => choose (buttons)', () => {
+  const p = planRegistration(
+    reg({
+      invite_required: true,
+      payment_required: true,
+      payment_amount: '5',
+      payment_currency: 'XMR',
+      registration_mode: 'any',
+    }),
+  );
+  assert.equal(p.kind, 'choose');
+  assert.deepEqual(p.methods, ['invite', 'payment']);
+  assert.equal(p.price, '5 XMR');
+});
+
+test('planRegistration — 2 gates, mode all (or absent) => sequential', () => {
+  assert.equal(
+    planRegistration(reg({ invite_required: true, payment_required: true, registration_mode: 'all' }))
+      .kind,
+    'sequential',
+  );
+  // absent mode defaults to all (the backend default)
+  assert.equal(
+    planRegistration(reg({ invite_required: true, payment_required: true })).kind,
+    'sequential',
+  );
 });

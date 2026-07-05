@@ -59,12 +59,37 @@ export interface AuthMethods {
      * `solvePowChallenge` returns it directly.
      */
     altchaSolution?: AltchaPayload;
+    /**
+     * Registration-gate credentials, sent only when the backend advertises the
+     * corresponding gate (see `/capabilities` registration). Ignored by the
+     * backend when the gate is off or for a returning wallet. Under
+     * `registration_mode: "any"` the client sends AT MOST ONE of these (the
+     * chosen method); presenting both is rejected server-side.
+     */
+    inviteCode?: string;
+    paymentInvoiceId?: string;
   }): Promise<
     ApiResponse<{
       accessToken: string;
       refreshToken: string;
       expiresIn: number;
       user: { id: string; username?: string; isNew?: boolean };
+    }>
+  >;
+
+  /**
+   * Mint a pay-to-register invoice bound to `sha256(btcPublicKey)`. Pass the
+   * SAME BTC public key that will register (the binding anchor). Returns the
+   * pay-to target (a checkout URL or raw address), price, and currency. There is
+   * no status endpoint: settlement is observed by retrying `extensionRegister`
+   * with the returned `invoiceId` until it succeeds (poll-by-register).
+   */
+  createPaymentInvoice(btcPublicKey: string): Promise<
+    ApiResponse<{
+      invoiceId: string;
+      payTo: string;
+      amount: string;
+      currency: string;
     }>
   >;
 
@@ -202,9 +227,36 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
           signed_timestamp: params.signedTimestamp,
           signature: params.signature,
           altcha_solution: params.altchaSolution,
+          // Registration-gate credentials. Omitted (undefined) unless the
+          // backend advertises the gate; the backend ignores them when the gate
+          // is off or for a returning wallet.
+          invite_code: params.inviteCode,
+          payment_invoice_id: params.paymentInvoiceId,
         }),
       });
       return transformResponse(result, snakeToCamel<AuthResponseCamel>);
+    },
+
+    async createPaymentInvoice(btcPublicKey) {
+      // Mint a pay-to-register invoice bound to sha256(btcPublicKey). MUST be the
+      // SAME btc key that will register, else enforce_payment rejects the settled
+      // invoice as mis-bound. NOT retryable: a retry could mint a duplicate.
+      const result = await client.request<Record<string, unknown>>(
+        '/auth/payment-invoice',
+        {
+          method: 'POST',
+          body: JSON.stringify({ btc_public_key: btcPublicKey }),
+        },
+      );
+      return transformResponse(
+        result,
+        snakeToCamel<{
+          invoiceId: string;
+          payTo: string;
+          amount: string;
+          currency: string;
+        }>,
+      );
     },
 
     async powChallenge() {

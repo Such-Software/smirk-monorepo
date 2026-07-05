@@ -51,13 +51,25 @@ export interface BootstrapJobResult {
  * mounts don't race two bootstraps for the same wallet) and for
  * cache discovery on subsequent mounts.
  */
-export async function runBootstrapInBackground(input: {
-  fingerprint: string;
-  keys: ReadonlyArray<{ asset: string; publicKey: string }>;
-  signedTimestamp: number;
-  signature: string;
-}): Promise<BootstrapJobResult> {
-  const dedupKey = `${BOOTSTRAP_DEDUP_PREFIX}${input.fingerprint}`;
+export async function runBootstrapInBackground(
+  input: {
+    fingerprint: string;
+    keys: ReadonlyArray<{ asset: string; publicKey: string }>;
+    signedTimestamp: number;
+    signature: string;
+    inviteCode?: string;
+    paymentInvoiceId?: string;
+  },
+  /**
+   * Appended to the dedup key. The pay-to-register poll passes a per-attempt
+   * value so each retry is a FRESH job (a fresh signature) rather than reusing a
+   * prior attempt's cached result. Omit for the normal reuse-on-remount flow.
+   */
+  dedupSuffix?: string,
+): Promise<BootstrapJobResult> {
+  const dedupKey = `${BOOTSTRAP_DEDUP_PREFIX}${input.fingerprint}${
+    dedupSuffix ? `:${dedupSuffix}` : ''
+  }`;
 
   // ---- 1. Look for a reusable existing job ----
   const existing = await jobs.list({
