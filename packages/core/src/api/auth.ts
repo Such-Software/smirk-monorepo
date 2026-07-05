@@ -143,6 +143,33 @@ export interface AuthMethods {
   linkNostr(identity: NostrIdentity): Promise<ApiResponse<{ nostrPubkey: string }>>;
 
   /**
+   * Register (or resolve) a wallet by its seed-derived Nostr identity: the
+   * npub-native path (`POST /auth/nostr/register`), NO BTC signature. Get-or-
+   * create: a returning npub resolves without re-gating. Use only when the
+   * backend advertises `features.nostr_native_auth`; otherwise
+   * `extensionRegister` (BTC). `keys` still ship for tip addresses + restore.
+   */
+  nostrRegister(params: {
+    identity: NostrIdentity;
+    keys: Array<{ asset: string; publicKey: string; publicSpendKey?: string }>;
+    username?: string;
+    walletBirthday?: number;
+    seedFingerprint?: string;
+    xmrStartHeight?: number;
+    wowStartHeight?: number;
+    altchaSolution?: AltchaPayload;
+    inviteCode?: string;
+    paymentInvoiceId?: string;
+  }): Promise<
+    ApiResponse<{
+      accessToken: string;
+      refreshToken: string;
+      expiresIn: number;
+      user: { id: string; username?: string; isNew?: boolean };
+    }>
+  >;
+
+  /**
    * The authenticated user (GET /auth/me). Used by the Settings identity screen
    * to detect whether an npub is already linked. Requires a session token.
    */
@@ -339,6 +366,59 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
         body: JSON.stringify({ nostr_token: nostrToken, nonce }),
       });
       return transformResponse(result, snakeToCamel<{ nostrPubkey: string }>);
+    },
+
+    async nostrRegister(params) {
+      // 1. Unauthenticated single-use register nonce (no JWT; npub-first create).
+      const challenge = await client.request<{ nonce: string }>(
+        '/auth/nostr/register-challenge',
+        { method: 'GET' },
+      );
+      if (!challenge.data?.nonce) {
+        return challenge as unknown as ApiResponse<AuthResponseCamel>;
+      }
+      const nonce = challenge.data.nonce;
+
+      // 2. Signed-action proof of npub control, binding the nonce, the
+      // `nostr_register` purpose, and the EMPTY-body descriptor (cross-impl
+      // contract string, matches the server + pinned KAT).
+      const url = `${client.getBaseUrl().replace(/\/+$/, '')}/auth/nostr/register`;
+      const payloadSha256Hex = descriptorSha256(
+        requestDescriptor('POST', '/api/v1/auth/nostr/register', '', ''),
+      );
+      const nostrToken = nip98AuthHeader(
+        buildSignedActionEvent(
+          { url, method: 'POST', purpose: 'nostr_register', challenge: nonce, payloadSha256Hex },
+          params.identity,
+        ),
+      );
+
+      // 3. POST the register body. The chain `keys` ship for tip addresses +
+      // restore; they are NOT the auth proof (the npub is).
+      const result = await client.request<Record<string, unknown>>(
+        '/auth/nostr/register',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            nostr_token: nostrToken,
+            nonce,
+            keys: params.keys.map((k) => ({
+              asset: k.asset,
+              public_key: k.publicKey,
+              public_spend_key: k.publicSpendKey,
+            })),
+            username: params.username,
+            wallet_birthday: params.walletBirthday,
+            seed_fingerprint: params.seedFingerprint,
+            xmr_start_height: params.xmrStartHeight,
+            wow_start_height: params.wowStartHeight,
+            altcha_solution: params.altchaSolution,
+            invite_code: params.inviteCode,
+            payment_invoice_id: params.paymentInvoiceId,
+          }),
+        },
+      );
+      return transformResponse(result, snakeToCamel<AuthResponseCamel>);
     },
 
     async getMe() {

@@ -95,6 +95,12 @@ export interface BackendCapabilities {
     grin_relay: boolean;
     prices: boolean;
     nostr_identity: boolean;
+    /**
+     * npub-native registration is available (`POST /auth/nostr/register`): the
+     * wallet can register + authenticate from its seed-derived Nostr key alone,
+     * no BTC signature. Absent on legacy backends ⇒ use the BTC bootstrap.
+     */
+    nostr_native_auth?: boolean;
     /** First-party Nostr relay (encrypted DM inbox). See `messaging`. */
     nostr_relay: boolean;
     tips: boolean;

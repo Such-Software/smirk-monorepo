@@ -22,11 +22,17 @@
  */
 
 import type { SmirkApi } from '@smirk/core';
-import { bytesToHex, signBitcoinMessage } from '@smirk/core';
+import {
+  bytesToHex,
+  signBitcoinMessage,
+  deriveNostrIdentity,
+  solvePowChallenge,
+} from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
 import { runBootstrapInBackground } from './bootstrap-auth';
 import type { BootstrapJobResult } from './bootstrap-auth';
+import { PAYMENT_PENDING_SENTINEL } from '../../background/jobs/types';
 
 function buildKeysList(
   wallet: UnlockedWallet,
@@ -63,10 +69,26 @@ export async function bootstrapAuthInExtension(
     pollAttempt?: number;
   },
 ): Promise<BootstrapJobResult['bootstrap']> {
+  const keys = buildKeysList(wallet);
+
+  // Capabilities-gated: a backend advertising npub-native auth gets the NIP-98
+  // bootstrap (no BTC signature); a legacy backend keeps the BTC offscreen-job
+  // path. A failed/absent capabilities read falls back to the legacy path.
+  let nostrNative = false;
+  try {
+    const caps = await api.getCapabilities();
+    nostrNative = !!caps.data?.features?.nostr_native_auth;
+  } catch {
+    /* treat as a legacy (BTC) backend */
+  }
+  if (nostrNative && wallet.mnemonic) {
+    return bootstrapViaNostr(api, wallet, keys, gate);
+  }
+
+  // ── Legacy BTC path (offscreen job) ──
   const timestamp = Math.floor(Date.now() / 1000);
   const message = `smirk-auth-${timestamp}`;
   const signature = signBitcoinMessage(message, wallet.keys.btc.privateKey);
-  const keys = buildKeysList(wallet);
 
   const result = await runBootstrapInBackground(
     {
@@ -82,4 +104,88 @@ export async function bootstrapAuthInExtension(
 
   api.setAccessToken(result.accessToken);
   return result.bootstrap;
+}
+
+/**
+ * npub-native bootstrap (NIP-98). Popup-resident: signing the register event and
+ * solving PoW both need the seed, which never leaves the popup (unlike the BTC
+ * path, this does not use the offscreen job. A heavy-PoW nostr backend requires
+ * the popup to stay open, matching the pay-to-register UX). `checkRestore`
+ * resumes heights + detects a returning wallet (so PoW is skipped, exactly like
+ * the BTC handler). A not-yet-settled pay-to-register invoice throws the shared
+ * PAYMENT_PENDING_SENTINEL so the onboarding router's poll keeps waiting.
+ */
+async function bootstrapViaNostr(
+  api: SmirkApi,
+  wallet: UnlockedWallet,
+  keys: ReadonlyArray<{ asset: string; publicKey: string }>,
+  gate?: { inviteCode?: string; paymentInvoiceId?: string },
+): Promise<BootstrapJobResult['bootstrap']> {
+  const identity = deriveNostrIdentity(wallet.mnemonic!, 0);
+
+  // Resume heights + returning detection (fingerprint is derivation-independent).
+  let xmrStartHeight: number | undefined;
+  let wowStartHeight: number | undefined;
+  let isKnown = false;
+  try {
+    const rc = await api.checkRestore({
+      fingerprint: wallet.fingerprint,
+      keys: keys.map((k) => ({ asset: k.asset, publicKey: k.publicKey })),
+    });
+    if (rc.data?.exists) {
+      isKnown = true;
+      if (typeof rc.data.xmrStartHeight === 'number') xmrStartHeight = rc.data.xmrStartHeight;
+      if (typeof rc.data.wowStartHeight === 'number') wowStartHeight = rc.data.wowStartHeight;
+    }
+  } catch (e) {
+    console.warn('[bootstrap-nostr] checkRestore failed, treating as new:', e);
+  }
+
+  const walletBirthday = isKnown ? undefined : Math.floor(Date.now() / 1000);
+
+  // Solve PoW for genuinely-new wallets (the backend bypasses it for a returning
+  // npub, so a known wallet skips the solve, mirroring the BTC handler).
+  let altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>> = null;
+  if (!isKnown) {
+    try {
+      altchaSolution = await solvePowChallenge(api);
+    } catch (e) {
+      console.warn('[bootstrap-nostr] PoW solve failed; registering without it:', e);
+    }
+  }
+
+  const res = await api.nostrRegister({
+    identity,
+    keys: keys.map((k) => ({ asset: k.asset, publicKey: k.publicKey })),
+    seedFingerprint: wallet.fingerprint,
+    ...(walletBirthday !== undefined ? { walletBirthday } : {}),
+    ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
+    ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+    ...(altchaSolution ? { altchaSolution } : {}),
+    ...(gate?.inviteCode ? { inviteCode: gate.inviteCode } : {}),
+    ...(gate?.paymentInvoiceId ? { paymentInvoiceId: gate.paymentInvoiceId } : {}),
+  });
+
+  if (res.error || !res.data) {
+    // A not-yet-settled pay-to-register invoice is EXPECTED while paying, so signal
+    // the shared sentinel so the router's poll keeps waiting (money-safe: the
+    // backend consumes the invoice only on settlement).
+    if (
+      gate?.paymentInvoiceId &&
+      res.status === 400 &&
+      /payment not yet confirmed/i.test(res.error ?? '')
+    ) {
+      throw new Error(PAYMENT_PENDING_SENTINEL);
+    }
+    throw new Error(res.error ?? 'Registration failed');
+  }
+
+  api.setAccessToken(res.data.accessToken);
+  return {
+    userId: res.data.user.id,
+    ...(res.data.user.username !== undefined ? { username: res.data.user.username } : {}),
+    isNew: res.data.user.isNew ?? false,
+    ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
+    ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+  };
 }
