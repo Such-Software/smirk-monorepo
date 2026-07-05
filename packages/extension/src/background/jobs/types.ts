@@ -77,6 +77,15 @@ export interface JobKindMap {
   // 'swap-poll':    { input: { tradeId: string };    output: { ... } };
 }
 
+/**
+ * Stable sentinel the `bootstrap-auth` handler throws while a pay-to-register
+ * invoice is minted+bound but not yet Settled. The popup's payment poll catches
+ * this EXACT message and keeps waiting (re-signing per attempt); any other thrown
+ * message is a real failure. A sentinel (not a translated string) survives the
+ * job-boundary error serialization intact.
+ */
+export const PAYMENT_PENDING_SENTINEL = 'SMIRK_PAYMENT_PENDING';
+
 export type JobKind = keyof JobKindMap;
 export type JobInput<K extends JobKind> = JobKindMap[K]['input'];
 export type JobOutput<K extends JobKind> = JobKindMap[K]['output'];

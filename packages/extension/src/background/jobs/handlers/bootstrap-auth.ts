@@ -35,15 +35,7 @@
 import { api, solvePowChallenge } from '@smirk/core';
 
 import type { JobHandler } from '../types';
-
-/**
- * Stable sentinel thrown when a pay-to-register invoice is not yet Settled. The
- * popup's payment poll catches this exact message and keeps waiting (re-signing
- * per attempt for the 5-min signature window); any OTHER thrown message is a
- * real, user-facing failure. A sentinel (not a translated string) survives the
- * job-boundary serialization intact.
- */
-export const PAYMENT_PENDING_SENTINEL = 'SMIRK_PAYMENT_PENDING';
+import { PAYMENT_PENDING_SENTINEL } from '../types';
 
 /** The backend returns a 400 with this literal while a pay-to-register invoice
  *  is minted+bound but not yet Settled (auth.rs enforce_payment). Expected

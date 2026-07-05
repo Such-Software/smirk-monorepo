@@ -86,8 +86,12 @@ import {
   writeBackendConfig,
   clearBackendConfig,
   applyBackendConfig,
+  planRegistration,
+  computeSeedFingerprint,
+  deriveAllKeys,
   type WalletApiStyle,
 } from '@smirk/core';
+import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
 import {
   AppShell,
@@ -131,6 +135,7 @@ import {
   type ExistingSocial,
   type InboxItem,
   type InboxTipItem,
+  type OnboardingRegistration,
   type RecentRecipient,
   type SparklinePoint,
 } from '@smirk/ui';
@@ -1220,6 +1225,81 @@ function App() {
   // for a "Welcome back" summary. `null` means "no identity to surface
   // yet" (the default on a fresh-create flow).
   const [existingIdentity, setExistingIdentity] = useState<ExistingIdentity | null>(null);
+  // The active backend's registration policy, fetched from /capabilities for the
+  // onboarding gate router (free / invite / payment / choose / sequential). Null
+  // until fetched or when not onboarding; the wizard treats absent as `free`.
+  const [regPlan, setRegPlan] = useState<OnboardingRegistration | null>(null);
+  // Shared state for the interactive pay-to-register flow: the wallet created at
+  // `payment.begin` and the invoice minted for it, read back by `payment.poll`.
+  const paymentWalletRef = useRef<UnlockedWallet | null>(null);
+  const paymentInvoiceRef = useRef<string | null>(null);
+  // Fetch the active backend's registration policy while onboarding, so the
+  // wizard can route the gate (invite / payment / choose). Absent => `free`.
+  useEffect(() => {
+    if (walletState?.kind !== 'empty' || needsMigration) return;
+    let stale = false;
+    void api
+      .getCapabilities()
+      .then((r) => {
+        if (stale) return;
+        const plan = planRegistration(r.data?.registration);
+        setRegPlan({
+          kind: plan.kind,
+          methods: plan.methods,
+          ...(plan.price ? { price: plan.price } : {}),
+        });
+      })
+      .catch(() => {
+        /* leave null => the wizard treats it as free/open */
+      });
+    return () => {
+      stale = true;
+    };
+  }, [walletState?.kind, needsMigration]);
+
+  // Shared post-register onboarding wiring: warm the bootstrap cache and surface
+  // any identity this wallet already owns. Used by both the free/invite
+  // `onComplete` and the pay-to-register poll's success path.
+  const finishOnboardRegister = async (
+    wallet: UnlockedWallet,
+    onboardBootstrap: Awaited<ReturnType<typeof bootstrapAuthInExtension>>,
+  ) => {
+    const token = api.getAccessToken();
+    if (token) {
+      await writeBootstrapCache(wallet.fingerprint, token, onboardBootstrap);
+    }
+    try {
+      const [nameRes, socialsRes] = await Promise.all([
+        api.getMySmirkUsername(),
+        api.getMyLinkedSocials(),
+      ]);
+      const smirkName =
+        !nameRes.error && typeof nameRes.data === 'string' && nameRes.data.length > 0
+          ? nameRes.data
+          : undefined;
+      const linkedSocials: ExistingSocial[] =
+        !socialsRes.error && socialsRes.data
+          ? socialsRes.data.socials
+              .slice()
+              .sort((a, b) => Number(b.verified) - Number(a.verified))
+              .map((s) => ({
+                platform: s.platform,
+                username: s.username ?? s.display_name ?? s.platform_user_id ?? '',
+                verified: s.verified,
+              }))
+              .filter((s) => s.username.length > 0)
+          : [];
+      if (smirkName || linkedSocials.length > 0) {
+        setExistingIdentity({
+          ...(smirkName ? { smirkName } : {}),
+          linkedSocials,
+        });
+      }
+    } catch (e) {
+      console.warn('[smirk] identity lookup failed during onboarding', e);
+    }
+  };
+
   const [grinInbox, setGrinInbox] = useState<{
     items: InboxItem[];
     loading: boolean;
@@ -1728,72 +1808,97 @@ function App() {
           },
           defaultUrl: DEFAULT_BACKEND.url,
         }}
-        onComplete={async (mnemonic, password) => {
+        {...(regPlan ? { registration: regPlan } : {})}
+        payment={{
+          // Create the wallet (once) + mint an invoice bound to its BTC key.
+          // The SAME wallet + invoice are read back by `poll`.
+          begin: async (mnemonic, password) => {
+            const wallet =
+              paymentWalletRef.current ??
+              (await walletKeystore.createWallet({ mnemonic, password }));
+            paymentWalletRef.current = wallet;
+            const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
+            await writeSessionCache(wallet, minutes);
+            const btcPub = bytesToHex(wallet.keys.btc.publicKey);
+            const inv = await api.createPaymentInvoice(btcPub);
+            if (inv.error || !inv.data) {
+              // Already registered on this backend (a re-import): no payment
+              // needed — the gate is bypassed server-side. Register directly.
+              if (/already registered/i.test(inv.error ?? '')) {
+                const b = await bootstrapAuthInExtension(api, wallet);
+                await finishOnboardRegister(wallet, b);
+                return { alreadyRegistered: true as const };
+              }
+              throw new Error(inv.error ?? 'Could not create a payment invoice.');
+            }
+            paymentInvoiceRef.current = inv.data.invoiceId;
+            return {
+              payTo: inv.data.payTo,
+              amount: inv.data.amount,
+              currency: inv.data.currency,
+            };
+          },
+          // One register attempt with a FRESH signature. `pending` => keep
+          // polling; `done` => registered (backend consumed the settled invoice).
+          poll: async (attempt, inviteCode) => {
+            const wallet = paymentWalletRef.current;
+            const invoiceId = paymentInvoiceRef.current;
+            if (!wallet || !invoiceId) {
+              throw new Error('Payment session lost. Please restart onboarding.');
+            }
+            try {
+              const onboardBootstrap = await bootstrapAuthInExtension(api, wallet, {
+                paymentInvoiceId: invoiceId,
+                ...(inviteCode ? { inviteCode } : {}),
+                pollAttempt: attempt,
+              });
+              await finishOnboardRegister(wallet, onboardBootstrap);
+              return 'done';
+            } catch (e) {
+              if (e instanceof Error && e.message === PAYMENT_PENDING_SENTINEL) {
+                return 'pending';
+              }
+              throw e;
+            }
+          },
+        }}
+        isReturningWallet={async (mnemonic) => {
+          // Derive the seed's public keys transiently (no keystore write) and ask
+          // the backend whether it's already registered here. Lets the wizard
+          // skip the gate for a re-import (server bypasses gates for returning
+          // wallets anyway). Any failure => treat as new (the gate applies).
+          try {
+            const keys = deriveAllKeys(mnemonic, '', 3);
+            const r = await api.checkRestore({
+              fingerprint: computeSeedFingerprint(mnemonic),
+              keys: [
+                { asset: 'btc', publicKey: bytesToHex(keys.btc.publicKey) },
+                { asset: 'ltc', publicKey: bytesToHex(keys.ltc.publicKey) },
+                { asset: 'xmr', publicKey: bytesToHex(keys.xmr.publicSpendKey) },
+                { asset: 'wow', publicKey: bytesToHex(keys.wow.publicSpendKey) },
+                { asset: 'grin', publicKey: bytesToHex(keys.grin.publicKey) },
+              ],
+            });
+            return !!r.data?.exists;
+          } catch {
+            return false;
+          }
+        }}
+        onComplete={async (mnemonic, password, gate) => {
           const wallet = await walletKeystore.createWallet({ mnemonic, password });
-          // Respect the user's stored auto-lock preference, if any was
-          // set previously. For a brand-new wallet this is normally the
-          // default `0` (immediate), so no session cache is written.
+          // Respect the user's stored auto-lock preference. For a brand-new
+          // wallet this is normally `0` (immediate), so no session cache.
           const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
           await writeSessionCache(wallet, minutes);
-          // Bootstrap NOW so the wizard's setup step has a valid JWT
-          // for handle-reservation. We don't `refresh()` here yet —
-          // walletState stays `empty` so the wizard keeps owning the
-          // screen through its setup step. `onFullyDone` below flips
-          // it to `unlocked` after the user is done.
-          //
-          // Cache the bootstrap immediately so the standard
-          // `startSession` effect (which fires the moment walletState
-          // transitions to unlocked) finds a warm cache and skips a
-          // second bootstrap. Pre-PoW that doubled call cost ~50ms;
-          // post-PoW it would have re-run a full ~1-2s PBKDF2 solve.
-          const onboardBootstrap = await bootstrapAuthInExtension(api, wallet);
-          const onboardToken = api.getAccessToken();
-          if (onboardToken) {
-            await writeBootstrapCache(
-              wallet.fingerprint,
-              onboardToken,
-              onboardBootstrap,
-            );
-          }
-          // Surface any identity this wallet already owns on the
-          // backend (Smirk handle + linked socials). Issued in
-          // parallel — both are read-only and one slow leg shouldn't
-          // hold up the other. Failures are non-fatal: the wizard
-          // falls back to the reserve-handle prompt when the lookup
-          // can't be completed (offline, transient 5xx, etc.).
-          try {
-            const [nameRes, socialsRes] = await Promise.all([
-              api.getMySmirkUsername(),
-              api.getMyLinkedSocials(),
-            ]);
-            const smirkName =
-              !nameRes.error && typeof nameRes.data === 'string' && nameRes.data.length > 0
-                ? nameRes.data
-                : undefined;
-            const linkedSocials: ExistingSocial[] =
-              !socialsRes.error && socialsRes.data
-                ? socialsRes.data.socials
-                    // Render verified first to lead with the strongest signal,
-                    // pending after. Ordering only affects display.
-                    .slice()
-                    .sort((a, b) => Number(b.verified) - Number(a.verified))
-                    .map((s) => ({
-                      platform: s.platform,
-                      username: s.username ?? s.display_name ?? s.platform_user_id ?? '',
-                      verified: s.verified,
-                    }))
-                    // Drop rows we can't usefully label.
-                    .filter((s) => s.username.length > 0)
-                : [];
-            if (smirkName || linkedSocials.length > 0) {
-              setExistingIdentity({
-                ...(smirkName ? { smirkName } : {}),
-                linkedSocials,
-              });
-            }
-          } catch (e) {
-            console.warn('[smirk] identity lookup failed during onboarding', e);
-          }
+          // Bootstrap NOW (with any invite-gate credential) so the wizard's setup
+          // step has a valid JWT for handle-reservation, and warm the bootstrap
+          // cache so the unlocked-shell startSession effect skips a re-bootstrap.
+          const onboardBootstrap = await bootstrapAuthInExtension(
+            api,
+            wallet,
+            gate,
+          );
+          await finishOnboardRegister(wallet, onboardBootstrap);
         }}
         reserveSmirkName={async (handle) => {
           const res = await api.setMySmirkUsername(handle);

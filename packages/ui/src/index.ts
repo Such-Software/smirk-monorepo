@@ -127,6 +127,7 @@ export type {
   ExistingIdentity,
   ExistingSocial,
   OnboardingWizardProps,
+  OnboardingRegistration,
 } from './components/OnboardingWizard';
 export { MigrationWizard } from './components/MigrationWizard';
 export type { MigrationWizardProps } from './components/MigrationWizard';

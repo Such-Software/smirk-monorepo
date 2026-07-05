@@ -6,26 +6,20 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
  * Pay-to-register gate — a FRESH (unregistered) wallet against a backend whose
  * `/capabilities` reports `payment_required: true`.
  *
- * Expected product behaviour: onboarding must NOT complete. A genuinely new
- * pubkey has no settled invoice, so `/auth/extension` is rejected by the
- * `enforce_payment` gate (HTTP 400 VALIDATION_ERROR, message "Registration on
- * this instance requires payment. Request an invoice from /auth/payment-invoice,
- * pay it, then retry."). That error propagates:
+ * Expected product behaviour: onboarding must NOT complete. The wizard reads the
+ * backend's registration policy from `/capabilities` (planRegistration) and,
+ * seeing `payment_required`, ROUTES to the pay-to-register step after the
+ * password. That step mints an invoice bound to the wallet's BTC key and polls
+ * `/auth/extension` for settlement; a genuinely new pubkey never pays here, so
+ * the backend keeps rejecting (`enforce_payment`, HTTP 400 "Payment not yet
+ * confirmed") and the poll stays pending forever.
  *
- *   offscreen bootstrap-auth (handlers/bootstrap-auth.ts) throws the payment
- *     message (friendlyRegisterError, 400 branch returns the raw message)
- *       → popup onComplete (popup/index.tsx, calls bootstrapAuthInExtension)
- *         → OnboardingWizard.handleSubmit catch (OnboardingWizard.tsx:176) →
- *           setError(message) → the SetPassword step re-renders with a red
- *           <FieldError> (OnboardingWizard.tsx:665) and the wizard STAYS on the
- *           password step.
- *
- * So the observable, meaningful outcome is: the wizard stays on the password
- * step (`onboarding-set-password-submit` still present), Home never appears
- * (no balance calls fire), and a payment-required message is surfaced. There is
- * no dedicated invoice-screen testid in the client yet (the pay-to-register
- * client UI is still being designed) — this asserts the GATE, which is the real,
- * testable behaviour.
+ * So the observable, meaningful outcome is: the wizard ADVANCES to the payment
+ * step (`onboarding-payment-step` visible, off the password step), and Home
+ * never appears (no balance calls fire) because registration never settles.
+ * (Whether the invoice-mint call itself succeeds depends on the test backend's
+ * payment-provider wiring; the router + non-completion are the real, testable
+ * behaviour either way.)
  *
  * CRITICAL — do NOT `waitForResponse('/auth/extension')`. The bootstrap-auth
  * POST fires from the extension's OFFSCREEN document, whose network is invisible
@@ -117,28 +111,26 @@ test('fresh wallet → payment_required backend blocks onboarding (pay-to-regist
   }
   await page.getByTestId('onboarding-import-continue').click();
 
-  // Set a password → submit. This runs onComplete → bootstrapAuthInExtension,
-  // which registers the (new) wallet against /auth/extension in the OFFSCREEN
-  // document. Because the wallet is unregistered and the backend requires
-  // payment, registration is rejected (400) and the wizard's handleSubmit catch
-  // sets the error and drops back to the password step.
+  // Set a password → submit. The wizard reads the backend's registration policy
+  // (planRegistration over /capabilities) and, because payment_required is on,
+  // ROUTES to the pay-to-register step instead of registering immediately. The
+  // step mints an invoice (bound to the wallet's BTC key) and polls for
+  // settlement; a fresh wallet never pays here, so onboarding cannot complete.
   await page.getByTestId('onboarding-password-input').fill(PASSWORD);
   await page.getByTestId('onboarding-password-confirm-input').fill(PASSWORD);
   await page.getByTestId('onboarding-set-password-submit').click();
 
-  // ---- Meaningful UI outcome: the gate surfaced a payment-required error. ----
-  // FieldError has no testid (plain red text under the password field), so
-  // assert on the wizard's rendered text. This is the signal that the offscreen
-  // bootstrap threw the backend's payment message all the way up to the wizard.
-  await expect(page.locator('#root')).toContainText(/payment|invoice|pay/i, {
+  // ---- Meaningful UI outcome: the router advanced to the payment step. ----
+  // (Whether the invoice mint succeeds depends on the test backend's payment
+  // provider wiring; either way the step renders and onboarding does NOT finish.)
+  await expect(page.getByTestId('onboarding-payment-step')).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.locator('#root')).toContainText(/payment|invoice|pay/i);
 
-  // The wizard is STILL on the SetPassword step — it never advanced to the
-  // Smirk-setup step or to Home. (handleSubmit's catch re-renders `password`.)
-  await expect(page.getByTestId('onboarding-set-password-submit')).toBeVisible();
-
-  // The post-registration setup-finish step must NOT be reachable.
+  // It advanced OFF the password step (the router did its job) and never reached
+  // the post-registration setup-finish step.
+  await expect(page.getByTestId('onboarding-set-password-submit')).toHaveCount(0);
   await expect(page.getByTestId('onboarding-setup-finish-btn')).toHaveCount(0);
 
   // ---- Home never rendered / no authenticated balance fetch fired. ----

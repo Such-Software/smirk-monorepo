@@ -65,8 +65,16 @@ export interface OnboardingWizardProps {
    * setup step has a JWT for backend calls. Caller wires this to
    * `walletKeystore.createWallet` + `bootstrapAuth`. May throw —
    * the wizard surfaces the error and lets the user retry the password.
+   *
+   * `gate` carries a registration-gate credential when the backend requires one
+   * (the free path passes none). The payment method does NOT use `onComplete`
+   * (it drives {@link OnboardingWizardProps.payment} instead).
    */
-  onComplete: (mnemonic: string, password: string) => Promise<void>;
+  onComplete: (
+    mnemonic: string,
+    password: string,
+    gate?: { inviteCode?: string },
+  ) => Promise<void>;
   /**
    * Called once the user finishes (or skips) the post-create setup
    * step. Caller refreshes wallet state here to unmount the wizard
@@ -130,7 +138,50 @@ export interface OnboardingWizardProps {
     current?: { url: string; instanceName?: string; isDefault: boolean };
     defaultUrl?: string;
   };
+  /**
+   * The active backend's registration policy (from `planRegistration` in
+   * `@smirk/core`, projected to this plain shape so the wizard stays API-free).
+   * Drives the gate router between the password step and register:
+   * `free` proceeds straight through; `invite`/`payment` route to that step;
+   * `choose` shows method buttons (`registration_mode: any`); `sequential`
+   * collects every required gate in turn (`all` with 2+ gates). Absent ⇒ `free`.
+   */
+  registration?: OnboardingRegistration;
+  /**
+   * Pay-to-register callbacks, required only when `registration` can reach the
+   * payment method. `begin` creates the wallet (once) + mints an invoice bound to
+   * its BTC key and returns the pay-to target; `poll` makes one register attempt
+   * with a FRESH signature (the wizard loops it), resolving `'done'` on
+   * settlement or `'pending'` while unpaid. `inviteCode` is threaded only for the
+   * rare `sequential` (invite AND payment) config.
+   */
+  payment?: {
+    begin: (
+      mnemonic: string,
+      password: string,
+      inviteCode?: string,
+    ) => Promise<
+      { payTo: string; amount: string; currency: string } | { alreadyRegistered: true }
+    >;
+    poll: (attempt: number, inviteCode?: string) => Promise<'pending' | 'done'>;
+  };
+  /**
+   * Whether this seed is ALREADY registered on the active backend. A returning
+   * wallet bypasses every gate server-side, so when this resolves true the wizard
+   * skips the gate step entirely (a re-import has no invite code and needs no
+   * payment). Only consulted when a gate is present. Failures are treated as
+   * "new" (the gate applies) — the backend is the safety net either way.
+   */
+  isReturningWallet?: (mnemonic: string) => Promise<boolean>;
   class?: string;
+}
+
+/** The active backend's registration branch, projected from `@smirk/core`'s
+ *  `RegistrationPlan` (kept local so `@smirk/ui` imports no API types). */
+export interface OnboardingRegistration {
+  kind: 'free' | 'invite' | 'payment' | 'choose' | 'sequential';
+  methods: Array<'invite' | 'payment'>;
+  price?: string;
 }
 
 type Step =
@@ -141,6 +192,23 @@ type Step =
   | { kind: 'import-warning' }
   | { kind: 'import' }
   | { kind: 'password'; mnemonic: string; isImport: boolean }
+  | { kind: 'choose-method'; mnemonic: string; password: string; isImport: boolean }
+  | {
+      kind: 'invite';
+      mnemonic: string;
+      password: string;
+      isImport: boolean;
+      /** sequential (`all` + both gates): collect invite, then go to payment. */
+      thenPayment: boolean;
+    }
+  | {
+      kind: 'payment';
+      mnemonic: string;
+      password: string;
+      isImport: boolean;
+      /** carried only for the sequential invite+payment config. */
+      inviteCode?: string;
+    }
   | { kind: 'submitting' }
   | { kind: 'setup' }
   | { kind: 'done' };
@@ -180,19 +248,66 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     }, 250);
   };
 
-  const handleSubmit = async (mnemonic: string, password: string, isImport: boolean) => {
+  /** Advance past a completed register to the setup step (or straight to done). */
+  const finishAfterRegister = async () => {
+    if (hasSetupStep) setStep({ kind: 'setup' });
+    else await finishSetup();
+  };
+
+  /** Create + bootstrap (optionally with an invite gate), then advance. Register
+   *  errors drop back to the password step. Not used for the payment method. */
+  const runRegister = async (
+    mnemonic: string,
+    password: string,
+    isImport: boolean,
+    gate?: { inviteCode?: string },
+  ) => {
     setStep({ kind: 'submitting' });
     setError(null);
     try {
-      await props.onComplete(mnemonic, password);
-      if (hasSetupStep) {
-        setStep({ kind: 'setup' });
-      } else {
-        await finishSetup();
-      }
+      await props.onComplete(mnemonic, password, gate);
+      await finishAfterRegister();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create wallet');
       setStep({ kind: 'password', mnemonic, isImport });
+    }
+  };
+
+  // After the password, route by the backend's registration policy. Free (or an
+  // absent policy) registers immediately; a gate routes to its step first.
+  const handleSubmit = async (mnemonic: string, password: string, isImport: boolean) => {
+    const kind = props.registration?.kind ?? 'free';
+    // A seed already registered on THIS backend bypasses gates server-side, so
+    // skip the gate UI (a re-import has no invite / needs no payment). Only
+    // costs a checkRestore round-trip on gated backends; free is unaffected.
+    if (kind !== 'free' && props.isReturningWallet) {
+      let known = false;
+      try {
+        known = await props.isReturningWallet(mnemonic);
+      } catch {
+        known = false;
+      }
+      if (known) {
+        await runRegister(mnemonic, password, isImport);
+        return;
+      }
+    }
+    switch (kind) {
+      case 'invite':
+        setStep({ kind: 'invite', mnemonic, password, isImport, thenPayment: false });
+        return;
+      case 'payment':
+        setStep({ kind: 'payment', mnemonic, password, isImport });
+        return;
+      case 'choose':
+        setStep({ kind: 'choose-method', mnemonic, password, isImport });
+        return;
+      case 'sequential':
+        // `all` with both gates: collect the invite, then pay.
+        setStep({ kind: 'invite', mnemonic, password, isImport, thenPayment: true });
+        return;
+      default:
+        await runRegister(mnemonic, password, isImport);
     }
   };
 
@@ -270,6 +385,66 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           {...(error ? { error } : {})}
           isImport={step.isImport}
           onSubmit={(pw) => void handleSubmit(step.mnemonic, pw, step.isImport)}
+          onBack={() => setStep({ kind: 'welcome' })}
+        />
+      )}
+
+      {step.kind === 'choose-method' && (
+        <ChooseMethod
+          methods={props.registration?.methods ?? []}
+          {...(props.registration?.price ? { price: props.registration.price } : {})}
+          onInvite={() =>
+            setStep({
+              kind: 'invite',
+              mnemonic: step.mnemonic,
+              password: step.password,
+              isImport: step.isImport,
+              thenPayment: false,
+            })
+          }
+          onPayment={() =>
+            setStep({
+              kind: 'payment',
+              mnemonic: step.mnemonic,
+              password: step.password,
+              isImport: step.isImport,
+            })
+          }
+          onBack={() => setStep({ kind: 'welcome' })}
+        />
+      )}
+
+      {step.kind === 'invite' && (
+        <InviteStep
+          onSubmit={async (code) => {
+            if (step.thenPayment) {
+              // sequential: carry the code to the payment step; the register
+              // (with both credentials) happens there.
+              setStep({
+                kind: 'payment',
+                mnemonic: step.mnemonic,
+                password: step.password,
+                isImport: step.isImport,
+                inviteCode: code,
+              });
+              return;
+            }
+            await runRegister(step.mnemonic, step.password, step.isImport, {
+              inviteCode: code,
+            });
+          }}
+          onBack={() => setStep({ kind: 'welcome' })}
+        />
+      )}
+
+      {step.kind === 'payment' && props.payment && (
+        <PaymentStep
+          {...(props.registration?.price ? { price: props.registration.price } : {})}
+          begin={() =>
+            props.payment!.begin(step.mnemonic, step.password, step.inviteCode)
+          }
+          poll={(attempt) => props.payment!.poll(attempt, step.inviteCode)}
+          onDone={() => void finishAfterRegister()}
           onBack={() => setStep({ kind: 'welcome' })}
         />
       )}
@@ -1152,6 +1327,294 @@ function LinkedSocialRow({ social }: { social: ExistingSocial }) {
         {social.verified ? 'Verified' : 'Pending'}
       </span>
     </li>
+  );
+}
+
+// ============================================================================
+// Registration gates (invite / pay-to-register / method chooser)
+// ============================================================================
+
+const errorBoxStyle = {
+  background: 'rgba(239,68,68,0.08)',
+  border: '1px solid rgba(239,68,68,0.5)',
+  color: 'var(--smirk-negative, #ef4444)',
+  padding: '10px 12px',
+  borderRadius: 8,
+  fontSize: 13,
+  margin: '10px 0',
+} as const;
+
+/** `any`-mode chooser: the backend accepts more than one registration method. */
+function ChooseMethod({
+  methods,
+  price,
+  onInvite,
+  onPayment,
+  onBack,
+}: {
+  methods: Array<'invite' | 'payment'>;
+  price?: string;
+  onInvite: () => void;
+  onPayment: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <div data-testid="onboarding-choose-method">
+      <ScreenHeader title="How do you want to register?" onBack={onBack} />
+      <p style={bodyTextStyle}>
+        This backend accepts more than one way to register a new wallet. Pick one.
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {methods.includes('invite') && (
+          <Button
+            variant="secondary"
+            testid="onboarding-reg-method-invite"
+            onClick={onInvite}
+          >
+            I have an invite code
+          </Button>
+        )}
+        {methods.includes('payment') && (
+          <Button
+            variant="secondary"
+            testid="onboarding-reg-method-payment"
+            onClick={onPayment}
+          >
+            {price ? `Pay to register (${price})` : 'Pay to register'}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Invite-code entry. Owns its submit + inline error so a bad code stays here. */
+function InviteStep({
+  onSubmit,
+  onBack,
+}: {
+  onSubmit: (code: string) => Promise<void>;
+  onBack: () => void;
+}) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    const c = code.trim();
+    if (!c || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onSubmit(c);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Invalid or already-used invite code.');
+      setBusy(false);
+    }
+  };
+  return (
+    <div data-testid="onboarding-invite-step">
+      <ScreenHeader title="Enter your invite code" onBack={onBack} />
+      <p style={bodyTextStyle}>
+        This backend requires an invite code to register a new wallet. Codes are
+        issued by the instance operator.
+      </p>
+      <input
+        data-testid="onboarding-invite-input"
+        value={code}
+        placeholder="Invite code"
+        autoFocus
+        autocomplete="off"
+        onInput={(e) => setCode((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void submit();
+        }}
+        style={inputStyle}
+      />
+      {err && <div style={errorBoxStyle}>{err}</div>}
+      <div style={{ marginTop: 12 }}>
+        <Button
+          variant="primary"
+          testid="onboarding-invite-submit"
+          disabled={!code.trim() || busy}
+          onClick={() => void submit()}
+        >
+          {busy ? 'Checking…' : 'Continue'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Pay-to-register: mint an invoice, show the pay-to target, and poll until the
+ *  backend reads it as settled (each poll is a fresh register attempt). */
+function PaymentStep({
+  price,
+  begin,
+  poll,
+  onDone,
+  onBack,
+}: {
+  price?: string;
+  begin: () => Promise<
+    { payTo: string; amount: string; currency: string } | { alreadyRegistered: true }
+  >;
+  poll: (attempt: number) => Promise<'pending' | 'done'>;
+  onDone: () => void;
+  onBack: () => void;
+}) {
+  const [invoice, setInvoice] = useState<{
+    payTo: string;
+    amount: string;
+    currency: string;
+  } | null>(null);
+  const [status, setStatus] = useState<'minting' | 'waiting' | 'settled' | 'error'>(
+    'minting',
+  );
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const started = useRef(false);
+
+  useEffect(() => {
+    // Mint once; a remount must not mint a second invoice.
+    if (started.current) return;
+    started.current = true;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const inv = await begin();
+        if (cancelled) return;
+        // Returning wallet: the backend bypassed the gate and `begin` already
+        // completed registration — finish without showing a pay screen.
+        if ('alreadyRegistered' in inv) {
+          setStatus('settled');
+          onDone();
+          return;
+        }
+        setInvoice(inv);
+        setStatus('waiting');
+        let attempt = 0;
+        while (!cancelled) {
+          const r = await poll(attempt++);
+          if (cancelled) return;
+          if (r === 'done') {
+            setStatus('settled');
+            onDone();
+            return;
+          }
+          await new Promise((res) => setTimeout(res, 6000));
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setErr(e instanceof Error ? e.message : 'Payment failed. Please try again.');
+        setStatus('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isUrl = !!invoice && /^https?:\/\//i.test(invoice.payTo);
+  const copy = async () => {
+    if (!invoice) return;
+    try {
+      await navigator.clipboard.writeText(invoice.payTo);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the text is selectable regardless */
+    }
+  };
+
+  return (
+    <div data-testid="onboarding-payment-step">
+      <ScreenHeader title="Registration payment" onBack={onBack} />
+      <p style={bodyTextStyle}>
+        Registering a new wallet on this backend costs {price ?? 'a fee'}. Send the
+        exact amount to the address below, or open the checkout link. Registration
+        completes automatically once payment confirms.
+      </p>
+
+      {status === 'minting' && (
+        <p data-testid="onboarding-payment-status" style={{ fontSize: 13, opacity: 0.75 }}>
+          Preparing your invoice…
+        </p>
+      )}
+
+      {invoice && (
+        <>
+          <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 4 }}>Pay to</div>
+          <div
+            data-testid="onboarding-payment-address"
+            style={{
+              fontFamily: 'monospace',
+              fontSize: 12,
+              wordBreak: 'break-all',
+              padding: '10px 12px',
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              borderRadius: 8,
+            }}
+          >
+            {invoice.payTo}
+          </div>
+          <div
+            data-testid="onboarding-payment-amount"
+            style={{ fontSize: 13, margin: '8px 0' }}
+          >
+            {invoice.amount} {invoice.currency}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button variant="secondary" testid="onboarding-payment-copy" onClick={() => void copy()}>
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+            {isUrl && (
+              <a
+                href={invoice.payTo}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="onboarding-payment-open"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '10px 14px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  fontSize: 13,
+                  textDecoration: 'none',
+                  color: 'inherit',
+                }}
+              >
+                Open checkout
+              </a>
+            )}
+          </div>
+        </>
+      )}
+
+      {status === 'waiting' && (
+        <p
+          data-testid="onboarding-payment-status"
+          style={{ fontSize: 13, opacity: 0.75, marginTop: 14 }}
+        >
+          Waiting for payment to confirm… you can keep this open.
+        </p>
+      )}
+      {status === 'settled' && (
+        <p
+          data-testid="onboarding-payment-status"
+          style={{ fontSize: 13, opacity: 0.85, marginTop: 14 }}
+        >
+          Payment confirmed. Finishing setup…
+        </p>
+      )}
+      {status === 'error' && err && (
+        <div data-testid="onboarding-payment-status" style={errorBoxStyle}>
+          {err}
+        </div>
+      )}
+    </div>
   );
 }
 
