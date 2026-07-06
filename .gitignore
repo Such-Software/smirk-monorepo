@@ -73,3 +73,4 @@ packages/smoke-tests/
 # Playwright e2e harness — standalone gitignored operator tooling
 # (heavy deps: own node_modules, kept out of the workspace lockfile).
 /smoke-e2e/
+builds/

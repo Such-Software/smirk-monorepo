@@ -874,6 +874,56 @@ function BootstrappingPlaceholder({
   );
 }
 
+/** Shown when auth bootstrap FAILS (rather than masking it behind the endless
+ *  "Setting up wallet…" placeholder). Offers a retry, which re-runs the session
+ *  bootstrap from a clean slate. */
+function BootstrapErrorScreen({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div
+      data-testid="bootstrap-error"
+      style={{
+        padding: '48px 16px 16px',
+        textAlign: 'center',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+      }}
+    >
+      <div style={{ fontSize: 30 }} aria-hidden="true">
+        ⚠️
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>Couldn&apos;t sign in</div>
+      <div style={{ fontSize: 12, opacity: 0.7, maxWidth: 300, lineHeight: 1.45 }}>
+        {message}
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        style={{
+          marginTop: 6,
+          padding: '8px 18px',
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: 'pointer',
+          borderRadius: 8,
+          border: '1px solid rgba(255,255,255,0.2)',
+          background: 'rgba(255,255,255,0.08)',
+          color: 'inherit',
+        }}
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
 /**
  * Live wallet session — auth bootstrap + fetched balances. Re-derived
  * whenever the user unlocks (or transitions empty → unlocked via
@@ -2077,6 +2127,16 @@ function App() {
   // identical guard in this file). The snapshot path stamps
   // `userId: ''` as a placeholder for exactly that reason.
   if (!session?.balances) {
+    // A failed bootstrap must surface its error + a retry — NOT sit forever on the
+    // "Setting up wallet…" placeholder (which reads as an infinite hang).
+    if (session?.error) {
+      return (
+        <BootstrapErrorScreen
+          message={session.error}
+          onRetry={() => setSession(null)}
+        />
+      );
+    }
     return (
       <BootstrappingPlaceholder
         dogeImageUrl={chrome.runtime.getURL('doge-mining.webp')}

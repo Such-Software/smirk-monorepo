@@ -27,6 +27,7 @@ import {
   signBitcoinMessage,
   deriveNostrIdentity,
   solvePowChallenge,
+  bootstrapAuth,
 } from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
@@ -37,6 +38,10 @@ import {
   getPendingRegistrationInvoice,
   clearPendingRegistrationInvoice,
 } from '../pending-registration-invoice';
+
+/** Internal signal: the npub bootstrap determined this wallet is already
+ *  registered on the backend and must authenticate via the BTC path instead. */
+const NOSTR_FALLBACK_TO_BTC = 'SMIRK_NOSTR_FALLBACK_TO_BTC';
 
 function buildKeysList(
   wallet: UnlockedWallet,
@@ -97,12 +102,29 @@ export async function bootstrapAuthInExtension(
     /* treat as a legacy (BTC) backend */
   }
   if (nostrNative && wallet.mnemonic) {
-    const bootstrap = await bootstrapViaNostr(api, wallet, keys, effectiveGate);
-    await clearPendingRegistrationInvoice(wallet.fingerprint);
-    return bootstrap;
+    try {
+      const bootstrap = await bootstrapViaNostr(api, wallet, keys, effectiveGate);
+      await clearPendingRegistrationInvoice(wallet.fingerprint);
+      return bootstrap;
+    } catch (e) {
+      // A wallet already registered on THIS backend (its seed is known — e.g. it
+      // onboarded via the BTC path before npub-native existed) can't npub-register:
+      // by design its npub links via the authenticated /auth/nostr/link flow, not
+      // bootstrap. Fall back to BTC auth, which signs the existing account in.
+      // Anything else (a genuinely new wallet's failure, the payment-pending
+      // sentinel) propagates.
+      if (!(e instanceof Error && e.message === NOSTR_FALLBACK_TO_BTC)) throw e;
+      // Re-auth INLINE (popup-resident) rather than via the offscreen job: this is
+      // a fast returning-user sign-in (no PoW, nothing to strand), and the offscreen
+      // path hits an MV3 "receiving end does not exist" race right after a reload.
+      // bootstrapAuth sets the access token itself.
+      const bootstrap = await bootstrapAuth(api, wallet);
+      await clearPendingRegistrationInvoice(wallet.fingerprint);
+      return bootstrap;
+    }
   }
 
-  // ── Legacy BTC path (offscreen job) ──
+  // ── BTC path (offscreen job) — legacy backends AND the npub→BTC fallback ──
   const timestamp = Math.floor(Date.now() / 1000);
   const message = `smirk-auth-${timestamp}`;
   const signature = signBitcoinMessage(message, wallet.keys.btc.privateKey);
@@ -197,6 +219,14 @@ async function bootstrapViaNostr(
         (res.status === 400 && /payment not yet confirmed/i.test(res.error ?? '')))
     ) {
       throw new Error(PAYMENT_PENDING_SENTINEL);
+    }
+    // The wallet's seed is already registered on this backend but its npub isn't
+    // linked, so npub-register is refused. A 409 is the DEFINITIVE "already has an
+    // account" signal (independent of checkRestore, which may have been rate-limited
+    // to a false `isKnown=false`); `isKnown` covers the 400-PoW-required variant.
+    // Either way, fall back to BTC auth, which signs the existing account in.
+    if (res.status === 409 || isKnown) {
+      throw new Error(NOSTR_FALLBACK_TO_BTC);
     }
     throw new Error(res.error ?? 'Registration failed');
   }
