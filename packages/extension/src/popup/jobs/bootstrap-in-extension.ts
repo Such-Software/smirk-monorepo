@@ -188,11 +188,13 @@ async function bootstrapViaNostr(
   if (res.error || !res.data) {
     // A not-yet-settled pay-to-register invoice is EXPECTED while paying, so signal
     // the shared sentinel so the router's poll keeps waiting (money-safe: the
-    // backend consumes the invoice only on settlement).
+    // backend consumes the invoice only on settlement). Prefer the stable
+    // `PAYMENT_PENDING` code; fall back to the legacy 400 + string for older
+    // backends.
     if (
       gate?.paymentInvoiceId &&
-      res.status === 400 &&
-      /payment not yet confirmed/i.test(res.error ?? '')
+      (res.code === 'PAYMENT_PENDING' ||
+        (res.status === 400 && /payment not yet confirmed/i.test(res.error ?? '')))
     ) {
       throw new Error(PAYMENT_PENDING_SENTINEL);
     }

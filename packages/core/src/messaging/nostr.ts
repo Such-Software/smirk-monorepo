@@ -71,12 +71,24 @@ export function wrapToDirectMessage(
 ): DirectMessage | null {
   const rumor = unwrapDmSecurely(wrap, recipientSk);
   if (!rumor) return null;
+  const nowSec = Math.floor(Date.now() / 1000);
+  // The rumor `id`/`created_at` are UNSIGNED (inside the encrypted layer) — the
+  // authenticated seal only binds the AUTHOR, not these fields. So an
+  // authenticated-but-malicious sender can pick a `created_at` far in the future
+  // (pin-to-top) or a colliding `id` (dedup-suppress another message). Key off
+  // the content-addressed, pool-verified gift-wrap `id` instead, and clamp a
+  // future `created_at` to now (NIP-59 back-dates for privacy, so only the
+  // future is anomalous).
+  const rawCreated =
+    typeof rumor.created_at === 'number' && Number.isFinite(rumor.created_at)
+      ? rumor.created_at
+      : nowSec;
   return {
-    id: rumor.id ?? wrap.id ?? '',
+    id: wrap.id ?? rumor.id ?? '',
     fromPubkeyHex: rumor.pubkey,
     fromNpub: npubEncode(rumor.pubkey),
     text: rumor.content,
-    createdAt: rumor.created_at,
+    createdAt: Math.min(rawCreated, nowSec + 300),
   };
 }
 

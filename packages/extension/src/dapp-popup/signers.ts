@@ -32,11 +32,29 @@ import {
 } from '@smirk/core';
 import type { SmirkAsset, SmirkSignResult } from '@such-software/smirk-dapp-api';
 
+/**
+ * Messages the wallet's OWN backend treats as an authentication challenge:
+ * `POST /auth/extension` verifies a BIP-137 signature over `smirk-auth-<ts>`.
+ * The general dapp `signMessage` surface MUST NEVER produce one — otherwise a
+ * connected site (which already holds the btc pubkey from `connect()`) could
+ * have the user approve a `signMessage("smirk-auth-<now>")` and replay it to the
+ * backend to forge a full authenticated session for the user's own account.
+ * The wallet's real registration signs these directly in core
+ * (`wallet-flow.ts` / `bootstrap-in-extension.ts`), never through this executor,
+ * so refusing the prefix here breaks no legitimate flow.
+ */
+const RESERVED_AUTH_MESSAGE = /^\s*smirk-auth-/i;
+
 export function signMessageWithUnlocked(
   wallet: UnlockedWallet,
   message: string,
   assets: SmirkAsset[],
 ): SmirkSignResult {
+  if (RESERVED_AUTH_MESSAGE.test(message)) {
+    throw new Error(
+      'Refusing to sign a reserved Smirk backend-auth challenge through the dapp interface.',
+    );
+  }
   const msgBytes = new TextEncoder().encode(message);
   const signatures: SmirkSignResult['signatures'] = [];
   for (const asset of assets) {

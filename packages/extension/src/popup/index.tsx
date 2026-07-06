@@ -1230,29 +1230,56 @@ function App() {
   // onboarding gate router (free / invite / payment / choose / sequential). Null
   // until fetched or when not onboarding; the wizard treats absent as `free`.
   const [regPlan, setRegPlan] = useState<OnboardingRegistration | null>(null);
+  // Whether the capabilities read that produces `regPlan` has actually resolved.
+  // The wizard fails closed while this is false rather than defaulting to the
+  // free path on a gated backend.
+  const [regResolved, setRegResolved] = useState(false);
   // Shared state for the interactive pay-to-register flow: the wallet created at
   // `payment.begin` and the invoice minted for it, read back by `payment.poll`.
   const paymentWalletRef = useRef<UnlockedWallet | null>(null);
   const paymentInvoiceRef = useRef<string | null>(null);
+  // The minted invoice's display details, cached so a PaymentStep REMOUNT (back
+  // then forward) reuses the same invoice instead of minting a second one and
+  // stranding the first — a double-charge risk.
+  const paymentInvoiceDetailsRef = useRef<
+    { payTo: string; amount: string; currency: string } | null
+  >(null);
   // Fetch the active backend's registration policy while onboarding, so the
   // wizard can route the gate (invite / payment / choose). Absent => `free`.
   useEffect(() => {
     if (walletState?.kind !== 'empty' || needsMigration) return;
     let stale = false;
-    void api
-      .getCapabilities()
-      .then((r) => {
-        if (stale) return;
-        const plan = planRegistration(r.data?.registration);
-        setRegPlan({
-          kind: plan.kind,
-          methods: plan.methods,
-          ...(plan.price ? { price: plan.price } : {}),
-        });
-      })
-      .catch(() => {
-        /* leave null => the wizard treats it as free/open */
-      });
+    setRegResolved(false);
+    const load = async () => {
+      // Retry a transient capabilities failure rather than falling through to the
+      // free path: an unresolved read must leave `regResolved` false so the wizard
+      // fails closed instead of committing a keystore we can't register on a
+      // gated backend. A non-2xx (r.error) is a failed attempt, not "open".
+      for (let attempt = 0; attempt < 4 && !stale; attempt++) {
+        try {
+          const r = await api.getCapabilities();
+          if (stale) return;
+          if (!r.error && r.data) {
+            const plan = planRegistration(r.data.registration);
+            setRegPlan({
+              kind: plan.kind,
+              methods: plan.methods,
+              ...(plan.price ? { price: plan.price } : {}),
+            });
+            setRegResolved(true);
+            return;
+          }
+        } catch {
+          /* network failure — retry below */
+        }
+        if (attempt < 3) {
+          await new Promise((res) => setTimeout(res, 800 * (attempt + 1)));
+        }
+      }
+      // Persistent failure: regResolved stays false, so the wizard blocks the
+      // password step with a retry instead of defaulting to free.
+    };
+    void load();
     return () => {
       stale = true;
     };
@@ -1819,6 +1846,7 @@ function App() {
           defaultUrl: DEFAULT_BACKEND.url,
         }}
         {...(regPlan ? { registration: regPlan } : {})}
+        registrationResolved={regResolved}
         payment={{
           // Create the wallet (once) + mint an invoice bound to its BTC key.
           // The SAME wallet + invoice are read back by `poll`.
@@ -1829,6 +1857,13 @@ function App() {
             paymentWalletRef.current = wallet;
             const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
             await writeSessionCache(wallet, minutes);
+            // Reuse an invoice already minted this session (a PaymentStep remount
+            // must not mint a second one and strand the first — F8). The refs
+            // persist across the remount; on a full popup close the wizard isn't
+            // shown again (keystore now exists) so bootstrap resumes instead.
+            if (paymentInvoiceRef.current && paymentInvoiceDetailsRef.current) {
+              return paymentInvoiceDetailsRef.current;
+            }
             const btcPub = bytesToHex(wallet.keys.btc.publicKey);
             const inv = await api.createPaymentInvoice(btcPub);
             if (inv.error || !inv.data) {
@@ -1842,17 +1877,19 @@ function App() {
               throw new Error(inv.error ?? 'Could not create a payment invoice.');
             }
             paymentInvoiceRef.current = inv.data.invoiceId;
+            const details = {
+              payTo: inv.data.payTo,
+              amount: inv.data.amount,
+              currency: inv.data.currency,
+            };
+            paymentInvoiceDetailsRef.current = details;
             // Persist durably so a popup closed mid-payment resumes on the next
             // unlock (the fee is never stranded).
             await setPendingRegistrationInvoice(
               wallet.fingerprint,
               inv.data.invoiceId,
             );
-            return {
-              payTo: inv.data.payTo,
-              amount: inv.data.amount,
-              currency: inv.data.currency,
-            };
+            return details;
           },
           // One register attempt with a FRESH signature. `pending` => keep
           // polling; `done` => registered (backend consumed the settled invoice).

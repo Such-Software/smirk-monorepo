@@ -148,6 +148,15 @@ export interface OnboardingWizardProps {
    */
   registration?: OnboardingRegistration;
   /**
+   * Whether the backend's registration policy has actually been RESOLVED (a
+   * successful capabilities read). When explicitly `false`, the wizard refuses to
+   * proceed past the password step: it must NOT fall back to the `free` path and
+   * commit a durable keystore on a gated backend whose gate it simply hasn't
+   * learned yet — that bricks onboarding. Omitted/undefined preserves the
+   * legacy behavior for hosts that don't gate on capabilities.
+   */
+  registrationResolved?: boolean;
+  /**
    * Pay-to-register callbacks, required only when `registration` can reach the
    * payment method. `begin` creates the wallet (once) + mints an invoice bound to
    * its BTC key and returns the pay-to target; `poll` makes one register attempt
@@ -276,6 +285,16 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // After the password, route by the backend's registration policy. Free (or an
   // absent policy) registers immediately; a gate routes to its step first.
   const handleSubmit = async (mnemonic: string, password: string, isImport: boolean) => {
+    // Fail closed: when the caller gates on a capabilities read that has NOT
+    // resolved, do not default to the free path — a gated backend would get a
+    // committed keystore that can never finish registering. Make the user retry
+    // instead of bricking the wallet. `undefined` keeps the legacy behavior.
+    if (props.registrationResolved === false) {
+      setError(
+        "Couldn't reach the backend to check its sign-up requirements. Check your connection and try again.",
+      );
+      return;
+    }
     const kind = props.registration?.kind ?? 'free';
     // A seed already registered on THIS backend bypasses gates server-side, so
     // skip the gate UI (a re-import has no invite / needs no payment). Only

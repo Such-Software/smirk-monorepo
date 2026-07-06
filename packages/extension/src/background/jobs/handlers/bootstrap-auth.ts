@@ -37,12 +37,19 @@ import { api, solvePowChallenge } from '@smirk/core';
 import type { JobHandler } from '../types';
 import { PAYMENT_PENDING_SENTINEL } from '../types';
 
-/** The backend returns a 400 with this literal while a pay-to-register invoice
- *  is minted+bound but not yet Settled (auth.rs enforce_payment). Expected
- *  during polling — not a failure. */
-function isPaymentPending(result: { error?: string; status?: number }): boolean {
+/** The backend signals a minted+bound-but-not-yet-Settled pay-to-register invoice
+ *  with the stable `PAYMENT_PENDING` code (auth.rs `verify_payment_settled`).
+ *  Expected during polling — not a failure. Match the machine-readable code
+ *  first; fall back to the legacy 400 + string for backends predating the code
+ *  so the rollout is not order-dependent. */
+function isPaymentPending(result: {
+  error?: string;
+  status?: number;
+  code?: string;
+}): boolean {
   return (
-    result.status === 400 && /payment not yet confirmed/i.test(result.error ?? '')
+    result.code === 'PAYMENT_PENDING' ||
+    (result.status === 400 && /payment not yet confirmed/i.test(result.error ?? ''))
   );
 }
 
