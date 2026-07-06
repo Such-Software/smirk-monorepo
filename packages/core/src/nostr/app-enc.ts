@@ -20,6 +20,8 @@
 import { HDKey } from '@scure/bip32';
 import { x25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
+import { blake2b } from '@noble/hashes/blake2b';
+import { hsalsa, secretbox } from '@noble/ciphers/salsa';
 import { bytesToHex } from '@noble/hashes/utils';
 
 import { mnemonicToSeed } from '../hd';
@@ -108,30 +110,74 @@ export function deriveAppEncryptionKey(
 }
 
 /**
- * Open a libsodium `crypto_box_seal` addressed to the app-scoped key — the read
- * side of the dapp envelope. The key never leaves the wallet.
- *
- * NOT YET IMPLEMENTED — needs a cross-impl KAT against libsodium before it can be
- * trusted (a subtly-wrong `crypto_box` assembly fails Poly1305 rather than
- * corrupting, but must be proven byte-exact). The construction to implement:
+ * Salsa20/ChaCha "expand 32-byte k" constant, as four little-endian 32-bit words.
+ * Used as the HSalsa20 constant input for `crypto_box_beforenm`.
+ */
+const SIGMA = new Uint32Array([0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]);
+
+/** Decode bytes → little-endian u32 words (host-endian-independent; Salsa is LE). */
+function bytesToU32LE(b: Uint8Array): Uint32Array {
+  const out = new Uint32Array(b.length >>> 2);
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  for (let i = 0; i < out.length; i++) out[i] = view.getUint32(i * 4, true);
+  return out;
+}
+
+/** Encode little-endian u32 words → bytes (inverse of `bytesToU32LE`). */
+function u32ToBytesLE(w: Uint32Array): Uint8Array {
+  const out = new Uint8Array(w.length * 4);
+  const view = new DataView(out.buffer);
+  for (let i = 0; i < w.length; i++) view.setUint32(i * 4, w[i] ?? 0, true);
+  return out;
+}
+
+/**
+ * `crypto_box_beforenm`: reduce a raw X25519 shared point to the 32-byte
+ * XSalsa20-Poly1305 box key via `HSalsa20(sigma, shared, 0^16)`.
+ */
+function cryptoBoxBeforenm(shared: Uint8Array): Uint8Array {
+  const out32 = new Uint32Array(8);
+  hsalsa(SIGMA, bytesToU32LE(shared), bytesToU32LE(new Uint8Array(16)), out32);
+  return u32ToBytesLE(out32);
+}
+
+/**
+ * Open a libsodium `crypto_box_seal` given the recipient's X25519 secret key —
+ * the pure primitive, no derivation. Byte-exact with libsodium (KAT'd in
+ * `app-enc-seal.test.ts`); throws on a bad tag (wrong key / tampered box).
  *
  *   sealed   = ephemPk(32) ‖ ciphertext
- *   recipPk  = x25519.getPublicKey(key.privateKey)
- *   nonce    = blake2b(ephemPk ‖ recipPk, dkLen=24)
- *   shared   = x25519.getSharedSecret(key.privateKey, ephemPk)      // raw ECDH
- *   boxKey   = HSalsa20(sigma, shared, 0^16)                        // crypto_box_beforenm
- *   plaintext= secretbox(boxKey, nonce).open(ciphertext)           // xsalsa20poly1305
- *
- * Next stage: add `libsodium-wrappers` as a dev-dep, KAT `crypto_box_seal` (js) →
- * this `open`, then delete this guard. (`@noble/ciphers` `hsalsa` is the low-level
- * Uint32 core for the beforenm step; `secretbox` is the AEAD.)
+ *   nonce    = blake2b(ephemPk ‖ recipPk, dkLen=24)   // crypto_generichash, unkeyed
+ *   shared   = X25519(secretKey, ephemPk)             // raw crypto_scalarmult
+ *   boxKey   = HSalsa20(sigma, shared, 0^16)          // crypto_box_beforenm
+ *   plaintext= secretbox(boxKey, nonce).open(ct)      // xsalsa20poly1305
+ */
+export function sealOpen(recipientSecretKey: Uint8Array, sealed: Uint8Array): Uint8Array {
+  if (recipientSecretKey.length !== 32) throw new Error('app-enc: secret key must be 32 bytes');
+  if (sealed.length < 32 + 16) throw new Error('app-enc: sealed box too short');
+  const ephemPk = sealed.slice(0, 32);
+  const ciphertext = sealed.slice(32);
+  const recipPk = x25519.getPublicKey(recipientSecretKey);
+  const nonce = blake2b(concatBytes(ephemPk, recipPk), { dkLen: 24 });
+  const shared = x25519.getSharedSecret(recipientSecretKey, ephemPk);
+  const boxKey = cryptoBoxBeforenm(shared);
+  return secretbox(boxKey, nonce).open(ciphertext);
+}
+
+/**
+ * Open a libsodium `crypto_box_seal` addressed to the app-scoped key — the read
+ * side of the dapp envelope. Re-derives the key from the seed (the private key
+ * never leaves the wallet), then opens. `sealed` is the raw envelope bytes; the
+ * dapp-api transport layer owns base64/hex framing. Returns the raw plaintext
+ * bytes (the caller utf8-decodes if the payload is text).
  */
 export function appSealOpen(
-  _mnemonic: string,
-  _domainScope: string,
-  _sealedBase64: string,
-  _context = '',
-  _passphrase = '',
-): string {
-  throw new Error('app-enc: appSealOpen not yet implemented (pending libsodium crypto_box KAT)');
+  mnemonic: string,
+  domainScope: string,
+  sealed: Uint8Array,
+  context = '',
+  passphrase = '',
+): Uint8Array {
+  const key = deriveAppEncryptionKey(mnemonic, domainScope, context, passphrase);
+  return sealOpen(key.privateKey, sealed);
 }

@@ -4,9 +4,8 @@
  * path + pubkey for a fixed vector, determinism, origin + context separation, and
  * disjointness from the Nostr identity key.
  *
- * NOTE: `appSealOpen` (libsodium crypto_box_seal open) is not yet implemented —
- * it needs a cross-impl KAT vs libsodium.js (next stage). This file locks the
- * recovery-critical derivation only.
+ * The open side (`sealOpen` / `appSealOpen`) is cross-KAT'd against libsodium in
+ * `app-enc-seal.test.ts`; this file locks the recovery-critical derivation only.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
