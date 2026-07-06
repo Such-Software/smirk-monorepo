@@ -8,3 +8,4 @@ export * from './nip98';
 export * from './nip05';
 export * from './client';
 export * from './notes';
+export * from './app-enc';
