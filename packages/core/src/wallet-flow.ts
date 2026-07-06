@@ -656,12 +656,21 @@ export async function fetchPrices(api: SmirkApi): Promise<Prices> {
   if (result.error || !result.data) {
     return { btc: null, ltc: null, xmr: null, wow: null, grin: null };
   }
+  // v3 backends nest the quotes under `prices` ({ currency, prices:{...},
+  // updated_at }); legacy backends return them flat. Read whichever is present,
+  // and coerce to number|null so a missing/opted-out quote is a clean null.
+  const data = result.data as Record<string, unknown> & {
+    prices?: Record<string, unknown>;
+  };
+  const src = data.prices ?? data;
+  const num = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
   return {
-    btc: result.data.btc,
-    ltc: result.data.ltc,
-    xmr: result.data.xmr,
-    wow: result.data.wow,
-    grin: result.data.grin,
+    btc: num(src.btc),
+    ltc: num(src.ltc),
+    xmr: num(src.xmr),
+    wow: num(src.wow),
+    grin: num(src.grin),
   };
 }
 
