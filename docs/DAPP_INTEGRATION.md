@@ -56,6 +56,48 @@ That's the entire diff. The total integration is a handful of lines.
 
 Same as v0.2.x: see the [`window.smirk` API reference](https://github.com/Such-Software/smirk-extension/blob/main/docs/INTEGRATION.md#api-reference) in the legacy doc. Plus `installSmirkPageApi()` at the top. No additional changes.
 
+## Sign in with Nostr (NIP-98)
+
+Since `@such-software/smirk-dapp-api` 0.4.0, a dapp can authenticate a user with their wallet's **seed-derived Nostr identity** — the same npub the wallet uses to sign in to its own backend (NIP-06 derivation, schnorr/BIP-340). No passwords, no email, no Smirk servers in the loop: the dapp gets a stable public key and a signature it verifies itself.
+
+Two methods (both flat on `window.smirk`):
+
+```ts
+// The user's Nostr public key (32-byte x-only, hex). Prompts a one-time
+// per-origin "allow this site to see your Nostr identity" approval.
+const pubkey: string = await window.smirk.getNostrPublicKey();
+
+// Ask the wallet to sign a NIP-01 event. The wallet stamps created_at (if
+// omitted), pubkey, the event id, and the schnorr signature.
+const signed = await window.smirk.signNostrEvent({
+  kind: 27235,            // NIP-98 HTTP auth
+  content: '',
+  tags: [
+    ['u', 'https://your-dapp.example/api/login'],
+    ['method', 'POST'],
+  ],
+});
+// signed: { id, pubkey, kind, content, tags, created_at, sig }
+```
+
+A minimal login:
+
+1. Your server issues a challenge (or you rely on the NIP-98 `u`/`method`/`payload` tags for the specific request being authenticated).
+2. The page builds the unsigned event and calls `window.smirk.signNostrEvent(...)`.
+3. Send the signed event to your server; verify the schnorr signature over the NIP-01 id against `signed.pubkey`, and check the tags match the request (and `created_at` is fresh). A valid signature proves the user controls that npub.
+
+`signNostrEvent` is general-purpose NIP-01 — kind 27235 for NIP-98 auth, kind 1 for a note your dapp publishes on the user's behalf, etc. The private key never leaves the wallet; the page only ever receives the signed event.
+
+**Version gate — feature-detect.** The Nostr identity is a **v0.3+** feature: the v0.2.x extension has no npub, so `getNostrPublicKey` / `signNostrEvent` are absent (or reject) there. Guard before using them:
+
+```ts
+if (typeof window.smirk?.getNostrPublicKey === 'function') {
+  // offer "Sign in with Nostr"
+}
+```
+
+`getBackend()` (also 0.4.0) returns the backend URL the user's wallet is pointed at, so a self-sovereign dapp can adapt to a user who runs their own Smirk backend.
+
 ## Wire-format internals (background only — most dapps don't need this)
 
 When the iframe transport runs, every call is a `SMIRK_REQUEST` envelope posted to `window.parent`:
@@ -103,6 +145,7 @@ This is a hard architectural commitment, not a setting. We don't run a `cdn.smir
 | Legacy dapp uses `window.smirk` only (no `installSmirkPageApi()` call)                               | works                    | shows "wallet not found"        | shows "wallet not found"     |
 | Dapp uses `installSmirkPageApi({ mode: 'never' })`                                                   | works (extension wins)   | shows "wallet not found"        | shows "wallet not found"     |
 | Dapp uses `installSmirkPageApi({ mode: 'force' })` (testing — install even when not in Smirk iframe) | works (extension wins)   | works                           | works                        |
+| Dapp uses `getNostrPublicKey()` / `signNostrEvent()` (Sign in with Nostr, dapp-api ≥ 0.4.0)          | not available (no npub)  | works                           | works                        |
 
 ## Where to file issues
 
