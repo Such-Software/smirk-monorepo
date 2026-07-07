@@ -1,5 +1,13 @@
-import { test, expect } from '../fixtures/extension.js';
+import { test, expect, skipDestructiveOnShared } from '../fixtures/extension.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
+
+// Registers a brand-new wallet → writes a real user row. Refused on a shared/prod
+// backend unless you deliberately opt in with ALLOW_PROD_WRITES=1, so a routine
+// run can never create test users in production.
+test.skip(
+  skipDestructiveOnShared(),
+  'creates a new wallet on the backend — set ALLOW_PROD_WRITES=1 to run against a shared/prod host on purpose',
+);
 
 /**
  * create-new-wallet — the full GENERATE → VERIFY → REGISTER path for a brand-new

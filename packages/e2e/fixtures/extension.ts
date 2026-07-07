@@ -54,3 +54,27 @@ export const expect = test.expect;
 
 /** The instance under test (default: local smirk-backend-core). */
 export const BACKEND_URL = process.env.BACKEND_URL ?? 'http://127.0.0.1:8080/api/v1';
+
+/**
+ * True when the target backend is a SHARED / production host (not loopback).
+ * Fails safe: an unparseable URL is treated as shared.
+ */
+export function isSharedBackend(): boolean {
+  try {
+    const h = new URL(BACKEND_URL).hostname;
+    return !(h === '127.0.0.1' || h === 'localhost' || h === '0.0.0.0' || h.endsWith('.local'));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Whether a spec that WRITES real rows (registers a new wallet, mints an invoice)
+ * should self-skip. The e2e suite normally runs against a local/disposable
+ * `smirk-backend-core`, so by default a write spec is refused on a shared/prod
+ * host — you can't pollute production by accident. You CAN opt in deliberately
+ * (a real prod smoke check) with `ALLOW_PROD_WRITES=1`.
+ */
+export function skipDestructiveOnShared(): boolean {
+  return isSharedBackend() && !process.env.ALLOW_PROD_WRITES;
+}

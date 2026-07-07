@@ -6893,6 +6893,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           Auto-lock wallet after
         </label>
         <select
+          data-testid="settings-autolock-select"
           value={String(autoLockMinutes)}
           onChange={(e) => void setAutoLock(Number((e.target as HTMLSelectElement).value))}
           style={{

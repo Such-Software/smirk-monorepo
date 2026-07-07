@@ -1,6 +1,13 @@
-import { test, expect } from '../fixtures/extension.js';
+import { test, expect, skipDestructiveOnShared } from '../fixtures/extension.js';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
+
+// Fresh wallet → mints a registration invoice on the backend. Refused on a
+// shared/prod host unless ALLOW_PROD_WRITES=1 is set on purpose.
+test.skip(
+  skipDestructiveOnShared(),
+  'mints a registration invoice — set ALLOW_PROD_WRITES=1 to run against a shared/prod host on purpose',
+);
 
 /**
  * Pay-to-register gate — a FRESH (unregistered) wallet against a backend whose
