@@ -18,9 +18,54 @@ import {
   clampAutoLockMinutes,
   parseSessionCache,
   restoreUnlockedFromCache,
+  serializeForSessionCache,
+  reviveForSessionCache,
+  derivedKeysUsable,
   type SessionCachePayload,
   type UnlockedWallet,
 } from '../keystore';
+
+// --- session-cache Uint8Array round-trip (the auto-unlock sign-in bug) --------
+
+/** Simulate chrome.storage.session, which serializes a Uint8Array into a plain
+ *  numeric-keyed object — the exact mangling that broke restore. */
+const throughStorage = (v: unknown): unknown => JSON.parse(JSON.stringify(v));
+
+function fakeKeys() {
+  return {
+    btc: { privateKey: new Uint8Array(32).fill(1), publicKey: new Uint8Array(33).fill(2) },
+    ltc: { privateKey: new Uint8Array(32).fill(3), publicKey: new Uint8Array(33).fill(4) },
+    xmr: { privateSpendKey: new Uint8Array(32).fill(5), publicSpendKey: new Uint8Array(32).fill(6) },
+  };
+}
+
+test('serialize -> storage-mangle -> revive restores Uint8Array key material', () => {
+  const keys = fakeKeys();
+  const restored = reviveForSessionCache(
+    throughStorage(serializeForSessionCache(keys)),
+  ) as ReturnType<typeof fakeKeys>;
+  assert.ok(restored.btc.privateKey instanceof Uint8Array, 'btc privkey is Uint8Array');
+  assert.equal(restored.btc.privateKey.length, 32);
+  assert.deepEqual(Array.from(restored.btc.privateKey), Array.from(keys.btc.privateKey));
+  assert.ok(restored.xmr.privateSpendKey instanceof Uint8Array);
+  assert.deepEqual(Array.from(restored.ltc.publicKey), Array.from(keys.ltc.publicKey));
+});
+
+test('revive self-heals a legacy numeric-object cache (no __u8 marker)', () => {
+  // A pre-fix cache stored the raw Uint8Array, which chrome flattened to {0:..}.
+  const broken = throughStorage(fakeKeys()) as Record<string, { privateKey: unknown }>;
+  assert.ok(!(broken.btc.privateKey instanceof Uint8Array)); // precondition: mangled
+  const revived = reviveForSessionCache(broken) as ReturnType<typeof fakeKeys>;
+  assert.ok(revived.btc.privateKey instanceof Uint8Array);
+  assert.equal(revived.btc.privateKey.length, 32);
+});
+
+test('derivedKeysUsable gates on real 32-byte BTC/LTC signing keys', () => {
+  assert.equal(derivedKeysUsable(fakeKeys() as never), true);
+  // Lost bytes (mangled, not revived) → not usable → force re-unlock.
+  assert.equal(derivedKeysUsable(throughStorage(fakeKeys()) as never), false);
+  assert.equal(derivedKeysUsable(undefined), false);
+});
 
 // --- clampAutoLockMinutes ----------------------------------------
 

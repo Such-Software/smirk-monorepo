@@ -53,6 +53,9 @@ import {
   restoreUnlockedFromCache,
   clampAutoLockMinutes,
   parseSessionCache,
+  serializeForSessionCache,
+  reviveForSessionCache,
+  derivedKeysUsable,
   AUTO_LOCK_MAX_MINUTES,
   type SessionCachePayload,
   totalFiat,
@@ -972,8 +975,11 @@ interface WalletSession {
  * normally-unlocked.
  */
 async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
-  const raw = await sessionStorage.get(SESSION_CACHE_KEY);
-  if (!raw) return null;
+  const stored = await sessionStorage.get(SESSION_CACHE_KEY);
+  if (!stored) return null;
+  // Revive `{__u8:hex}` (and recover a legacy numeric-object form) back to real
+  // Uint8Arrays before validating — see serializeForSessionCache in keystore.ts.
+  const raw = reviveForSessionCache(stored);
 
   // Parse via @smirk/core's `parseSessionCache` — rejects:
   //   - legacy v0.2.x { mnemonic, fingerprint, expiresAtMs } shape
@@ -996,6 +1002,13 @@ async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
   // unlock it.
   const ksState = await walletKeystore.getState();
   if (ksState.kind === 'empty' || ksState.keystore.fingerprint !== entry.fingerprint) {
+    await sessionStorage.remove(SESSION_CACHE_KEY);
+    return null;
+  }
+  // Guard: if the key bytes didn't survive storage (revive couldn't recover real
+  // Uint8Arrays), drop the cache and fall back to a password unlock instead of
+  // restoring a wallet whose keys crash the auth bootstrap.
+  if (!derivedKeysUsable(entry.keys)) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     return null;
   }
@@ -1037,7 +1050,10 @@ async function writeSessionCache(wallet: UnlockedWallet, minutes: number): Promi
     addresses: wallet.addresses,
     expiresAtMs,
   };
-  await sessionStorage.set(SESSION_CACHE_KEY, entry);
+  // Serialize Uint8Array key material to `{__u8:hex}` — chrome.storage.session
+  // would otherwise flatten it to a numeric-keyed object that breaks signing on
+  // restore ("private key must be hex string or Uint8Array").
+  await sessionStorage.set(SESSION_CACHE_KEY, serializeForSessionCache(entry));
 }
 
 /**

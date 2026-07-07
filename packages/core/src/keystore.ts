@@ -422,6 +422,67 @@ export function parseSessionCache(raw: unknown): SessionCachePayload | null {
   return r as unknown as SessionCachePayload;
 }
 
+/**
+ * `chrome.storage.session` (like JSON) does NOT preserve `Uint8Array` — a stored
+ * key comes back as a plain numeric-keyed object, so downstream signing throws
+ * "private key must be hex string or Uint8Array" and an auto-unlock (session
+ * cache) restore fails even though the user never had to sign in. These two
+ * helpers make the round-trip lossless: every `Uint8Array` is written as
+ * `{ __u8: <hex> }` (a plain string, which every storage backend preserves) and
+ * revived back on read.
+ */
+export function serializeForSessionCache(value: unknown): unknown {
+  if (value instanceof Uint8Array) return { __u8: bytesToHex(value) };
+  if (Array.isArray(value)) return value.map(serializeForSessionCache);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = serializeForSessionCache(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Inverse of {@link serializeForSessionCache}. Revives `{ __u8: hex }` to a
+ * `Uint8Array`, AND recovers a `Uint8Array` that a prior (pre-fix) write —
+ * or the raw storage layer — flattened into a `{0:..,1:..}` numeric-keyed
+ * object, so an already-broken cache self-heals instead of stranding the user.
+ */
+export function reviveForSessionCache(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(reviveForSessionCache);
+  if (value && typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    if (typeof o.__u8 === 'string') return hexToBytes(o.__u8);
+    const ks = Object.keys(o);
+    if (
+      ks.length > 0 &&
+      ks.every((k, i) => k === String(i)) &&
+      Object.values(o).every(
+        (n) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 255,
+      )
+    ) {
+      return Uint8Array.from(Object.values(o) as number[]);
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(o)) out[k] = reviveForSessionCache(v);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Cheap sanity check that a restored `DerivedKeys` still carries real byte
+ * material (the BTC/LTC signing keys the auth bootstrap needs). Guards the
+ * lost-bytes case where storage dropped the arrays entirely — the restore then
+ * falls back to a password unlock instead of throwing mid-sign-in.
+ */
+export function derivedKeysUsable(keys: DerivedKeys | undefined): boolean {
+  const ok = (u: unknown): boolean => u instanceof Uint8Array && u.length === 32;
+  return !!keys && ok(keys.btc?.privateKey) && ok(keys.ltc?.privateKey);
+}
+
 // ============================================================================
 // Stateful wrapper
 // ============================================================================
