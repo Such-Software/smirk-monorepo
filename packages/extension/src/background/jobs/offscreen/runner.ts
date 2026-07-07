@@ -21,6 +21,8 @@
  * own DevTools is the only way to debug a stuck solve.
  */
 
+import { initSmirkApi } from '@smirk/core';
+
 import { bootBackendSelection } from '../../../backend-boot';
 
 import { HANDLERS } from '../handlers/registry';
@@ -55,6 +57,14 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   if (!message || typeof message !== 'object') return false;
   const req = message as OffscreenJobRequest;
   if (req.type !== 'run') return false;
+
+  // Point this offscreen context's api singleton at the backend the SW resolved
+  // (forwarded on the request because the offscreen can't read chrome.storage).
+  // Without this, bootstrap-auth would target the build default even on a
+  // self-hosted backend and return a token the real backend rejects.
+  if (req.backend?.url) {
+    initSmirkApi({ baseUrl: req.backend.url, walletApiStyle: req.backend.apiStyle });
+  }
 
   const handler = HANDLERS[req.kind as JobKind];
   if (!handler) {

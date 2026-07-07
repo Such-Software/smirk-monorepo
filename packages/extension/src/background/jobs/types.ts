@@ -32,6 +32,9 @@
  * `start`, `await`, and `subscribe` rely on this map; any new job
  * kind starts here.
  */
+
+import type { WalletApiStyle } from '@smirk/core';
+
 export interface JobKindMap {
   /**
    * Full wallet bootstrap (the whole `@smirk/core.bootstrapAuth`
@@ -191,6 +194,12 @@ export type OffscreenJobRequest = {
   id: string;
   kind: JobKind;
   input: unknown;
+  /**
+   * The backend the SW is pointed at, forwarded so the offscreen (which can't
+   * read chrome.storage to resolve the durable selection) auths against the SAME
+   * backend the user chose — not just the build default. See runner.ts.
+   */
+  backend?: { url: string; apiStyle: WalletApiStyle };
 };
 
 /** Messages the offscreen runner sends back. */

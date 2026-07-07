@@ -47,7 +47,25 @@ export function bootBackendSelection(onChange?: () => void): void {
   // (1) Immediate default — synchronous, so any request before the async read
   // resolves still has a valid base URL.
   initSmirkApi({ baseUrl: FALLBACK.url, walletApiStyle: FALLBACK.apiStyle });
-  const storage = new ChromeLocalStorage();
+  // (2)+(3) Durable override + cross-context re-apply, both storage-backed.
+  // MV3 OFFSCREEN documents don't expose `chrome.storage` (restricted API
+  // surface), so `new ChromeLocalStorage()` throws there — which previously
+  // crashed the offscreen runner at module load, before it could register its
+  // message listener, surfacing to the popup as "Receiving end does not exist".
+  // Degrade gracefully: keep the synchronous default. The offscreen instead
+  // receives the resolved backend in each job request (see `applyBackendToApi`
+  // in the runner + the coordinator), so auth still targets the right backend.
+  let storage: ChromeLocalStorage;
+  try {
+    storage = new ChromeLocalStorage();
+  } catch (e) {
+    console.warn(
+      '[backend-boot] chrome.storage unavailable in this context (offscreen?); ' +
+        'using the build default until a backend is supplied per-job',
+      e,
+    );
+    return;
+  }
   // (2) Durable override. Fire-and-forget: the first real request (auth
   // bootstrap, balances) happens well after this resolves.
   void loadAndApplyBackend(storage, FALLBACK);

@@ -41,6 +41,7 @@ import {
   JOBS_STORAGE_PREFIX,
   OFFSCREEN_PATH,
 } from './types';
+import { api } from '@smirk/core';
 
 const DEDUP_PREFIX = `${JOBS_STORAGE_PREFIX}dedup:`;
 const RESULT_TTL_MS = 10 * 60 * 1000;
@@ -200,6 +201,9 @@ async function startJob<K extends JobKind>(args: {
     id,
     kind: args.kind,
     input: args.input,
+    // Forward the SW's resolved backend so the offscreen auths against the user's
+    // chosen backend (it can't read chrome.storage to resolve it itself).
+    backend: { url: api.getBaseUrl(), apiStyle: api.getWalletApiStyle() },
   };
   // The offscreen runner is listening on chrome.runtime.onMessage;
   // its `sendMessage` reply isn't used (offscreen reports via its
