@@ -68,6 +68,9 @@ import {
   reconcilePendingOutgoing,
   chainProviders,
   deriveNostrIdentity,
+  buildSlatepackChannels,
+  readAllInbound,
+  type InboundSlatepack,
   detectLegacyWallet,
   migrateLegacyWallet,
   sweepLegacyBtcLtc,
@@ -398,11 +401,43 @@ function isTipStale(
   return Date.now() - created > STALE_TIP_NO_CONF_MS;
 }
 
-async function fetchGrinInbox(userId: string): Promise<{
-  items: InboxItem[];
-  loading: boolean;
-  error: string | null;
-}> {
+/** Map a transport-normalized inbound slatepack to the shell's InboxItem
+ *  (seconds → ISO; stage → the shell's two-bucket kind). */
+function inboundToInboxItem(s: InboundSlatepack): InboxItem {
+  const iso = (sec?: number) => (sec ? new Date(sec * 1000).toISOString() : '');
+  return {
+    kind: s.stage === 'to-sign' ? 'pending_to_sign' : 'pending_to_finalize',
+    relayId: s.id,
+    slateId: s.slateId,
+    counterpartyUserId: s.counterpartyRef,
+    amountAtomic: BigInt(s.amountNanogrin),
+    slatepack: s.slatepack,
+    createdAt: iso(s.createdAt),
+    expiresAt: iso(s.expiresAt),
+  };
+}
+
+/**
+ * Load the Grin inbox. With the unlocked `identity`, merge BOTH transports (the
+ * backend relay + the Nostr gift-wrap inbox) via {@link readAllInbound} so a
+ * payment sent over Nostr — including from a Goblin wallet — shows up here.
+ * Without it (locked / no seed), fall back to the backend-only path so the inbox
+ * still works pre-identity.
+ */
+async function fetchGrinInbox(
+  userId: string,
+  identity?: NostrIdentity | null,
+): Promise<{ items: InboxItem[]; loading: boolean; error: string | null }> {
+  if (identity) {
+    try {
+      const channels = buildSlatepackChannels({ grin: api, userId, identity });
+      const inbound = await readAllInbound(channels);
+      return { items: inbound.map(inboundToInboxItem), loading: false, error: null };
+    } catch (e) {
+      // Fall through to the backend-only path on any channel-construction error.
+      void e;
+    }
+  }
   const r = await api.getGrinPendingSlatepacks(userId);
   if (r.error || !r.data) {
     return { items: [], loading: false, error: r.error ?? 'Failed to load inbox' };
@@ -1858,7 +1893,10 @@ function App() {
       const [nextGrin, nextTips] = await Promise.all([
         grinOff
           ? Promise.resolve({ items: [], loading: false, error: null })
-          : fetchGrinInbox(userId),
+          : fetchGrinInbox(
+              userId,
+              walletState.wallet.mnemonic ? deriveNostrIdentity(walletState.wallet.mnemonic, 0) : null,
+            ),
         tipsOff
           ? Promise.resolve({ tips: [], error: null })
           : fetchTipInbox().catch((e) => ({
@@ -2169,10 +2207,11 @@ function App() {
     // slatepack relay round-trip but still refresh tips.
     const sess = await store.load();
     const grinHidden = (sess.ui.hiddenAssets ?? []).includes('grin');
+    const mnemonic = walletState.wallet.mnemonic;
     const [nextGrin, nextTips] = await Promise.all([
       grinHidden
         ? Promise.resolve({ items: [], loading: false, error: null })
-        : fetchGrinInbox(userId),
+        : fetchGrinInbox(userId, mnemonic ? deriveNostrIdentity(mnemonic, 0) : null),
       fetchTipInbox().catch((e) => ({
         tips: [],
         error: e instanceof Error ? e.message : 'Tip fetch failed',
