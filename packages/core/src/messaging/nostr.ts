@@ -91,6 +91,10 @@ export class NostrMessagingProvider implements MessagingProvider {
     await this.publish(relays, giftWrap);
   }
 
+  async publishWrap({ wrap, relays }: { wrap: GiftWrapEvent; relays: string[] }): Promise<void> {
+    await this.publish(relays, wrap as unknown as Parameters<SimplePool['publish']>[1]);
+  }
+
   subscribeDms({
     identity,
     relays,

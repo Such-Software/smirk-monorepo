@@ -34,6 +34,7 @@ export * from './nostr';
 
 // Payment transport seam (interactive Grin over backend relay OR Nostr gift-wrap)
 export * from './payments/slatepack-channel';
+export * from './payments/nostr-channel-io';
 
 // v0.2 -> v0.3 migration (detect / decrypt legacy seed / legacy BTC-LTC keys)
 export * from './migration';

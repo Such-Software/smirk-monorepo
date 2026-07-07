@@ -21,6 +21,15 @@ export interface MessagingProvider {
   }): Promise<void>;
 
   /**
+   * Publish an ALREADY-BUILT gift-wrap (kind 1059) to `relays`. Unlike
+   * {@link sendDm} (which wraps plaintext), this takes a caller-constructed wrap —
+   * used by the payment transport, whose kind-14 rumor carries a structured
+   * payload, not DM text. Same 1059 rail, same relays. Resolves once at least one
+   * relay accepts.
+   */
+  publishWrap(params: { wrap: GiftWrapEvent; relays: string[] }): Promise<void>;
+
+  /**
    * Subscribe to incoming direct messages for `identity` on `relays`. Each
    * decrypted message is delivered to `onMessage`; malformed/undecryptable
    * envelopes are skipped. Returns a handle to stop the subscription.
