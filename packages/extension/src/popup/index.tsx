@@ -45,12 +45,7 @@ import {
   withAssetVisibility,
   fetchPrices,
   generateMnemonicPhrase,
-  isValidBtcAddress,
-  isValidGrinSlatepackAddress,
-  isValidLtcAddress,
   isValidMnemonic,
-  isValidWowAddress,
-  isValidXmrAddress,
   restoreUnlockedFromCache,
   clampAutoLockMinutes,
   parseSessionCache,
@@ -118,6 +113,9 @@ import {
 } from '@smirk/core';
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
+import { formatUsd, parseAmount, atomicToText, feedTimeAgo, bytesToHex, randomToken } from './format';
+import { validateAddress, resolveAddressForAsset } from './address';
+import { rowTimestamp, explorerUrlForRow, explorerUrlForPendingOutgoing } from './explorer';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
 import {
   AppShell,
@@ -491,12 +489,6 @@ const verifyKeyImage = async ({
   }
   return result.data;
 };
-
-function bytesToHex(b: Uint8Array): string {
-  return Array.from(b)
-    .map((x) => x.toString(16).padStart(2, '0'))
-    .join('');
-}
 
 /**
  * Project an `UnlockedWallet` into the public-material shape the
@@ -3627,16 +3619,6 @@ function ScanProgressBanner({
 }
 
 /** Format a USD amount with thousands separators and 2-decimal precision. */
-function formatUsd(usd: number): string {
-  if (!Number.isFinite(usd)) return '—';
-  return usd.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
 // ----- Stubbed wallet ops (replaced incrementally) -----
 //
 // SECURITY GUARD: stubs accept anything that resembles a string and return
@@ -3667,101 +3649,6 @@ if (import.meta.env.VITE_SMIRK_RELEASE === 'true') {
  * `packages/core/src/__tests__/address.test.ts` cover round-trip,
  * single-char tampering, wrong-network rejection, and malformed input.
  */
-function validateAddress(assetId: string, addr: string): string | null {
-  const trimmed = addr.trim();
-  if (!trimmed) return 'Address is empty';
-
-  const ok =
-    assetId === 'btc'
-      ? isValidBtcAddress(trimmed)
-      : assetId === 'ltc'
-        ? isValidLtcAddress(trimmed)
-        : assetId === 'xmr'
-          ? isValidXmrAddress(trimmed)
-          : assetId === 'wow'
-            ? isValidWowAddress(trimmed)
-            : assetId === 'grin'
-              ? isValidGrinSlatepackAddress(trimmed)
-              : false;
-
-  if (ok) return null;
-
-  const ticker = mustGetAsset(assetId).ticker;
-
-  // For CryptoNote chains (XMR/WOW), if the decode failed, look for the
-  // first character outside the Monero base58 alphabet and surface it
-  // — copy-paste from a web/chat context often introduces `0`, `O`,
-  // `I`, `l`, or HTML-escape gunk (`&`, `;`) that's not in the
-  // alphabet. The generic "not a valid address" doesn't help the user
-  // figure out which char to retype.
-  if (assetId === 'xmr' || assetId === 'wow') {
-    const cnAlphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-    for (let i = 0; i < trimmed.length; i++) {
-      if (!cnAlphabet.includes(trimmed[i]!)) {
-        return `Not a valid ${ticker} address — char '${trimmed[i]}' at position ${i + 1} isn't in base58 (likely copy-paste mangled)`;
-      }
-    }
-  }
-
-  return `Not a valid ${ticker} address`;
-}
-
-/**
- * Resolve the receive address for a given asset from the unlocked wallet.
- *
- * Special-cased for Grin: `wallet.addresses.grin` is the legacy Smirk
- * SHA256-custom derivation (see grin-flows.ts comment on
- * `canonicalGrinSlatepackAddress`). Displaying that and letting the
- * user share it means senders encrypt to a pubkey the receiver's
- * wasm-derived secret can't decrypt — every Smirk→Smirk send fails
- * with "age decrypt: No matching keys found". Override with the wasm
- * canonical derivation so the displayed/shared address is the same
- * one used for encryption + decryption end-to-end.
- *
- * Requires wasm to be initialized (warmed up on popup mount; user
- * reaches the Receive screen long after that resolves).
- */
-function resolveAddressForAsset(wallet: UnlockedWallet, assetId: string): string {
-  if (assetId === 'grin' && wallet.mnemonic) {
-    return canonicalGrinSlatepackAddress(wallet.mnemonic);
-  }
-  const addr = (wallet.addresses as unknown as Record<string, string | undefined>)[assetId];
-  if (!addr) throw new Error(`No receive address for asset "${assetId}"`);
-  return addr;
-}
-
-/**
- * Parse a decimal string into atomic units using the asset's registered
- * decimals. Pure BigInt math — no floating point.
- */
-function parseAmount(assetId: string, text: string): bigint | null {
-  const asset = mustGetAsset(assetId);
-  const decimals = asset.decimals;
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-  // Cap input length to prevent multi-megabyte BigInt construction from
-  // a pasted-junk amount field (UI hang, not a security bug). 32 chars
-  // covers any sane amount: 21M satoshis is 16 chars, full-precision XMR
-  // (12 decimals) tops out around 26.
-  if (trimmed.length > 32) return null;
-  const m = /^(\d*)(?:\.(\d*))?$/.exec(trimmed);
-  if (!m) return null;
-  const intPart = m[1] ?? '';
-  const fracPart = m[2] ?? '';
-  if (intPart === '' && fracPart === '') return null;
-  if (fracPart.length > decimals) return null;
-  const padded = fracPart.padEnd(decimals, '0');
-  try {
-    const intBig = BigInt(intPart || '0');
-    const fracBig = padded === '' ? 0n : BigInt(padded);
-    const result = intBig * 10n ** BigInt(decimals) + fracBig;
-    if (result < 0n) return null;
-    return result;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * InboxPasteRouter — universal paste-and-dispatch screen.
  *
@@ -4593,28 +4480,6 @@ function mapBackendStatus(
   }
 }
 
-function randomToken(byteLen: number): string {
-  const bytes = new Uint8Array(byteLen);
-  crypto.getRandomValues(bytes);
-  // base64url so it travels cleanly through Trocador's passthrough
-  // round-trip without URL-encoding tripping anything up.
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
-function atomicToText(atomic: string, assetId: string): string {
-  const asset = mustGetAsset(assetId);
-  const decimals = asset.decimals;
-  const n = BigInt(atomic);
-  if (decimals === 0) return n.toString();
-  const padded = n.toString().padStart(decimals + 1, '0');
-  const whole = padded.slice(0, padded.length - decimals);
-  const frac = padded.slice(padded.length - decimals).replace(/0+$/, '');
-  return frac.length === 0 ? whole : `${whole}.${frac}`;
-}
-
 /**
  * Asset-detail route. Pulls per-chain history + sparkline, normalizes
  * into AssetDetailTxRow, hands off to the @smirk/ui presentational
@@ -4935,17 +4800,6 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
   return out;
 }
 
-function rowTimestamp(row: AssetDetailTxRow): number | null {
-  if (row.kind === 'utxo') return null;
-  // pending-outgoing rows carry `submittedAt` (the broadcast time)
-  // instead of `timestamp` — they pre-date any chain-side timestamp
-  // so they sort to the very top of newest-first Activity.
-  const iso = row.kind === 'pending-outgoing' ? row.submittedAt : row.timestamp;
-  if (!iso) return null;
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? null : t;
-}
-
 /**
  * Per-chain adapter. Pulls from whichever history endpoint the asset's
  * family supports, normalizes to the AssetDetailTxRow shape the UI
@@ -5022,42 +4876,6 @@ async function loadAssetHistory(
   return [];
 }
 
-/**
- * Build the explorer URL for a tap on a tx row. Mirrors the explorer
- * lookup in `SendWizard.tsx` — duplicated here because the row union
- * is shaped differently from the Done-step txid string.
- */
-function explorerUrlForRow(
-  assetId: string,
-  row: AssetDetailTxRow,
-): string | null {
-  if (row.kind === 'utxo') {
-    if (assetId === 'btc') return `https://mempool.space/tx/${row.txid}`;
-    if (assetId === 'ltc') return `https://litecoinspace.org/tx/${row.txid}`;
-  }
-  if (row.kind === 'cryptonote') {
-    if (assetId === 'xmr') return `https://xmrchain.net/tx/${row.txid}`;
-    if (assetId === 'wow') return `https://explore.wownero.com/tx/${row.txid}`;
-  }
-  if (row.kind === 'grin' && row.kernelExcess) {
-    return `https://grincoin.org/kernel/${row.kernelExcess}`;
-  }
-  return null;
-}
-
-/** Tap target for a `pending-outgoing` row when no richer context
- *  applies — opens the chain explorer for the broadcast txid. Grin's
- *  Mimblewimble model has no per-tx URL, so it returns null. */
-function explorerUrlForPendingOutgoing(
-  assetId: string,
-  txid: string,
-): string | null {
-  if (assetId === 'btc') return `https://mempool.space/tx/${txid}`;
-  if (assetId === 'ltc') return `https://litecoinspace.org/tx/${txid}`;
-  if (assetId === 'xmr') return `https://xmrchain.net/tx/${txid}`;
-  if (assetId === 'wow') return `https://explore.wownero.com/tx/${txid}`;
-  return null;
-}
 
 function InboxRouter({
   wallet,
@@ -5692,14 +5510,6 @@ function NostrIdentityRoute({
  * background delivery + notifications are future work).
  */
 /** Compact relative time for a unix-seconds timestamp ("3m", "5h", "2d"). */
-function feedTimeAgo(createdAtSec: number, nowMs: number): string {
-  const s = Math.max(0, Math.floor(nowMs / 1000) - createdAtSec);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
-}
-
 /** One note in the feed. Author npub is shown truncated; content is inert text. */
 function FeedNote({ note, nowMs }: { note: DisplayNote; nowMs: number }) {
   const who = `${note.npub.slice(0, 12)}…${note.npub.slice(-4)}`;
