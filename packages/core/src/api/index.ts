@@ -29,6 +29,7 @@ export type { ApiResponse, WalletApiStyle } from './client';
 export { ApiClient } from './client';
 export * from './parse';
 export * from './capabilities';
+export * from './capabilities-cache';
 export * from './backend-config';
 
 export type { AuthMethods } from './auth';

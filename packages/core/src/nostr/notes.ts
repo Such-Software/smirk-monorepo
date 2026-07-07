@@ -13,7 +13,7 @@
  */
 
 import { finalizeEvent, verifyEvent } from 'nostr-tools/pure';
-import { npubEncode } from 'nostr-tools/nip19';
+import { npubEncode, decode as decodeNip19 } from 'nostr-tools/nip19';
 
 import type { NostrIdentity } from './identity';
 import type { NostrClient, NostrFilter, NostrWireEvent } from './client';
@@ -43,6 +43,43 @@ export interface FeedSources {
   hashtags?: string[];
   /** Extra relays to pull author/hashtag notes from, beyond the operator relay. */
   relays?: string[];
+}
+
+/** Structural shape of the backend `feed` capability, kept local so this Nostr
+ *  module doesn't import the api-layer type. Matches `FeedCapability`. */
+export interface FeedCapabilityLike {
+  relay_url: string;
+  show_owner: boolean;
+  owner_npub: string | null;
+  allowlist_npubs: string[];
+  extra_relays: string[];
+}
+
+/**
+ * Map an operator `feed` capability to relay-subscription {@link FeedSources} plus
+ * the primary relay. npubs are decoded to hex pubkeys (Nostr author filters key on
+ * hex); a malformed npub is skipped rather than thrown, so one bad allowlist entry
+ * can't blank the whole feed.
+ */
+export function feedSourcesFromCapability(feed: FeedCapabilityLike): {
+  sources: FeedSources;
+  relayUrl: string;
+} {
+  const authors: string[] = [];
+  const add = (npub: string): void => {
+    try {
+      const d = decodeNip19(npub);
+      if (d.type === 'npub' && typeof d.data === 'string') authors.push(d.data);
+    } catch {
+      /* skip a malformed npub */
+    }
+  };
+  if (feed.show_owner && feed.owner_npub) add(feed.owner_npub);
+  for (const n of feed.allowlist_npubs ?? []) add(n);
+  return {
+    sources: { authors, relays: feed.extra_relays ?? [] },
+    relayUrl: feed.relay_url,
+  };
 }
 
 /** Whether the user may post to the operator relay right now, per its policy. */

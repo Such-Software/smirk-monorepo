@@ -103,6 +103,12 @@ export interface BackendCapabilities {
     nostr_native_auth?: boolean;
     /** First-party Nostr relay (encrypted DM inbox). See `messaging`. */
     nostr_relay: boolean;
+    /** Paid premium relay tier (unlocks posting on a `premium-post` relay). See
+     *  `premium`. Absent on backends without a premium tier. */
+    premium_relay?: boolean;
+    /** Operator-curated public feed (owner/allowlist/hashtag notes over the
+     *  relay). See `feed`. Absent on backends that run no feed. */
+    feed?: boolean;
     tips: boolean;
   };
   restore: RestoreCapability;
@@ -110,6 +116,48 @@ export interface BackendCapabilities {
   registration?: RegistrationCapability;
   /** First-party Nostr relay details; present only when `features.nostr_relay`. */
   messaging?: MessagingCapability;
+  /** Premium relay tier (plans + pricing); present only when `features.premium_relay`. */
+  premium?: PremiumCapability;
+  /** Operator feed configuration; present only when `features.feed`. */
+  feed?: FeedCapability;
+}
+
+/** One premium plan the operator sells (unlocks posting on a `premium-post` relay). */
+export interface PremiumPlanInfo {
+  id: string;
+  days: number;
+  amount: string;
+}
+
+/** Paid premium relay tier. Present only when `features.premium_relay`. */
+export interface PremiumCapability {
+  /** Pricing currency, e.g. `XMR`. */
+  currency: string;
+  /** Purchasable plans. */
+  plans: PremiumPlanInfo[];
+  /** The relay premium posting targets (mirrors `messaging.relay_url`). */
+  relay_url: string;
+}
+
+/**
+ * Operator-curated public feed. Present only when `features.feed`. The wallet
+ * reads notes DIRECTLY from `relay_url` (+ `extra_relays`) filtered to the
+ * owner/allowlist authors — there is no feed-serving backend endpoint. Maps onto
+ * the Nostr `FeedSources` type. See {@link feedSourcesFromCapability}.
+ */
+export interface FeedCapability {
+  /** ws(s):// relay the feed is read from (mirrors `messaging.relay_url`). */
+  relay_url: string;
+  /** Include the operator's own announcements (`owner_npub`) in the feed. */
+  show_owner: boolean;
+  /** Include premium members' posts (advisory; the relay serves them). */
+  show_premium: boolean;
+  /** The operator announcements npub, or `null` if unset. */
+  owner_npub: string | null;
+  /** Additional curated author npubs to include. */
+  allowlist_npubs: string[];
+  /** Extra relays to pull feed notes from, beyond `relay_url`. */
+  extra_relays: string[];
 }
 
 /** A plain summary of a backend's registration gates for onboarding UI. An
@@ -168,6 +216,41 @@ export interface MessagingCapability {
  * injected) and the single place the policy semantics live client-side — mirrors
  * the backend's enforcement so the UX and the server agree.
  */
+// ============================================================================
+// Feature gates. Everything is opt-in: a minimal backend may advertise no
+// prices, tips, feed, or relay, and "absent" is a valid first-class state, not
+// an error. Components + poll loops call these before rendering/fetching.
+//
+// Two flavours by design:
+//  - PERMISSIVE-on-unknown (prices/tips/grin): a `null` caps object (still
+//    loading, OR a legacy pre-/capabilities backend) reads as ALLOWED, so we
+//    preserve old behavior and never hide mid-load. Only an EXPLICIT `false`
+//    from a caps-advertising backend gates the feature off.
+//  - STRICT (relay/premium/feed): brand-new surfaces with no legacy install
+//    base, shown ONLY when explicitly advertised (a `null`/absent reads off).
+// ============================================================================
+
+type Caps = BackendCapabilities | null | undefined;
+
+/** Fiat prices (`GET /prices`). Permissive on unknown. */
+export const capAllowsPrices = (c: Caps): boolean => c == null || c.features.prices;
+/** Social tips (`/tips/social/*`). Permissive on unknown (default-off on new backends). */
+export const capAllowsTips = (c: Caps): boolean => c == null || c.features.tips;
+/** Grin relay (address registration + slatepack relay). Permissive on unknown. */
+export const capAllowsGrin = (c: Caps): boolean => c == null || c.features.grin_relay;
+/** First-party Nostr relay (DM inbox). STRICT — only when advertised. */
+export const capHasRelay = (c: Caps): boolean => !!c?.features.nostr_relay && !!c?.messaging;
+/** Operator public feed. STRICT — needs the flag AND the feed config block. */
+export const capHasFeed = (c: Caps): boolean => !!c?.features.feed && !!c?.feed;
+/** Paid premium relay tier. STRICT. */
+export const capHasPremium = (c: Caps): boolean => !!c?.features.premium_relay && !!c?.premium;
+/** Whether a specific chain is serviceable. Permissive on unknown (legacy backends
+ *  serve every chain the wallet knows). */
+export const capAllowsChain = (
+  c: Caps,
+  chain: 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin',
+): boolean => c == null || c.chains[chain].enabled;
+
 export function earliestRestoreDate(restore: RestoreCapability, now: Date): Date | null {
   switch (restore.policy) {
     case 'unlimited':

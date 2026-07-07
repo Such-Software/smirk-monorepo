@@ -7,6 +7,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { npubEncode } from 'nostr-tools/nip19';
+
 import { deriveNostrIdentity } from '../identity';
 import {
   NOTE_KIND,
@@ -15,12 +17,41 @@ import {
   postingRequirement,
   resolvePublishRelays,
   feedFilters,
+  feedSourcesFromCapability,
 } from '../notes';
 
 const MNEMONIC =
   'leader monkey parrot ring guide accident before fence cannon height naive bean';
 const identity = deriveNostrIdentity(MNEMONIC, 0);
 const RELAY = 'wss://relay.smirk.cash';
+
+test('feedSourcesFromCapability: decodes npubs to hex, honours show_owner, keeps relays', () => {
+  const owner = deriveNostrIdentity(MNEMONIC, 1);
+  const listed = deriveNostrIdentity(MNEMONIC, 2);
+  const { sources, relayUrl } = feedSourcesFromCapability({
+    relay_url: RELAY,
+    show_owner: true,
+    owner_npub: npubEncode(owner.pubkeyHex),
+    allowlist_npubs: [npubEncode(listed.pubkeyHex)],
+    extra_relays: ['wss://relay.other'],
+  });
+  assert.equal(relayUrl, RELAY);
+  assert.deepEqual(sources.authors, [owner.pubkeyHex, listed.pubkeyHex]);
+  assert.deepEqual(sources.relays, ['wss://relay.other']);
+});
+
+test('feedSourcesFromCapability: show_owner=false drops the owner; malformed npub is skipped', () => {
+  const listed = deriveNostrIdentity(MNEMONIC, 2);
+  const { sources } = feedSourcesFromCapability({
+    relay_url: RELAY,
+    show_owner: false,
+    owner_npub: npubEncode(deriveNostrIdentity(MNEMONIC, 1).pubkeyHex),
+    allowlist_npubs: ['not-an-npub', npubEncode(listed.pubkeyHex)],
+    extra_relays: [],
+  });
+  // Owner excluded (show_owner=false), garbage skipped, valid entry kept.
+  assert.deepEqual(sources.authors, [listed.pubkeyHex]);
+});
 
 test('postingRequirement never hardcodes a paywall — it reads operator policy', () => {
   // Open relay: always allowed.
