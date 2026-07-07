@@ -32,6 +32,9 @@ export * from './chain';
 // Nostr identity (seed-derived npub, NIP-06; the identity-plane foundation)
 export * from './nostr';
 
+// Payment transport seam (interactive Grin over backend relay OR Nostr gift-wrap)
+export * from './payments/slatepack-channel';
+
 // v0.2 -> v0.3 migration (detect / decrypt legacy seed / legacy BTC-LTC keys)
 export * from './migration';
 
