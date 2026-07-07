@@ -143,6 +143,7 @@ export function useRoute(): UseRouteApi {
     home: 'home',
     swap: 'swap',
     inbox: 'inbox',
+    feed: 'feed',
     settings: 'settings',
     browse: 'browse',
   });

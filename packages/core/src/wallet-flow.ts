@@ -36,6 +36,7 @@
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
+import { loadCapabilities, capAllowsPrices } from './api';
 import { chainProviders, type ChainProviderRegistry } from './chain';
 import { solvePowChallenge, type AltchaPayload } from './pow';
 
@@ -650,11 +651,16 @@ async function fetchGrinBalance(
  */
 export type Prices = Record<'btc' | 'ltc' | 'xmr' | 'wow' | 'grin', number | null>;
 
-/** Fetch current spot prices in USD. Best-effort — returns nulls on failure. */
+/** Fetch current spot prices in USD. Best-effort — returns nulls on failure.
+ *  Opt-in: a backend that advertises no price feed (`features.prices: false`) is
+ *  never hit; the wallet shows a clean no-fiat state instead of logging a 404.
+ *  Permissive on unknown/legacy caps (preserves old behavior). */
 export async function fetchPrices(api: SmirkApi): Promise<Prices> {
+  const empty: Prices = { btc: null, ltc: null, xmr: null, wow: null, grin: null };
+  if (!capAllowsPrices(await loadCapabilities(api))) return empty;
   const result = await api.getPrices();
   if (result.error || !result.data) {
-    return { btc: null, ltc: null, xmr: null, wow: null, grin: null };
+    return empty;
   }
   // v3 backends nest the quotes under `prices` ({ currency, prices:{...},
   // updated_at }); legacy backends return them flat. Read whichever is present,

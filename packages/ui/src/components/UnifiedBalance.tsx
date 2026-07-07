@@ -227,6 +227,9 @@ export interface HomeActionRowProps {
   onSend?: () => void;
   onReceive?: () => void;
   onSwap?: () => void;
+  /** Hide the Tip action entirely — the backend advertises no social tips. The
+   *  row reflows to the remaining verbs. Default: shown. */
+  showTip?: boolean;
   /** Disable any combination — e.g. Swap when no swap routes available. */
   disabled?: Partial<Record<'tip' | 'send' | 'receive' | 'swap', boolean>>;
   class?: string;
@@ -237,9 +240,20 @@ export function HomeActionRow({
   onSend,
   onReceive,
   onSwap,
+  showTip = true,
   disabled = {},
   class: className,
 }: HomeActionRowProps) {
+  // Build only the visible verbs so a hidden Tip reflows the grid (no empty
+  // cell) instead of leaving a dead slot.
+  const buttons = [
+    showTip && (
+      <ActionButton key="tip" testid="home-action-tip" label="Tip" icon="🎁" {...(onTip ? { onClick: onTip } : {})} {...(disabled.tip ? { disabled: true } : {})} />
+    ),
+    <ActionButton key="send" testid="home-action-send" label="Send" icon="↗" {...(onSend ? { onClick: onSend } : {})} {...(disabled.send ? { disabled: true } : {})} />,
+    <ActionButton key="receive" testid="home-action-receive" label="Receive" icon="↘" {...(onReceive ? { onClick: onReceive } : {})} {...(disabled.receive ? { disabled: true } : {})} />,
+    <ActionButton key="swap" testid="home-action-swap" label="Swap" icon="⇄" {...(onSwap ? { onClick: onSwap } : {})} {...(disabled.swap ? { disabled: true } : {})} />,
+  ].filter(Boolean);
   return (
     <div
       class={className}
@@ -247,15 +261,12 @@ export function HomeActionRow({
       aria-label="Wallet actions"
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
+        gridTemplateColumns: `repeat(${buttons.length}, 1fr)`,
         gap: 8,
         padding: '4px 0 8px',
       }}
     >
-      <ActionButton testid="home-action-tip" label="Tip" icon="🎁" {...(onTip ? { onClick: onTip } : {})} {...(disabled.tip ? { disabled: true } : {})} />
-      <ActionButton testid="home-action-send" label="Send" icon="↗" {...(onSend ? { onClick: onSend } : {})} {...(disabled.send ? { disabled: true } : {})} />
-      <ActionButton testid="home-action-receive" label="Receive" icon="↘" {...(onReceive ? { onClick: onReceive } : {})} {...(disabled.receive ? { disabled: true } : {})} />
-      <ActionButton testid="home-action-swap" label="Swap" icon="⇄" {...(onSwap ? { onClick: onSwap } : {})} {...(disabled.swap ? { disabled: true } : {})} />
+      {buttons}
     </div>
   );
 }

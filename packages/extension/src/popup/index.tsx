@@ -90,6 +90,23 @@ import {
   computeSeedFingerprint,
   deriveAllKeys,
   type WalletApiStyle,
+  // Capabilities: memoized session cache + opt-in feature gates. Everything is
+  // opt-in — a minimal backend may advertise no prices/tips/grin/feed, so we
+  // gate reads + hide surfaces instead of firing calls that 404.
+  loadCapabilities,
+  invalidateCapabilities,
+  capAllowsPrices,
+  capAllowsTips,
+  capAllowsGrin,
+  capHasFeed,
+  // Nostr feed (operator-curated public feed over the relay).
+  feedSourcesFromCapability,
+  NostrClient,
+  NostrNotes,
+  postingRequirement,
+  type BackendCapabilities,
+  type DisplayNote,
+  type PostingRequirement,
 } from '@smirk/core';
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
@@ -1388,6 +1405,25 @@ function App() {
     error: string | null;
   }>({ tips: [], error: null });
 
+  // This backend's capabilities (memoized in core). Drives all opt-in gating:
+  // fiat/tips/grin/feed surfaces hide, and their calls stop firing, when the
+  // instance doesn't advertise them. Null until loaded / on a caps-less backend
+  // (gates read null as permissive, preserving legacy behavior).
+  const [caps, setCaps] = useState<BackendCapabilities | null>(null);
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked') return undefined;
+    let cancelled = false;
+    void loadCapabilities(api).then((c) => {
+      if (cancelled) return;
+      setCaps(c);
+      // Reflect feed availability into the nav (BottomNav reads this flag).
+      (globalThis as { __smirk_feed__?: boolean }).__smirk_feed__ = capHasFeed(c);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [walletState?.kind, session?.bootstrap?.userId]);
+
   // Refresh from the keystore. Called on mount and after every state
   // transition (create / unlock / lock / destroy) so the gate re-renders.
   // Also opportunistically restores a non-expired session cache.
@@ -1661,6 +1697,9 @@ function App() {
     const bootstrap = session.bootstrap;
     void (async () => {
       await ensureWasmInit();
+      // Opt-in: skip Grin address registration + recovery entirely when the
+      // backend advertises no Grin relay (permissive on unknown/legacy caps).
+      if (!capAllowsGrin(await loadCapabilities(api))) return;
       try {
         const canonical = canonicalGrinSlatepackAddress(mnemonic);
         const res = await api.registerGrinAddress(canonical);
@@ -1750,15 +1789,24 @@ function App() {
       // any asset, hidden or not, need to surface in the Inbox so
       // the user can claim them.
       const sess = await store.load();
+      // Opt-in gating (memoized caps): skip the Grin relay round-trip when the
+      // backend runs no Grin relay OR the user hid Grin; skip the tip poll when
+      // the backend advertises no social tips. This is the main recurring-404
+      // source on a minimal backend.
+      const caps = await loadCapabilities(api);
       const grinHidden = (sess.ui.hiddenAssets ?? []).includes('grin');
+      const grinOff = grinHidden || !capAllowsGrin(caps);
+      const tipsOff = !capAllowsTips(caps);
       const [nextGrin, nextTips] = await Promise.all([
-        grinHidden
+        grinOff
           ? Promise.resolve({ items: [], loading: false, error: null })
           : fetchGrinInbox(userId),
-        fetchTipInbox().catch((e) => ({
-          tips: [],
-          error: e instanceof Error ? e.message : 'Tip fetch failed',
-        })),
+        tipsOff
+          ? Promise.resolve({ tips: [], error: null })
+          : fetchTipInbox().catch((e) => ({
+              tips: [],
+              error: e instanceof Error ? e.message : 'Tip fetch failed',
+            })),
       ]);
       if (!alive) return;
       setGrinInbox(nextGrin);
@@ -2166,6 +2214,7 @@ function App() {
             <HomeRouter
               wallet={walletState.wallet}
               session={session}
+              caps={caps}
               tips={tipInbox.tips}
               onRefresh={handleRefresh}
               onTipClaim={async (tipId, assetId) => {
@@ -2202,6 +2251,11 @@ function App() {
               onClaimTip={onClaimTipHandler}
             />
           ),
+          // Feed is opt-in — present only when the backend advertises an operator
+          // feed. BottomNav shows the tab off the same capability (globalThis flag).
+          ...(capHasFeed(caps)
+            ? { feed: <FeedRoute wallet={walletState.wallet} caps={caps} /> }
+            : {}),
           settings: (
             <SettingsRouter
               wallet={walletState.wallet}
@@ -2219,6 +2273,9 @@ function App() {
                 // The JWT is per-backend; drop it + the caches + the session so
                 // the unlocked-shell effect re-bootstraps against the new backend.
                 api.setAccessToken(null);
+                // Capabilities are per-backend too — drop the memoized copy so
+                // gating re-evaluates against the new instance's advertisement.
+                invalidateCapabilities();
                 await clearBootstrapCache();
                 await clearDappPublicCache();
                 setSession(null);
@@ -2276,6 +2333,7 @@ function RefreshIconButton({ onClick, busy }: { onClick: () => void; busy: boole
 function HomeRouter({
   wallet,
   session,
+  caps,
   tips,
   onRefresh,
   onTipClaim,
@@ -2295,9 +2353,14 @@ function HomeRouter({
     tipId: string,
     assetId: InboxTipItem['assetId'],
   ) => Promise<{ ok: boolean; error?: string }>;
+  /** Backend capabilities — gates the fiat headline (prices) + Tip action (tips).
+   *  Null reads permissive (legacy/loading), so nothing hides by accident. */
+  caps: BackendCapabilities | null;
 }) {
   const { route, navigate, switchTab } = useRoute();
   const sessionState = useSessionState();
+  const showFiat = capAllowsPrices(caps);
+  const showTip = capAllowsTips(caps);
   const balancesHidden = sessionState.ui.balanceHidden;
   const toggleBalancesHidden = () => {
     void store.update((s) => {
@@ -3163,6 +3226,11 @@ function HomeRouter({
   useEffect(() => {
     let alive = true;
     const tick = async () => {
+      // Opt-in: no tips capability → no sent-tips poll (skips a recurring 404).
+      if (!capAllowsTips(await loadCapabilities(api))) {
+        if (alive) setReadyToShareCount(0);
+        return;
+      }
       const r = await api.getSentSocialTips().catch(() => null);
       const rows = r?.data?.tips ?? [];
       const ready = rows.filter(
@@ -3189,6 +3257,9 @@ function HomeRouter({
     return m;
   })();
   const totalDisplay = (() => {
+    // Opt-in: no price feed on this backend → no fiat headline (avoids a
+    // misleading "$0.00" when quotes are all null).
+    if (!showFiat) return null;
     if (session?.error) return '—';
     if (!balances || !prices) return null;
     // Headline shows total wealth on chain (confirmed + pending +
@@ -3224,7 +3295,7 @@ function HomeRouter({
     <HomeTab
       balance={{
         totalDisplay,
-        denominationLabel: balances ? 'USD' : '',
+        denominationLabel: showFiat && balances ? 'USD' : '',
         hidden: balancesHidden,
         onToggleHidden: toggleBalancesHidden,
         // onCycleDenomination intentionally omitted — UnifiedBalance
@@ -3234,6 +3305,8 @@ function HomeRouter({
         loading: session?.refreshing ?? false,
       }}
       actions={{
+        // Tip is opt-in: hidden when the backend advertises no social tips.
+        showTip,
         onTip: () => void navigate('home/tip'),
         onSend: () => void navigate('home/send'),
         onReceive: () => void navigate('home/receive'),
@@ -5487,6 +5560,226 @@ function NostrIdentityRoute({
  * no relay. The subscription lives for the screen's lifetime (a basic surface;
  * background delivery + notifications are future work).
  */
+/** Compact relative time for a unix-seconds timestamp ("3m", "5h", "2d"). */
+function feedTimeAgo(createdAtSec: number, nowMs: number): string {
+  const s = Math.max(0, Math.floor(nowMs / 1000) - createdAtSec);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+/** One note in the feed. Author npub is shown truncated; content is inert text. */
+function FeedNote({ note, nowMs }: { note: DisplayNote; nowMs: number }) {
+  const who = `${note.npub.slice(0, 12)}…${note.npub.slice(-4)}`;
+  return (
+    <div
+      data-testid="feed-note"
+      style={{
+        border: '1px solid var(--smirk-border)',
+        borderRadius: 8,
+        padding: 10,
+        background: 'var(--smirk-bg-sunken)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, opacity: 0.6 }}>
+        <span style={{ fontFamily: 'var(--smirk-font-family-mono, monospace)' }}>{who}</span>
+        <span>{feedTimeAgo(note.createdAt, nowMs)}</span>
+      </div>
+      <div style={{ fontSize: 13, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {note.content}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Feed tab — the operator-curated public Nostr feed (kind-1 notes by the owner +
+ * allowlist over the relay) plus compose. Opt-in: this route only mounts when the
+ * backend advertises a `feed` capability, so the whole surface is absent on a
+ * feed-less instance. Reading is always available; POSTING is capability-gated by
+ * the relay's write policy via {@link postingRequirement} (open / needs-premium).
+ */
+function FeedRoute({
+  wallet,
+  caps,
+}: {
+  wallet: UnlockedWallet;
+  caps: BackendCapabilities | null;
+}) {
+  const [notes, setNotes] = useState<DisplayNote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  // A single tick source so every note's relative time stays fresh without a
+  // per-note timer.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const h = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(h);
+  }, []);
+
+  const identity = useMemo(
+    () => (wallet.mnemonic ? deriveNostrIdentity(wallet.mnemonic, 0) : null),
+    [wallet.mnemonic],
+  );
+
+  const feed = caps?.feed ?? null;
+  const writePolicy = caps?.messaging?.write_policy;
+  const posting: PostingRequirement = feed
+    ? postingRequirement({
+        relayUrl: feed.relay_url,
+        ...(writePolicy ? { writePolicy } : {}),
+        // Premium status isn't yet surfaced client-side; treat as non-premium so a
+        // premium-post relay honestly shows "needs premium" rather than failing at
+        // publish time. (Premium purchase + status is a follow-up.)
+        hasPremium: false,
+      })
+    : { kind: 'no-relay' };
+
+  // One shared transport for the screen's lifetime.
+  const clientRef = useRef<NostrClient | null>(null);
+  if (!clientRef.current) clientRef.current = new NostrClient();
+  const notesApiRef = useRef<NostrNotes | null>(null);
+  if (!notesApiRef.current) notesApiRef.current = new NostrNotes(clientRef.current);
+
+  const refresh = async () => {
+    if (!feed) return;
+    setLoading(true);
+    setError(undefined);
+    try {
+      const { sources, relayUrl } = feedSourcesFromCapability(feed);
+      const list = await notesApiRef.current!.fetchFeed(sources, relayUrl, { limit: 50 });
+      setNotes(list);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load the feed');
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    void refresh();
+    const client = clientRef.current;
+    return () => client?.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feed?.relay_url]);
+
+  const publish = async () => {
+    const body = text.trim();
+    if (!identity || !body || posting.kind !== 'allowed' || !feed) return;
+    setSending(true);
+    setError(undefined);
+    try {
+      const relays = [feed.relay_url, ...feed.extra_relays];
+      const note = await notesApiRef.current!.publishNote(body, identity, relays);
+      setNotes((prev) => [note, ...prev.filter((n) => n.id !== note.id)]);
+      setText('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to post');
+    }
+    setSending(false);
+  };
+
+  const muted = { fontSize: 12, opacity: 0.65, lineHeight: 1.5 } as const;
+
+  return (
+    <div
+      data-testid="feed-screen"
+      style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 12 }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ fontSize: 16, margin: 0 }}>Feed</h2>
+        <button
+          data-testid="feed-refresh"
+          onClick={() => void refresh()}
+          disabled={loading}
+          title="Refresh"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'inherit',
+            cursor: loading ? 'default' : 'pointer',
+            fontSize: 16,
+            opacity: loading ? 0.4 : 0.8,
+          }}
+        >
+          ↻
+        </button>
+      </div>
+
+      {posting.kind === 'allowed' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <textarea
+            data-testid="feed-compose"
+            value={text}
+            onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+            placeholder={identity ? 'Share something…' : 'Unlock the wallet to post'}
+            disabled={!identity || sending}
+            rows={3}
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              resize: 'vertical',
+              padding: 8,
+              borderRadius: 8,
+              border: '1px solid var(--smirk-border)',
+              background: 'var(--smirk-bg)',
+              color: 'var(--smirk-fg)',
+              fontFamily: 'inherit',
+              fontSize: 13,
+            }}
+          />
+          <button
+            data-testid="feed-post"
+            onClick={() => void publish()}
+            disabled={sending || !text.trim() || !identity}
+            style={{
+              alignSelf: 'flex-end',
+              padding: '6px 14px',
+              borderRadius: 8,
+              border: 'none',
+              cursor: sending || !text.trim() ? 'default' : 'pointer',
+              background: 'var(--smirk-accent)',
+              color: 'var(--smirk-accent-fg, #fff)',
+              fontWeight: 600,
+              fontSize: 13,
+              opacity: sending || !text.trim() || !identity ? 0.5 : 1,
+            }}
+          >
+            {sending ? 'Posting…' : 'Post'}
+          </button>
+        </div>
+      ) : posting.kind === 'needs-premium' ? (
+        <p data-testid="feed-needs-premium" style={muted}>
+          Posting to this feed needs a premium subscription. You can read it below.
+        </p>
+      ) : null}
+
+      {error && (
+        <p style={{ ...muted, color: 'var(--smirk-negative)', opacity: 1 }}>{error}</p>
+      )}
+
+      {loading && notes.length === 0 ? (
+        <p style={muted}>Loading the feed…</p>
+      ) : notes.length === 0 ? (
+        <p data-testid="feed-empty" style={muted}>
+          No posts in this feed yet.
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {notes.map((n) => (
+            <FeedNote key={n.id} note={n} nowMs={nowMs} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBack: () => void }) {
   const [ready, setReady] = useState<'loading' | 'off' | 'on'>('loading');
   const [identity, setIdentity] = useState<NostrIdentity | null>(null);

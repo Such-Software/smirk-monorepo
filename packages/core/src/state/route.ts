@@ -34,7 +34,7 @@ import type { SessionStateStore, Route } from './session-state';
  * extension popup never surfaces `browse` because the host browser
  * is the browser.
  */
-export type Tab = 'home' | 'swap' | 'inbox' | 'settings' | 'browse';
+export type Tab = 'home' | 'swap' | 'inbox' | 'feed' | 'settings' | 'browse';
 
 /** Get the tab segment of a route id. */
 export function tabOf(route: Route): Tab {
@@ -43,6 +43,7 @@ export function tabOf(route: Route): Tab {
     first === 'home' ||
     first === 'swap' ||
     first === 'inbox' ||
+    first === 'feed' ||
     first === 'settings' ||
     first === 'browse'
   ) {

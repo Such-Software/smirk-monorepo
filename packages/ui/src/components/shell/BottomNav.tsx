@@ -38,6 +38,23 @@ const BASE_TABS: TabConfig[] = [
 // future platform regresses.
 const BROWSE_TAB: TabConfig = { id: 'browse', label: 'Browse', icon: '◯' };
 
+// `☷` would clash with theme glyphs; `≋` (U+224B) reads as a "feed/stream" of
+// posts and sits in the Math Operators block that renders cross-platform.
+const FEED_TAB: TabConfig = { id: 'feed', label: 'Feed', icon: '≋' };
+
+/**
+ * Feed tab renders only when the active backend advertises an operator feed
+ * (`features.feed`). The app sets `globalThis.__smirk_feed__` once capabilities
+ * load; a backend that runs no feed never surfaces the tab. Same opt-in idiom as
+ * Browse — read per-render so a backend switch re-evaluates cleanly.
+ */
+function isFeedAvailable(): boolean {
+  return Boolean(
+    typeof globalThis !== 'undefined' &&
+      (globalThis as { __smirk_feed__?: unknown }).__smirk_feed__,
+  );
+}
+
 /**
  * Browse tab renders only when an embedded-browser controller is
  * wired into the runtime via `globalThis.__smirk_browser__`. The
@@ -62,7 +79,12 @@ export function BottomNav({ orientation = 'horizontal', badges }: BottomNavProps
   const { tab: activeTab, switchTab, navigate, route } = useRoute();
 
   const isVertical = orientation === 'vertical';
-  const TABS: TabConfig[] = isBrowseAvailable() ? [...BASE_TABS, BROWSE_TAB] : BASE_TABS;
+  // Feed slots before Settings (a content tab, not a config tab); Browse stays
+  // last. Both are opt-in and absent by default.
+  const feedTabs: TabConfig[] = isFeedAvailable()
+    ? [...BASE_TABS.slice(0, 3), FEED_TAB, ...BASE_TABS.slice(3)]
+    : BASE_TABS;
+  const TABS: TabConfig[] = isBrowseAvailable() ? [...feedTabs, BROWSE_TAB] : feedTabs;
 
   return (
     <nav
