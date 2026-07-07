@@ -40,6 +40,7 @@ import {
   WalletKeystore,
   api,
   fetchAllBalances,
+  mergeBalancesKeepLastKnown,
   visibleAssetIds,
   withAssetVisibility,
   fetchPrices,
@@ -961,6 +962,21 @@ interface WalletSession {
   refreshing: boolean;
   /** When the latest successful balance fetch completed. */
   refreshedAt: Date | null;
+  /** Unix ms when balances FIRST went stale (a fetch errored while we held a
+   *  good value), or null/absent when everything is fresh. Drives the "couldn't
+   *  reach the backend for N minutes" warning; cleared on the next clean refresh. */
+  balancesStaleSince?: number | null;
+}
+
+/** How long balances may stay stale before we warn the user in-app. */
+const BALANCE_STALE_WARN_MS = 15 * 60 * 1000;
+
+/** Compute the next `balancesStaleSince` given the merged balances + the prior
+ *  value: start the clock when any asset is stale, clear it when none are. */
+function nextStaleSince(balances: Balances | null, prior: number | null): number | null {
+  const anyStale = !!balances && Object.values(balances).some((b) => b?.stale);
+  if (!anyStale) return null;
+  return prior ?? Date.now();
 }
 
 /**
@@ -1521,36 +1537,41 @@ function App() {
         verifyKeyImage,
         visibleAssetIds: visible,
         onAssetBalance: (assetId, balance) => {
-          setSession((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  balances: {
-                    ...(prev.balances ?? {
-                      btc: { confirmed: 0n, pending: 0n },
-                      ltc: { confirmed: 0n, pending: 0n },
-                      xmr: { confirmed: 0n, pending: 0n },
-                      wow: { confirmed: 0n, pending: 0n },
-                      grin: { confirmed: 0n, pending: 0n },
-                    }),
-                    [assetId]: balance,
-                  },
-                }
-              : prev,
-          );
+          setSession((prev) => {
+            if (!prev) return prev;
+            const base = prev.balances ?? {
+              btc: { confirmed: 0n, pending: 0n },
+              ltc: { confirmed: 0n, pending: 0n },
+              xmr: { confirmed: 0n, pending: 0n },
+              wow: { confirmed: 0n, pending: 0n },
+              grin: { confirmed: 0n, pending: 0n },
+            };
+            // Keep the last-known value (flagged stale) if this fetch errored and
+            // we already had a good number — don't flash the row to 0.
+            const prior = base[assetId];
+            const next =
+              balance.error && prior && !prior.error
+                ? { ...prior, stale: true }
+                : balance;
+            return { ...prev, balances: { ...base, [assetId]: next } };
+          });
         },
       });
       const prices = await pricesPromise;
-      setSession({
+      // Merge the fresh fetch over the pre-fetch snapshot so an asset whose fetch
+      // errored keeps its last-known number (flagged stale) instead of flashing 0.
+      const merged = mergeBalancesKeepLastKnown(snap?.balances ?? null, balances);
+      setSession((prev) => ({
         bootstrap,
-        balances,
+        balances: merged,
         prices,
         error: null,
         refreshing: false,
         refreshedAt: new Date(),
-      });
-      // Persist for instant next-open. Best-effort.
-      void writeBalanceSnapshot(wallet.fingerprint, balances, prices);
+        balancesStaleSince: nextStaleSince(merged, prev?.balancesStaleSince ?? null),
+      }));
+      // Persist the merged (last-known) view for instant, non-zero next-open.
+      void writeBalanceSnapshot(wallet.fingerprint, merged, prices);
     } catch (e) {
       // If a warm-path balance call rejected (auth error), drop the
       // cache and force a fresh bootstrap on the next render. Surface
@@ -1566,14 +1587,18 @@ function App() {
           : e instanceof Error
             ? e.message
             : 'Failed to connect to backend';
-      setSession({
+      setSession((prev) => ({
         bootstrap: { userId: '', isNew: false },
-        balances: null,
-        prices: null,
+        // Keep showing last-known balances (snapshot / prior session) behind the
+        // error banner instead of blanking the wallet on a transient auth/network
+        // failure. Null only if we truly have nothing cached.
+        balances: prev?.balances ?? snap?.balances ?? null,
+        prices: prev?.prices ?? snap?.prices ?? null,
         error: message,
         refreshing: false,
-        refreshedAt: null,
-      });
+        refreshedAt: prev?.refreshedAt ?? null,
+        balancesStaleSince: prev?.balancesStaleSince ?? (snap ? Date.now() : null),
+      }));
     }
   };
 
@@ -1595,14 +1620,16 @@ function App() {
         verifyKeyImage,
         visibleAssetIds: visible,
         onAssetBalance: (assetId, balance) => {
-          setSession((prev) =>
-            prev && prev.balances
-              ? {
-                  ...prev,
-                  balances: { ...prev.balances, [assetId]: balance },
-                }
-              : prev,
-          );
+          setSession((prev) => {
+            if (!prev || !prev.balances) return prev;
+            const prior = prev.balances[assetId];
+            // Keep last-known (stale) on a fetch error; don't flash the row to 0.
+            const next =
+              balance.error && prior && !prior.error
+                ? { ...prior, stale: true }
+                : balance;
+            return { ...prev, balances: { ...prev.balances, [assetId]: next } };
+          });
         },
       });
       const prices = (await pricesPromise) ?? {
@@ -1641,19 +1668,33 @@ function App() {
           s.pendingOutgoing = kept;
         }
       });
-      setSession((prev) =>
-        prev
-          ? { ...prev, balances, prices, error: null, refreshing: false, refreshedAt: new Date() }
-          : prev,
-      );
-      void writeBalanceSnapshot(wallet.fingerprint, balances, prices);
+      let mergedForSnapshot: Balances = balances;
+      setSession((prev) => {
+        const merged = mergeBalancesKeepLastKnown(prev?.balances ?? null, balances);
+        mergedForSnapshot = merged;
+        return prev
+          ? {
+              ...prev,
+              balances: merged,
+              prices,
+              error: null,
+              refreshing: false,
+              refreshedAt: new Date(),
+              balancesStaleSince: nextStaleSince(merged, prev.balancesStaleSince ?? null),
+            }
+          : prev;
+      });
+      void writeBalanceSnapshot(wallet.fingerprint, mergedForSnapshot, prices);
     } catch (e) {
+      // A whole-refresh failure keeps the last-known balances (already in
+      // session) and just surfaces the error + starts the stale clock.
       setSession((prev) =>
         prev
           ? {
               ...prev,
               error: e instanceof Error ? e.message : 'Refresh failed',
               refreshing: false,
+              balancesStaleSince: prev.balancesStaleSince ?? Date.now(),
             }
           : prev,
       );
@@ -3380,6 +3421,32 @@ function HomeRouter({
       resolveIcon={resolveIcon}
       topNotice={
         <>
+          {(() => {
+            // Sustained-failure warning: balances stayed stale past the threshold,
+            // so the numbers on screen are last-known, not live. See
+            // balancesStaleSince / BALANCE_STALE_WARN_MS.
+            const since = session?.balancesStaleSince ?? null;
+            if (!since || Date.now() - since < BALANCE_STALE_WARN_MS) return null;
+            const mins = Math.floor((Date.now() - since) / 60_000);
+            return (
+              <div
+                data-testid="balance-stale-warning"
+                style={{
+                  fontSize: 12,
+                  lineHeight: 1.4,
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  marginBottom: 8,
+                  background: 'var(--smirk-bg-sunken)',
+                  border: '1px solid var(--smirk-warning, #b8860b)',
+                  color: 'var(--smirk-fg-muted)',
+                }}
+              >
+                ⚠ Couldn't reach the backend for {mins} min — showing your last-known
+                balances. They'll update as soon as the connection recovers.
+              </div>
+            );
+          })()}
           {(() => {
             const claimable = tips.filter(
               (t) => t.fundingConfirmations >= t.confirmationsRequired,

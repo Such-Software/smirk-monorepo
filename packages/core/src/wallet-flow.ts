@@ -271,6 +271,12 @@ export interface AssetBalance {
   locked?: bigint;
   error?: string;
   /**
+   * True when this value is a LAST-KNOWN carry-over: the latest fetch errored,
+   * so {@link mergeBalancesKeepLastKnown} kept the previous good value rather
+   * than flashing the row to 0. The UI shows a subtle "not fresh" affordance.
+   */
+  stale?: boolean;
+  /**
    * LWS scan progress for this asset (XMR/WOW only). Populated when the
    * LWS reports `scanned_height < blockchain_height` — meaning the
    * displayed balance may be stale until the scanner catches up.
@@ -320,6 +326,39 @@ export interface ScanProgress {
 }
 
 export type Balances = Record<'btc' | 'ltc' | 'xmr' | 'wow' | 'grin', AssetBalance>;
+
+/** The five wallet assets, in canonical display order. */
+export const BALANCE_ASSETS = ['btc', 'ltc', 'xmr', 'wow', 'grin'] as const;
+
+/**
+ * Merge a fresh balance set over the last-known one, PREFERRING the last-known
+ * value for any asset whose fresh fetch errored. A transient LWS/electrum failure
+ * returns a zeroed `{error}` balance; overwriting a good cached value with that
+ * makes the row "disappear" (flash to 0 — the reported XMR/WOW symptom). Kept
+ * values are flagged `stale` so the UI can warn without hiding the number.
+ *
+ * Precedence per asset: a clean fresh value wins; otherwise the last good value
+ * (marked stale); otherwise the fresh errored value (nothing better to show).
+ */
+export function mergeBalancesKeepLastKnown(
+  prev: Balances | null | undefined,
+  fresh: Balances,
+): Balances {
+  if (!prev) return fresh;
+  const out = {} as Balances;
+  for (const id of BALANCE_ASSETS) {
+    const f = fresh[id];
+    const p = prev[id];
+    if (f && !f.error) {
+      out[id] = f; // fresh + clean
+    } else if (p && !p.error) {
+      out[id] = { ...p, stale: true }; // keep last-known, flag stale
+    } else {
+      out[id] = f; // nothing better than the fresh (errored) value
+    }
+  }
+  return out;
+}
 
 /**
  * Fetch all five asset balances in parallel. For XMR/WOW this also
