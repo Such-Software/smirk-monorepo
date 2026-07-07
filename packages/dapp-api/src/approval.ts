@@ -111,6 +111,17 @@ export type ApprovalRequest =
       context: string;
       /** base64 libsodium `crypto_box_seal` envelope to open with the app key. */
       sealed: string;
+    }
+  | {
+      kind: 'nostrCrypt';
+      origin: OriginContext;
+      /** encrypt plaintext → ciphertext, or decrypt ciphertext → plaintext. */
+      op: 'encrypt' | 'decrypt';
+      scheme: 'nip44' | 'nip04';
+      /** Counterparty x-only pubkey (hex). */
+      peer: string;
+      /** The input: plaintext (encrypt) or ciphertext (decrypt). */
+      data: string;
     };
 
 /** Approval result. Each non-rejected branch carries the computed
@@ -159,6 +170,12 @@ export type ApprovalResult =
       approved: true;
       /** base64 of the opened plaintext bytes. */
       plaintext: string;
+    }
+  | {
+      kind: 'nostrCrypt';
+      approved: true;
+      /** The output: ciphertext (encrypt) or plaintext (decrypt). */
+      data: string;
     }
   | { approved: false };
 

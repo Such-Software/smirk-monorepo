@@ -34,6 +34,7 @@ import {
   signNostrEventWithUnlocked,
   deriveAppEncKeyWithUnlocked,
   openAppSealWithUnlocked,
+  nostrCryptWithUnlocked,
 } from './signers';
 
 /**
@@ -285,6 +286,20 @@ export async function executeApproval(
         request.context,
       );
       return { kind: 'appSealOpen', approved: true, plaintext };
+    }
+
+    case 'nostrCrypt': {
+      if (request.kind !== 'nostrCrypt') {
+        throw new Error('Pending request kind mismatch (expected nostrCrypt)');
+      }
+      const data = nostrCryptWithUnlocked(
+        deps.wallet,
+        request.op,
+        request.scheme,
+        request.peer,
+        request.data,
+      );
+      return { kind: 'nostrCrypt', approved: true, data };
     }
 
     default: {

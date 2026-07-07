@@ -95,6 +95,14 @@ export type ApprovalRequest =
       domainScope: string;
       context: string;
       sealed: string;
+    }
+  | {
+      kind: 'nostrCrypt';
+      origin: ApprovalOrigin;
+      op: 'encrypt' | 'decrypt';
+      scheme: 'nip44' | 'nip04';
+      peer: string;
+      data: string;
     };
 
 export interface ApprovalScreenProps {
@@ -129,15 +137,18 @@ export type ApprovalApproval =
   | { kind: 'nostrGrant' }
   | { kind: 'signNostrEvent' }
   | { kind: 'appEncKey' }
-  | { kind: 'appSealOpen' };
+  | { kind: 'appSealOpen' }
+  | { kind: 'nostrCrypt' };
 
-/** Kinds the wallet resolves WITHOUT a fresh user click. `appSealOpen` and a
- *  re-derive `appEncKey` (firstGrant === false) both run under an already-granted,
- *  origin-bound e2ee scope and only ever touch the origin's OWN sealed data — a
- *  per-call prompt would be friction with no security value. The screen still
- *  renders (and enforces unlock upstream), it just self-approves on mount. */
+/** Kinds the wallet resolves WITHOUT a fresh user click. `appSealOpen`, a
+ *  re-derive `appEncKey` (firstGrant === false), and `nostrCrypt` (NIP-07 DM
+ *  encrypt/decrypt) all run under an already-granted scope on low-risk data — a
+ *  per-call prompt would be friction with no security value (Goblin's model too:
+ *  DM crypto is session-grantable; only money-tier events prompt). The screen
+ *  still renders (unlock is enforced upstream); it just self-approves on mount. */
 function isAutoApprove(request: ApprovalRequest): boolean {
   if (request.kind === 'appSealOpen') return true;
+  if (request.kind === 'nostrCrypt') return true;
   if (request.kind === 'appEncKey') return !request.firstGrant;
   return false;
 }
@@ -171,6 +182,7 @@ export function ApprovalScreen({
     if (autoFired.current || !isAutoApprove(request)) return;
     autoFired.current = true;
     if (request.kind === 'appSealOpen') void handleApprove({ kind: 'appSealOpen' });
+    else if (request.kind === 'nostrCrypt') void handleApprove({ kind: 'nostrCrypt' });
     else if (request.kind === 'appEncKey') void handleApprove({ kind: 'appEncKey' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
@@ -305,6 +317,8 @@ function ApprovalBody({
       return <AppEncKeyBody firstGrant={request.firstGrant} context={request.context} />;
     case 'appSealOpen':
       return <AppSealOpenBody />;
+    case 'nostrCrypt':
+      return <NostrCryptBody op={request.op} />;
   }
 }
 
@@ -559,6 +573,15 @@ function AppSealOpenBody() {
   );
 }
 
+function NostrCryptBody({ op }: { op: 'encrypt' | 'decrypt' }) {
+  // Auto-approves (NIP-07 DM crypto under the granted Nostr scope); shown briefly.
+  return (
+    <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
+      {op === 'encrypt' ? 'Encrypting a message…' : 'Decrypting a message…'}
+    </p>
+  );
+}
+
 function AssetChip({ asset }: { asset: ApprovalAsset }) {
   // Use the accent color for asset chips so they're high-contrast
   // against every theme background (light, dark, retro). Earlier
@@ -626,6 +649,8 @@ function ApprovalActions({
               return onApprove({ kind: 'appEncKey' });
             case 'appSealOpen':
               return onApprove({ kind: 'appSealOpen' });
+            case 'nostrCrypt':
+              return onApprove({ kind: 'nostrCrypt' });
           }
         }}
       >

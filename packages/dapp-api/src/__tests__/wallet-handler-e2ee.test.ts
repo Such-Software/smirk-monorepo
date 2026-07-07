@@ -67,6 +67,9 @@ function recordingApproval(): { handler: ApprovalHandler; seen: ApprovalRequest[
     if (req.kind === 'appSealOpen') {
       return { kind: 'appSealOpen', approved: true, plaintext: 'cGxhaW4=' /* "plain" */ };
     }
+    if (req.kind === 'nostrCrypt') {
+      return { kind: 'nostrCrypt', approved: true, data: `out:${req.op}:${req.scheme}` };
+    }
     return { approved: false } as ApprovalResult;
   };
   return { handler, seen };
@@ -166,4 +169,50 @@ test('appSealOpen: with scope, routes the sealed box + verified scope, returns p
   assert.equal(open.kind === 'appSealOpen' && open.sealed, 'c2VhbGVk');
   assert.equal(open.kind === 'appSealOpen' && open.domainScope, ORIGIN.origin);
   assert.equal(open.kind === 'appSealOpen' && open.context, 'sso');
+});
+
+// ── NIP-07 nostrEncrypt / nostrDecrypt routing ──────────────────────────────
+
+function connectedNostr(): OriginPermission {
+  return { ...connected(), nostr: true };
+}
+
+test('nostrEncrypt: NOT_AUTHORIZED without the Nostr scope', async () => {
+  const { handler } = recordingApproval();
+  const dispatch = createWalletHandler({
+    provider: fakeProvider(),
+    permissions: memStore(connected()), // no nostr scope
+    approval: handler,
+  });
+  const res = await dispatch(req('nostrEncrypt', { peer: 'ab'.repeat(32), plaintext: 'hi' }), ORIGIN);
+  assert.equal(res.error?.code, 'NOT_AUTHORIZED');
+});
+
+test('nostrEncrypt/Decrypt: with the scope, routes op+scheme+peer and returns data', async () => {
+  const { handler, seen } = recordingApproval();
+  const dispatch = createWalletHandler({
+    provider: fakeProvider(),
+    permissions: memStore(connectedNostr()),
+    approval: handler,
+  });
+  const enc = await dispatch(req('nostrEncrypt', { peer: 'cd'.repeat(32), plaintext: 'hi' }), ORIGIN);
+  assert.equal(enc.result, 'out:encrypt:nip44'); // default scheme
+  const dec = await dispatch(
+    req('nostrDecrypt', { peer: 'cd'.repeat(32), ciphertext: 'zz', scheme: 'nip04' }),
+    ORIGIN,
+  );
+  assert.equal(dec.result, 'out:decrypt:nip04');
+  const encReq = seen.find((s) => s.kind === 'nostrCrypt' && s.op === 'encrypt');
+  assert.equal(encReq?.kind === 'nostrCrypt' && encReq.peer, 'cd'.repeat(32));
+});
+
+test('nostrEncrypt: LOCKED when the wallet is locked', async () => {
+  const { handler } = recordingApproval();
+  const dispatch = createWalletHandler({
+    provider: fakeProvider(false),
+    permissions: memStore(connectedNostr()),
+    approval: handler,
+  });
+  const res = await dispatch(req('nostrEncrypt', { peer: 'ab'.repeat(32), plaintext: 'hi' }), ORIGIN);
+  assert.equal(res.error?.code, 'LOCKED');
 });

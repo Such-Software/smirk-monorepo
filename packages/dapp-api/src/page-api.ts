@@ -99,8 +99,10 @@ function base64ToBytes(b64: string): Uint8Array {
 
 let nextRequestId = 0;
 
-export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi {
-  async function call<M extends SmirkMethod>(
+/** One request/response round-trip over the adapter transport. Shared by the
+ *  `window.smirk` surface and the `window.nostr` (NIP-07) surface. */
+function makeCaller(transport: SmirkPageTransport) {
+  return async function call<M extends SmirkMethod>(
     method: M,
     params: SmirkMethodMap[M]['params'],
   ): Promise<SmirkMethodMap[M]['result']> {
@@ -115,22 +117,20 @@ export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi 
     try {
       resp = await transport(req);
     } catch (e) {
-      throw new SmirkRpcError(
-        'INTERNAL',
-        e instanceof Error ? e.message : 'transport failed',
-      );
+      throw new SmirkRpcError('INTERNAL', e instanceof Error ? e.message : 'transport failed');
     }
     if (resp.error) {
       throw new SmirkRpcError(resp.error.code, resp.error.message);
     }
     if (resp.result === undefined) {
-      throw new SmirkRpcError(
-        'INTERNAL',
-        'wallet returned no result and no error',
-      );
+      throw new SmirkRpcError('INTERNAL', 'wallet returned no result and no error');
     }
     return resp.result;
-  }
+  };
+}
+
+export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi {
+  const call = makeCaller(transport);
 
   // The returned object is frozen so a page can't reach in and mutate
   // it (e.g., swap out our `connect` for theirs to harvest keys).
@@ -170,6 +170,55 @@ export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi 
   return api;
 }
 
+/**
+ * Standard NIP-07 provider — the `window.nostr` object any Nostr app (Magick
+ * Market, etc.) expects, so Smirk works as a Nostr signer out of the box.
+ * `getPublicKey`/`signEvent` route to the SAME wallet-side Nostr methods as
+ * `window.smirk`; `nip44`/`nip04` add DM encrypt/decrypt. This is the interop
+ * lane for "log in / pay on Magick Market with Smirk".
+ */
+export interface SmirkNostrProvider {
+  getPublicKey(): Promise<string>;
+  signEvent(event: SmirkNostrUnsignedEvent): Promise<SmirkNostrSignedEvent>;
+  nip44: {
+    encrypt(peer: string, plaintext: string): Promise<string>;
+    decrypt(peer: string, ciphertext: string): Promise<string>;
+  };
+  /** Legacy scheme; some older dapps still use it. */
+  nip04: {
+    encrypt(peer: string, plaintext: string): Promise<string>;
+    decrypt(peer: string, ciphertext: string): Promise<string>;
+  };
+  getRelays(): Promise<Record<string, { read: boolean; write: boolean }>>;
+}
+
+export function createNip07Provider(transport: SmirkPageTransport): SmirkNostrProvider {
+  const call = makeCaller(transport);
+  const getPublicKey = async (): Promise<string> => {
+    const pk = await call('getNostrPublicKey', {});
+    if (!pk) throw new SmirkRpcError('NOT_AUTHORIZED', 'No Nostr identity available');
+    return pk;
+  };
+  return Object.freeze({
+    getPublicKey,
+    signEvent: (event: SmirkNostrUnsignedEvent) => call('signNostrEvent', { event }),
+    nip44: Object.freeze({
+      encrypt: (peer: string, plaintext: string) =>
+        call('nostrEncrypt', { peer, plaintext, scheme: 'nip44' }),
+      decrypt: (peer: string, ciphertext: string) =>
+        call('nostrDecrypt', { peer, ciphertext, scheme: 'nip44' }),
+    }),
+    nip04: Object.freeze({
+      encrypt: (peer: string, plaintext: string) =>
+        call('nostrEncrypt', { peer, plaintext, scheme: 'nip04' }),
+      decrypt: (peer: string, ciphertext: string) =>
+        call('nostrDecrypt', { peer, ciphertext, scheme: 'nip04' }),
+    }),
+    // The wallet doesn't impose a relay list on the dapp; it uses its own.
+    getRelays: async () => ({}),
+  });
+}
+
 /** Install the API at `window.smirk` and dispatch the `smirk-ready`
  *  event. Idempotent — if `window.smirk` already exists (another
  *  Smirk instance is running, somehow) we skip rather than overwrite.
@@ -196,6 +245,22 @@ export function installSmirkApi(
     configurable: false,
     enumerable: true,
   });
+  // Also expose the standard NIP-07 provider at `window.nostr` — but ONLY if no
+  // other signer already claimed it (Alby, nos2x, another Nostr extension). We
+  // never clobber the user's chosen signer; if one exists, Smirk is reachable via
+  // window.smirk and the user can disable the other extension to make us primary.
+  if (!(target as { nostr?: unknown }).nostr) {
+    try {
+      Object.defineProperty(target, 'nostr', {
+        value: createNip07Provider(transport),
+        writable: false,
+        configurable: true, // configurable so a later-loading signer can still take over
+        enumerable: true,
+      });
+    } catch {
+      /* another provider defined it non-configurably between the check + set */
+    }
+  }
   target.dispatchEvent(new CustomEvent('smirk-ready'));
   return api;
 }

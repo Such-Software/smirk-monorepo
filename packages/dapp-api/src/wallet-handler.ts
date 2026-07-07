@@ -369,6 +369,46 @@ async function dispatchInner<M extends SmirkMethod>(
       return { plaintext: decision.plaintext };
     }
 
+    case 'nostrEncrypt':
+    case 'nostrDecrypt': {
+      // NIP-07 DM crypto: low-tier, requires the Nostr scope (same one-time grant
+      // as getNostrPublicKey). Runs silently once granted — a per-call prompt on
+      // every DM decrypt would be unusable (matches Goblin's session model, where
+      // 1/7/1059 are session-grantable and only 17/30402/22242 are money-tier).
+      await assertUnlocked(deps.provider);
+      const perm = await requireOriginPermission(deps.permissions, origin.origin);
+      if (!hasNostrAuthorized(perm)) {
+        throw new HandlerError(
+          'NOT_AUTHORIZED',
+          'Origin lacks the Nostr scope — call getNostrPublicKey() first',
+        );
+      }
+      const op = req.method === 'nostrEncrypt' ? 'encrypt' : 'decrypt';
+      const params = req.params as {
+        peer: string;
+        scheme?: 'nip44' | 'nip04';
+        plaintext?: string;
+        ciphertext?: string;
+      };
+      const data = (op === 'encrypt' ? params.plaintext : params.ciphertext) ?? '';
+      const decision = await deps.approval({
+        kind: 'nostrCrypt',
+        origin,
+        op,
+        scheme: params.scheme ?? 'nip44',
+        peer: params.peer,
+        data,
+      });
+      if (!decision.approved) {
+        throw new HandlerError('USER_REJECTED', 'User declined the encryption request');
+      }
+      if (decision.kind !== 'nostrCrypt') {
+        throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
+      }
+      await touch(deps.permissions, perm);
+      return decision.data;
+    }
+
     default: {
       // Exhaustiveness check — the switch above covers every
       // SmirkMethod. If a new method gets added to the map without

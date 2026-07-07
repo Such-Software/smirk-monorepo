@@ -189,7 +189,23 @@ export type SmirkMethodMap = {
     /** `plaintext`: base64 of the opened bytes (the dapp decodes; may be binary). */
     result: { plaintext: string };
   };
+  /** NIP-07 encrypt: the wallet encrypts `plaintext` to `peer` (x-only hex) under
+   *  the user's Nostr identity. Requires the Nostr scope; runs silently once
+   *  granted (low-tier, like reading a DM). Default scheme is NIP-44. */
+  nostrEncrypt: {
+    params: { peer: string; plaintext: string; scheme?: SmirkNostrCryptScheme };
+    result: string;
+  };
+  /** NIP-07 decrypt: inverse of `nostrEncrypt`. */
+  nostrDecrypt: {
+    params: { ciphertext: string; peer: string; scheme?: SmirkNostrCryptScheme };
+    result: string;
+  };
 };
+
+/** NIP-07 DM encryption scheme. NIP-44 (v2) is the default + interop baseline;
+ *  NIP-04 is legacy support for older dapps. */
+export type SmirkNostrCryptScheme = 'nip44' | 'nip04';
 
 export type SmirkMethod = keyof SmirkMethodMap;
 

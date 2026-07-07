@@ -28,6 +28,10 @@ import {
   signBitcoinMessage,
   signEd25519WithScalar,
   signNostrEvent,
+  nip44Encrypt,
+  nip44Decrypt,
+  nip04Encrypt,
+  nip04Decrypt,
   type SignedNostrEvent,
   type UnlockedWallet,
   type UnsignedNostrEvent,
@@ -188,4 +192,30 @@ export function openAppSealWithUnlocked(
   const key = deriveAppEncryptionKey(wallet.mnemonic, domainScope, context);
   const plaintext = sealOpen(key.privateKey, base64ToBytes(sealedBase64));
   return bytesToBase64(plaintext);
+}
+
+/**
+ * NIP-07 DM crypto (NIP-44 v2 / legacy NIP-04) under the wallet's Nostr identity
+ * (account 0). `op` selects encrypt/decrypt; `peer` is the counterparty x-only
+ * hex pubkey. Requires the unlocked mnemonic (absent on a session-cache restore).
+ */
+export function nostrCryptWithUnlocked(
+  wallet: UnlockedWallet,
+  op: 'encrypt' | 'decrypt',
+  scheme: 'nip44' | 'nip04',
+  peer: string,
+  data: string,
+): string {
+  if (!wallet.mnemonic) {
+    throw new Error('Nostr encryption needs the unlocked mnemonic — re-unlock the wallet');
+  }
+  const identity = deriveNostrIdentity(wallet.mnemonic, 0);
+  if (scheme === 'nip04') {
+    return op === 'encrypt'
+      ? nip04Encrypt(identity, peer, data)
+      : nip04Decrypt(identity, peer, data);
+  }
+  return op === 'encrypt'
+    ? nip44Encrypt(identity, peer, data)
+    : nip44Decrypt(identity, peer, data);
 }
