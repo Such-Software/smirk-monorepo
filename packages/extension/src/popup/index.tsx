@@ -32,12 +32,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { TrocadorSwap } from '@smirk/swap';
 import {
-  ChromeLocalStorage,
-  ChromeSessionStorage,
-  SessionStateStore,
-  RouteController,
   SESSION_CACHE_KEY,
-  WalletKeystore,
   api,
   fetchAllBalances,
   mergeBalancesKeepLastKnown,
@@ -116,6 +111,7 @@ import { setPendingRegistrationInvoice } from './pending-registration-invoice';
 import { formatUsd, parseAmount, atomicToText, feedTimeAgo, bytesToHex, randomToken } from './format';
 import { validateAddress, resolveAddressForAsset } from './address';
 import { rowTimestamp, explorerUrlForRow, explorerUrlForPendingOutgoing } from './explorer';
+import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
 import {
   AppShell,
@@ -562,38 +558,6 @@ const ICON_BY_KEY: Record<string, string> = {
 };
 const resolveIcon = (key: string): string | undefined =>
   ICON_BY_KEY[key] ? chrome.runtime.getURL(ICON_BY_KEY[key]) : undefined;
-
-// Session-state storage. Even though it's called "session" semantically,
-// the user preferences it holds (autoLockMinutes, theme, denomination,
-// balanceHidden) are real preferences — they must survive browser
-// restart. So we back on chrome.storage.local, not chrome.storage.session.
-//
-// The schema currently has no sensitive-ephemeral fields (no
-// password-mid-typing, etc.); wizards hold form fields like recipient
-// address and amount, which are not privacy-regressing if persisted.
-// If sensitive ephemeral state lands later, it should get its own
-// session-tier store rather than co-mingle here.
-const storage = new ChromeLocalStorage();
-const store = new SessionStateStore(storage);
-const router = new RouteController(store);
-
-/**
- * Persistent encrypted-keystore storage. Lives in `chrome.storage.local`
- * — survives browser restart, NEVER holds plaintext seed material
- * (the seed is XChaCha20-Poly1305 encrypted under a PBKDF2-stretched
- * password before write). On MV3 service-worker restart, the in-memory
- * unlocked state is lost and the user re-enters their password — see
- * `docs/SECURITY_AUDIT.md` for the audit-backed rationale.
- */
-const walletKeystore = new WalletKeystore(new ChromeLocalStorage());
-
-/**
- * Ephemeral cache for the unlocked mnemonic, used by the opt-in
- * "stay unlocked for N minutes" Settings feature. Cleared on browser
- * close. Default behavior (autoLockMinutes = 0) writes nothing here —
- * the seed never leaves popup-process memory.
- */
-const sessionStorage = new ChromeSessionStorage();
 
 // ============================================================================
 // Browse tab — desktop-only, mounted via globalThis.__smirk_browser__
