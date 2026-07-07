@@ -1,6 +1,6 @@
 {
   "name": "@such-software/smirk-dapp-api",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Smirk wallet dapp integration. Provides window.smirk (connect / signMessage / requestPayment / claimPublicTip) for websites that want to support Smirk across the browser extension, desktop app, and mobile app. Transport-agnostic — auto-detects extension content-script injection, iframe + postMessage, or Capacitor bridge.",
   "type": "module",
   "main": "./dist/index.js",
