@@ -17,7 +17,13 @@ import { HDKey } from '@scure/bip32';
 import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bech32 } from '@scure/base';
+import { generateSecretKey } from 'nostr-tools/pure';
 import { mnemonicToSeed } from '../hd';
+
+/** Sentinel `account` for a NON-seed-derived identity (imported nsec or a random
+ *  burner). The identity store tracks the real source; this just flags "not
+ *  rotation-derivable from the seed" on the NostrIdentity itself. */
+export const NON_DERIVED_ACCOUNT = -1;
 
 /** SLIP-0044 coin type for Nostr keys (NIP-06). */
 const NOSTR_COIN_TYPE = 1237;
@@ -72,6 +78,52 @@ export function deriveNostrIdentity(mnemonic: string, account = 0, passphrase = 
     pubkeyHex: toHex(pubkeyXOnly),
     privateKey,
   };
+}
+
+/**
+ * Build a NostrIdentity from a raw 32-byte secret key — for an imported `nsec` or
+ * a random "burner". `account` is {@link NON_DERIVED_ACCOUNT} because it isn't
+ * seed-rotation-derivable; the identity store records the real source.
+ */
+export function nostrIdentityFromPrivkey(privateKey: Uint8Array): NostrIdentity {
+  if (privateKey.length !== 32) throw new Error('nostr secret key must be 32 bytes');
+  const pubkeyXOnly = schnorr.getPublicKey(privateKey);
+  return {
+    account: NON_DERIVED_ACCOUNT,
+    npub: encodeNpub(pubkeyXOnly),
+    pubkeyHex: toHex(pubkeyXOnly),
+    privateKey,
+  };
+}
+
+/**
+ * A fresh RANDOM "burner" identity — deliberately NOT seed-derived. Rationale
+ * (matches Goblin's stance): a leaked seed can't derive it (stronger
+ * compartmentalization), and it's cross-wallet-portable as an `nsec`. The secret
+ * is the ONLY backup; the identity store encrypts it at rest.
+ */
+export function generateBurnerIdentity(): NostrIdentity {
+  return nostrIdentityFromPrivkey(generateSecretKey());
+}
+
+/** Decode an `nsec` (NIP-19) to its 32-byte secret key (throws on bad input). */
+export function decodeNsec(nsec: string): Uint8Array {
+  const { prefix, words } = bech32.decode(nsec as `nsec1${string}`, BECH32_LIMIT);
+  if (prefix !== 'nsec') throw new Error(`not an nsec: ${prefix}`);
+  const key = new Uint8Array(bech32.fromWords(words));
+  if (key.length !== 32) throw new Error('nsec did not decode to a 32-byte key');
+  return key;
+}
+
+/** Encode a 32-byte secret key as an `nsec` (for per-identity export/backup). */
+export function encodeNsec(privateKey: Uint8Array): string {
+  if (privateKey.length !== 32) throw new Error('nostr secret key must be 32 bytes');
+  return bech32.encode('nsec', bech32.toWords(privateKey), BECH32_LIMIT);
+}
+
+/** Import an identity from an `nsec` string (e.g. carried over from Goblin). */
+export function importNostrIdentity(nsec: string): NostrIdentity {
+  return nostrIdentityFromPrivkey(decodeNsec(nsec));
 }
 
 /**

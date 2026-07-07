@@ -70,6 +70,9 @@ function recordingApproval(): { handler: ApprovalHandler; seen: ApprovalRequest[
     if (req.kind === 'nostrCrypt') {
       return { kind: 'nostrCrypt', approved: true, data: `out:${req.op}:${req.scheme}` };
     }
+    if (req.kind === 'nostrGrant') {
+      return { kind: 'nostrGrant', approved: true };
+    }
     return { approved: false } as ApprovalResult;
   };
   return { handler, seen };
@@ -215,4 +218,31 @@ test('nostrEncrypt: LOCKED when the wallet is locked', async () => {
   });
   const res = await dispatch(req('nostrEncrypt', { peer: 'ab'.repeat(32), plaintext: 'hi' }), ORIGIN);
   assert.equal(res.error?.code, 'LOCKED');
+});
+
+// ── NIP-07 self-connect (the Magick Market login fix) ───────────────────────
+
+test('getNostrPublicKey: self-connects on grant — no prior connect() needed (NIP-07)', async () => {
+  const { handler, seen } = recordingApproval();
+  const store = memStore(); // NO permission — a NIP-07 dapp never called connect()
+  const dispatch = createWalletHandler({ provider: fakeProvider(), permissions: store, approval: handler });
+
+  const res = await dispatch(req('getNostrPublicKey', {}), ORIGIN);
+
+  // Must NOT be NOT_CONNECTED — the grant establishes the connection.
+  assert.notEqual(res.error?.code, 'NOT_CONNECTED');
+  assert.equal(seen[0]?.kind, 'nostrGrant');
+  const perm = await store.get(ORIGIN.origin);
+  assert.equal(perm?.nostr, true);
+  assert.deepEqual(perm?.assets, []); // pure-Nostr connection, no chain assets
+});
+
+test('getNostrPublicKey: user rejecting the grant surfaces USER_REJECTED', async () => {
+  const dispatch = createWalletHandler({
+    provider: fakeProvider(),
+    permissions: memStore(),
+    approval: async () => ({ approved: false }),
+  });
+  const res = await dispatch(req('getNostrPublicKey', {}), ORIGIN);
+  assert.equal(res.error?.code, 'USER_REJECTED');
 });

@@ -263,10 +263,13 @@ async function dispatchInner<M extends SmirkMethod>(
 
     case 'getNostrPublicKey': {
       await assertUnlocked(deps.provider);
-      const perm = await requireOriginPermission(deps.permissions, origin.origin);
-      if (!hasNostrAuthorized(perm)) {
-        // First npub read prompts a DEDICATED grant — the npub is a distinct,
-        // cross-site-correlatable disclosure, never bundled into connect().
+      // A standard NIP-07 dapp (Magick Market, any Nostr app) calls
+      // window.nostr.getPublicKey() directly and NEVER calls our proprietary
+      // connect(). So the Nostr grant IS the connection for a pure-Nostr origin —
+      // do NOT require a pre-existing permission. The npub is still a dedicated,
+      // cross-site-correlatable disclosure, so it always prompts on first ask.
+      const existing = await deps.permissions.get(origin.origin);
+      if (!existing || !hasNostrAuthorized(existing)) {
         const decision = await deps.approval({ kind: 'nostrGrant', origin });
         if (!decision.approved) {
           throw new HandlerError('USER_REJECTED', 'User declined to share their Nostr identity');
@@ -274,9 +277,22 @@ async function dispatchInner<M extends SmirkMethod>(
         if (decision.kind !== 'nostrGrant') {
           throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
         }
-        await deps.permissions.set({ ...perm, nostr: true, lastUsedAt: Date.now() });
+        // Upgrade an existing permission, or CREATE one (no chain assets needed
+        // for a pure-Nostr connection).
+        const next: OriginPermission = existing
+          ? { ...existing, nostr: true, lastUsedAt: Date.now() }
+          : {
+              origin: origin.origin,
+              assets: [],
+              nostr: true,
+              ...(origin.siteName ? { siteName: origin.siteName } : {}),
+              ...(origin.favicon ? { favicon: origin.favicon } : {}),
+              grantedAt: Date.now(),
+              lastUsedAt: Date.now(),
+            };
+        await deps.permissions.set(next);
       } else {
-        await touch(deps.permissions, perm);
+        await touch(deps.permissions, existing);
       }
       return await deps.provider.getNostrPublicKey();
     }
