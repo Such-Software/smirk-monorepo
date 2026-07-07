@@ -2,17 +2,51 @@
  * Grin wallet API methods — slatepack relay and output management.
  *
  * The slatepack relay is a backend convenience: instead of forcing users
- * to copy/paste slatepacks out-of-band (Telegram, email, ...), the
- * sender posts a slatepack to `/grin/relay` and the recipient pulls it
- * from `/grin/relay/pending/:userId`. The relay never sees plaintext
- * slate contents — slatepacks are encrypted to the recipient's
- * slatepack address. The backend just routes ciphertext.
+ * to copy/paste slatepacks out-of-band (Telegram, email, ...), the sender
+ * posts a slatepack to `/wallet/grin/relay/create` and the recipient pulls
+ * it from `GET /wallet/grin/relay/pending`. The relay never sees plaintext
+ * slate contents — slatepacks are encrypted to the recipient's slatepack
+ * address. The backend just routes ciphertext.
+ *
+ * The v3 backend keys every relay entry on its `slate_id` (a UUID) and
+ * identifies the caller from the bearer token — there is no separate row
+ * `id` and no `user_id`/`relay_id` in the request bodies. This adapter keeps
+ * the five method signatures stable for existing callers by (a) synthesizing
+ * the legacy per-item `id` from `slate_id` (so `relayId` round-trips back as
+ * the `slate_id` the v3 respond/cancel endpoints want), and (b) splitting the
+ * flat `{ relays }` response into the caller's two buckets by lifecycle
+ * status: `pending_recipient` → the caller must respond (`pending_to_sign`),
+ * `pending_sender` → the recipient responded, caller finalizes
+ * (`pending_to_finalize`).
  *
  * Output management mirrors `grin-wallet`'s output store (UnspentOut,
  * Locked, Spent) so the wallet shell can render correct balances.
  */
 
 import { ApiClient, ApiResponse } from './client';
+
+/** A relay entry as the v3 backend returns it (keyed on `slate_id`, no row id).
+ *  Internal to this adapter — callers see the mapped legacy shape. */
+interface GrinRelayEntryV3 {
+  slate_id: string;
+  sender_user_id: string;
+  recipient_user_id: string | null;
+  /** The sender's armored slatepack (what the recipient responds to). */
+  slatepack_content: string;
+  /** The recipient's response slatepack, once provided. */
+  response_slatepack: string | null;
+  amount_nanogrin: number;
+  status:
+    | 'pending_recipient'
+    | 'pending_sender'
+    | 'finalized'
+    | 'expired'
+    | 'cancelled';
+  created_at: string;
+  expires_at: string;
+  finalized_at: string | null;
+  tx_hash: string | null;
+}
 
 export interface GrinMethods {
   // ----- Slatepack relay -----
@@ -209,54 +243,97 @@ export interface GrinMethods {
 
 export function createGrinMethods(client: ApiClient): GrinMethods {
   return {
-    // ----- Slatepack relay -----
+    // ----- Slatepack relay (v3: /wallet/grin/relay/*, keyed on slate_id,
+    // caller identified by the bearer token) -----
     async createGrinRelay(params) {
-      return client.request('/grin/relay', {
+      // v3 requires a REGISTERED recipient (recipient_user_id); it does not
+      // accept a bare slatepack address. Address-only relay needs a backend
+      // address→userId lookup that v3 doesn't expose yet, so callers must
+      // resolve the recipient's userId first.
+      const res = await client.request<GrinRelayEntryV3>('/wallet/grin/relay/create', {
         method: 'POST',
         body: JSON.stringify({
-          sender_user_id: params.senderUserId,
-          slatepack: params.slatepack,
-          slate_id: params.slateId,
-          amount: params.amount,
           recipient_user_id: params.recipientUserId,
-          recipient_address: params.recipientAddress,
+          slate_id: params.slateId,
+          slatepack: params.slatepack,
+          amount_nanogrin: params.amount,
         }),
       });
+      // Legacy callers read `.data.id`; v3 keys on slate_id. Map it through so
+      // the value they round-trip back to respond/cancel is the slate_id.
+      if (res.data) {
+        return { ...res, data: { id: res.data.slate_id, expires_at: res.data.expires_at } };
+      }
+      const { error, status, code } = res;
+      return {
+        ...(error !== undefined ? { error } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(code !== undefined ? { code } : {}),
+      };
     },
 
-    async getGrinPendingSlatepacks(userId) {
-      return client.retryableRequest(`/grin/relay/pending/${userId}`, { method: 'GET' });
+    async getGrinPendingSlatepacks(_userId) {
+      // The `_userId` arg is retained for signature compat but unused — v3
+      // identifies the recipient from the bearer token.
+      const res = await client.retryableRequest<{ relays: GrinRelayEntryV3[] }>(
+        '/wallet/grin/relay/pending',
+        { method: 'GET' },
+      );
+      if (res.error || !res.data) {
+        const { error, status, code } = res;
+        return { ...(error !== undefined ? { error } : {}), ...(status !== undefined ? { status } : {}), ...(code !== undefined ? { code } : {}) };
+      }
+      const toItem = (e: GrinRelayEntryV3, slatepack: string) => ({
+        id: e.slate_id, // v3 has no separate id; synthesize from slate_id
+        slate_id: e.slate_id,
+        sender_user_id: e.sender_user_id,
+        amount: e.amount_nanogrin,
+        slatepack,
+        created_at: e.created_at,
+        expires_at: e.expires_at,
+      });
+      const relays = res.data.relays ?? [];
+      return {
+        ...res,
+        data: {
+          // Caller is the RECIPIENT: the sender's slatepack awaits a response.
+          pending_to_sign: relays
+            .filter((r) => r.status === 'pending_recipient')
+            .map((r) => toItem(r, r.slatepack_content)),
+          // Caller is the SENDER: the recipient responded; finalize with it.
+          pending_to_finalize: relays
+            .filter((r) => r.status === 'pending_sender')
+            .map((r) => toItem(r, r.response_slatepack ?? '')),
+        },
+      };
     },
 
     async signGrinSlatepack(params) {
-      return client.request('/grin/relay/sign', {
+      // v3 "respond": the recipient attaches their response slatepack. relayId
+      // is the slate_id (synthesized above).
+      return client.request('/wallet/grin/relay/respond', {
         method: 'POST',
         body: JSON.stringify({
-          relay_id: params.relayId,
-          user_id: params.userId,
-          signed_slatepack: params.signedSlatepack,
+          slate_id: params.relayId,
+          response_slatepack: params.signedSlatepack,
         }),
       });
     },
 
     async finalizeGrinSlatepack(params) {
-      return client.request('/grin/relay/finalize', {
+      return client.request('/wallet/grin/relay/finalize', {
         method: 'POST',
         body: JSON.stringify({
-          relay_id: params.relayId,
-          user_id: params.userId,
-          finalized_slatepack: params.finalizedSlatepack,
+          slate_id: params.relayId,
+          tx_hash: params.finalizedSlatepack,
         }),
       });
     },
 
     async cancelGrinSlatepack(params) {
-      return client.retryableRequest('/grin/relay/cancel', {
+      return client.retryableRequest('/wallet/grin/relay/cancel', {
         method: 'POST',
-        body: JSON.stringify({
-          relay_id: params.relayId,
-          user_id: params.userId,
-        }),
+        body: JSON.stringify({ slate_id: params.relayId }),
       });
     },
 
