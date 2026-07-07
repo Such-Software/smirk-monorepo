@@ -98,9 +98,10 @@ import {
   // opt-in — a minimal backend may advertise no prices/tips/grin/feed, so we
   // gate reads + hide surfaces instead of firing calls that 404.
   loadCapabilities,
+  peekCapabilities,
   invalidateCapabilities,
   capAllowsPrices,
-  capAllowsTips,
+  capHasTips,
   capAllowsGrin,
   capHasFeed,
   // Nostr feed (operator-curated public feed over the relay).
@@ -1853,7 +1854,7 @@ function App() {
       const caps = await loadCapabilities(api);
       const grinHidden = (sess.ui.hiddenAssets ?? []).includes('grin');
       const grinOff = grinHidden || !capAllowsGrin(caps);
-      const tipsOff = !capAllowsTips(caps);
+      const tipsOff = !capHasTips(caps);
       const [nextGrin, nextTips] = await Promise.all([
         grinOff
           ? Promise.resolve({ items: [], loading: false, error: null })
@@ -2417,7 +2418,7 @@ function HomeRouter({
   const { route, navigate, switchTab } = useRoute();
   const sessionState = useSessionState();
   const showFiat = capAllowsPrices(caps);
-  const showTip = capAllowsTips(caps);
+  const showTip = capHasTips(caps);
   const balancesHidden = sessionState.ui.balanceHidden;
   const toggleBalancesHidden = () => {
     void store.update((s) => {
@@ -3284,7 +3285,7 @@ function HomeRouter({
     let alive = true;
     const tick = async () => {
       // Opt-in: no tips capability → no sent-tips poll (skips a recurring 404).
-      if (!capAllowsTips(await loadCapabilities(api))) {
+      if (!capHasTips(await loadCapabilities(api))) {
         if (alive) setReadyToShareCount(0);
         return;
       }
@@ -4664,22 +4665,30 @@ function AssetDetailRoute({
             return [] as AssetDetailTxRow[];
           },
         ),
-        loadAssetTipRows(assetId).catch((e) => {
-          console.warn('[asset-detail] tips failed:', e);
-          return [] as AssetDetailTxRow[];
-        }),
-        api.getSparkline(assetId).then(
-          (r) =>
-            r.data
-              ? ({
-                  prices: r.data.prices,
-                  min: r.data.min,
-                  max: r.data.max,
-                  changePct: r.data.change_pct,
-                } as SparklinePoint)
-              : undefined,
-          () => undefined,
-        ),
+        // Opt-in: only load the tip history when the backend runs social tips.
+        capHasTips(peekCapabilities())
+          ? loadAssetTipRows(assetId).catch((e) => {
+              console.warn('[asset-detail] tips failed:', e);
+              return [] as AssetDetailTxRow[];
+            })
+          : Promise.resolve([] as AssetDetailTxRow[]),
+        // Sparkline only for a priced asset — skip the request (and its 404) for an
+        // asset the feed carries no quote for (e.g. WOW) or a no-prices backend.
+        capAllowsPrices(peekCapabilities()) &&
+        (session?.prices as Record<string, number | null> | null | undefined)?.[assetId] != null
+          ? api.getSparkline(assetId).then(
+              (r) =>
+                r.data
+                  ? ({
+                      prices: r.data.prices,
+                      min: r.data.min,
+                      max: r.data.max,
+                      changePct: r.data.change_pct,
+                    } as SparklinePoint)
+                  : undefined,
+              () => undefined,
+            )
+          : Promise.resolve(undefined),
       ]);
       if (!alive) return;
       // Merge + sort newest-first. Tips and chain rows both carry an

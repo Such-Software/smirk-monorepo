@@ -247,6 +247,11 @@ type Caps = BackendCapabilities | null | undefined;
 export const capAllowsPrices = (c: Caps): boolean => c == null || c.features.prices;
 /** Social tips (`/tips/social/*`). Permissive on unknown (default-off on new backends). */
 export const capAllowsTips = (c: Caps): boolean => c == null || c.features.tips;
+/** Social tips, STRICT — only when a caps-advertising backend says tips:true.
+ *  Used to gate the tip poll loops + Tip action so they never fire on a backend
+ *  that doesn't run tips (the v3 client only ever talks to caps-advertising
+ *  backends, so an unknown/legacy caps reads as "no tips" here). */
+export const capHasTips = (c: Caps): boolean => !!c?.features.tips;
 /** Grin relay (address registration + slatepack relay). Permissive on unknown. */
 export const capAllowsGrin = (c: Caps): boolean => c == null || c.features.grin_relay;
 /** First-party Nostr relay (DM inbox). STRICT — only when advertised. */
