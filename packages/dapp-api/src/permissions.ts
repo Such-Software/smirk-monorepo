@@ -25,6 +25,11 @@ export interface OriginPermission {
    *  Nostr-event signatures. Separate from chain `assets` because exposing the
    *  npub is a distinct, cross-site-correlatable grant. */
   nostr?: boolean;
+  /** Whether the origin may derive its app-scoped e2ee key(s) and ask the wallet
+   *  to open boxes sealed to them. A one-time disclosure grant: the key is
+   *  origin-bound and unlinkable to identity, so once granted, derive/open need
+   *  no per-call prompt (the site is only ever reading its OWN sealed data). */
+  e2ee?: boolean;
   /** Display name from the dapp's `<title>` at approval time. Stored
    *  so Settings → Connected Sites can show something friendlier than
    *  the bare origin. */
@@ -73,4 +78,9 @@ export function hasAssetsAuthorized(
 /** True iff the origin has been granted the Nostr scope (npub + signing). */
 export function hasNostrAuthorized(perm: OriginPermission | null): boolean {
   return !!perm?.nostr;
+}
+
+/** True iff the origin has been granted the app-scoped e2ee scope. */
+export function hasE2eeAuthorized(perm: OriginPermission | null): boolean {
+  return !!perm?.e2ee;
 }

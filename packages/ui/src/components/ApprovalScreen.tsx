@@ -22,7 +22,7 @@
  * deny.
  */
 
-import { useState } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Button } from './Button';
 
@@ -79,6 +79,22 @@ export type ApprovalRequest =
         tags: string[][];
         created_at?: number;
       };
+    }
+  | {
+      kind: 'appEncKey';
+      origin: ApprovalOrigin;
+      domainScope: string;
+      context: string;
+      /** True on the origin's first e2ee use — shows the disclosure and asks
+       *  for a click. False = re-derive under an existing grant (auto-approves). */
+      firstGrant: boolean;
+    }
+  | {
+      kind: 'appSealOpen';
+      origin: ApprovalOrigin;
+      domainScope: string;
+      context: string;
+      sealed: string;
     };
 
 export interface ApprovalScreenProps {
@@ -111,7 +127,20 @@ export type ApprovalApproval =
   | { kind: 'requestPayment' }
   | { kind: 'claimPublicTip' }
   | { kind: 'nostrGrant' }
-  | { kind: 'signNostrEvent' };
+  | { kind: 'signNostrEvent' }
+  | { kind: 'appEncKey' }
+  | { kind: 'appSealOpen' };
+
+/** Kinds the wallet resolves WITHOUT a fresh user click. `appSealOpen` and a
+ *  re-derive `appEncKey` (firstGrant === false) both run under an already-granted,
+ *  origin-bound e2ee scope and only ever touch the origin's OWN sealed data — a
+ *  per-call prompt would be friction with no security value. The screen still
+ *  renders (and enforces unlock upstream), it just self-approves on mount. */
+function isAutoApprove(request: ApprovalRequest): boolean {
+  if (request.kind === 'appSealOpen') return true;
+  if (request.kind === 'appEncKey') return !request.firstGrant;
+  return false;
+}
 
 export function ApprovalScreen({
   request,
@@ -133,6 +162,18 @@ export function ApprovalScreen({
       setBusy(false);
     }
   };
+
+  // Granted-scope e2ee reads self-approve on mount (no user click). If it
+  // throws, the error surfaces and the Deny/Approve buttons stay live for a
+  // manual retry, same as any other prompt.
+  const autoFired = useRef(false);
+  useEffect(() => {
+    if (autoFired.current || !isAutoApprove(request)) return;
+    autoFired.current = true;
+    if (request.kind === 'appSealOpen') void handleApprove({ kind: 'appSealOpen' });
+    else if (request.kind === 'appEncKey') void handleApprove({ kind: 'appEncKey' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request]);
 
   return (
     // Natural-height stack — let content size to its actual size.
@@ -260,6 +301,10 @@ function ApprovalBody({
       return <NostrGrantBody />;
     case 'signNostrEvent':
       return <SignNostrEventBody event={request.event} />;
+    case 'appEncKey':
+      return <AppEncKeyBody firstGrant={request.firstGrant} context={request.context} />;
+    case 'appSealOpen':
+      return <AppSealOpenBody />;
   }
 }
 
@@ -480,6 +525,40 @@ function SignNostrEventBody({
   );
 }
 
+function AppEncKeyBody({ firstGrant, context }: { firstGrant: boolean; context: string }) {
+  // Re-derive under an existing grant: the screen auto-approves before the user
+  // reads this, so keep it to a quiet status line.
+  if (!firstGrant) {
+    return (
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
+        Providing this site's encryption key…
+      </p>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h2 style={{ margin: 0, fontSize: 18, color: 'var(--smirk-fg)' }}>
+        Allow private storage?
+      </h2>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
+        The site wants an encryption key derived from your wallet so it can store
+        data that only you can read — the server can't. The key is unique to this
+        site{context ? ` (“${context}”)` : ''} and unrelated to your identity or
+        funds; your wallet never hands out the private half.
+      </p>
+    </div>
+  );
+}
+
+function AppSealOpenBody() {
+  // Always auto-approves; shown only briefly (or if a decrypt error surfaces).
+  return (
+    <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
+      Decrypting this site's data…
+    </p>
+  );
+}
+
 function AssetChip({ asset }: { asset: ApprovalAsset }) {
   // Use the accent color for asset chips so they're high-contrast
   // against every theme background (light, dark, retro). Earlier
@@ -543,6 +622,10 @@ function ApprovalActions({
               return onApprove({ kind: 'nostrGrant' });
             case 'signNostrEvent':
               return onApprove({ kind: 'signNostrEvent' });
+            case 'appEncKey':
+              return onApprove({ kind: 'appEncKey' });
+            case 'appSealOpen':
+              return onApprove({ kind: 'appSealOpen' });
           }
         }}
       >

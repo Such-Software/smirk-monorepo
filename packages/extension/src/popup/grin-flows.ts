@@ -1088,7 +1088,7 @@ const RECOVER_GRIN_DEFAULT = import.meta.env?.VITE_RECOVER_GRIN_DEFAULT === 'tru
 const RECOVER_GRIN_ALLOWLIST = new Set<string>(
   (import.meta.env?.VITE_RECOVER_GRIN_ALLOWLIST ?? '')
     .split(',')
-    .map((addr) => addr.trim())
+    .map((addr: string) => addr.trim())
     .filter(Boolean),
 );
 

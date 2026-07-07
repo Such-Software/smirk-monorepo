@@ -16,6 +16,7 @@
 import {
   PROTOCOL_VERSION,
   SmirkAddresses,
+  SmirkAppEncryptionKey,
   SmirkAsset,
   SmirkBackend,
   SmirkMethod,
@@ -69,6 +70,31 @@ export interface SmirkPageApi {
   /** Ask the wallet to schnorr-sign a Nostr event (NIP-98 login, a note, …).
    *  Requires the Nostr scope; prompts per signature. */
   signNostrEvent(event: SmirkNostrUnsignedEvent): Promise<SmirkNostrSignedEvent>;
+  /** The origin's app-scoped e2ee sealing key (x25519). Seal to `publicKey` with
+   *  libsodium `crypto_box_seal` for storage only the user can read. Prompts a
+   *  one-time grant the first time an origin asks; `context` sub-scopes the key.
+   *  `null` if the user declines. */
+  getAppEncryptionKey(context?: string): Promise<SmirkAppEncryptionKey | null>;
+  /** Open a `crypto_box_seal` envelope addressed to this origin's app key,
+   *  returning the plaintext bytes. Requires the e2ee scope (call
+   *  `getAppEncryptionKey` first). `sealed` may be base64 or raw bytes. */
+  appSealOpen(sealed: Uint8Array | string, context?: string): Promise<Uint8Array>;
+}
+
+/** Uint8Array → base64 (wire form). Small + dependency-free; runs in page,
+ *  SW, and Tauri webview contexts alike. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  return btoa(bin);
+}
+
+/** base64 → Uint8Array (inverse of `bytesToBase64`). */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 let nextRequestId = 0;
@@ -129,6 +155,16 @@ export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi 
     getNostrPublicKey: () => call('getNostrPublicKey', {}),
     signNostrEvent: (event: SmirkNostrUnsignedEvent) =>
       call('signNostrEvent', { event }),
+    getAppEncryptionKey: (context?: string) =>
+      call('getAppEncryptionKey', context !== undefined ? { context } : {}),
+    appSealOpen: async (sealed: Uint8Array | string, context?: string) => {
+      const sealedB64 = typeof sealed === 'string' ? sealed : bytesToBase64(sealed);
+      const res = await call('appSealOpen', {
+        sealed: sealedB64,
+        ...(context !== undefined ? { context } : {}),
+      });
+      return base64ToBytes(res.plaintext);
+    },
   });
 
   return api;

@@ -29,7 +29,12 @@ import type {
   SmirkAsset,
 } from '@such-software/smirk-dapp-api';
 import type { ApprovalApproval } from '@smirk/ui';
-import { signMessageWithUnlocked, signNostrEventWithUnlocked } from './signers';
+import {
+  signMessageWithUnlocked,
+  signNostrEventWithUnlocked,
+  deriveAppEncKeyWithUnlocked,
+  openAppSealWithUnlocked,
+} from './signers';
 
 /**
  * The popup-side dependencies the executor needs. We pass these in
@@ -255,6 +260,31 @@ export async function executeApproval(
       }
       const result = signNostrEventWithUnlocked(deps.wallet, request.event);
       return { kind: 'signNostrEvent', approved: true, result };
+    }
+
+    case 'appEncKey': {
+      if (request.kind !== 'appEncKey') {
+        throw new Error('Pending request kind mismatch (expected appEncKey)');
+      }
+      const publicKey = deriveAppEncKeyWithUnlocked(
+        deps.wallet,
+        request.domainScope,
+        request.context,
+      );
+      return { kind: 'appEncKey', approved: true, publicKey };
+    }
+
+    case 'appSealOpen': {
+      if (request.kind !== 'appSealOpen') {
+        throw new Error('Pending request kind mismatch (expected appSealOpen)');
+      }
+      const plaintext = openAppSealWithUnlocked(
+        deps.wallet,
+        request.domainScope,
+        request.sealed,
+        request.context,
+      );
+      return { kind: 'appSealOpen', approved: true, plaintext };
     }
 
     default: {

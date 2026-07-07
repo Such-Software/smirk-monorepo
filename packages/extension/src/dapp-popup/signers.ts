@@ -22,7 +22,9 @@
 
 import { bytesToHex } from '@noble/hashes/utils';
 import {
+  deriveAppEncryptionKey,
   deriveNostrIdentity,
+  sealOpen,
   signBitcoinMessage,
   signEd25519WithScalar,
   signNostrEvent,
@@ -132,4 +134,58 @@ export function signNostrEventWithUnlocked(
     );
   }
   return signNostrEvent(event, deriveNostrIdentity(wallet.mnemonic, 0));
+}
+
+/** Uint8Array → base64 (the dapp-api wire form for sealed/plaintext bytes). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  return btoa(bin);
+}
+
+/** base64 → Uint8Array. */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * Derive the origin's app-scoped e2ee PUBLIC key (x25519 hex). `domainScope` is
+ * the wallet-verified origin, supplied by the handler — never a page string.
+ * Requires the unlocked mnemonic (absent on a session-cache restore).
+ */
+export function deriveAppEncKeyWithUnlocked(
+  wallet: UnlockedWallet,
+  domainScope: string,
+  context: string,
+): string {
+  if (!wallet.mnemonic) {
+    throw new Error(
+      'App encryption needs the unlocked mnemonic — re-unlock the wallet',
+    );
+  }
+  return deriveAppEncryptionKey(wallet.mnemonic, domainScope, context).publicKeyHex;
+}
+
+/**
+ * Open a base64 libsodium `crypto_box_seal` envelope addressed to the origin's
+ * app key, returning base64 plaintext. The private key is derived transiently
+ * and never leaves this context. Throws on a bad tag (wrong key / tampered box).
+ */
+export function openAppSealWithUnlocked(
+  wallet: UnlockedWallet,
+  domainScope: string,
+  sealedBase64: string,
+  context: string,
+): string {
+  if (!wallet.mnemonic) {
+    throw new Error(
+      'App decryption needs the unlocked mnemonic — re-unlock the wallet',
+    );
+  }
+  const key = deriveAppEncryptionKey(wallet.mnemonic, domainScope, context);
+  const plaintext = sealOpen(key.privateKey, base64ToBytes(sealedBase64));
+  return bytesToBase64(plaintext);
 }

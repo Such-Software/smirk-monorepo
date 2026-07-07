@@ -88,6 +88,29 @@ export type ApprovalRequest =
       /** The unsigned event the page wants signed. The wallet renders a human
        *  summary (NIP-98 login to <url>, a note, …) from kind + tags. */
       event: SmirkNostrUnsignedEvent;
+    }
+  | {
+      kind: 'appEncKey';
+      origin: OriginContext;
+      /** Wallet-verified derivation scope (the origin), NEVER page-supplied.
+       *  The handler sets this; the executor derives on it verbatim. */
+      domainScope: string;
+      /** Sub-scope within the origin (e.g. `sso`). Empty = the default key. */
+      context: string;
+      /** True on the origin's FIRST e2ee use — the screen shows the disclosure
+       *  and approving grants the scope. False = re-derive under an already-
+       *  granted scope; the screen auto-approves (deriving a public key, no
+       *  fresh decision). */
+      firstGrant: boolean;
+    }
+  | {
+      kind: 'appSealOpen';
+      origin: OriginContext;
+      /** Wallet-verified derivation scope (the origin), NEVER page-supplied. */
+      domainScope: string;
+      context: string;
+      /** base64 libsodium `crypto_box_seal` envelope to open with the app key. */
+      sealed: string;
     };
 
 /** Approval result. Each non-rejected branch carries the computed
@@ -124,6 +147,18 @@ export type ApprovalResult =
       kind: 'signNostrEvent';
       approved: true;
       result: SmirkNostrSignedEvent;
+    }
+  | {
+      kind: 'appEncKey';
+      approved: true;
+      /** The derived x25519 public key (hex) for (domainScope, context). */
+      publicKey: string;
+    }
+  | {
+      kind: 'appSealOpen';
+      approved: true;
+      /** base64 of the opened plaintext bytes. */
+      plaintext: string;
     }
   | { approved: false };
 

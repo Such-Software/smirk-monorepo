@@ -17,6 +17,11 @@
 
 export const PROTOCOL_VERSION = 1 as const;
 
+/** App-scoped e2ee envelope scheme. Must match `@smirk/core`'s `APP_ENC_SCHEME`
+ *  (libsodium `crypto_box_seal`, x25519 sealed box). Duplicated here so this
+ *  published protocol package stays decoupled from wallet internals. */
+export const APP_ENC_SCHEME = 'x25519-sealedbox' as const;
+
 /** Asset namespace shared with the rest of @smirk. */
 export type SmirkAsset = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
 export const ALL_ASSETS: readonly SmirkAsset[] = [
@@ -106,6 +111,17 @@ export interface SmirkNostrSignedEvent {
   sig: string;
 }
 
+/** The app-scoped e2ee public key a dapp seals to (libsodium `crypto_box_seal`).
+ *  Deterministic + seed-derived + origin-bound; the wallet holds the secret half
+ *  and only ever opens boxes, never exports the private key. */
+export interface SmirkAppEncryptionKey {
+  /** X25519 public key, 32-byte hex. Seal to this with `crypto_box_seal`. */
+  publicKey: string;
+  /** Envelope scheme identifier, e.g. `x25519-sealedbox`. Pins the on-the-wire
+   *  format so a future scheme bump is detectable by the dapp. */
+  scheme: string;
+}
+
 // ============================================================================
 // Method dispatch table — single source of truth for what the page-side
 // surface and wallet-side handler agree on.
@@ -156,6 +172,22 @@ export type SmirkMethodMap = {
   signNostrEvent: {
     params: { event: SmirkNostrUnsignedEvent };
     result: SmirkNostrSignedEvent;
+  };
+  getAppEncryptionKey: {
+    /** `context` sub-scopes the key WITHIN the origin (e.g. `sso`, `notes`), so
+     *  one site can hold several unlinkable keys. Omitted = the origin's default
+     *  key. Never a cross-origin string — the handler binds to the verified origin. */
+    params: { context?: string };
+    /** The x25519 sealing key; `null` if the origin lacks/declines the e2ee scope. */
+    result: SmirkAppEncryptionKey | null;
+  };
+  appSealOpen: {
+    /** `sealed`: base64 libsodium `crypto_box_seal` envelope addressed to the
+     *  app key for `context`. Requires the e2ee scope (granted via a prior
+     *  `getAppEncryptionKey`). */
+    params: { sealed: string; context?: string };
+    /** `plaintext`: base64 of the opened bytes (the dapp decodes; may be binary). */
+    result: { plaintext: string };
   };
 };
 

@@ -23,12 +23,14 @@ import { ApprovalHandler, OriginContext } from './approval';
 import {
   hasAssetsAuthorized,
   hasNostrAuthorized,
+  hasE2eeAuthorized,
   OriginPermission,
   OriginPermissionStore,
 } from './permissions';
 import { WalletProvider } from './provider';
 import {
   ALL_ASSETS,
+  APP_ENC_SCHEME,
   PROTOCOL_VERSION,
   SmirkAsset,
   SmirkErrorCode,
@@ -305,6 +307,66 @@ async function dispatchInner<M extends SmirkMethod>(
       }
       await touch(deps.permissions, perm);
       return decision.result;
+    }
+
+    case 'getAppEncryptionKey': {
+      await assertUnlocked(deps.provider);
+      const perm = await requireOriginPermission(deps.permissions, origin.origin);
+      const params = req.params as { context?: string };
+      const context = params.context ?? '';
+      // domainScope is the VERIFIED origin, set here — never a page string.
+      const firstGrant = !hasE2eeAuthorized(perm);
+      // The executor derives in its unlocked context (the pubkey is public but
+      // needs the seed). `firstGrant` drives the one-time disclosure; a
+      // re-derive under an existing grant auto-approves (deriving a public key
+      // is not a fresh decision, and it's the origin's OWN key).
+      const decision = await deps.approval({
+        kind: 'appEncKey',
+        origin,
+        domainScope: origin.origin,
+        context,
+        firstGrant,
+      });
+      if (!decision.approved) {
+        throw new HandlerError('USER_REJECTED', 'User declined the encryption-key request');
+      }
+      if (decision.kind !== 'appEncKey') {
+        throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
+      }
+      if (firstGrant) {
+        // Persist the scope so subsequent derive/open skip the disclosure.
+        await deps.permissions.set({ ...perm, e2ee: true, lastUsedAt: Date.now() });
+      } else {
+        await touch(deps.permissions, perm);
+      }
+      return { publicKey: decision.publicKey, scheme: APP_ENC_SCHEME };
+    }
+
+    case 'appSealOpen': {
+      await assertUnlocked(deps.provider);
+      const perm = await requireOriginPermission(deps.permissions, origin.origin);
+      if (!hasE2eeAuthorized(perm)) {
+        throw new HandlerError(
+          'NOT_AUTHORIZED',
+          'Origin lacks the e2ee scope — call getAppEncryptionKey() first',
+        );
+      }
+      const params = req.params as { sealed: string; context?: string };
+      const decision = await deps.approval({
+        kind: 'appSealOpen',
+        origin,
+        domainScope: origin.origin,
+        context: params.context ?? '',
+        sealed: params.sealed,
+      });
+      if (!decision.approved) {
+        throw new HandlerError('USER_REJECTED', 'User declined the decryption request');
+      }
+      if (decision.kind !== 'appSealOpen') {
+        throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
+      }
+      await touch(deps.permissions, perm);
+      return { plaintext: decision.plaintext };
     }
 
     default: {
