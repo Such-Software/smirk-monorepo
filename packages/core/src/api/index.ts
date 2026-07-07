@@ -23,7 +23,7 @@ import { createWalletUtxoMethods, WalletUtxoMethods } from './wallet-utxo';
 import { createWalletLwsMethods, WalletLwsMethods } from './wallet-lws';
 import { createGrinMethods, GrinMethods } from './grin';
 import { createSwapMethods, SwapMethods } from './swap';
-import type { BackendCapabilities } from './capabilities';
+import type { BackendCapabilities, PremiumStatus } from './capabilities';
 
 export type { ApiResponse, WalletApiStyle } from './client';
 export { ApiClient } from './client';
@@ -263,6 +263,16 @@ export class SmirkApi
    */
   getCapabilities(): Promise<ApiResponse<BackendCapabilities>> {
     return this.request('/capabilities', { method: 'GET' });
+  }
+
+  /**
+   * The authenticated user's premium subscription status. Requires a bearer
+   * token. `active` gates premium-only actions — e.g. whether the Feed compose
+   * box may post to a `premium-post` relay. Answers even on non-premium backends
+   * (returns `{ active: false }`).
+   */
+  getPremiumStatus(): Promise<ApiResponse<PremiumStatus>> {
+    return this.request('/premium/status', { method: 'GET' });
   }
 
   /** Current cryptocurrency prices. */

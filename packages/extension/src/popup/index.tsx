@@ -5628,16 +5628,29 @@ function FeedRoute({
     [wallet.mnemonic],
   );
 
+  // The user's premium status gates posting on a `premium-post` relay. Fetched
+  // once; failures read as non-premium (compose shows "needs premium").
+  const [hasPremium, setHasPremium] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getPremiumStatus()
+      .then((r) => {
+        if (!cancelled) setHasPremium(r.data?.active ?? false);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const feed = caps?.feed ?? null;
   const writePolicy = caps?.messaging?.write_policy;
   const posting: PostingRequirement = feed
     ? postingRequirement({
         relayUrl: feed.relay_url,
         ...(writePolicy ? { writePolicy } : {}),
-        // Premium status isn't yet surfaced client-side; treat as non-premium so a
-        // premium-post relay honestly shows "needs premium" rather than failing at
-        // publish time. (Premium purchase + status is a follow-up.)
-        hasPremium: false,
+        hasPremium,
       })
     : { kind: 'no-relay' };
 

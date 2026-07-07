@@ -129,6 +129,17 @@ export interface PremiumPlanInfo {
   amount: string;
 }
 
+/** The authenticated user's CURRENT premium subscription status (`GET
+ *  /premium/status`). Distinct from {@link PremiumCapability} (which is the
+ *  operator's plans/pricing) — this is "am I, right now, a subscriber?". Gates
+ *  premium-only actions like posting to a `premium-post` relay feed. */
+export interface PremiumStatus {
+  /** True iff the user holds an unexpired subscription. */
+  active: boolean;
+  /** RFC3339 expiry timestamp, or `null` if never subscribed. */
+  premium_until: string | null;
+}
+
 /** Paid premium relay tier. Present only when `features.premium_relay`. */
 export interface PremiumCapability {
   /** Pricing currency, e.g. `XMR`. */
