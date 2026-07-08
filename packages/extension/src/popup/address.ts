@@ -81,15 +81,26 @@ export function resolveAddressForAsset(wallet: UnlockedWallet, assetId: string):
  */
 export function validateSendRecipient(assetId: string, addr: string): string | null {
   const t = addr.trim();
-  if (assetId === 'grin' && (t.startsWith('npub1') || /^[0-9a-fA-F]{64}$/.test(t))) {
-    try {
-      recipientToHex(t);
-      return null;
-    } catch {
-      return 'Not a valid npub';
+  if (assetId === 'grin') {
+    if (t.startsWith('npub1') || /^[0-9a-fA-F]{64}$/.test(t)) {
+      try {
+        recipientToHex(t);
+        return null;
+      } catch {
+        return 'Not a valid npub';
+      }
     }
+    // A NIP-05 name (federation): alice@goblin.st. Only the FORMAT is checked
+    // here — resolution against the domain's /.well-known/nostr.json happens at
+    // send time (a network call, not run per keystroke).
+    if (isNip05Name(t)) return null;
   }
   return validateAddress(assetId, addr);
+}
+
+/** True if `s` looks like a NIP-05 identifier `name@domain.tld` (format only). */
+export function isNip05Name(s: string): boolean {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.trim());
 }
 
 /** If `recipient` is an npub (or raw x-only hex), return its x-only pubkey hex;

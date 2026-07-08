@@ -52,6 +52,7 @@ import {
   readAllInbound,
   isGoblinPayUri,
   parseGoblinPayUri,
+  resolveNip05,
   type InboundSlatepack,
   detectLegacyWallet,
   migrateLegacyWallet,
@@ -81,7 +82,7 @@ import {
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
 import { formatUsd, parseAmount, bytesToHex } from './format';
-import { validateSendRecipient, recipientNpubToHex, resolveAddressForAsset } from './address';
+import { validateSendRecipient, recipientNpubToHex, isNip05Name, resolveAddressForAsset } from './address';
 import { encodeNostrRelayRef } from './relay-ref';
 import { respondToInboxItem } from './inbox-actions';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
@@ -1769,10 +1770,19 @@ function HomeRouter({
           // recipient pastes our S1 into their wallet and pastes the
           // S2 response back.
           const recipientUserId: string | undefined = undefined;
-          // If the recipient field is a Nostr npub, route the send over the
-          // gift-wrap channel (armored plain, delivered to their NIP-17 inbox)
-          // instead of a grin slatepack address — the Goblin-interoperable path.
-          const recipientPubkeyHex = recipientNpubToHex(toAddress);
+          // If the recipient field is a Nostr npub OR a NIP-05 name
+          // (alice@goblin.st — federation), route the send over the gift-wrap
+          // channel instead of a grin slatepack address. npub/hex resolve
+          // synchronously; a NIP-05 name resolves against the domain's
+          // /.well-known/nostr.json here at send time.
+          let recipientPubkeyHex = recipientNpubToHex(toAddress);
+          if (!recipientPubkeyHex && isNip05Name(toAddress)) {
+            const res = await resolveNip05(toAddress);
+            if (!res.ok) {
+              return { ok: false, error: `Couldn't resolve ${toAddress}: ${res.error}` };
+            }
+            recipientPubkeyHex = res.resolution.pubkeyHex;
+          }
           try {
             const result = await startGrinSend({
               userId: grinUserId,

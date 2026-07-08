@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { validateAddress, validateSendRecipient, recipientNpubToHex } from '../address';
+import { validateAddress, validateSendRecipient, recipientNpubToHex, isNip05Name } from '../address';
 
 test('empty input → "Address is empty"', () => {
   assert.equal(validateAddress('btc', '   '), 'Address is empty');
@@ -43,4 +43,17 @@ test('recipientNpubToHex: hex → itself, non-npub/hex → null', () => {
   assert.equal(recipientNpubToHex(hex), hex);
   assert.equal(recipientNpubToHex('grin1someaddress'), null); // a slatepack address, not nostr
   assert.equal(recipientNpubToHex('npub1bad'), null); // malformed npub
+  assert.equal(recipientNpubToHex('alice@goblin.st'), null); // a NIP-05 name — resolved async, not here
+});
+
+test('isNip05Name + validateSendRecipient accept a NIP-05 name for Grin (federation)', () => {
+  assert.equal(isNip05Name('alice@goblin.st'), true);
+  assert.equal(isNip05Name('bob@smirk.cash'), true);
+  assert.equal(isNip05Name('nodomain'), false);
+  assert.equal(isNip05Name('two@at@signs'), false);
+  assert.equal(isNip05Name('no@tld'), false);
+  // Grin accepts a NIP-05 name (format-valid); resolution is deferred to send time.
+  assert.equal(validateSendRecipient('grin', 'alice@goblin.st'), null);
+  // Other assets do NOT — a name is not a BTC address.
+  assert.match(validateSendRecipient('btc', 'alice@goblin.st') ?? '', /Not a valid BTC/);
 });
