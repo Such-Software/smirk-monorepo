@@ -78,6 +78,14 @@ export function bytesToHex(b: Uint8Array): string {
     .join('');
 }
 
+/** Decode a hex string to bytes (inverse of {@link bytesToHex}). */
+export function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.length % 2 === 0 ? hex : `0${hex}`;
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
 /** A random base64url token of `byteLen` bytes — URL-safe (survives a passthrough
  *  round-trip without percent-encoding surprises). */
 export function randomToken(byteLen: number): string {

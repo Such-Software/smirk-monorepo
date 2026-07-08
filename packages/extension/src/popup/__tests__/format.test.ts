@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { formatUsd, parseAmount, atomicToText, feedTimeAgo, bytesToHex, randomToken } from '../format';
+import { formatUsd, parseAmount, atomicToText, feedTimeAgo, bytesToHex, hexToBytes, randomToken } from '../format';
 
 test('formatUsd: currency format + em dash for non-finite', () => {
   assert.equal(formatUsd(1234.5), '$1,234.50');
@@ -50,6 +50,12 @@ test('feedTimeAgo: compact buckets', () => {
 test('bytesToHex: lowercase, zero-padded', () => {
   assert.equal(bytesToHex(new Uint8Array([0, 15, 255, 16])), '000fff10');
   assert.equal(bytesToHex(new Uint8Array([])), '');
+});
+
+test('hexToBytes: inverse of bytesToHex (round-trip)', () => {
+  const bytes = new Uint8Array([0, 15, 255, 16, 128]);
+  assert.deepEqual(hexToBytes(bytesToHex(bytes)), bytes);
+  assert.deepEqual(hexToBytes('ab'.repeat(32)).length, 32); // an x-only pubkey
 });
 
 test('randomToken: URL-safe, no padding, length scales', () => {

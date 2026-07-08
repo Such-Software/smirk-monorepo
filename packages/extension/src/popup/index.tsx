@@ -53,6 +53,8 @@ import {
   isGoblinPayUri,
   parseGoblinPayUri,
   resolveNip05,
+  encodeNpub,
+  shortNpub,
   type InboundSlatepack,
   detectLegacyWallet,
   migrateLegacyWallet,
@@ -81,7 +83,7 @@ import {
 } from '@smirk/core';
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
-import { formatUsd, parseAmount, bytesToHex } from './format';
+import { formatUsd, parseAmount, bytesToHex, hexToBytes } from './format';
 import { validateSendRecipient, recipientNpubToHex, isNip05Name, resolveAddressForAsset } from './address';
 import { encodeNostrRelayRef } from './relay-ref';
 import { respondToInboxItem } from './inbox-actions';
@@ -330,7 +332,12 @@ function inboundToInboxItem(s: InboundSlatepack): InboxItem {
     // counterparty pubkey so respond/cancel can gift-wrap back to the sender.
     relayId: s.channel === 'nostr' ? encodeNostrRelayRef(s.slateId, s.counterpartyRef) : s.id,
     slateId: s.slateId,
-    counterpartyUserId: s.counterpartyRef,
+    // Display: a Nostr counterparty is a pubkey — show a short npub, not raw hex.
+    // (Routing to them lives in relayId, so this field is display-only.)
+    counterpartyUserId:
+      s.channel === 'nostr'
+        ? shortNpub(encodeNpub(hexToBytes(s.counterpartyRef)))
+        : s.counterpartyRef,
     amountAtomic: BigInt(s.amountNanogrin),
     slatepack: s.slatepack,
     createdAt: iso(s.createdAt),
