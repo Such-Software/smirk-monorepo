@@ -80,6 +80,8 @@ import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
 import { formatUsd, parseAmount, bytesToHex } from './format';
 import { validateSendRecipient, recipientNpubToHex, resolveAddressForAsset } from './address';
+import { encodeNostrRelayRef } from './relay-ref';
+import { respondToInboxItem } from './inbox-actions';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
 import { readBalanceSnapshot, writeBalanceSnapshot } from './balance-snapshot';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
@@ -321,7 +323,9 @@ function inboundToInboxItem(s: InboundSlatepack): InboxItem {
   const iso = (sec?: number) => (sec ? new Date(sec * 1000).toISOString() : '');
   return {
     kind: s.stage === 'to-sign' ? 'pending_to_sign' : 'pending_to_finalize',
-    relayId: s.id,
+    // Backend items carry the bare slate_id; Nostr items pack slate_id +
+    // counterparty pubkey so respond/cancel can gift-wrap back to the sender.
+    relayId: s.channel === 'nostr' ? encodeNostrRelayRef(s.slateId, s.counterpartyRef) : s.id,
     slateId: s.slateId,
     counterpartyUserId: s.counterpartyRef,
     amountAtomic: BigInt(s.amountNanogrin),
@@ -2042,23 +2046,21 @@ function HomeRouter({
             // and they can hand it to the sender out-of-band. Surface
             // the failure so the UI can render a "copy manually" hint
             // instead of silently lying about success.
+            // Deliver the S2 back over the item's transport: a Nostr gift-wrap
+            // item (relayId packs the counterparty) is answered with a gift-wrap
+            // response; a backend item hits the relay's `sign` endpoint. Either
+            // way the receiver is still valid on failure — their S2 is in
+            // `signed.s2_armored` for manual hand-off.
             let relayDeliveryFailed = false;
             if (relayId) {
-              const relayRes = await api
-                .signGrinSlatepack({
-                  relayId,
-                  userId: grinUserId,
-                  signedSlatepack: signed.s2_armored,
-                })
-                .catch((err) => {
-                  console.warn('[smirk-popup] signGrinSlatepack threw:', err);
-                  return { error: err instanceof Error ? err.message : 'Relay delivery failed' };
-                });
-              if (relayRes && 'error' in relayRes && relayRes.error) {
-                console.warn(
-                  '[smirk-popup] signGrinSlatepack rejected:',
-                  relayRes.error,
-                );
+              const relayRes = await respondToInboxItem({
+                relayId,
+                s2Armored: signed.s2_armored,
+                userId: grinUserId,
+                mnemonic: wallet.mnemonic,
+              });
+              if (relayRes.error) {
+                console.warn('[smirk-popup] S2 delivery failed:', relayRes.error);
                 relayDeliveryFailed = true;
               }
             }
@@ -2290,21 +2292,14 @@ function HomeRouter({
             // surface a flag for the UI to render a fallback hint.
             let relayDeliveryFailed = false;
             if (relayId) {
-              const relayRes = await api
-                .signGrinSlatepack({
-                  relayId,
-                  userId: grinUserId,
-                  signedSlatepack: signed.armored,
-                })
-                .catch((err) => {
-                  console.warn('[smirk-popup] signGrinSlatepack (i2) threw:', err);
-                  return { error: err instanceof Error ? err.message : 'Relay delivery failed' };
-                });
-              if (relayRes && 'error' in relayRes && relayRes.error) {
-                console.warn(
-                  '[smirk-popup] signGrinSlatepack (i2) rejected:',
-                  relayRes.error,
-                );
+              const relayRes = await respondToInboxItem({
+                relayId,
+                s2Armored: signed.armored,
+                userId: grinUserId,
+                mnemonic: wallet.mnemonic,
+              });
+              if (relayRes.error) {
+                console.warn('[smirk-popup] I2 delivery failed:', relayRes.error);
                 relayDeliveryFailed = true;
               }
             }

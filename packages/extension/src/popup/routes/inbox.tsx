@@ -8,6 +8,7 @@ import {
   type InboxTipItem,
 } from '@smirk/ui';
 import { store } from '../singletons';
+import { cancelInboxItem } from '../inbox-actions';
 
 /**
  * InboxPasteRouter — universal paste-and-dispatch screen.
@@ -441,14 +442,18 @@ export function InboxRouter({
   // reserved outputs and mark the local tx record cancelled so the
   // wallet's pendingOutgoing tristate clears.
   const handleCancel = async (item: InboxItem) => {
-    // Don't silently swallow — if the backend says we can't cancel this
-    // relay row (e.g. ownership check fails) the user sees nothing
-    // happen and the row sticks around forever. Surface the failure so
-    // they can act on it instead of poking the X repeatedly.
-    const cancelRes = await api.cancelGrinSlatepack({
-      relayId: item.relayId,
-      userId,
-    });
+    // Don't silently swallow — if we can't cancel this row (backend ownership
+    // check, or a Nostr gift-wrap that won't send) the user sees nothing happen
+    // and the row sticks around forever. Surface the failure so they can act on
+    // it. Routes over the item's transport: a Nostr item (relayId packs the
+    // counterparty) gift-wraps a cancel back to the sender; a backend item hits
+    // the relay cancel endpoint.
+    const mnemonic = wallet.mnemonic;
+    if (!mnemonic) {
+      window.alert("Couldn't cancel: wallet is locked");
+      return;
+    }
+    const cancelRes = await cancelInboxItem({ relayId: item.relayId, userId, mnemonic });
     if (cancelRes.error) {
       window.alert(`Couldn't cancel: ${cancelRes.error}`);
       return;
