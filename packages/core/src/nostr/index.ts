@@ -8,6 +8,7 @@ export * from './identity-store';
 export * from './nip98';
 export * from './nip05';
 export * from './authority';
+export * from './nip05-cache';
 export * from './client';
 export * from './notes';
 export * from './app-enc';
