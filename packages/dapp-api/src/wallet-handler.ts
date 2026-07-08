@@ -20,6 +20,7 @@
  */
 
 import { ApprovalHandler, OriginContext } from './approval';
+import { nostrKindTier, isNostrSessionActive, mergeNostrSession } from './nostr-tiers';
 import {
   hasAssetsAuthorized,
   hasNostrAuthorized,
@@ -307,13 +308,21 @@ async function dispatchInner<M extends SmirkMethod>(
         );
       }
       const params = req.params as { event: SmirkNostrUnsignedEvent };
-      // Prompt per-signature (like signMessage) — a Nostr signature is an
-      // auth/publish credential; auto-signing would let a connected origin act
-      // as the user without a fresh prompt.
+      // Money-tier session model (P4): a Nostr signature is a credential. Money
+      // events (17/30402/22242) ALWAYS get an explicit per-event prompt and can
+      // never be session-covered; low-tier events (notes/reactions/gift-wraps)
+      // may be covered by an active session grant so the wallet auto-signs. The
+      // tier + coverage are computed HERE (the enforcement point) — a money kind
+      // is reported as never-covered regardless of any stored session.
+      const tier = nostrKindTier(params.event.kind);
+      const nowMs = Date.now();
+      const sessionCovered = isNostrSessionActive(perm.nostrSession, params.event.kind, nowMs);
       const decision = await deps.approval({
         kind: 'signNostrEvent',
         origin,
         event: params.event,
+        tier,
+        sessionCovered,
       });
       if (!decision.approved) {
         throw new HandlerError('USER_REJECTED', 'User rejected the Nostr signature request');
@@ -321,7 +330,15 @@ async function dispatchInner<M extends SmirkMethod>(
       if (decision.kind !== 'signNostrEvent') {
         throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
       }
-      await touch(deps.permissions, perm);
+      // Persist a session grant if the user asked for one — mergeNostrSession
+      // drops money-tier + non-grantable kinds, so a money event can never be
+      // written into a session even if the approval UI tried.
+      if (decision.grantSession) {
+        const nextSession = mergeNostrSession(perm.nostrSession, decision.grantSession, nowMs);
+        await deps.permissions.set({ ...perm, ...(nextSession ? { nostrSession: nextSession } : {}), lastUsedAt: nowMs });
+      } else {
+        await touch(deps.permissions, perm);
+      }
       return decision.result;
     }
 

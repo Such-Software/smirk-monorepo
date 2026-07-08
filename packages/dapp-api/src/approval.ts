@@ -30,6 +30,7 @@ import {
   SmirkPaymentResult,
   SmirkSignResult,
 } from './protocol';
+import type { NostrKindTier } from './nostr-tiers';
 
 /** Origin metadata the wallet shows the user. The page-context API
  *  reads `document.title` and `window.location.origin` and forwards
@@ -88,6 +89,14 @@ export type ApprovalRequest =
       /** The unsigned event the page wants signed. The wallet renders a human
        *  summary (NIP-98 login to <url>, a note, …) from kind + tags. */
       event: SmirkNostrUnsignedEvent;
+      /** Risk tier of this event's kind (see nostr-tiers.ts). `money` events must
+       *  get a strong warning and NO "allow for session" option; `session-grantable`
+       *  may offer one; `default` prompts per-event. */
+      tier: NostrKindTier;
+      /** True when an active session already covers this kind — the wallet may
+       *  auto-approve + sign silently. The handler sets this to false for any
+       *  money-tier kind, so money events always prompt. */
+      sessionCovered: boolean;
     }
   | {
       kind: 'appEncKey';
@@ -158,6 +167,9 @@ export type ApprovalResult =
       kind: 'signNostrEvent';
       approved: true;
       result: SmirkNostrSignedEvent;
+      /** Set when the user chose "allow for this session" — the handler persists a
+       *  time-boxed grant (money-tier kinds are filtered out before persisting). */
+      grantSession?: { kinds: number[]; expiresAt: number };
     }
   | {
       kind: 'appEncKey';

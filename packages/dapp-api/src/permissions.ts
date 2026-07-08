@@ -30,6 +30,10 @@ export interface OriginPermission {
    *  origin-bound and unlinkable to identity, so once granted, derive/open need
    *  no per-call prompt (the site is only ever reading its OWN sealed data). */
   e2ee?: boolean;
+  /** Time-boxed grant to sign session-grantable Nostr kinds (notes/reactions/
+   *  gift-wraps) without re-prompting. NEVER covers money-tier kinds
+   *  (17/30402/22242) — see nostr-tiers.ts. Absent = every signature prompts. */
+  nostrSession?: { kinds: number[]; expiresAt: number };
   /** Display name from the dapp's `<title>` at approval time. Stored
    *  so Settings → Connected Sites can show something friendlier than
    *  the bare origin. */

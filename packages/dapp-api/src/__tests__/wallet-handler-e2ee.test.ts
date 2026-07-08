@@ -246,3 +246,81 @@ test('getNostrPublicKey: user rejecting the grant surfaces USER_REJECTED', async
   const res = await dispatch(req('getNostrPublicKey', {}), ORIGIN);
   assert.equal(res.error?.code, 'USER_REJECTED');
 });
+
+// ── Money-tier session model (P4) ───────────────────────────────────────────
+
+function signNostrApproval(): {
+  handler: ApprovalHandler;
+  seen: Array<Extract<ApprovalRequest, { kind: 'signNostrEvent' }>>;
+  grant?: { kinds: number[]; expiresAt: number };
+} {
+  const state: { grant?: { kinds: number[]; expiresAt: number } } = {};
+  const seen: Array<Extract<ApprovalRequest, { kind: 'signNostrEvent' }>> = [];
+  const handler: ApprovalHandler = async (req) => {
+    if (req.kind === 'nostrGrant') return { kind: 'nostrGrant', approved: true };
+    if (req.kind === 'signNostrEvent') {
+      seen.push(req);
+      const sig = {
+        id: 'id',
+        pubkey: 'pk',
+        created_at: 0,
+        kind: req.event.kind,
+        tags: [],
+        content: req.event.content,
+        sig: 'sig',
+      };
+      return {
+        kind: 'signNostrEvent',
+        approved: true,
+        result: sig,
+        ...(state.grant ? { grantSession: state.grant } : {}),
+      };
+    }
+    return { approved: false } as ApprovalResult;
+  };
+  return { handler, seen, get grant() { return state.grant; }, set grant(g) { state.grant = g; } } as never;
+}
+
+function nostrPerm(nostrSession?: { kinds: number[]; expiresAt: number }): OriginPermission {
+  return { origin: ORIGIN.origin, assets: [], nostr: true, ...(nostrSession ? { nostrSession } : {}), grantedAt: 1, lastUsedAt: 1 };
+}
+
+function signReq(kind: number) {
+  return req('signNostrEvent', { event: { kind, content: '', tags: [] } });
+}
+
+test('signNostrEvent: a money-tier kind (30402) is tier=money + never session-covered', async () => {
+  const ap = signNostrApproval();
+  // A session that WRONGLY lists the money kind + is still live.
+  const store = memStore(nostrPerm({ kinds: [30402], expiresAt: Date.now() + 60_000 }));
+  const dispatch = createWalletHandler({ provider: fakeProvider(), permissions: store, approval: ap.handler });
+
+  await dispatch(signReq(30402), ORIGIN);
+  assert.equal(ap.seen[0]?.tier, 'money');
+  assert.equal(ap.seen[0]?.sessionCovered, false); // money is NEVER covered
+});
+
+test('signNostrEvent: a low-tier kind (1) with an active session is sessionCovered', async () => {
+  const ap = signNostrApproval();
+  const store = memStore(nostrPerm({ kinds: [1], expiresAt: Date.now() + 60_000 }));
+  const dispatch = createWalletHandler({ provider: fakeProvider(), permissions: store, approval: ap.handler });
+
+  await dispatch(signReq(1), ORIGIN);
+  assert.equal(ap.seen[0]?.tier, 'session-grantable');
+  assert.equal(ap.seen[0]?.sessionCovered, true);
+
+  // Kind 7 is NOT in the session → not covered.
+  await dispatch(signReq(7), ORIGIN);
+  assert.equal(ap.seen[1]?.sessionCovered, false);
+});
+
+test('signNostrEvent: granting a session persists it, filtering money-tier kinds', async () => {
+  const ap = signNostrApproval();
+  ap.grant = { kinds: [1, 7, 30402], expiresAt: Date.now() + 60_000 }; // includes a money kind
+  const store = memStore(nostrPerm());
+  const dispatch = createWalletHandler({ provider: fakeProvider(), permissions: store, approval: ap.handler });
+
+  await dispatch(signReq(1), ORIGIN);
+  const saved = await store.get(ORIGIN.origin);
+  assert.deepEqual(saved?.nostrSession?.kinds.sort(), [1, 7]); // 30402 dropped
+});
