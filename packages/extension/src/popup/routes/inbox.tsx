@@ -94,6 +94,7 @@ export function InboxPasteRouter({
       </div>
 
       <textarea
+        data-testid="paste-dispatch-input"
         value={text}
         onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
         placeholder="BEGINSLATEPACK.&#10;…&#10;ENDSLATEPACK."
@@ -137,6 +138,7 @@ export function InboxPasteRouter({
           </button>
         )}
         <button
+          data-testid="paste-dispatch-submit"
           onClick={() => void submit()}
           disabled={!text.trim() || busy}
           style={{

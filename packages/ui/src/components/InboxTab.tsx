@@ -170,6 +170,7 @@ export function InboxTab(props: InboxTabProps) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {props.onPasteSlatepack && (
             <button
+              data-testid="inbox-paste-slatepack-btn"
               onClick={props.onPasteSlatepack}
               style={{
                 display: 'flex',

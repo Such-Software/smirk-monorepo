@@ -139,6 +139,7 @@ export function NostrIdentityRoute({
     burner: { text: 'burner', color: '#f59e0b' },
     imported: { text: 'imported', color: '#22c55e' },
   };
+  const activeIdentity = vault?.identities.find((i) => i.pubkeyHex === vault.active);
 
   return (
     <div data-testid="settings-nostr-screen">
@@ -150,6 +151,29 @@ export function NostrIdentityRoute({
         Switch which identity signs, pays, and receives. Burner + imported keys are
         encrypted with your wallet — back up an nsec before removing it.
       </p>
+
+      {activeIdentity ? (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 11, opacity: 0.6 }}>Active npub</span>
+          <div
+            data-testid="nostr-npub"
+            style={{
+              fontFamily: 'monospace',
+              fontSize: 11,
+              wordBreak: 'break-all',
+              padding: '8px 10px',
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              borderRadius: 6,
+              cursor: 'pointer',
+            }}
+            title="Click to copy"
+            onClick={() => void navigator.clipboard.writeText(activeIdentity.npub).catch(() => {})}
+          >
+            {activeIdentity.npub}
+          </div>
+        </div>
+      ) : null}
 
       <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {(vault?.identities ?? []).map((id) => {
