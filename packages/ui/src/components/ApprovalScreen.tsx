@@ -79,6 +79,11 @@ export type ApprovalRequest =
         tags: string[][];
         created_at?: number;
       };
+      /** Risk tier of the event kind. `money` shows a strong warning + no session
+       *  option; `session-grantable` may offer "remember for this session". */
+      tier?: 'money' | 'session-grantable' | 'default';
+      /** True when an active session already covers this kind — auto-approve. */
+      sessionCovered?: boolean;
     }
   | {
       kind: 'appEncKey';
@@ -135,7 +140,7 @@ export type ApprovalApproval =
   | { kind: 'requestPayment' }
   | { kind: 'claimPublicTip' }
   | { kind: 'nostrGrant' }
-  | { kind: 'signNostrEvent' }
+  | { kind: 'signNostrEvent'; grantSession?: { kinds: number[]; expiresAt: number } }
   | { kind: 'appEncKey' }
   | { kind: 'appSealOpen' }
   | { kind: 'nostrCrypt' };
@@ -150,6 +155,9 @@ function isAutoApprove(request: ApprovalRequest): boolean {
   if (request.kind === 'appSealOpen') return true;
   if (request.kind === 'nostrCrypt') return true;
   if (request.kind === 'appEncKey') return !request.firstGrant;
+  // A Nostr signature auto-approves ONLY when an active session covers its kind.
+  // The handler sets sessionCovered=false for money-tier, so those always prompt.
+  if (request.kind === 'signNostrEvent') return request.sessionCovered === true;
   return false;
 }
 
@@ -161,6 +169,10 @@ export function ApprovalScreen({
 }: ApprovalScreenProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "Remember for this session" toggle — only meaningful for a session-grantable
+  // Nostr signature. Ignored for every other kind (and for money-tier, which the
+  // body never offers it for).
+  const [grantForSession, setGrantForSession] = useState(false);
 
   const handleApprove = async (approval: ApprovalApproval) => {
     setBusy(true);
@@ -207,7 +219,12 @@ export function ApprovalScreen({
       }}
     >
       <OriginHeader origin={request.origin} />
-      <ApprovalBody request={request} {...(formatAmount ? { formatAmount } : {})} />
+      <ApprovalBody
+        request={request}
+        grantForSession={grantForSession}
+        onToggleGrant={setGrantForSession}
+        {...(formatAmount ? { formatAmount } : {})}
+      />
       {error && (
         <div
           style={{
@@ -227,6 +244,7 @@ export function ApprovalScreen({
         busy={busy}
         onApprove={handleApprove}
         onDeny={onDeny}
+        grantForSession={grantForSession}
       />
     </div>
   );
@@ -288,9 +306,13 @@ function OriginHeader({ origin }: { origin: ApprovalOrigin }) {
 function ApprovalBody({
   request,
   formatAmount,
+  grantForSession,
+  onToggleGrant,
 }: {
   request: ApprovalRequest;
   formatAmount?: (asset: string, atomic: string) => string;
+  grantForSession: boolean;
+  onToggleGrant: (v: boolean) => void;
 }) {
   switch (request.kind) {
     case 'connect':
@@ -312,7 +334,14 @@ function ApprovalBody({
     case 'nostrGrant':
       return <NostrGrantBody />;
     case 'signNostrEvent':
-      return <SignNostrEventBody event={request.event} />;
+      return (
+        <SignNostrEventBody
+          event={request.event}
+          tier={request.tier ?? 'default'}
+          grantForSession={grantForSession}
+          onToggleGrant={onToggleGrant}
+        />
+      );
     case 'appEncKey':
       return <AppEncKeyBody firstGrant={request.firstGrant} context={request.context} />;
     case 'appSealOpen':
@@ -502,8 +531,14 @@ function nostrEventSummary(event: { kind: number; tags: string[][] }): {
 
 function SignNostrEventBody({
   event,
+  tier,
+  grantForSession,
+  onToggleGrant,
 }: {
   event: { kind: number; content: string; tags: string[][] };
+  tier: 'money' | 'session-grantable' | 'default';
+  grantForSession: boolean;
+  onToggleGrant: (v: boolean) => void;
 }) {
   const { title, detail } = nostrEventSummary(event);
   return (
@@ -512,6 +547,42 @@ function SignNostrEventBody({
       <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
         {detail}
       </p>
+      {tier === 'money' ? (
+        <div
+          role="alert"
+          style={{
+            padding: 10,
+            borderRadius: 8,
+            fontSize: 12,
+            lineHeight: 1.4,
+            color: 'var(--smirk-fg)',
+            background: 'var(--smirk-negative-bg, rgba(255,107,107,0.12))',
+            border: '1px solid var(--smirk-negative, #ff6b6b)',
+          }}
+        >
+          ⚠️ This is a value / authorization signature (payment, listing, or login).
+          It's signed once, right now — Smirk will never auto-sign these.
+        </div>
+      ) : null}
+      {tier === 'session-grantable' ? (
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 12,
+            color: 'var(--smirk-fg-muted)',
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={grantForSession}
+            onChange={(e) => onToggleGrant((e.target as HTMLInputElement).checked)}
+          />
+          Allow this site to sign events like this for the next hour without asking
+        </label>
+      ) : null}
       {event.content ? (
         <Section title="Content">
           <pre
@@ -613,11 +684,13 @@ function ApprovalActions({
   busy,
   onApprove,
   onDeny,
+  grantForSession,
 }: {
   request: ApprovalRequest;
   busy: boolean;
   onApprove: (a: ApprovalApproval) => void;
   onDeny: () => void;
+  grantForSession: boolean;
 }) {
   return (
     <div style={{ display: 'flex', gap: 8 }}>
@@ -644,7 +717,17 @@ function ApprovalActions({
             case 'nostrGrant':
               return onApprove({ kind: 'nostrGrant' });
             case 'signNostrEvent':
-              return onApprove({ kind: 'signNostrEvent' });
+              return onApprove({
+                kind: 'signNostrEvent',
+                ...(grantForSession && request.tier === 'session-grantable'
+                  ? {
+                      grantSession: {
+                        kinds: [request.event.kind],
+                        expiresAt: Date.now() + 60 * 60 * 1000, // 1 hour
+                      },
+                    }
+                  : {}),
+              });
             case 'appEncKey':
               return onApprove({ kind: 'appEncKey' });
             case 'appSealOpen':

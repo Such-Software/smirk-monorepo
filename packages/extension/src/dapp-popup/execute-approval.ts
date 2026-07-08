@@ -260,7 +260,14 @@ export async function executeApproval(
         throw new Error('Pending request kind mismatch (expected signNostrEvent)');
       }
       const result = signNostrEventWithUnlocked(deps.wallet, request.event);
-      return { kind: 'signNostrEvent', approved: true, result };
+      // Forward a "remember for this session" grant (money-tier kinds are filtered
+      // out downstream by the wallet-handler's mergeNostrSession).
+      return {
+        kind: 'signNostrEvent',
+        approved: true,
+        result,
+        ...(approval.grantSession ? { grantSession: approval.grantSession } : {}),
+      };
     }
 
     case 'appEncKey': {
