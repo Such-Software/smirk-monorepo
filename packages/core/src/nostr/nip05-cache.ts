@@ -24,7 +24,7 @@ export interface Nip05PinStore {
 }
 
 export type Nip05CachedResult =
-  | { ok: true; resolution: Nip05Resolution; keyChanged: false }
+  | { ok: true; resolution: Nip05Resolution; keyChanged: false; firstSeen: boolean }
   /** The name resolved to a DIFFERENT key than previously pinned — do NOT trust
    *  without user confirmation (call {@link Nip05Resolver.confirmPin}). */
   | { ok: true; resolution: Nip05Resolution; keyChanged: true; pinnedPubkeyHex: string }
@@ -66,7 +66,7 @@ export function createNip05Resolver(deps: {
       if (!opts.force) {
         const hit = cache.get(key);
         if (hit && now() - hit.at < ttlMs) {
-          return { ok: true, resolution: hit.resolution, keyChanged: false };
+          return { ok: true, resolution: hit.resolution, keyChanged: false, firstSeen: false };
         }
       }
 
@@ -83,7 +83,7 @@ export function createNip05Resolver(deps: {
       }
       if (!pinned) await deps.pins.set(key, res.resolution.pubkeyHex); // TOFU
       cache.set(key, { at: now(), resolution: res.resolution });
-      return { ok: true, resolution: res.resolution, keyChanged: false };
+      return { ok: true, resolution: res.resolution, keyChanged: false, firstSeen: !pinned };
     },
 
     async confirmPin(identifier, pubkeyHex, opts = {}) {

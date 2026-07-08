@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveNip05, splitNip05 } from '../nip05';
+import { resolveNip05, splitNip05, homeDomainFromApiBase } from '../nip05';
 
 // NIP-06 vector 1 pubkey, used as a known-good well-known entry.
 const PUB = '17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917';
@@ -63,4 +63,10 @@ test('network error / non-ok -> unreachable', async () => {
     ok: false,
     error: 'unreachable',
   });
+});
+
+test('homeDomainFromApiBase derives the instance host', () => {
+  assert.equal(homeDomainFromApiBase('https://api.smirk.cash/api/v1'), 'api.smirk.cash');
+  assert.equal(homeDomainFromApiBase('http://127.0.0.1:8080/api/v1'), '127.0.0.1');
+  assert.equal(homeDomainFromApiBase('not a url'), 'smirk.cash'); // graceful default
 });

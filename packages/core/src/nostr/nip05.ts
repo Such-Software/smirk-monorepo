@@ -38,6 +38,20 @@ export function splitNip05(identifier: string, homeDomain: string): { name: stri
 
 const HEX64 = /^[0-9a-f]{64}$/i;
 
+/**
+ * The instance's NIP-05 "home" authority, derived from its API base URL host — so
+ * a self-hosted instance treats ITS OWN domain as home (bare-name resolution + the
+ * bare-vs-`name·domain` display rule) instead of the hardcoded default. Falls back
+ * to `smirk.cash` when the URL can't be parsed.
+ */
+export function homeDomainFromApiBase(apiBase: string): string {
+  try {
+    return new URL(apiBase).hostname.toLowerCase();
+  } catch {
+    return 'smirk.cash';
+  }
+}
+
 /** Resolve a NIP-05 identifier to a pubkey + relay hints. Never throws. */
 export async function resolveNip05(
   identifier: string,

@@ -52,7 +52,6 @@ import {
   readAllInbound,
   isGoblinPayUri,
   parseGoblinPayUri,
-  resolveNip05,
   encodeNpub,
   shortNpub,
   type InboundSlatepack,
@@ -87,6 +86,7 @@ import { validateSendRecipient, recipientNpubToHex, isNip05Name, resolveAddressF
 import { encodeNostrRelayRef } from './relay-ref';
 import { respondToInboxItem } from './inbox-actions';
 import { getActiveNostrIdentity } from './nostr-vault';
+import { nip05Resolver, instanceHomeDomain } from './nip05';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
 import { readBalanceSnapshot, writeBalanceSnapshot } from './balance-snapshot';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
@@ -1784,9 +1784,31 @@ function HomeRouter({
           // /.well-known/nostr.json here at send time.
           let recipientPubkeyHex = recipientNpubToHex(toAddress);
           if (!recipientPubkeyHex && isNip05Name(toAddress)) {
-            const res = await resolveNip05(toAddress);
+            // Federation: resolve the name to a key via the TOFU-pinning resolver,
+            // and show the user WHICH key before paying — a name is only a lookup;
+            // the key is what's authoritative ("follow the key, not the name").
+            const res = await nip05Resolver.resolve(toAddress, { homeDomain: instanceHomeDomain() });
             if (!res.ok) {
               return { ok: false, error: `Couldn't resolve ${toAddress}: ${res.error}` };
+            }
+            if (res.keyChanged) {
+              const prev = shortNpub(encodeNpub(hexToBytes(res.pinnedPubkeyHex)));
+              const ok = window.confirm(
+                `⚠️ The Nostr key for ${toAddress} CHANGED since you last used it.\n\n` +
+                  `Previously: ${prev}\nNow:        ${shortNpub(res.resolution.npub)}\n\n` +
+                  `This can happen legitimately (key rotation) or mean the name was hijacked. ` +
+                  `Only continue if you trust this change.`,
+              );
+              if (!ok) return { ok: false, error: 'Send cancelled — key change not confirmed' };
+              await nip05Resolver.confirmPin(toAddress, res.resolution.pubkeyHex, {
+                homeDomain: instanceHomeDomain(),
+              });
+            } else if (res.firstSeen) {
+              const ok = window.confirm(
+                `Pay ${toAddress}?\n\nResolves to ${shortNpub(res.resolution.npub)}.\n` +
+                  `Smirk will remember this key and warn you if it ever changes.`,
+              );
+              if (!ok) return { ok: false, error: 'Send cancelled' };
             }
             recipientPubkeyHex = res.resolution.pubkeyHex;
           }
