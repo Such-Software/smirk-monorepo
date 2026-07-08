@@ -12,6 +12,7 @@ import {
   isValidXmrAddress,
   isValidWowAddress,
   isValidGrinSlatepackAddress,
+  recipientToHex,
   type UnlockedWallet,
 } from '@smirk/core';
 
@@ -69,4 +70,37 @@ export function resolveAddressForAsset(wallet: UnlockedWallet, assetId: string):
   const addr = (wallet.addresses as unknown as Record<string, string | undefined>)[assetId];
   if (!addr) throw new Error(`No receive address for asset "${assetId}"`);
   return addr;
+}
+
+/**
+ * Validate a SEND recipient. Same as {@link validateAddress}, but for Grin it
+ * ALSO accepts a Nostr `npub` (or raw x-only hex) — a send to an npub routes over
+ * the gift-wrap channel instead of a slatepack address, so the sender doesn't need
+ * to know the recipient's Grin address (the Goblin-interoperable path). Returns
+ * null when valid, else a short reason.
+ */
+export function validateSendRecipient(assetId: string, addr: string): string | null {
+  const t = addr.trim();
+  if (assetId === 'grin' && (t.startsWith('npub1') || /^[0-9a-fA-F]{64}$/.test(t))) {
+    try {
+      recipientToHex(t);
+      return null;
+    } catch {
+      return 'Not a valid npub';
+    }
+  }
+  return validateAddress(assetId, addr);
+}
+
+/** If `recipient` is an npub (or raw x-only hex), return its x-only pubkey hex;
+ *  otherwise null (it's a plain slatepack/chain address). Used to decide whether a
+ *  Grin send goes over the Nostr gift-wrap channel. */
+export function recipientNpubToHex(recipient: string): string | null {
+  const t = recipient.trim();
+  if (!t.startsWith('npub1') && !/^[0-9a-fA-F]{64}$/.test(t)) return null;
+  try {
+    return recipientToHex(t);
+  } catch {
+    return null;
+  }
 }

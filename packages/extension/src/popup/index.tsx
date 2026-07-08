@@ -79,7 +79,7 @@ import {
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
 import { formatUsd, parseAmount, bytesToHex } from './format';
-import { validateAddress, resolveAddressForAsset } from './address';
+import { validateSendRecipient, recipientNpubToHex, resolveAddressForAsset } from './address';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
 import { readBalanceSnapshot, writeBalanceSnapshot } from './balance-snapshot';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
@@ -1581,7 +1581,7 @@ function HomeRouter({
         assetIds={visibleAssetIds(sessionState, listAssets())
           .filter((a) => a.sendable)
           .map((a) => a.id)}
-        validateAddress={validateAddress}
+        validateAddress={validateSendRecipient}
         parseAmount={parseAmount}
         resolveBalance={(assetId) => {
           // Read confirmed balance from current session. Returns 0n if
@@ -1763,12 +1763,18 @@ function HomeRouter({
           // recipient pastes our S1 into their wallet and pastes the
           // S2 response back.
           const recipientUserId: string | undefined = undefined;
+          // If the recipient field is a Nostr npub, route the send over the
+          // gift-wrap channel (armored plain, delivered to their NIP-17 inbox)
+          // instead of a grin slatepack address — the Goblin-interoperable path.
+          const recipientPubkeyHex = recipientNpubToHex(toAddress);
           try {
             const result = await startGrinSend({
               userId: grinUserId,
               mnemonic: wallet.mnemonic,
               senderSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
-              recipientSlatepackAddress: toAddress,
+              ...(recipientPubkeyHex
+                ? { recipientPubkeyHex }
+                : { recipientSlatepackAddress: toAddress }),
               ...(recipientUserId ? { recipientUserId } : {}),
               amount: Number(amountAtomic),
               resolver: {

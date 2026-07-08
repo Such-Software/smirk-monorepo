@@ -29,7 +29,13 @@
  * always uses the armored binary form.
  */
 
-import { api, chainProviders } from '@smirk/core';
+import {
+  api,
+  chainProviders,
+  deriveNostrIdentity,
+  NostrGiftwrapChannel,
+  createNostrChannelIO,
+} from '@smirk/core';
 import { grin as wasmGrin } from '@smirk/wasm';
 import type {
   GrinChangeOutputInfo,
@@ -355,6 +361,11 @@ export async function startGrinSend(args: {
   /** Set if recipient is also a Smirk user; we'll drop the slatepack
    *  at the backend relay so they don't have to copy/paste manually. */
   recipientUserId?: string;
+  /** Set when the recipient is addressed by Nostr npub (x-only pubkey hex).
+   *  The S1 is armored plain + gift-wrapped to their NIP-17 inbox — the
+   *  Goblin-interoperable path (works to any Smirk/Goblin npub without knowing
+   *  their grin slatepack address). Takes precedence over the backend relay. */
+  recipientPubkeyHex?: string;
   amount: number;
   resolver: GrinSendInputResolver;
 }): Promise<GrinSendInitResult> {
@@ -506,7 +517,21 @@ export async function startGrinSend(args: {
   // pending_to_sign queue. Without an address we skip the relay
   // entirely; the sender's wizard surfaces the armored blob for
   // manual delivery.
-  if (hasRecipient) {
+  if (args.recipientPubkeyHex) {
+    // Nostr gift-wrap delivery (the Goblin-interoperable path): the recipient
+    // is known by npub, not a grin slatepack address. Armor plain — the
+    // gift-wrap provides confidentiality + routes to their NIP-17 inbox, and
+    // any Smirk/Goblin wallet decodes a plain slatepack after unwrapping.
+    const identity = deriveNostrIdentity(args.mnemonic, 0);
+    const channel = new NostrGiftwrapChannel(createNostrChannelIO(identity));
+    await channel.deliver({
+      slateId: sendResult.slate_id,
+      slatepack: armored,
+      amountNanogrin: args.amount,
+      recipientPubkeyHex: args.recipientPubkeyHex,
+    });
+    relay_id = sendResult.slate_id;
+  } else if (hasRecipient) {
     const relay = await api.createGrinRelay({
       senderUserId: args.userId,
       slatepack: armored,
