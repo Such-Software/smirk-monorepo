@@ -50,6 +50,8 @@ import {
   deriveNostrIdentity,
   buildSlatepackChannels,
   readAllInbound,
+  isGoblinPayUri,
+  parseGoblinPayUri,
   type InboundSlatepack,
   detectLegacyWallet,
   migrateLegacyWallet,
@@ -2091,6 +2093,33 @@ function HomeRouter({
         onDispatch={async (armored) => {
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
+          }
+          // A GoblinPay pay-link (goblin:/nostr:) isn't a slatepack. Parse it
+          // and pre-fill the Send flow — Grin to the recipient npub, amount from
+          // the link — so pasting a Magick Market checkout URI lands the user at
+          // send review. This is the "be a valid Magick Market buyer" path.
+          const pasted = armored.trim();
+          if (isGoblinPayUri(pasted)) {
+            let pay;
+            try {
+              pay = parseGoblinPayUri(pasted);
+            } catch (e) {
+              return { ok: false, error: e instanceof Error ? e.message : 'Invalid pay link' };
+            }
+            await store.update((s) => {
+              s.wizards.send = {
+                step: 1,
+                startedAt: Date.now(),
+                fields: {
+                  fromAssetId: 'grin',
+                  toAddress: pay.recipientPubkeyHex,
+                  ...(pay.amountGrin ? { amountText: pay.amountGrin } : {}),
+                  ...(pay.memo ? { grinPayMemo: pay.memo } : {}),
+                },
+              };
+            });
+            void navigate('home/send');
+            return { ok: true };
           }
           await ensureWasmInit();
           // Derive the slatepack secret upfront so we can decrypt

@@ -31,13 +31,17 @@ export function InboxPasteRouter({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const looksLikeSlatepack = (s: string): boolean =>
-    s.trimStart().startsWith('BEGINSLATEPACK');
+  // Accept a slatepack OR a goblin:/nostr: pay-link — the shell's onDispatch
+  // routes a pay-link to a pre-filled Send flow, a slatepack to the right wizard.
+  const looksDispatchable = (s: string): boolean => {
+    const t = s.trimStart();
+    return t.startsWith('BEGINSLATEPACK') || /^(goblin|nostr):/i.test(t);
+  };
 
   const submit = async () => {
     const trimmed = text.trim();
-    if (!looksLikeSlatepack(trimmed)) {
-      setError("Doesn't look like a slatepack — expected BEGINSLATEPACK…");
+    if (!looksDispatchable(trimmed)) {
+      setError("Doesn't look like a slatepack or a pay-link");
       return;
     }
     setError(null);
@@ -51,7 +55,7 @@ export function InboxPasteRouter({
     if (!onReadClipboard) return;
     try {
       const clip = await onReadClipboard();
-      if (looksLikeSlatepack(clip)) {
+      if (looksDispatchable(clip)) {
         setText(clip);
         setError(null);
       } else {
