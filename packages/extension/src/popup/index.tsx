@@ -60,7 +60,6 @@ import {
   migrateLegacyWallet,
   type Balances,
   type BootstrapAuthResult,
-  type NostrIdentity,
   type Prices,
   type UnlockedWallet,
   type WalletState,
@@ -87,6 +86,7 @@ import { formatUsd, parseAmount, bytesToHex, hexToBytes } from './format';
 import { validateSendRecipient, recipientNpubToHex, isNip05Name, resolveAddressForAsset } from './address';
 import { encodeNostrRelayRef } from './relay-ref';
 import { respondToInboxItem } from './inbox-actions';
+import { getActiveNostrIdentity } from './nostr-vault';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
 import { readBalanceSnapshot, writeBalanceSnapshot } from './balance-snapshot';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
@@ -354,10 +354,13 @@ function inboundToInboxItem(s: InboundSlatepack): InboxItem {
  */
 async function fetchGrinInbox(
   userId: string,
-  identity?: NostrIdentity | null,
+  mnemonic?: string | null,
 ): Promise<{ items: InboxItem[]; loading: boolean; error: string | null }> {
-  if (identity) {
+  if (mnemonic) {
     try {
+      // The ACTIVE identity drives the inbox — a burner/imported identity sees
+      // gift-wraps addressed to IT, not always account 0.
+      const identity = await getActiveNostrIdentity(mnemonic);
       const channels = buildSlatepackChannels({ grin: api, userId, identity });
       const inbound = await readAllInbound(channels);
       return { items: inbound.map(inboundToInboxItem), loading: false, error: null };
@@ -1030,10 +1033,7 @@ function App() {
       const [nextGrin, nextTips] = await Promise.all([
         grinOff
           ? Promise.resolve({ items: [], loading: false, error: null })
-          : fetchGrinInbox(
-              userId,
-              walletState.wallet.mnemonic ? deriveNostrIdentity(walletState.wallet.mnemonic, 0) : null,
-            ),
+          : fetchGrinInbox(userId, walletState.wallet.mnemonic ?? null),
         tipsOff
           ? Promise.resolve({ tips: [], error: null })
           : fetchTipInbox().catch((e) => ({
@@ -1348,7 +1348,7 @@ function App() {
     const [nextGrin, nextTips] = await Promise.all([
       grinHidden
         ? Promise.resolve({ items: [], loading: false, error: null })
-        : fetchGrinInbox(userId, mnemonic ? deriveNostrIdentity(mnemonic, 0) : null),
+        : fetchGrinInbox(userId, mnemonic),
       fetchTipInbox().catch((e) => ({
         tips: [],
         error: e instanceof Error ? e.message : 'Tip fetch failed',
@@ -1790,6 +1790,11 @@ function HomeRouter({
             }
             recipientPubkeyHex = res.resolution.pubkeyHex;
           }
+          // Gift-wrap the S1 under the ACTIVE identity (from the vault), so a send
+          // from a burner/imported identity is signed by it, not always account 0.
+          const senderNostrIdentity = recipientPubkeyHex
+            ? await getActiveNostrIdentity(wallet.mnemonic)
+            : undefined;
           try {
             const result = await startGrinSend({
               userId: grinUserId,
@@ -1798,6 +1803,7 @@ function HomeRouter({
               ...(recipientPubkeyHex
                 ? { recipientPubkeyHex }
                 : { recipientSlatepackAddress: toAddress }),
+              ...(senderNostrIdentity ? { senderNostrIdentity } : {}),
               ...(recipientUserId ? { recipientUserId } : {}),
               amount: Number(amountAtomic),
               resolver: {

@@ -35,6 +35,7 @@ import {
   deriveNostrIdentity,
   NostrGiftwrapChannel,
   createNostrChannelIO,
+  type NostrIdentity,
 } from '@smirk/core';
 import { grin as wasmGrin } from '@smirk/wasm';
 import type {
@@ -366,6 +367,10 @@ export async function startGrinSend(args: {
    *  Goblin-interoperable path (works to any Smirk/Goblin npub without knowing
    *  their grin slatepack address). Takes precedence over the backend relay. */
   recipientPubkeyHex?: string;
+  /** The ACTIVE Nostr identity to gift-wrap the S1 under (resolved by the caller
+   *  from the identity vault). Falls back to the account-0 derived identity. Only
+   *  used on the Nostr send path. */
+  senderNostrIdentity?: NostrIdentity;
   amount: number;
   resolver: GrinSendInputResolver;
 }): Promise<GrinSendInitResult> {
@@ -522,7 +527,7 @@ export async function startGrinSend(args: {
     // is known by npub, not a grin slatepack address. Armor plain — the
     // gift-wrap provides confidentiality + routes to their NIP-17 inbox, and
     // any Smirk/Goblin wallet decodes a plain slatepack after unwrapping.
-    const identity = deriveNostrIdentity(args.mnemonic, 0);
+    const identity = args.senderNostrIdentity ?? deriveNostrIdentity(args.mnemonic, 0);
     const channel = new NostrGiftwrapChannel(createNostrChannelIO(identity));
     await channel.deliver({
       slateId: sendResult.slate_id,

@@ -7,12 +7,13 @@
  * cancel button (routes/inbox.tsx).
  */
 
-import { api, buildSlatepackChannels, deriveNostrIdentity } from '@smirk/core';
+import { api, buildSlatepackChannels } from '@smirk/core';
 
 import { parseRelayRef } from './relay-ref';
+import { getActiveNostrIdentity } from './nostr-vault';
 
-function channelsFor(userId: string, mnemonic: string) {
-  const identity = deriveNostrIdentity(mnemonic, 0);
+async function channelsFor(userId: string, mnemonic: string) {
+  const identity = await getActiveNostrIdentity(mnemonic);
   return buildSlatepackChannels({ grin: api, userId, identity });
 }
 
@@ -26,7 +27,7 @@ export async function respondToInboxItem(params: {
 }): Promise<{ error?: string }> {
   const ref = parseRelayRef(params.relayId);
   try {
-    const channels = channelsFor(params.userId, params.mnemonic);
+    const channels = await channelsFor(params.userId, params.mnemonic);
     if (ref.channel === 'nostr') {
       await channels.nostr.respond(ref.slateId, params.s2Armored, ref.counterparty);
     } else {
@@ -46,7 +47,7 @@ export async function cancelInboxItem(params: {
 }): Promise<{ error?: string }> {
   const ref = parseRelayRef(params.relayId);
   try {
-    const channels = channelsFor(params.userId, params.mnemonic);
+    const channels = await channelsFor(params.userId, params.mnemonic);
     if (ref.channel === 'nostr') {
       await channels.nostr.cancel(ref.slateId, ref.counterparty);
     } else {
