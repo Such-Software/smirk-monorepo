@@ -59,7 +59,7 @@ pub use grin::{
     grin_derive_keys, grin_ext_version, grin_kernel_features_bytes, grin_kernel_sig_msg,
     grin_pedersen_commit, grin_point_add, grin_point_sum, grin_schnorr_aggregate_partials,
     grin_schnorr_final_signature, grin_schnorr_partial_sign, grin_schnorr_partial_verify,
-    grin_pubkey_to_commitment, grin_receiver_finalize_i3, grin_receiver_init_i1,
+    grin_pubkey_to_commitment, grin_receiver_finalize_i3, grin_receiver_init_i1, grin_rewind_hash,
     grin_receiver_round_s2, grin_schnorr_sign, grin_schnorr_verify, grin_secp256k1_public_key,
     grin_sender_blind_excess, grin_sender_finalize_s3, grin_sender_init_s1, grin_sender_round_i2,
     grin_sign_payment_proof, grin_slate_round_trip, grin_slate_summary,
@@ -71,8 +71,9 @@ pub use grin::{
     grin_slatepack_unpack_with_secret, grin_verify_payment_proof,
     // High-level wallet orchestrators (Phase 1 → Phase 2 wasm exposure).
     grin_create_invoice, grin_create_send_transaction, grin_finalize_invoice,
-    grin_finalize_send_slate, grin_random_secret_nonce, grin_sign_incoming_send_slate,
-    grin_sign_invoice, grin_slate_v4_from_bin_hex, grin_slate_v4_to_bin_hex,
+    grin_finalize_send_slate, grin_identify_output, grin_random_secret_nonce,
+    grin_sign_incoming_send_slate, grin_sign_invoice, grin_slate_v4_from_bin_hex,
+    grin_slate_v4_to_bin_hex,
     // Voucher tx — non-interactive UTXO transfer for social tipping.
     grin_create_grin_voucher, grin_sweep_grin_voucher,
 };

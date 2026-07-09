@@ -1,41 +1,46 @@
 /**
  * Grin send + invoice + receive orchestration.
  *
- * Sits between `@smirk/wasm`'s slate-ceremony primitives and the backend
- * RPC endpoints in `@smirk/core/api/grin.ts`. Owns the data flow for each
- * Grin user action:
+ * Sits between `@smirk/wasm`'s slate-ceremony primitives and the v3 Grin backend
+ * (`@smirk/core/api/grin.ts`). Grin on v3 is NON-CUSTODIAL: there is no
+ * server-side output store, balance, or lock/spend lifecycle. Spendable inputs
+ * come from `POST /wallet/grin/scan` (the source of truth), and the client owns
+ * output state via a minimal local pending overlay
+ * (`@smirk/core` `GrinPendingOverlay`):
  *
- *   - `startGrinSend` — sender's S1 step: select UTXOs, lock them on
- *     the backend, build S1 slate, optionally drop encrypted slatepack
- *     at the backend relay if the recipient is also a Smirk user.
- *   - `processGrinS2` — sender's S3 step: finalize the slate, broadcast
- *     the tx, mark inputs spent + tx 'finalized'.
- *   - `cancelGrinSend` — unlock outputs + delete relay entry +
- *     mark tx 'cancelled'.
- *   - `startGrinInvoice` / `signGrinInvoice` / `processGrinI2` —
- *     inverse-direction trio for the receiver-initiated flow.
- *   - `signIncomingGrinSlate` — counterpart receive flow: external
- *     wallet hands us an S1, we sign as S2 + post-back via relay.
+ *   - `resolveGrinSpendable` — scan → maturity filter → exclude just-spent
+ *     (overlay) → recover each output's BIP32 path via `wasmGrin.identifyOutput`
+ *     (scan returns no path). This is the scan-based replacement for the old
+ *     custodial `listOutputs`.
+ *   - `startGrinSend` — sender's S1: select inputs, build S1, RESERVE the spent
+ *     inputs + change index in the overlay AT BUILD TIME (so a concurrent
+ *     send/receive/invoice can neither re-select the inputs nor re-derive the
+ *     change index), then deliver over the unified channel seam
+ *     (`selectSendChannel`).
+ *   - `processGrinS2` — sender's S3: finalize + broadcast, then mark the reserved
+ *     overlay entry `broadcast` (re-anchoring its TTL to the real broadcast) and
+ *     settle the exchange on the wire. The child index was already advanced at
+ *     build time — it does NOT bump again here.
+ *   - `cancelGrinSend` — drop the overlay entry (inputs selectable again) — but
+ *     ONLY while still pre-broadcast — and cancel the exchange on its channel.
+ *   - `startGrinInvoice` / `signGrinInvoice` / `processGrinI2` — receiver-
+ *     initiated trio.
+ *   - `signIncomingGrinSlate` — external wallet hands us an S1; we sign as S2.
  *
- * Wizard state (sender_context, receiver_context) lives in
- * `wizard.fields` between rounds — opaque JSON to the wizard, restored
- * verbatim when the popup reopens mid-flow.
- *
- * Slatepack format: the canonical container is ASCII-armored binary
- * (BEGINSLATEPACK…ENDSLATEPACK). Inside is a slatepack wire-format
- * blob (version + sender + payload). The payload is a slate v4 binary
- * (the format grin-wallet CLI / Niffler / etc. use). Smirk-to-Smirk
- * via relay can transit JSON inline; clipboard / external interop
- * always uses the armored binary form.
+ * The child-index counter (`overlay.nextChildIndex`) is money-critical: with the
+ * server output store gone there is no `next_child_index` field, and reusing an
+ * index re-derives an identical commitment (the second output is unspendable →
+ * fund loss). Every flow that mints a new output advances the counter.
  */
 
 import {
-  api,
   chainProviders,
-  deriveNostrIdentity,
-  NostrGiftwrapChannel,
-  createNostrChannelIO,
-  type NostrIdentity,
+  GrinPendingOverlay,
+  selectSendChannel,
+  type GrinPending,
+  type GrinPendingStore,
+  type GrinScanOutput,
+  type SlatepackChannels,
 } from '@smirk/core';
 import { grin as wasmGrin } from '@smirk/wasm';
 import type {
@@ -49,6 +54,18 @@ import type {
   GrinSignInvoiceResult,
   GrinUnspentOutput,
 } from '@smirk/wasm';
+
+/** Grin coinbase maturity: coinbase outputs are unspendable for 1440 blocks. */
+const GRIN_COINBASE_MATURITY = 1440;
+
+/**
+ * Child-index search span for `identifyOutput`. Scan returns no derivation path,
+ * so we search `0..=(persistedNextChildIndex + span)` for each output. Generous
+ * enough to cover a fresh-load wallet whose counter hasn't been seeded yet;
+ * grin's UTXO set is small so the cost is bounded. Identify runs only at
+ * send/receive time, never on a plain balance refresh.
+ */
+const GRIN_IDENTIFY_SEARCH_SPAN = 2000;
 
 // ============================================================================
 // Helpers
@@ -69,6 +86,19 @@ import type {
  */
 export function canonicalGrinSlatepackAddress(mnemonic: string): string {
   return wasmGrin.slatepackAddress(mnemonic, 0, 'mainnet');
+}
+
+/**
+ * Compute the wallet's Grin `rewind_hash` (view-only credential) from the
+ * mnemonic. This is the only secret handed to `POST /wallet/grin/scan`; it lets
+ * the backend recognize this wallet's outputs without spend authority. Requires
+ * wasm to be initialized.
+ */
+export function grinRewindHashFromMnemonic(mnemonic: string): string {
+  const extKeyHex = (
+    JSON.parse(wasmGrin.deriveExtendedKey(mnemonic)) as { extended_private_key_hex: string }
+  ).extended_private_key_hex;
+  return wasmGrin.rewindHash(extKeyHex);
 }
 
 /**
@@ -108,8 +138,127 @@ function augmentDearmorError(e: unknown, armored: string): Error {
 }
 
 
-function bytesToHex(b: Uint8Array): string {
-  return Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('');
+// ============================================================================
+// Scan-based spendable resolver (replaces the custodial output store)
+// ============================================================================
+
+/** Dependencies for a scan-based spendable resolution. */
+export interface GrinScanDeps {
+  /** Mnemonic — derives ext keys for `identifyOutput`. Never logged. */
+  mnemonic: string;
+  /** View-only credential for the scan (see {@link grinRewindHashFromMnemonic}). */
+  rewindHash: string;
+  /** Client pending overlay: excludes just-spent inputs + owns the child index. */
+  overlay: GrinPendingOverlay;
+}
+
+/** Spendable inputs resolved from scan, each with its recovered BIP32 path. */
+export interface GrinSpendable {
+  outputs: GrinUnspentOutput[];
+  /**
+   * The child-index counter value AFTER seeding from scan — informational only.
+   * Do NOT derive a new output's path from this: a read-here / bump-later pair
+   * races (two concurrent flows read the same value → duplicate commitment → fund
+   * loss). Mint flows MUST call `overlay.reserveNextChildIndex()` to atomically
+   * read-and-increment instead.
+   */
+  nextChildIndex: number;
+}
+
+/**
+ * Resolve currently-spendable Grin inputs from a fresh scan.
+ *
+ * 1. scan (source of truth) + chain tip.
+ * 2. reconcile the overlay against the scan (clear settled entries first).
+ * 3. keep MATURE outputs (coinbase ≥1440 confs; regular past lock_height) that
+ *    are NOT in the overlay's pending-spent set (just-broadcast, not yet mined).
+ * 4. recover each output's path via `identifyOutput` — DROP (warn) any output
+ *    whose path can't be identified (never feed a wrong path to the send
+ *    builder: it silently yields a bad blind and an invalid tx).
+ * 5. seed the child-index counter to max(identified path[2]) + 1 so a new output
+ *    never reuses an index (reuse = duplicate commitment = fund loss).
+ */
+export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpendable> {
+  const grin = chainProviders.grin();
+  const [scanRes, heightRes] = await Promise.all([
+    grin.scan({ rewindHash: deps.rewindHash }),
+    grin.getHeight(),
+  ]);
+  if (scanRes.error || !scanRes.data) {
+    throw new Error(`Failed to scan Grin outputs: ${scanRes.error ?? 'network error'}`);
+  }
+  const scanned: GrinScanOutput[] = scanRes.data.outputs;
+  const tip = heightRes.data?.height ?? 0;
+
+  // Reconcile BEFORE reading the overlay so settled entries stop excluding
+  // inputs / inflating the counter.
+  await deps.overlay.reconcile(scanned);
+  const pendingSpent = await deps.overlay.selectablePendingSpent();
+
+  const selectable = scanned.filter((o) => {
+    const spendableHeight = o.is_coinbase
+      ? o.height + GRIN_COINBASE_MATURITY
+      : Math.max(o.height, o.lock_height);
+    const mature = o.height > 0 && tip >= spendableHeight;
+    return mature && !pendingSpent.has(o.commit);
+  });
+
+  const extKeyHex = (
+    JSON.parse(wasmGrin.deriveExtendedKey(deps.mnemonic)) as { extended_private_key_hex: string }
+  ).extended_private_key_hex;
+  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(deps.mnemonic);
+
+  const persisted = await deps.overlay.nextChildIndex();
+  const maxN = persisted + GRIN_IDENTIFY_SEARCH_SPAN;
+
+  const outputs: GrinUnspentOutput[] = [];
+  const identifiedIndices: number[] = [];
+  for (const o of selectable) {
+    const path = wasmGrin.identifyOutput(extKeyHex, legacyExtKeyHex, o.commit, BigInt(o.value), maxN);
+    if (!path) {
+      console.warn(
+        '[grin-spend] could not identify derivation path for output; dropping from selection:',
+        o.commit,
+      );
+      continue;
+    }
+    identifiedIndices.push(path[2]);
+    outputs.push({ path, amount: o.value, commitment_hex: o.commit, is_coinbase: o.is_coinbase });
+  }
+
+  // Seed the counter from the highest on-chain index we recognized, so the next
+  // new output allocates a fresh index. seedNextChildIndex never rewinds.
+  if (identifiedIndices.length > 0) {
+    await deps.overlay.seedNextChildIndex(Math.max(...identifiedIndices) + 1);
+  }
+  const nextChildIndex = await deps.overlay.nextChildIndex();
+  return { outputs, nextChildIndex };
+}
+
+/** Build a {@link GrinSendInputResolver} bound to a scan context. */
+export function makeGrinResolver(deps: GrinScanDeps): GrinSendInputResolver {
+  return { fetchSpendable: () => resolveGrinSpendable(deps) };
+}
+
+// ── Counterparty ref codec ───────────────────────────────────────────────────
+//
+// The send channel (nostr vs backend) + the counterparty address are threaded
+// through the wizard as one opaque string so the wizard contract stays a single
+// `relayId`/`relay_id`. `settle`/`cancel` decode it to pick the right channel.
+
+type ChannelKind = 'nostr' | 'backend';
+
+function encodeCounterparty(kind: ChannelKind, ref: string): string {
+  return `${kind}:${ref}`;
+}
+
+function decodeCounterparty(s: string): { kind: ChannelKind; ref: string } | null {
+  const i = s.indexOf(':');
+  if (i <= 0) return null;
+  const kind = s.slice(0, i);
+  const ref = s.slice(i + 1);
+  if ((kind !== 'nostr' && kind !== 'backend') || !ref) return null;
+  return { kind, ref };
 }
 
 /**
@@ -295,29 +444,13 @@ export function calcGrinFee(numInputs: number, numOutputs: number, numKernels: n
 // Send flow (sender-initiated S1 → S2 → S3)
 // ============================================================================
 
+/**
+ * Resolves currently-spendable Grin inputs (scan-based). Each output already
+ * carries its recovered BIP32 `path`; `nextChildIndex` is the counter for a new
+ * change/receive output. Build one with {@link makeGrinResolver}.
+ */
 export interface GrinSendInputResolver {
-  /**
-   * Return all currently-unspent outputs the wallet can spend, plus
-   * the next-available BIP32 child index for new outputs. Backed by
-   * `/wallet/grin/user/:userId/outputs` server-side.
-   */
-  fetchSpendable: () => Promise<{
-    outputs: Array<{
-      /** Backend grin_outputs.id (UUID). Required for lock/spend RPCs —
-       *  the backend's `lock_grin_outputs` and `spend_grin_outputs`
-       *  match by row UUID, NOT by `key_id`. Passing `key_id` here
-       *  silently no-ops (the UUID parse 400s) and leaves the input
-       *  unlocked → input never marked spent → balance double-counts
-       *  the spent UTXO. */
-      id: string;
-      key_id: string;
-      n_child: number;
-      amount: number;
-      commitment: string;
-      is_coinbase: boolean;
-    }>;
-    next_child_index: number;
-  }>;
+  fetchSpendable: () => Promise<GrinSpendable>;
 }
 
 export interface GrinSendInitResult {
@@ -328,64 +461,60 @@ export interface GrinSendInitResult {
   slate_json: string;
   /** Opaque sender context (persist in wizard fields). */
   sender_context_json: string;
-  /** Inputs that got locked — needed at finalize. */
+  /** Inputs consumed — needed at finalize (+ their commits become pending-spent). */
   sender_inputs: GrinUnspentOutput[];
   change_output?: GrinChangeOutputInfo;
-  /** Backend relay entry id, if recipient is a Smirk user. */
+  /** Opaque counterparty ref (`kind:ref`) when delivered over a channel;
+   *  round-tripped to finalize (settle) + cancel. Absent for manual/clipboard. */
   relay_id?: string;
   amount: number;
   fee: number;
 }
 
 /**
- * Start a Grin send: select inputs, build S1 slate, lock outputs.
+ * Start a Grin send: scan for spendable inputs, select, build S1, deliver over
+ * the unified channel seam.
  *
- * The caller passes the recipient slatepack address (`grin1…`) so
- * we can include it in the slatepack envelope. Whether we ALSO drop
- * an entry at the backend relay depends on whether the recipient is
- * a registered Smirk user — caller looks up via
- * `api.client.request('/wallet/grin/address/:address/user')` and
- * passes the user_id if known.
+ * Delivery routing (Nostr default, backend fallback, else manual):
+ *   - `recipientPubkeyHex` present → Nostr gift-wrap.
+ *   - else `recipientUserId` present → backend relay.
+ *   - else → manual (armored blob only; no channel).
+ *
+ * NO backend output record/lock here — v3 has no output store. The overlay entry
+ * (spent inputs + change) is RESERVED here at BUILD TIME so a concurrent flow
+ * can't re-select the inputs or re-derive the change index; {@link processGrinS2}
+ * flips it to `broadcast`, and a pre-broadcast {@link cancelGrinSend} frees it.
+ * The selected inputs + change also flow up through the wizard so finalize can
+ * build the tx.
  */
 export async function startGrinSend(args: {
-  // api: imported at top, used directly
-  userId: string;
   mnemonic: string;
   senderSlatepackAddress: string;
-  /** Recipient slatepack address. When omitted/empty the sender goes
-   *  in "manual slatepack" mode: the S1 is armored plain (no
-   *  recipient encryption), no relay row is created, and the wizard
-   *  surfaces the armored blob for the sender to deliver out-of-band
-   *  (DM, signal, paper, etc). Any grin-wallet / Grim user can decode
-   *  a plain slatepack — no address known up front needed. */
+  /** Recipient slatepack address (encrypts the S1 to them). Omit for manual
+   *  plain-armored delivery to a recipient whose address isn't known up front. */
   recipientSlatepackAddress?: string;
-  /** Set if recipient is also a Smirk user; we'll drop the slatepack
-   *  at the backend relay so they don't have to copy/paste manually. */
+  /** Backend-relay recipient (same-instance user_id). */
   recipientUserId?: string;
-  /** Set when the recipient is addressed by Nostr npub (x-only pubkey hex).
-   *  The S1 is armored plain + gift-wrapped to their NIP-17 inbox — the
-   *  Goblin-interoperable path (works to any Smirk/Goblin npub without knowing
-   *  their grin slatepack address). Takes precedence over the backend relay. */
+  /** Nostr recipient (x-only pubkey hex) — the Goblin-interoperable default. */
   recipientPubkeyHex?: string;
-  /** The ACTIVE Nostr identity to gift-wrap the S1 under (resolved by the caller
-   *  from the identity vault). Falls back to the account-0 derived identity. Only
-   *  used on the Nostr send path. */
-  senderNostrIdentity?: NostrIdentity;
+  /** Both send transports, built by the caller (`buildSlatepackChannels`). */
+  channels: SlatepackChannels;
   amount: number;
   resolver: GrinSendInputResolver;
+  /** Client pending overlay — reserves the spent inputs + change index at build. */
+  overlay: GrinPendingOverlay;
 }): Promise<GrinSendInitResult> {
-  // 1. Derive both v3 and legacy ext keys. JS-side; never logged.
-  // The orchestrator tries v3 first per input, falls back to legacy
-  // (PBKDF2-then-HMAC) on commitment mismatch — lets v0.3 spend
-  // outputs created by pre-2026-05 v0.2.x wallets that hadn't yet
-  // migrated derivationVersion to 3. Sunset 2026-11-15.
+  // 1. Derive both v3 and legacy ext keys. JS-side; never logged. The
+  //    orchestrator tries v3 first per input, falls back to legacy on
+  //    commitment mismatch — lets v0.3 spend outputs created by pre-2026-05
+  //    v0.2.x wallets. Sunset 2026-11-15.
   const extKeyJson = wasmGrin.deriveExtendedKey(args.mnemonic);
   const extKey = JSON.parse(extKeyJson) as { extended_private_key_hex: string };
   const extKeyHex = extKey.extended_private_key_hex;
   const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(args.mnemonic);
 
-  // 2. Pick inputs via greedy + fee iteration. Grin fee depends on
-  //    input count, so loop until stable.
+  // 2. Pick inputs via greedy + fee iteration. Grin fee depends on input
+  //    count, so loop until stable.
   const spendable = await args.resolver.fetchSpendable();
   if (spendable.outputs.length === 0) {
     throw new Error('No spendable Grin outputs');
@@ -431,13 +560,17 @@ export async function startGrinSend(args: {
     fee = calcGrinFee(selected.length, 1, 1);
   }
 
-  // 3. Path each input + present commitments for verification.
-  const inputs: GrinUnspentOutput[] = selected.map((o) => ({
-    path: keyIdToPath(o.key_id, o.n_child),
-    amount: o.amount,
-    commitment_hex: o.commitment,
-    is_coinbase: o.is_coinbase,
-  }));
+  // 3. Inputs already carry their identified path (from the scan resolver).
+  const inputs: GrinUnspentOutput[] = selected;
+
+  // 3b. ATOMICALLY reserve the change index BEFORE the build (the builder needs
+  //     the change_path up front, before we know whether a change output is
+  //     actually produced). Reserving here — rather than reading spendable's
+  //     counter and bumping after — closes the race where two concurrent mint
+  //     flows read the same index and mint duplicate (unspendable) commitments.
+  //     If this send turns out to have no change, the reserved index is simply
+  //     skipped (harmless; the counter never re-hands a value).
+  const changeIndex = await args.overlay.reserveNextChildIndex();
 
   // 4. Build S1 slate via wasm orchestrator.
   const sendResult: GrinCreateSendTxResult = wasmGrin.createSendTransaction({
@@ -447,105 +580,67 @@ export async function startGrinSend(args: {
     amount: args.amount,
     fee,
     kernel_kind: 'plain',
-    change_path: childIndexToPath(spendable.next_child_index),
+    change_path: childIndexToPath(changeIndex),
     // Per-slate random kernel offset for kernel-linkability privacy.
-    // grin-wallet's reference behaviour. The "keychain error" that
-    // showed up during the May 2026 diagnostic was actually the
-    // unrelated kernel.excess_sig byte-format bug — verified by the
-    // `full_send_round_trip_validates_against_grin_wallet` test which
-    // round-trips through `grin_core::Transaction::validate` with a
-    // non-zero offset.
     kernel_offset_hex: wasmGrin.randomSecretNonce(),
     kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
 
-  // Derivation breadcrumb — useful when a user reports a spend that
-  // matched an unexpected derivation path. `console.debug` keeps this
-  // off the default console view; users opening "Verbose" in DevTools
-  // see it. Expect "v3+Regular" for post-2026-05 outputs; "legacy+Regular"
-  // (or "legacy+None") for pre-rotation v0.2.x outputs.
   console.debug('[grin-send] input derivations:', sendResult.input_derivations);
 
-  // 5. Backend bookkeeping — record + lock + relay drop.
-  const recordRes = await api.recordGrinTransaction({
-    userId: args.userId,
-    slateId: sendResult.slate_id,
-    amount: args.amount,
-    fee,
-    direction: 'send',
-    ...(args.recipientSlatepackAddress
-      ? { counterpartyAddress: args.recipientSlatepackAddress }
+  // 4b. Reserve the selected inputs + the change index in the overlay AT BUILD
+  //     TIME (before delivery), matching the invoice/receive flows. This is
+  //     money-critical: without it a concurrent send/invoice/receive could
+  //     re-select the same inputs (double-spend reject) or re-derive the same
+  //     change index (duplicate commitment → unspendable → fund loss), because
+  //     the overlay wasn't updated until broadcast. The entry starts NOT
+  //     broadcast; processGrinS2 flips it, cancelGrinSend frees it while still
+  //     pre-broadcast, and the 7-day reconcile backstop frees an abandoned one.
+  await args.overlay.addPending(sendResult.slate_id, {
+    spentCommits: inputs.map((i) => i.commitment_hex),
+    ...(sendResult.change_output
+      ? {
+          change: {
+            commit: sendResult.change_output.commitment_hex,
+            value: sendResult.change_output.amount,
+          },
+        }
       : {}),
   });
-  if (recordRes.error) {
-    throw new Error(`Failed to record Grin transaction: ${recordRes.error}`);
-  }
-  // Lock MUST succeed before the user can finalize/broadcast: an unchecked lock
-  // failure leaves these inputs spendable by a later send, opening a double-spend
-  // window until confirmation. Abort the build here on lock failure.
-  const lockRes = await chainProviders.grin().lockOutputs({
-    userId: args.userId,
-    outputIds: selected.map((o) => o.id),
-    txSlateId: sendResult.slate_id,
-  });
-  if (lockRes.error) {
-    throw new Error(`Failed to lock Grin inputs: ${lockRes.error}`);
-  }
-  // NOTE: change_output is NOT recorded here in v0.3. We forward it
-  // through wizard state and the backend `broadcast_grin_transaction`
-  // handler inserts it atomically with the broadcast. Recording the
-  // change at S1 build (the v0.2.4 pattern) leaves an orphan
-  // `unconfirmed` row in the DB if the user cancels — discovered as
-  // wowovermoon's 6.14 GRIN ghost balance 2026-05-14. The change_output
-  // details still flow up to the wizard via the return value below so
-  // finalize can build the broadcastable tx bytes.
+  // The change index was already reserved atomically at step 3b — do NOT bump
+  // again here or it would double-advance and skip an index.
 
-  let relay_id: string | undefined;
-  // Encrypt the S1 to the recipient's slatepack address when known —
-  // otherwise armor plain so the sender can hand the blob over
-  // manually. Both Smirk (v0.2.4 + v0.3) and grin-wallet/Grim decode
-  // plain slatepacks, so "no address" still produces an interoperable
-  // payload; only the relay-side hand-off is lost.
-  const hasRecipient = !!(
+  // 5. Deliver over the unified channel seam. Encrypt the S1 to the recipient's
+  //    slatepack address when known; else armor plain (gift-wrap / manual still
+  //    interoperable). NO backend bookkeeping — the overlay is recorded at
+  //    broadcast (processGrinS2).
+  const hasRecipientAddr = !!(
     args.recipientSlatepackAddress && args.recipientSlatepackAddress.trim()
   );
   const armored = armorSlate(
     sendResult.slate_json,
     args.senderSlatepackAddress,
-    hasRecipient ? args.recipientSlatepackAddress : undefined,
+    // Nostr sends armor plain (the gift-wrap provides confidentiality + routing).
+    args.recipientPubkeyHex ? undefined : hasRecipientAddr ? args.recipientSlatepackAddress : undefined,
   );
-  // Only post to the relay when we have a recipient address. The
-  // backend matches the address against `wallets` — if the recipient
-  // is a registered Smirk user, the slatepack lands in their
-  // pending_to_sign queue. Without an address we skip the relay
-  // entirely; the sender's wizard surfaces the armored blob for
-  // manual delivery.
-  if (args.recipientPubkeyHex) {
-    // Nostr gift-wrap delivery (the Goblin-interoperable path): the recipient
-    // is known by npub, not a grin slatepack address. Armor plain — the
-    // gift-wrap provides confidentiality + routes to their NIP-17 inbox, and
-    // any Smirk/Goblin wallet decodes a plain slatepack after unwrapping.
-    const identity = args.senderNostrIdentity ?? deriveNostrIdentity(args.mnemonic, 0);
-    const channel = new NostrGiftwrapChannel(createNostrChannelIO(identity));
+
+  let relay_id: string | undefined;
+  const recipient = {
+    ...(args.recipientPubkeyHex ? { pubkeyHex: args.recipientPubkeyHex } : {}),
+    ...(args.recipientUserId ? { userId: args.recipientUserId } : {}),
+  };
+  if (recipient.pubkeyHex || recipient.userId) {
+    const channel = selectSendChannel(recipient, args.channels);
     await channel.deliver({
       slateId: sendResult.slate_id,
       slatepack: armored,
       amountNanogrin: args.amount,
-      recipientPubkeyHex: args.recipientPubkeyHex,
+      ...(recipient.pubkeyHex ? { recipientPubkeyHex: recipient.pubkeyHex } : {}),
+      ...(recipient.userId ? { recipientUserId: recipient.userId } : {}),
     });
-    relay_id = sendResult.slate_id;
-  } else if (hasRecipient) {
-    const relay = await api.createGrinRelay({
-      senderUserId: args.userId,
-      slatepack: armored,
-      slateId: sendResult.slate_id,
-      amount: args.amount,
-      ...(args.recipientUserId ? { recipientUserId: args.recipientUserId } : {}),
-      recipientAddress: args.recipientSlatepackAddress!,
-    });
-    if (relay.data) relay_id = relay.data.id;
+    relay_id = encodeCounterparty(channel.kind, recipient.pubkeyHex ?? recipient.userId!);
   }
 
   return {
@@ -569,24 +664,22 @@ export interface GrinSendBroadcastResult {
 }
 
 /**
- * Receiver returned S2; finalize and broadcast.
+ * Receiver returned S2; finalize, broadcast, and record the pending overlay.
  *
- * `s2Source` is either an armored slatepack (clipboard/relay) or the
- * raw slate JSON. We detect by leading 'B' (slatepack) vs '{' (JSON).
+ * `s2` is either an armored slatepack (clipboard/relay) or raw slate JSON.
  */
 export async function processGrinS2(args: {
-  // api: imported at top, used directly
-  userId: string;
-  /** Sender's mnemonic — needed to derive the slatepack secret for
-   *  decrypting an S2 the receiver encrypted to us. */
+  /** Sender's mnemonic — derives the slatepack secret for decrypting an
+   *  S2 the receiver encrypted to us. */
   mnemonic: string;
   s2: string;
   sender_context_json: string;
   sender_inputs: GrinUnspentOutput[];
   change_output?: GrinChangeOutputInfo;
-  /** If non-null, finalize via the relay /grin/relay/finalize endpoint
-   *  so the recipient gets notified instantly. Otherwise just broadcast. */
+  /** Opaque counterparty ref from startGrinSend — used to settle on its channel. */
   relay_id?: string;
+  channels: SlatepackChannels;
+  overlay: GrinPendingOverlay;
 }): Promise<GrinSendBroadcastResult> {
   const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
   const s2_slate_json = looksArmored(args.s2)
@@ -600,96 +693,79 @@ export async function processGrinS2(args: {
     ...(args.change_output ? { change_output: args.change_output } : {}),
   });
 
-  // Broadcast the tx_json via the backend. Pass change_output through
-  // so the backend atomically records the change row alongside the
-  // broadcast — replaces the v0.2.4 pre-record pattern that leaked
-  // orphans on cancel.
+  // Broadcast the tx_json via the backend (reads only { tx }). Grin's
+  // /v2/foreign push_transaction expects a JSON Transaction object, NOT the
+  // binary wire-format hex; tx_json matches grin_core's Transaction serde shape.
+  const slateId = JSON.parse(finalize.slate_json).id as string;
   const broadcastRes = await chainProviders.grin().broadcast({
-    userId: args.userId,
-    slateId: JSON.parse(finalize.slate_json).id,
-    // Grin's /v2/foreign push_transaction expects a JSON Transaction
-    // object ({offset, body:{inputs,outputs,kernels}}), NOT the binary
-    // wire-format hex. Sending the hex blob (the old shape) yielded
-    // JSON-RPC error -32602 InvalidArgStructure "tx" at position 0,
-    // which our backend parser silently treated as success — every
-    // broadcast since 2026-04-28 was a no-op. tx_json comes from
-    // grin-ext's slate_to_transaction_json and matches grin_core's
-    // Transaction serde shape verbatim.
-    // wasm types this as `unknown` (parsed via JSON.parse without a
-    // schema); the wasm Rust side always emits a JSON object literal,
-    // so the narrowing here is safe — `tx_json` is the Grin
-    // Transaction body in serde shape, never a primitive.
     tx: finalize.tx_json as object,
-    ...(args.change_output
-      ? {
-          changeOutput: {
-            keyId: pathToKeyId(args.change_output.path),
-            // The real BIP32 child index sits at path[2]; path[3] is the
-            // trailing padding `0` per Grin's depth-3-+-1 convention.
-            // Storing path[3] left every change output's n_child=0,
-            // so derive_blind on the NEXT send walked m/0/0/0/0 instead
-            // of m/0/0/<actual>/0 and reported "no candidate derivation
-            // reproduced the on-chain commit" — full wallet bricking
-            // after one spend.
-            nChild: args.change_output.path[2],
-            amount: args.change_output.amount,
-            commitment: args.change_output.commitment_hex,
-          },
-        }
-      : {}),
   });
-  // CRITICAL: bail on broadcast failure. Previously we await'd the
-  // response and continued blindly to spendGrinOutputs +
-  // updateGrinTransaction(status='finalized'), so a node rejection
-  // (low fee, bad kernel, etc.) silently became a "finalized" row in
-  // our DB while no kernel ever hit the chain. That's the source of
-  // every "+X pending" ghost row on receivers — sender's tx looks
-  // finalized so the receive output never gets cleaned up.
+  // CRITICAL: bail on broadcast failure so we never record a pending overlay
+  // entry (excluding inputs) for a tx that never hit the chain.
   if (broadcastRes.error) {
     throw new Error(`Broadcast failed: ${broadcastRes.error}`);
   }
 
-  // Cleanup: mark inputs spent + tx finalized + stamp kernel excess.
-  const slateId = JSON.parse(finalize.slate_json).id;
-  await chainProviders.grin().spendOutputs({ userId: args.userId, txSlateId: slateId });
-  await api.updateGrinTransaction({
-    userId: args.userId,
-    slateId,
-    status: 'finalized',
-    kernelExcess: finalize.kernel_excess_hex,
+  // Mark the reserved overlay entry (created at startGrinSend) as broadcast:
+  // exclude the spent inputs until they leave the UTXO set, show the change as
+  // pending until scanned, and re-anchor broadcastAt to the real broadcast time
+  // (the TTL age-out clock). The child index was ALREADY advanced at build time
+  // (startGrinSend) — do NOT bump again here or it would double-advance and skip
+  // an index.
+  await args.overlay.addPending(slateId, {
+    broadcast: true,
+    spentCommits: args.sender_inputs.map((i) => i.commitment_hex),
+    ...(args.change_output
+      ? { change: { commit: args.change_output.commitment_hex, value: args.change_output.amount } }
+      : {}),
   });
 
-  // Relay slatepack status flip now happens server-side inside
-  // `broadcast_grin_transaction` (atomic with the push_transaction
-  // call, on the same DB transaction). The old `finalize_grin_relay`
-  // endpoint goes through the grin-wallet daemon's slatepack decoder
-  // which hangs at ECDH against the wallet socket, leaving the
-  // slatepack stuck in `pending_sender` and the sender's "pending to
-  // finalize" counter stale forever. Removed the call entirely.
+  // Settle the exchange on its channel (S3 notice / relay finalize). Best-effort:
+  // never undo an on-chain broadcast.
+  if (args.relay_id) {
+    const cp = decodeCounterparty(args.relay_id);
+    if (cp) {
+      const channel = cp.kind === 'nostr' ? args.channels.nostr : args.channels.backend;
+      await channel.settle(slateId, cp.ref).catch(() => undefined);
+    }
+  }
 
-  return {
-    slate_id: slateId,
-    kernel_excess_hex: finalize.kernel_excess_hex,
-  };
+  return { slate_id: slateId, kernel_excess_hex: finalize.kernel_excess_hex };
 }
 
 export async function cancelGrinSend(args: {
-  // api: imported at top, used directly
-  userId: string;
   slate_id: string;
+  /** Opaque counterparty ref from startGrinSend, if the send was delivered. */
   relay_id?: string;
+  channels: SlatepackChannels;
+  overlay: GrinPendingOverlay;
 }): Promise<void> {
+  // Guard: once the tx has broadcast, its inputs are genuinely spent in-flight —
+  // freeing them here would let a later send re-select them and build a
+  // double-spend (node reject at best, fund confusion at worst). Only a send
+  // that's still pre-broadcast (a build-time reservation that never went out)
+  // frees its inputs on cancel; a broadcast tx retires scan-driven (reconcile)
+  // instead, and there is nothing legitimate to cancel on the wire.
+  //
+  // FAIL SAFE: if we can't even read the overlay, ASSUME broadcast and do NOT
+  // free — a spurious free (double-spend risk) is far worse than leaving a
+  // pre-broadcast reservation to age out via the 7-day backstop. (overlay.remove
+  // carries its own pre-broadcast guard as defense-in-depth, but we must not even
+  // attempt the wire-cancel of a possibly-broadcast tx on an unknown state.)
+  const pending = await args.overlay.load().catch(() => null);
+  if (pending === null || pending.entries[args.slate_id]?.broadcast) return;
+  // Free the reserved inputs immediately (they become selectable again).
+  // remove() re-checks the broadcast flag, so this can only free a pre-broadcast
+  // reservation.
+  await args.overlay.remove(args.slate_id).catch(() => undefined);
+  // Notify the counterparty over the exact channel the send used.
   if (args.relay_id) {
-    await api
-      .cancelGrinSlatepack({ relayId: args.relay_id, userId: args.userId })
-      .catch(() => undefined);
+    const cp = decodeCounterparty(args.relay_id);
+    if (cp) {
+      const channel = cp.kind === 'nostr' ? args.channels.nostr : args.channels.backend;
+      await channel.cancel(args.slate_id, cp.ref).catch(() => undefined);
+    }
   }
-  await chainProviders.grin().unlockOutputs({ userId: args.userId, txSlateId: args.slate_id });
-  await api.updateGrinTransaction({
-    userId: args.userId,
-    slateId: args.slate_id,
-    status: 'cancelled',
-  });
 }
 
 // ============================================================================
@@ -707,33 +783,35 @@ export interface GrinInvoiceInitResult {
 }
 
 export async function startGrinInvoice(args: {
-  // api: imported at top, used directly
-  userId: string;
   mnemonic: string;
   receiverSlatepackAddress: string;
   amount: number;
   /** Receiver picks the fee in the invoice — sender accepts or rejects. */
   fee: number;
   resolver: GrinSendInputResolver;
+  overlay: GrinPendingOverlay;
 }): Promise<GrinInvoiceInitResult> {
   const extKey = JSON.parse(wasmGrin.deriveExtendedKey(args.mnemonic)) as {
     extended_private_key_hex: string;
   };
-  const spendable = await args.resolver.fetchSpendable();
+  await args.resolver.fetchSpendable();
+
+  // ATOMICALLY reserve the receiver's output index so it can never be reused
+  // (reuse = duplicate commitment = fund loss), even if this invoice is
+  // abandoned. Reserving in one persisted step (rather than read-now / bump-later)
+  // closes the race where a concurrent mint flow reads the same index. But do NOT
+  // record the incoming value as pending here: WE created this invoice and nobody
+  // has committed to pay it yet, so counting it would inflate the headline pending
+  // balance on speculation. The incoming only becomes genuinely in-flight once the
+  // payer returns I2 and we finalize + broadcast (processGrinI2).
+  const outputIndex = await args.overlay.reserveNextChildIndex();
 
   const invoice: GrinCreateInvoiceResult = wasmGrin.createInvoice({
     extended_private_key_hex: extKey.extended_private_key_hex,
     amount: args.amount,
     fee: args.fee,
     kernel_kind: 'plain',
-    output_path: childIndexToPath(spendable.next_child_index),
-    // Per-slate random kernel offset for kernel-linkability privacy.
-    // grin-wallet's reference behaviour. The "keychain error" that
-    // showed up during the May 2026 diagnostic was actually the
-    // unrelated kernel.excess_sig byte-format bug — verified by the
-    // `full_send_round_trip_validates_against_grin_wallet` test which
-    // round-trips through `grin_core::Transaction::validate` with a
-    // non-zero offset.
+    output_path: childIndexToPath(outputIndex),
     kernel_offset_hex: wasmGrin.randomSecretNonce(),
     receiver_kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
@@ -762,19 +840,15 @@ export interface GrinInvoiceSignedResult {
 
 /** Payer signs an invoice (I1 → I2). */
 export async function signGrinInvoice(args: {
-  // api: imported at top, used directly
-  userId: string;
   mnemonic: string;
   payerSlatepackAddress: string;
   i1Armored: string;
   resolver: GrinSendInputResolver;
+  overlay: GrinPendingOverlay;
 }): Promise<GrinInvoiceSignedResult> {
   const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
-  // Pull the sender (= invoice originator = receiver of the payment)
-  // address out of the slatepack envelope so we can encrypt I2 back
-  // to them. The receiver's `slatepack_address` field is set when
-  // they build I1 via `create_invoice` — we plumbed it through the
-  // wasm DTO from grin-ext.
+  // Pull the invoice originator's address out of the envelope so we can encrypt
+  // I2 back to them.
   const { slate_json: i1_slate_json, sender: i1Sender } = dearmorSlateAndSender(
     args.i1Armored,
     secretKeyHex,
@@ -809,58 +883,41 @@ export async function signGrinInvoice(args: {
   if (total < amount + fee) {
     throw new Error('Insufficient funds to pay invoice');
   }
-  const inputs: GrinUnspentOutput[] = selected.map((o) => ({
-    path: keyIdToPath(o.key_id, o.n_child),
-    amount: o.amount,
-    commitment_hex: o.commitment,
-    is_coinbase: o.is_coinbase,
-  }));
+  const inputs: GrinUnspentOutput[] = selected;
+
+  // ATOMICALLY reserve the change index BEFORE the build (the builder needs the
+  // change_path up front). Reserving in one step closes the race where a
+  // concurrent mint flow reads the same index → duplicate commitment → fund loss.
+  // A no-change invoice payment simply skips the reserved index (harmless).
+  const changeIndex = await args.overlay.reserveNextChildIndex();
 
   const signed: GrinSignInvoiceResult = wasmGrin.signInvoice({
     extended_private_key_hex: extKey.extended_private_key_hex,
     legacy_extended_private_key_hex: legacyExtKeyHex,
     i1_slate_json,
     inputs,
-    change_path: childIndexToPath(spendable.next_child_index),
+    change_path: childIndexToPath(changeIndex),
     sender_kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
 
-  // See grin-send derivation breadcrumb above for the rationale.
   console.debug('[grin-pay-invoice] input derivations:', signed.input_derivations);
 
-  // Lock + record at the payer's side.
-  await api.recordGrinTransaction({
-    userId: args.userId,
-    slateId: parsed.id,
-    amount,
-    fee,
-    direction: 'send',
+  // Record the pending overlay at the payer's side: exclude the spent inputs +
+  // show the change as pending until the receiver broadcasts and scan reflects
+  // it. The change index was already reserved atomically above — do NOT bump here.
+  await args.overlay.addPending(parsed.id, {
+    spentCommits: inputs.map((i) => i.commitment_hex),
+    ...(signed.change_output
+      ? { change: { commit: signed.change_output.commitment_hex, value: signed.change_output.amount } }
+      : {}),
   });
-  await chainProviders.grin().lockOutputs({
-    userId: args.userId,
-    outputIds: selected.map((o) => o.id),
-    txSlateId: parsed.id,
-  });
-  if (signed.change_output) {
-    await chainProviders.grin().recordOutput({
-      userId: args.userId,
-      keyId: pathToKeyId(signed.change_output.path),
-      nChild: signed.change_output.path[2],
-      amount: signed.change_output.amount,
-      commitment: signed.change_output.commitment_hex,
-      txSlateId: parsed.id,
-    });
-  }
 
   return {
     slate_id: parsed.id,
-    // Encrypt I2 back to whoever sent us I1 (invoice originator).
-    // i1Sender is set when the originator built the I1 via the
-    // create_invoice flow; if absent (older external tooling that
-    // didn't populate the slatepack `sender` field), fall back to
-    // plaintext so the user can still copy-paste it.
+    // Encrypt I2 back to whoever sent us I1 (invoice originator); plaintext
+    // fallback when the envelope carried no sender.
     armored: armorSlate(
       signed.slate_json,
       args.payerSlatepackAddress,
@@ -878,16 +935,21 @@ export async function signGrinInvoice(args: {
  * Sender's inputs are extracted from the I2 slate's `coms` list — entries
  * without a rangeproof `p` are input refs (vs outputs which carry a proof).
  * The Rust finalize uses commitment + features only, so path + amount are
- * dummy on the receiver side.
+ * dummy on the receiver side. The receiver's incoming output's child index was
+ * already reserved at {@link startGrinInvoice}; here — after a SUCCESSFUL
+ * broadcast — we also record the `incoming` pending entry so the received value
+ * shows in the pending balance until the next scan confirms it (symmetric with
+ * {@link signIncomingGrinSlate}). The output commitment + amount come from the
+ * receiver context we created at invoice time.
  */
 export async function processGrinI2(args: {
-  // api: imported at top, used directly
-  userId: string;
   /** Receiver's mnemonic — derives the slatepack secret for
    *  decrypting an I2 the payer encrypted to us. */
   mnemonic: string;
   i2: string;
   receiver_context_json: string;
+  /** Client pending overlay — records the incoming after broadcast. */
+  overlay: GrinPendingOverlay;
 }): Promise<GrinSendBroadcastResult> {
   const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
   const i2_slate_json = looksArmored(args.i2)
@@ -909,33 +971,38 @@ export async function processGrinI2(args: {
     receiver_context_json: args.receiver_context_json,
     sender_inputs,
   });
-  const slateId = JSON.parse(finalize.slate_json).id;
+  const slateId = JSON.parse(finalize.slate_json).id as string;
   const broadcastRes = await chainProviders.grin().broadcast({
-    userId: args.userId,
-    slateId,
-    // Grin's /v2/foreign push_transaction expects a JSON Transaction
-    // object ({offset, body:{inputs,outputs,kernels}}), NOT the binary
-    // wire-format hex. tx_json comes from grin-ext's
-    // slate_to_transaction_json and matches grin_core's Transaction
-    // serde shape verbatim.
-    // wasm types this as `unknown` (parsed via JSON.parse without a
-    // schema); the wasm Rust side always emits a JSON object literal,
-    // so the narrowing here is safe — `tx_json` is the Grin
-    // Transaction body in serde shape, never a primitive.
     tx: finalize.tx_json as object,
   });
-  // See parallel comment in processGrinS2 — bail on error so the tx
-  // stays "pending" / cancellable instead of getting wrongly stamped
-  // "finalized" by the next update call.
   if (broadcastRes.error) {
     throw new Error(`Broadcast failed: ${broadcastRes.error}`);
   }
-  await api.updateGrinTransaction({
-    userId: args.userId,
-    slateId,
-    status: 'finalized',
-    kernelExcess: finalize.kernel_excess_hex,
-  });
+
+  // Broadcast succeeded — record our incoming output as pending so the received
+  // value is visible in the balance until the next scan (~1 block) confirms it,
+  // symmetric with signIncomingGrinSlate. The receiver context (created at
+  // startGrinInvoice) carries our output's commitment + amount as JSON (see the
+  // Rust `ReceiverContext` serde: `commitment` hex + `amount`). Best-effort: an
+  // unparsable/absent context must never undo an on-chain broadcast.
+  try {
+    const ctx = JSON.parse(args.receiver_context_json) as {
+      commitment?: string;
+      amount?: number;
+    };
+    if (ctx.commitment && typeof ctx.amount === 'number') {
+      // Flag broadcast: WE just put this tx on-chain (unlike signIncomingGrinSlate,
+      // where the SENDER broadcasts). This keeps the invoice wizard's onCancel →
+      // remove() from wiping a legitimately in-flight incoming before scan confirms.
+      await args.overlay.addPending(slateId, {
+        incoming: { commit: ctx.commitment, value: ctx.amount },
+        broadcast: true,
+      });
+    }
+  } catch {
+    // Non-fatal: the next scan still surfaces the confirmed output.
+  }
+
   return { slate_id: slateId, kernel_excess_hex: finalize.kernel_excess_hex };
 }
 
@@ -955,25 +1022,20 @@ export interface GrinSignS1Result {
 }
 
 /**
- * External wallet handed us an S1 slatepack. Sign as S2 and emit
- * the result. The sender will finalize + broadcast; we just record
- * the incoming output + tx so balance + history update once the
- * kernel is confirmed on chain.
+ * External wallet handed us an S1 slatepack. Sign as S2 and emit the result.
+ * The sender finalizes + broadcasts; we reserve our incoming output's child
+ * index and show it as pending until scan confirms it on chain.
  */
 export async function signIncomingGrinSlate(args: {
-  // api: imported at top, used directly
-  userId: string;
   mnemonic: string;
   receiverSlatepackAddress: string;
   s1Armored: string;
   resolver: GrinSendInputResolver;
+  overlay: GrinPendingOverlay;
 }): Promise<GrinSignS1Result> {
-  // Sanity-check that the current mnemonic actually derives the
-  // slatepack address the wallet is claiming. If they disagree, the
-  // wallet has been recreated since this slatepack was sent — the
-  // sender encrypted to an address we no longer control and age
-  // decrypt is guaranteed to fail with the cryptic "No matching
-  // keys found". Surface a clear cause instead.
+  // Sanity-check that the current mnemonic actually derives the slatepack
+  // address the wallet claims — a mismatch means the wallet was recreated since
+  // this slatepack was sent (age decrypt would fail with "No matching keys").
   const derivedAddress = wasmGrin.slatepackAddress(args.mnemonic, 0, 'mainnet');
   if (derivedAddress !== args.receiverSlatepackAddress) {
     throw new Error(
@@ -984,11 +1046,6 @@ export async function signIncomingGrinSlate(args: {
     );
   }
   const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
-  // Pull the original sender's address out of the slatepack envelope
-  // so we can encrypt S2 back to them. Without `sender` (e.g. a
-  // legacy plaintext slatepack from an external wallet that didn't
-  // include it), we fall back to plain — the user can still copy
-  // S2 to clipboard and hand it back manually.
   const { slate_json: s1_slate_json, sender: s1Sender } = dearmorSlateAndSender(
     args.s1Armored,
     secretKeyHex,
@@ -1001,39 +1058,27 @@ export async function signIncomingGrinSlate(args: {
   const extKey = JSON.parse(wasmGrin.deriveExtendedKey(args.mnemonic)) as {
     extended_private_key_hex: string;
   };
-  const spendable = await args.resolver.fetchSpendable();
+  await args.resolver.fetchSpendable();
+
+  // ATOMICALLY reserve our incoming output's index before the build (one persisted
+  // step, so a concurrent mint flow can't be handed the same index → duplicate
+  // commitment → fund loss).
+  const outputIndex = await args.overlay.reserveNextChildIndex();
 
   const signed: GrinSignIncomingSendResult = wasmGrin.signIncomingSendSlate({
     extended_private_key_hex: extKey.extended_private_key_hex,
     s1_slate_json,
-    output_path: childIndexToPath(spendable.next_child_index),
+    output_path: childIndexToPath(outputIndex),
     receiver_kernel_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_rewind_nonce_hex: wasmGrin.randomSecretNonce(),
     bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
 
-  // Record our incoming output + the pending receive tx.
+  // Show our incoming output as pending until the sender broadcasts and scan
+  // reflects it. The index was already reserved atomically above.
   const amount = Number(parsed.amt);
-  await api.recordGrinTransaction({
-    userId: args.userId,
-    slateId: parsed.id,
-    amount,
-    fee: 0, // receiver doesn't pay fee
-    direction: 'receive',
-  });
-  await chainProviders.grin().recordOutput({
-    userId: args.userId,
-    keyId: pathToKeyId(signed.output.path),
-    nChild: signed.output.path[2],
-    amount: signed.output.amount,
-    commitment: signed.output.commitment_hex,
-    txSlateId: parsed.id,
-  });
-  await api.updateGrinTransaction({
-    userId: args.userId,
-    slateId: parsed.id,
-    status: 'signed',
-    kernelExcess: signed.kernel_excess_hex,
+  await args.overlay.addPending(parsed.id, {
+    incoming: { commit: signed.output.commitment_hex, value: signed.output.amount },
   });
 
   return {
@@ -1055,220 +1100,62 @@ export async function signIncomingGrinSlate(args: {
 // Helpers — path packing
 // ============================================================================
 
-/**
- * Convert a stored `key_id` blob + `n_child` index into the 4-level
- * BIP32 path our wasm primitives expect.
- *
- * Legacy stored key_id as hex-encoded `Identifier` bytes; the canonical
- * Grin path is `m/0/0/n_child/0` for receive outputs and similar for
- * change. We rely on the BACKEND to round-trip `key_id` exactly and
- * only use `n_child` here; the path is recoverable from the index.
- */
-function keyIdToPath(_keyId: string, nChild: number): [number, number, number, number] {
-  return [0, 0, nChild, 0];
-}
-
 function childIndexToPath(nChild: number): [number, number, number, number] {
   return [0, 0, nChild, 0];
-}
-
-/** Pack a 4-level path back into a hex key_id for backend storage. */
-function pathToKeyId(path: [number, number, number, number]): string {
-  // 1-byte depth (4) + 4 × 4-byte BE u32 = 17 bytes total. Matches
-  // grin-wallet's `Identifier::to_bytes` layout used by our backend
-  // for storing key_id.
-  const out = new Uint8Array(17);
-  out[0] = 4;
-  const view = new DataView(out.buffer);
-  view.setUint32(1, path[0], false);
-  view.setUint32(5, path[1], false);
-  view.setUint32(9, path[2], false);
-  view.setUint32(13, path[3], false);
-  return bytesToHex(out);
 }
 
 function looksArmored(s: string): boolean {
   return s.trimStart().startsWith('BEGINSLATEPACK');
 }
 
-// ===========================================================================
-// Grin seed-only recovery (STEP 4 / view-key scan)
-// ===========================================================================
-//
-// Pages the node's UNSPENT output set (with rangeproofs) and rewinds each
-// proof with the wallet's view key to rediscover + record the outputs that
-// belong to this wallet — recovering balance from the seed alone, without a
-// stored output list. Requires the wasm build that ships the deterministic
-// create path (so new Smirk outputs are recoverable) and the `path` array on
-// `recoverOutput`. Legacy random-nonce Smirk outputs are NOT found (they
-// remain backend-recorded; see docs/grin.md "Output recovery").
-//
-// Gating: external-seed recovery is OFF by default. It is enabled at build
-// time, either globally (VITE_RECOVER_GRIN_DEFAULT=true) or per-wallet via an
-// allowlist of canonical Grin slatepack addresses (VITE_RECOVER_GRIN_ALLOWLIST,
-// comma-separated). Public builds ship with recovery inert. Allowlist entries
-// are public slatepack addresses (derived from the seed, never the mnemonic).
+// ============================================================================
+// Pending overlay store adapter (chrome.storage.local)
+// ============================================================================
 
-const RECOVER_GRIN_DEFAULT = import.meta.env?.VITE_RECOVER_GRIN_DEFAULT === 'true';
+const GRIN_PENDING_STORAGE_KEY = 'grin_pending_v1';
 
-/** Canonical Grin slatepack addresses allowed to run seed-only recovery even
- *  when `RECOVER_GRIN_DEFAULT` is false. Sourced from build-time config; empty
- *  in public builds, so recovery stays inert unless an operator opts a wallet
- *  in. */
-const RECOVER_GRIN_ALLOWLIST = new Set<string>(
-  (import.meta.env?.VITE_RECOVER_GRIN_ALLOWLIST ?? '')
-    .split(',')
-    .map((addr: string) => addr.trim())
-    .filter(Boolean),
-);
-
-/** Grin block-height floor for the recovery scan, from build-time config.
- *  `undefined` scans from genesis; setting it to a wallet's birthday height
- *  makes the first scan far faster. Err LOW: too high silently skips real
- *  outputs, too low only costs scan time. */
-export const RECOVER_GRIN_BIRTHDAY_HEIGHT: number | undefined = (() => {
-  const raw = import.meta.env?.VITE_RECOVER_GRIN_BIRTHDAY;
-  if (raw == null || raw === '') return undefined;
-  const height = Number(raw);
-  return Number.isFinite(height) ? height : undefined;
-})();
-
-/** Whether to run seed-only Grin recovery for the wallet with this canonical
- *  slatepack address. */
-export function shouldRecoverGrin(canonicalSlatepackAddress: string): boolean {
-  return RECOVER_GRIN_DEFAULT || RECOVER_GRIN_ALLOWLIST.has(canonicalSlatepackAddress);
-}
-
-/** Result of a recovery sweep. */
-export interface GrinRecoveryResult {
-  scanned: number;
-  recovered: number;
-  pages: number;
-}
-
-interface RecoveredGrinOutput {
-  value: string; // decimal nanogrin
-  key_id_hex: string;
-  path?: number[];
-  n_child: number;
-  depth: number;
-  switch: string;
-  blinding_factor_hex: string;
-}
-
-function tryRecoverGrinOutput(
-  extKeyHex: string,
-  commitHex: string,
-  proofHex: string,
-): RecoveredGrinOutput | null {
-  try {
-    const json = wasmGrin.recoverOutput(extKeyHex, commitHex, proofHex);
-    if (json === 'null') return null;
-    return JSON.parse(json) as RecoveredGrinOutput;
-  } catch (e) {
-    console.warn('[smirk-grin-recovery] recoverOutput threw:', e);
-    return null;
-  }
+/**
+ * A {@link GrinPendingStore} backed by `chrome.storage.local`. Keeps
+ * `@smirk/core` platform-agnostic (no `chrome.*` there); the extension wires
+ * this adapter and injects the resulting {@link GrinPendingOverlay}.
+ */
+export function createChromeGrinPendingStore(): GrinPendingStore {
+  const empty = (): GrinPending => ({ entries: {}, nextChildIndex: 0 });
+  return {
+    // Report the storage key so EVERY overlay over this same chrome slot shares
+    // one process-global serialization lock (see GrinPendingStore.key) — even a
+    // code path that constructs its own overlay instead of importing the shared
+    // `grinOverlay` singleton below. Belt-and-suspenders with the singleton.
+    key: GRIN_PENDING_STORAGE_KEY,
+    async load(): Promise<GrinPending> {
+      try {
+        const got = await chrome.storage.local.get(GRIN_PENDING_STORAGE_KEY);
+        const raw = got[GRIN_PENDING_STORAGE_KEY];
+        if (raw && typeof raw === 'object' && 'entries' in raw) {
+          return raw as GrinPending;
+        }
+        return empty();
+      } catch {
+        return empty();
+      }
+    },
+    async save(p: GrinPending): Promise<void> {
+      await chrome.storage.local.set({ [GRIN_PENDING_STORAGE_KEY]: p });
+    },
+  };
 }
 
 /**
- * Seed-only Grin output recovery. Pages the unspent output set from
- * `opts.startHeight` (the wallet birthday; `undefined` = genesis), rewinds
- * each proof with the v3 then legacy ext key, and records the hits.
+ * THE single shared client-only Grin pending overlay (v3 is non-custodial — no
+ * server output store). Backed by the one `chrome.storage.local` slot, so every
+ * money-critical flow — the always-on ~30s balance reconcile, send/receive/
+ * invoice child-index reservation, and the voucher tip/claim + inbox handlers —
+ * MUST route through this instance rather than constructing its own.
  *
- * Idempotent + best-effort: the backend dedupes recorded outputs by
- * commitment (`ON CONFLICT (commitment) DO NOTHING`), so re-running on every
- * unlock is safe; any scan/record error aborts the sweep without throwing so
- * recovery never blocks the wallet.
+ * The overlay's serialization lock is now process-global per storage key (see
+ * `GrinPendingStore.key`), so even a stray `new GrinPendingOverlay(...)` over the
+ * same slot would still serialize; sharing this singleton is the primary guard
+ * and the global lock is the belt-and-suspenders backstop. Import THIS — do not
+ * build a fresh overlay.
  */
-export async function recoverGrinOutputs(
-  mnemonic: string,
-  userId: string,
-  opts?: {
-    startHeight?: number | undefined;
-    maxPages?: number | undefined;
-    /** Called after each output is successfully recorded, so the caller can
-     *  surface recovered funds mid-scan (the full scan-to-tip takes minutes).
-     *  Receives the running recovered count. */
-    onRecovered?: ((recovered: number) => void) | undefined;
-  },
-): Promise<GrinRecoveryResult> {
-  const extKeyHex = (
-    JSON.parse(wasmGrin.deriveExtendedKey(mnemonic)) as { extended_private_key_hex: string }
-  ).extended_private_key_hex;
-  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(mnemonic);
-
-  console.info(
-    `[smirk-grin-recovery] start: startHeight=${opts?.startHeight ?? 'genesis'} user=${userId.slice(0, 8)}`,
-  );
-  const maxPages = opts?.maxPages ?? 10_000; // backstop for a genesis scan
-  let startIndex: number | undefined;
-  let scanned = 0;
-  let recovered = 0;
-  let pages = 0;
-
-  for (; pages < maxPages; pages++) {
-    const res = await chainProviders.grin().scanUnspent({
-      // Birthday height on the first page only; index thereafter (the
-      // backend prefers start_index when both are present).
-      startIndex,
-      startHeight: startIndex === undefined ? opts?.startHeight : undefined,
-      max: 1000,
-    });
-    if (res.error || !res.data) {
-      console.warn('[smirk-grin-recovery] scan page failed:', res.error ?? res.code);
-      break;
-    }
-    const { highest_index: highestIndex, last_retrieved_index: lastIndex, outputs } = res.data;
-    console.info(
-      `[smirk-grin-recovery] page ${pages}: ${outputs.length} outs, index ${lastIndex}/${highestIndex}, recovered=${recovered}`,
-    );
-
-    for (const o of outputs) {
-      scanned++;
-      if (!o.proof) continue; // need the rangeproof to rewind
-      const rec =
-        tryRecoverGrinOutput(extKeyHex, o.commit, o.proof) ??
-        tryRecoverGrinOutput(legacyExtKeyHex, o.commit, o.proof);
-      if (!rec) continue;
-      // Smirk's spendable child index is path[2] (= path[depth-1] for both
-      // depth-3 Grim and depth-4 [0,0,n,0] Smirk layouts). Do NOT fall back
-      // to rec.n_child: for depth-4 that's path[3] = 0, which would record the
-      // output under the [0,0,0,0] bricking layout. If path is somehow absent
-      // (e.g. a wasm build predating the `path` field), skip + warn — better
-      // an unrecovered output than one recorded with an unspendable index.
-      const nChild = rec.path?.[2];
-      if (nChild === undefined) {
-        console.warn(
-          '[smirk-grin-recovery] recovered output missing path[2]; skipping (avoids bricking-layout record):',
-          o.commit,
-        );
-        continue;
-      }
-      const r = await chainProviders.grin().recordOutput({
-        userId,
-        keyId: rec.key_id_hex,
-        nChild,
-        amount: Number(rec.value),
-        commitment: o.commit,
-        // Recovered outputs have NO originating slate — omit tx_slate_id so the
-        // backend stores NULL. Sending "" is an invalid UUID → 400 (this was
-        // the bug that silently dropped every recovered output).
-        // Only include when known (exactOptionalPropertyTypes).
-        ...(o.block_height != null ? { blockHeight: o.block_height } : {}),
-      });
-      if (!r.error) {
-        recovered++;
-        opts?.onRecovered?.(recovered);
-      } else console.warn('[smirk-grin-recovery] record failed:', r.error);
-    }
-
-    if (lastIndex >= highestIndex) break; // reached the tip
-    startIndex = lastIndex + 1;
-  }
-
-  console.info(
-    `[smirk-grin-recovery] done: scanned=${scanned} recovered=${recovered} pages=${pages}`,
-  );
-  return { scanned, recovered, pages };
-}
+export const grinOverlay = new GrinPendingOverlay(createChromeGrinPendingStore());

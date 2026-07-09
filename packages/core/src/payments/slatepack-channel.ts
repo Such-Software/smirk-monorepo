@@ -69,6 +69,19 @@ export interface SlatepackChannel {
   inbox(): Promise<InboundSlatepack[]>;
   respond(slateId: string, responseSlatepack: string, counterpartyRef?: string): Promise<void>;
   cancel(slateId: string, counterpartyRef?: string): Promise<void>;
+  /**
+   * Notify the counterparty that the exchange is settled (the sender broadcast
+   * the final tx). Called after a SUCCESSFUL broadcast so the exchange retires
+   * on the wire rather than only optimistically in the UI:
+   *   - Nostr: publishes the `finalize` settlement gift-wrap to `counterpartyRef`
+   *     AND to ourselves (was never sent → both sides only retired inbox items
+   *     optimistically; the self-addressed copy retires the sender's own inbox).
+   *   - Backend relay: flips the relay row via `relay/finalize` (`counterpartyRef`
+   *     ignored; routed by slate_id + bearer token).
+   * Best-effort — a settle failure must not undo an on-chain broadcast, so
+   * callers should not throw on failure.
+   */
+  settle(slateId: string, counterpartyRef?: string): Promise<void>;
 }
 
 // ── Backend relay transport ─────────────────────────────────────────────────
@@ -133,6 +146,19 @@ export class BackendRelayChannel implements SlatepackChannel {
       userId: this.deps.userId,
     });
     if (res.error) throw new Error(res.error);
+  }
+
+  /** Flip the relay row to finalized after the sender broadcast. Best-effort:
+   *  a relay finalize failure must never undo the on-chain broadcast. */
+  async settle(slateId: string): Promise<void> {
+    await this.deps.grin
+      .finalizeGrinSlatepack({
+        relayId: slateId,
+        userId: this.deps.userId,
+        // relay/finalize is a status flip; no tx_hash to attach here.
+        finalizedSlatepack: '',
+      })
+      .catch(() => undefined);
   }
 }
 
@@ -246,6 +272,24 @@ export class NostrGiftwrapChannel implements SlatepackChannel {
   /** Push a settlement notice closing an exchange (S3 broadcast). */
   async finalizeNotice(slateId: string, counterpartyRef: string): Promise<void> {
     await this.publishTo(counterpartyRef, grinPayload('finalize', slateId));
+  }
+
+  /** Settlement notice after a successful broadcast — the wire-level S3 that was
+   *  previously never sent (inbox items only retired optimistically). Requires
+   *  `counterpartyRef` (the recipient's pubkey) to address the gift-wrap; a
+   *  no-op without it so a manual/clipboard send never throws here.
+   *
+   *  Publishes the `finalize` to BOTH the counterparty AND ourselves: the sender
+   *  broadcast the tx, but its own inbox still holds the counterparty's
+   *  `response` gift-wrap, so without a self-addressed terminal marker inbox()
+   *  would keep reconstructing that slateId as `to-finalize` forever. The
+   *  self-addressed `finalize` (newest role wins) retires it on the sender side
+   *  too — the whole exchange stays wire-driven, no local terminal state. */
+  async settle(slateId: string, counterpartyRef?: string): Promise<void> {
+    if (!counterpartyRef) return;
+    await this.finalizeNotice(slateId, counterpartyRef);
+    // Retire the exchange in our OWN inbox by self-addressing the finalize.
+    await this.finalizeNotice(slateId, this.io.identity.pubkeyHex);
   }
 
   /** Send a tip to an npub over the same rail. Not part of the slatepack

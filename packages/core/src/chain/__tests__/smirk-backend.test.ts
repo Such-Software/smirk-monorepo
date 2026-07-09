@@ -41,16 +41,9 @@ function mockApi(): { api: SmirkApi; calls: Call[] } {
     getRandomOuts: stub('getRandomOuts', ok({ outputs: [] })),
     registerLws: stub('registerLws', ok({ success: true, message: 'ok' })),
     deactivateLws: stub('deactivateLws', ok({ success: true, message: 'ok' })),
-    // grin
-    getGrinUserBalance: stub('getGrinUserBalance', ok({ confirmed: 0, locked: 0, pending: 0, total: 0 })),
-    getGrinOutputs: stub('getGrinOutputs', ok({ outputs: [], next_child_index: 0 })),
-    getGrinUserHistory: stub('getGrinUserHistory', ok({ transactions: [] })),
+    // grin (non-custodial: scan + broadcast only)
+    scanGrin: stub('scanGrin', ok({ outputs: [], total_balance: 0, last_pmmr_index: 0 })),
     broadcastGrinTransaction: stub('broadcastGrinTransaction', ok({ success: true })),
-    scanGrinUnspentOutputs: stub('scanGrinUnspentOutputs', ok({ highest_index: 0, last_retrieved_index: 0, outputs: [] })),
-    recordGrinOutput: stub('recordGrinOutput', ok({ id: 'o1' })),
-    lockGrinOutputs: stub('lockGrinOutputs', ok(undefined)),
-    unlockGrinOutputs: stub('unlockGrinOutputs', ok(undefined)),
-    spendGrinOutputs: stub('spendGrinOutputs', ok(undefined)),
   } as unknown as SmirkApi;
   return { api, calls };
 }
@@ -94,17 +87,16 @@ test('lws provider delegates with asset + view key, declares param-derived fee',
   assert.deepEqual((await p.estimateFee()).data, { model: 'param-derived' });
 });
 
-test('grin provider delegates lifecycle + recovery, declares formula fee', async () => {
+test('grin provider delegates scan + broadcast, declares formula fee', async () => {
   const { api, calls } = mockApi();
   const p = new SmirkGrinProvider(api);
-  await p.getBalance('u');
-  await p.broadcast({ userId: 'u', slateId: 's', tx: {} });
-  await p.scanUnspent({ startIndex: 0 });
-  await p.lockOutputs({ userId: 'u', outputIds: ['a'], txSlateId: 's' });
+  await p.scan({ rewindHash: 'rh' });
+  await p.broadcast({ tx: {} });
   assert.deepEqual(
     calls.map((c) => c.method),
-    ['getGrinUserBalance', 'broadcastGrinTransaction', 'scanGrinUnspentOutputs', 'lockGrinOutputs'],
+    ['scanGrin', 'broadcastGrinTransaction'],
   );
+  assert.deepEqual(calls[0]?.args, [{ rewindHash: 'rh' }]);
   assert.deepEqual((await p.estimateFee()).data, { model: 'formula' });
 });
 

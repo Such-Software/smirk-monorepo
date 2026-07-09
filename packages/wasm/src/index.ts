@@ -129,6 +129,12 @@ export const grin = {
     wasm.grin_slatepack_address(mnemonic, index, network),
   slatepackAddressSecret: (mnemonic: string, index: number): string =>
     wasm.grin_slatepack_address_secret(mnemonic, index),
+  /** Compute the wallet's `rewind_hash` (32-byte view credential, 64 hex
+   *  chars) from the 64-byte extended private key (hex). This is the only
+   *  secret handed to `POST /wallet/grin/scan` — it lets the backend's
+   *  view-only rewind scan recognize this wallet's outputs without spend
+   *  authority. */
+  rewindHash: (extKeyHex: string): string => wasm.grin_rewind_hash(extKeyHex),
   /** Decode a bech32 slatepack address back to its 32-byte ed25519
    *  public key (hex). Used to encrypt outgoing slatepacks to a
    *  recipient via `slatepackPackEncrypted`. */
@@ -485,6 +491,32 @@ export const grin = {
   createSendTransaction: (params: GrinCreateSendTxParams): GrinCreateSendTxResult => {
     const json = wasm.grin_create_send_transaction(JSON.stringify(params));
     return JSON.parse(json) as GrinCreateSendTxResult;
+  },
+  /**
+   * Recover the BIP32 path of one of the wallet's own on-chain outputs from its
+   * commitment + value alone. Enables stateless scan-based spending: the v3
+   * `/wallet/grin/scan` returns `{commit, value, ...}` but NOT the derivation
+   * path, while {@link createSendTransaction} requires each input's `path`.
+   *
+   * Searches child indices `0..=maxN` over the standard `[0,0,n,0]` layout,
+   * applying the same v3/legacy x Regular/None x depth-3/4 candidate matrix the
+   * send builder uses per input. Returns the matching 4-level path, or `null`
+   * when no index in range reproduces the commitment — the caller MUST then drop
+   * that output (never feed an unidentified input to the send builder: a wrong
+   * path silently yields a bad blind and an invalid tx).
+   *
+   * `legacyExtKeyHex` may be `''` to skip the legacy fallback. `value` is in
+   * nanogrin.
+   */
+  identifyOutput: (
+    extKeyHex: string,
+    legacyExtKeyHex: string,
+    commitHex: string,
+    value: bigint,
+    maxN: number,
+  ): [number, number, number, number] | null => {
+    const json = wasm.grin_identify_output(extKeyHex, legacyExtKeyHex, commitHex, value, maxN);
+    return JSON.parse(json) as [number, number, number, number] | null;
   },
   signIncomingSendSlate: (
     params: GrinSignIncomingSendParams,

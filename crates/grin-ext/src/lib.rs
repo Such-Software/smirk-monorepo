@@ -46,7 +46,8 @@ pub use transaction::{
     BuildTransactionParams, TxInput, TxOutput,
 };
 pub use wallet_flows::{
-    create_invoice, create_send_transaction, finalize_invoice, finalize_send_slate, sign_invoice,
+    create_invoice, create_send_transaction, finalize_invoice, finalize_send_slate,
+    identify_output, sign_invoice,
     sign_incoming_send_slate, ChangeOutputInfo, CreateInvoiceOutput, CreateInvoiceParams,
     CreateSendTxOutput, CreateSendTxParams, FinalizeInvoiceOutput, FinalizeInvoiceParams,
     FinalizeSendOutput, FinalizeSendParams, ReceiverOutputInfo, SignIncomingSendOutput,

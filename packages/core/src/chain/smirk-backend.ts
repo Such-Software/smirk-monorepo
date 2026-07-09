@@ -49,10 +49,13 @@ const GRIN_CAPS: ChainCapabilities = {
   model: 'mw-commitment',
   feeModel: 'formula',
   requiresViewKey: false,
-  requiresRegistration: true,
+  // v3 grin key registration is discovery-only (POST /keys), not required to
+  // read balance — scan works from the rewind_hash alone.
+  requiresRegistration: false,
   hasDecoys: false,
   hasRecoveryScan: true,
-  serverSideOutputStore: true,
+  // No server-side output store on v3; the client owns output state via scan.
+  serverSideOutputStore: false,
 };
 
 /** Map a response's data while preserving its envelope (status/error/code), in a
@@ -144,46 +147,15 @@ export class SmirkGrinProvider implements GrinChainProvider {
   readonly capabilities = GRIN_CAPS;
   constructor(private readonly api: SmirkApi) {}
 
-  getBalance(userId: string) {
-    return this.api.getGrinUserBalance(userId);
-  }
-  listOutputs(userId: string) {
-    return this.api.getGrinOutputs(userId);
-  }
-  getHistory(userId: string) {
-    return this.api.getGrinUserHistory(userId);
-  }
-  broadcast(params: {
-    userId: string;
-    slateId: string;
-    tx: object;
-    changeOutput?: { keyId: string; nChild: number; amount: number; commitment: string };
+  scan(params: {
+    rewindHash: string;
+    startHeight?: number | undefined;
+    restorePowNonce?: number | undefined;
   }) {
+    return this.api.scanGrin(params);
+  }
+  broadcast(params: { tx: object }) {
     return this.api.broadcastGrinTransaction(params);
-  }
-  scanUnspent(params: { startIndex?: number | undefined; startHeight?: number | undefined; max?: number | undefined }) {
-    return this.api.scanGrinUnspentOutputs(params);
-  }
-  recordOutput(params: {
-    userId: string;
-    keyId: string;
-    nChild: number;
-    amount: number;
-    commitment: string;
-    txSlateId?: string;
-    blockHeight?: number;
-    lockHeight?: number;
-  }) {
-    return this.api.recordGrinOutput(params);
-  }
-  lockOutputs(params: { userId: string; outputIds: string[]; txSlateId: string }) {
-    return this.api.lockGrinOutputs(params);
-  }
-  unlockOutputs(params: { userId: string; txSlateId: string }) {
-    return this.api.unlockGrinOutputs(params);
-  }
-  spendOutputs(params: { userId: string; txSlateId: string }) {
-    return this.api.spendGrinOutputs(params);
   }
   getHeight() {
     return heightFromBackend(this.api, 'grin');

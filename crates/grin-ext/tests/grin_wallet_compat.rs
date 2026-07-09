@@ -8,11 +8,11 @@
 
 use grin_ext::{
     blind, create_invoice, create_send_transaction, derive_blind, deserialize_slate_v4_bin,
-    finalize_invoice, finalize_send_slate, kernel::KernelFeatures, pedersen_commit,
-    random_secret_nonce, sender_init_s1, serialize_slate_v4, serialize_slate_v4_bin,
-    sign_incoming_send_slate, sign_invoice, CreateInvoiceParams, CreateSendTxParams,
-    FinalizeInvoiceParams, FinalizeSendParams, SenderInitParams, SignIncomingSendParams,
-    SignInvoiceParams, SwitchCommitmentType, UnspentOutput,
+    finalize_invoice, finalize_send_slate, identify_output, kernel::KernelFeatures,
+    pedersen_commit, random_secret_nonce, sender_init_s1, serialize_slate_v4,
+    serialize_slate_v4_bin, sign_incoming_send_slate, sign_invoice, CreateInvoiceParams,
+    CreateSendTxParams, FinalizeInvoiceParams, FinalizeSendParams, SenderInitParams,
+    SignIncomingSendParams, SignInvoiceParams, SwitchCommitmentType, UnspentOutput,
 };
 use grin_wallet_libwallet::Slate;
 
@@ -848,4 +848,47 @@ fn scalar(bytes: &[u8]) -> [u8; 32] {
     let n = bytes.len().min(32);
     out[32 - n..].copy_from_slice(&bytes[..n]);
     out
+}
+
+/// `identify_output` recovers the exact `[0,0,n,0]` path that produced a
+/// commitment, using the SAME derivation the send builder verifies inputs with.
+/// This is the enabler for stateless scan-based spend: scan returns
+/// `{commit, value}` with no path, and we recover the path here.
+#[test]
+fn identify_output_recovers_the_child_index_from_commitment_and_value() {
+    let ext = master_ext_from_seed(b"identify-output-test-seed");
+    let value: u64 = 250_000_000; // 0.25 GRIN
+
+    // Build the on-chain commitment exactly as a wallet output would: standard
+    // Smirk layout [0,0,n,0], Regular switch.
+    let n: u32 = 7;
+    let path = [0u32, 0, n, 0];
+    let blind = derive_blind(&ext, &path, value, SwitchCommitmentType::Regular).unwrap();
+    let commit = pedersen_commit(value, &blind).unwrap();
+
+    // No legacy fallback needed for a v3-derived output.
+    let found = identify_output(&ext, None, commit, value, n + 5);
+    assert_eq!(found, Some(path), "recovered the exact derivation path");
+
+    // A search range that stops short of the real index finds nothing.
+    assert_eq!(
+        identify_output(&ext, None, commit, value, n - 1),
+        None,
+        "index outside the search bound is not found"
+    );
+
+    // Wrong value → wrong blind → no match (guards against value confusion).
+    assert_eq!(
+        identify_output(&ext, None, commit, value + 1, n + 5),
+        None,
+        "a mismatched value must not identify a path"
+    );
+
+    // An unrelated commitment isn't attributed to this wallet.
+    let other = pedersen_commit(value, &scalar(&[0x11, 0x22])).unwrap();
+    assert_eq!(
+        identify_output(&ext, None, other, value, 50),
+        None,
+        "a foreign commitment is not identified"
+    );
 }

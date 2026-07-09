@@ -27,7 +27,7 @@
 
 import { sha256 } from '@noble/hashes/sha256';
 import { ed25519 } from '@noble/curves/ed25519';
-import type { UnlockedWallet } from '@smirk/core';
+import type { UnlockedWallet, GrinPendingOverlay } from '@smirk/core';
 import {
   api,
   chainProviders,
@@ -47,6 +47,7 @@ import {
 import type { TipPlatform, TipSubmitFields, TipSubmitOutcome } from '@smirk/ui';
 import { grin as wasmGrin } from '@smirk/wasm';
 import { send } from './send-handler';
+import { resolveGrinSpendable } from './grin-flows';
 import { storeTipKeyBackup } from './tip-key-backup';
 
 /**
@@ -132,6 +133,11 @@ export async function dispatchSocialTip(args: {
    *  reflect. Matches v0.2.4 `addPendingTx` behavior for XMR/WOW
    *  (which the v0.3 port silently dropped). */
   onBroadcast?: (e: TipBroadcastEvent) => void | Promise<void>;
+  /** Grin pending overlay (client output state) — required for a Grin tip:
+   *  scan-based input selection + child-index reservation. */
+  grinPending?: GrinPendingOverlay;
+  /** Grin view-only rewind hash — required for a Grin tip's scan. */
+  grinRewindHash?: string;
 }): Promise<TipSubmitOutcome> {
   const { wallet, fields, onBroadcast } = args;
 
@@ -165,10 +171,16 @@ export async function dispatchSocialTip(args: {
       return await createXmrWowTip(wallet, args.senderUserId, fields, onBroadcast);
     }
     if (fields.assetId === 'grin') {
-      // Grin tracks pending balance via `lockGrinOutputs` (called
-      // inside createGrinTip), not via pendingOutgoing. No onBroadcast
-      // wiring needed.
-      return await createGrinTip(wallet, args.senderUserId, fields);
+      // Grin tracks in-flight balance via the client pending overlay (recorded
+      // inside createGrinTip after broadcast), not via pendingOutgoing. No
+      // onBroadcast wiring needed.
+      if (!args.grinPending || !args.grinRewindHash) {
+        return { ok: false, error: 'Grin tipping unavailable — wallet not ready (no scan credential)' };
+      }
+      return await createGrinTip(wallet, args.senderUserId, fields, {
+        overlay: args.grinPending,
+        rewindHash: args.grinRewindHash,
+      });
     }
     return {
       ok: false,
@@ -634,10 +646,12 @@ async function createGrinTip(
   wallet: UnlockedWallet,
   senderUserId: string,
   fields: TipSubmitFields,
+  deps: { overlay: GrinPendingOverlay; rewindHash: string },
 ): Promise<TipSubmitOutcome> {
   if (!wallet.mnemonic) {
     return { ok: false, error: 'Wallet not unlocked' };
   }
+  void senderUserId; // v3 is non-custodial: scan (rewindHash) identifies outputs.
 
   // 1. Resolve recipient BTC pubkey for targeted tips.
   let recipientBtcPubkeyHex: string | undefined;
@@ -647,21 +661,23 @@ async function createGrinTip(
     recipientBtcPubkeyHex = lookup.btcPubkeyHex;
   }
 
-  // 2. Fetch sender's spendable Grin outputs and pick inputs to cover
-  //    voucher_amount + fee. Same greedy-with-fee-iteration scheme as
-  //    startGrinSend in grin-flows.ts.
-  const outputsResp = await chainProviders.grin().listOutputs(senderUserId);
-  if (outputsResp.error || !outputsResp.data) {
-    return {
-      ok: false,
-      error: outputsResp.error ?? 'Failed to fetch Grin outputs',
-    };
+  // 2. Scan for spendable Grin inputs (each already carries its identified BIP32
+  //    path) and pick inputs to cover voucher_amount + fee. Same greedy-with-fee
+  //    scheme as startGrinSend in grin-flows.ts.
+  let spendableSet;
+  try {
+    spendableSet = await resolveGrinSpendable({
+      mnemonic: wallet.mnemonic,
+      rewindHash: deps.rewindHash,
+      overlay: deps.overlay,
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Failed to scan Grin outputs' };
   }
-  const spendable = outputsResp.data.outputs.filter((o) => o.status === 'unspent');
-  if (spendable.length === 0) {
+  if (spendableSet.outputs.length === 0) {
     return { ok: false, error: 'No spendable Grin outputs' };
   }
-  const sortedDesc = [...spendable].sort((a, b) => b.amount - a.amount);
+  const sortedDesc = [...spendableSet.outputs].sort((a, b) => b.amount - a.amount);
 
   const voucherAmount = Number(fields.amountAtomic);
   // Mirrors grin-flows.ts calcGrinFee — `weight × DEFAULT_ACCEPT_FEE_BASE`
@@ -708,12 +724,16 @@ async function createGrinTip(
     fee = calcFee(selected.length, 1, 1);
   }
 
-  // 3. Pick BIP32 paths for voucher + change.
-  const nextChild = outputsResp.data.next_child_index;
-  const voucherPath: [number, number, number, number] = [0, 0, nextChild, 0];
-  const changePath: [number, number, number, number] | undefined = hasChange
-    ? [0, 0, nextChild + 1, 0]
-    : undefined;
+  // 3. ATOMICALLY reserve BIP32 child indices for the voucher (+ change) outputs.
+  //    Each reserveNextChildIndex() reads-and-increments the persisted counter in
+  //    one serialized step, so two concurrent mint flows can never be handed the
+  //    same index (reuse = duplicate Pedersen commitment = fund loss). The old
+  //    read-now (nextChild) / bump-later pattern raced across the awaits below.
+  const voucherChild = await deps.overlay.reserveNextChildIndex();
+  const voucherPath: [number, number, number, number] = [0, 0, voucherChild, 0];
+  const changeChild = hasChange ? await deps.overlay.reserveNextChildIndex() : undefined;
+  const changePath: [number, number, number, number] | undefined =
+    changeChild !== undefined ? [0, 0, changeChild, 0] : undefined;
   const changeAmount = hasChange ? totalSelected - voucherAmount - fee : 0;
 
   // 4. Derive extended private key from mnemonic (v3 + legacy fallback so a
@@ -727,12 +747,8 @@ async function createGrinTip(
   const voucherResult = wasmGrin.createGrinVoucher({
     extended_private_key_hex: extKey.extended_private_key_hex,
     legacy_extended_private_key_hex: legacyExtKeyHex,
-    inputs: selected.map((o) => ({
-      path: [0, 0, o.n_child, 0] as [number, number, number, number],
-      amount: o.amount,
-      commitment_hex: o.commitment,
-      is_coinbase: o.is_coinbase,
-    })),
+    // Inputs already carry their identified BIP32 path from the scan resolver.
+    inputs: selected,
     voucher_amount: voucherAmount,
     fee,
     voucher_path: voucherPath,
@@ -812,71 +828,35 @@ async function createGrinTip(
     ...(urlFragmentEncoded ? { urlFragmentEncoded } : {}),
   });
 
-  // 8. Record the on-chain tx + lock inputs (Grin-side bookkeeping).
-  //    Different from the broader two-phase tip flow — this is the
-  //    grin-specific output-locking we already do in regular sends.
-  const recordRes = await api.recordGrinTransaction({
-    userId: senderUserId,
-    slateId,
-    amount: voucherAmount,
-    fee,
-    direction: 'send',
-  });
-  if (recordRes.error) {
-    return {
-      ok: false,
-      error: `Failed to record Grin transaction (${recordRes.error}); no broadcast attempted. The voucher is registered server-side; retry from the tip row.`,
-    };
-  }
-  // Lock MUST succeed before broadcast: if we broadcast while the backend still
-  // treats these inputs as unlocked, a later send can reselect them, opening a
-  // double-spend window until confirmation. Abort on lock failure.
-  const lockRes = await chainProviders.grin().lockOutputs({
-    userId: senderUserId,
-    outputIds: selected.map((o) => o.id),
-    txSlateId: slateId,
-  });
-  if (lockRes.error) {
-    return {
-      ok: false,
-      error: `Failed to lock Grin inputs (${lockRes.error}); no broadcast attempted to avoid a double-spend. The voucher is registered server-side; retry from the tip row.`,
-    };
-  }
-
-  // 9. Broadcast the voucher tx via the backend's broadcast endpoint.
-  //    Includes change_output for atomic record-on-broadcast (per
-  //    dddb025).
-  // Grin node's `/v2/foreign push_transaction` accepts the JSON
-  // Transaction body (offset + body{inputs, outputs, kernels}) —
-  // NOT a hex-encoded wire blob. Earlier this passed
-  // `{ tx_bytes_hex }`, which the node rejected with
-  // `InvalidArgStructure "tx" at position 0` — same class of bug
-  // that bit the regular Grin send + the voucher claim path.
+  // 8. Broadcast the voucher tx via the backend's broadcast endpoint (reads only
+  //    `{ tx }` on v3 — no server output store to record into).
+  // Grin node's `/v2/foreign push_transaction` accepts the JSON Transaction body
+  // (offset + body{inputs, outputs, kernels}) — NOT a hex-encoded wire blob.
   // `voucherResult.tx_json` is the canonical shape, emitted by
   // `crates/grin-ext/src/voucher.rs::serialize_voucher_tx_json`.
   const broadcast = await chainProviders.grin().broadcast({
-    userId: senderUserId,
-    slateId,
     tx: voucherResult.tx_json as object,
-    ...(voucherResult.change
-      ? {
-          changeOutput: {
-            keyId: pathToKeyId(voucherResult.change.path),
-            nChild: voucherResult.change.path[2],
-            amount: voucherResult.change.amount,
-            commitment: voucherResult.change.commitment_hex,
-          },
-        }
-      : {}),
   });
   if (broadcast.error) {
-    // Rollback Grin output lock + cancel the draft tip.
-    await api
-      .unlockGrinOutputs({ userId: senderUserId, txSlateId: slateId })
-      .catch(() => undefined);
+    // No overlay entry recorded yet (we add it only after broadcast succeeds),
+    // so the inputs are still selectable — just cancel the draft tip.
     await api.cancelSocialTip(tipId).catch(() => undefined);
     return { ok: false, error: `Grin broadcast failed: ${broadcast.error}` };
   }
+
+  // 9. Record the client pending overlay now that the tx is on the wire:
+  //    exclude the spent inputs from selection until they're mined, and show the
+  //    sender's change as pending until scan confirms it. The voucher output is
+  //    outgoing (to the tip recipient) — not our change/incoming — so it isn't
+  //    surfaced as pending, but its index was already consumed. The voucher +
+  //    change child indices were reserved atomically at step 3 — do NOT bump the
+  //    counter again here or it would double-advance and skip indices.
+  await deps.overlay.addPending(slateId, {
+    spentCommits: selected.map((i) => i.commitment_hex),
+    ...(voucherResult.change
+      ? { change: { commit: voucherResult.change.commitment_hex, value: voucherResult.change.amount } }
+      : {}),
+  });
 
   // 10. Phase 2 — attach the slate_id (acts as the funding identifier
   //     for Grin since the kernel commit IS the on-chain identity).
@@ -896,21 +876,6 @@ async function createGrinTip(
     shareUrl: fields.isPublic ? buildShareUrl(tipId, urlFragmentEncoded) : null,
     shareUrlPending: fields.isPublic,
   };
-}
-
-/**
- * Pack a 4-level BIP32 path back into the hex key_id format the
- * backend stores for Grin outputs. Mirrors grin-flows.ts::pathToKeyId.
- */
-function pathToKeyId(path: [number, number, number, number]): string {
-  const out = new Uint8Array(17);
-  out[0] = 4;
-  const view = new DataView(out.buffer);
-  view.setUint32(1, path[0], false);
-  view.setUint32(5, path[1], false);
-  view.setUint32(9, path[2], false);
-  view.setUint32(13, path[3], false);
-  return bytesToHex(out);
 }
 
 /** Generate a UUID-shaped hex string. Voucher txs need a slate_id for

@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { api, type UnlockedWallet } from '@smirk/core';
+import { type UnlockedWallet } from '@smirk/core';
 import {
   InboxTab,
   useRoute,
@@ -442,11 +442,19 @@ export function InboxRouter({
     void navigator.clipboard.writeText(slatepack).catch(() => undefined);
     void navigate('home/send');
   };
-  // Drop a row from the relay. Backend marks the entry cancelled; our
-  // 30s poll will pick up the removal. For pending_to_finalize rows
-  // (which represent an in-flight send we initiated), also unlock the
-  // reserved outputs and mark the local tx record cancelled so the
-  // wallet's pendingOutgoing tristate clears.
+  // Drop a row from the relay. Backend marks the entry cancelled; our 30s poll
+  // picks up the removal.
+  //
+  // A `pending_to_finalize` row is an in-flight send we initiated but have NOT
+  // broadcast yet (we're waiting on the recipient's S2 / to finalize). The
+  // overlay reserves this send's inputs + change index AT BUILD TIME
+  // (startGrinSend), so cancelling the row must ALSO free those reserved inputs
+  // or they stay excluded from selection until the 7-day age-out (stuck funds).
+  // cancelInboxItem does exactly that — it calls the overlay's pre-broadcast
+  // remove() (which refuses to free an already-broadcast tx's inputs) before
+  // cancelling on the transport. (The old custodial
+  // unlockGrinOutputs/updateGrinTransaction calls hit dead v3 endpoints and are
+  // gone.)
   const handleCancel = async (item: InboxItem) => {
     // Don't silently swallow — if we can't cancel this row (backend ownership
     // check, or a Nostr gift-wrap that won't send) the user sees nothing happen
@@ -463,18 +471,6 @@ export function InboxRouter({
     if (cancelRes.error) {
       window.alert(`Couldn't cancel: ${cancelRes.error}`);
       return;
-    }
-    if (item.kind === 'pending_to_finalize') {
-      await api
-        .unlockGrinOutputs({ userId, txSlateId: item.slateId })
-        .catch(() => undefined);
-      await api
-        .updateGrinTransaction({
-          userId,
-          slateId: item.slateId,
-          status: 'cancelled',
-        })
-        .catch(() => undefined);
     }
     await onRefresh();
   };

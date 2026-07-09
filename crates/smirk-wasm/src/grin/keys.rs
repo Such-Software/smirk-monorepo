@@ -128,6 +128,22 @@ pub fn grin_slatepack_address_to_pubkey_hex(addr: &str) -> Result<String, JsValu
     Ok(hex::encode(pubkey))
 }
 
+/// Compute the wallet's `rewind_hash` (32-byte view credential) from the
+/// 64-byte extended private key (hex).
+///
+/// `rewind_hash = blake2b-256(data = compressed_public_root_key (33B), key = [])`.
+/// This is the ONLY secret handed to `POST /wallet/grin/scan` — it lets the
+/// backend's view-only rewind scan recognize this wallet's outputs WITHOUT
+/// exposing spend authority. Returns the 32-byte hash as 64 hex chars.
+#[wasm_bindgen]
+pub fn grin_rewind_hash(ext_key_hex: &str) -> Result<String, JsValue> {
+    let mut ext = [0u8; 64];
+    hex::decode_to_slice(ext_key_hex, &mut ext)
+        .map_err(|e| JsValue::from_str(&format!("invalid ext_key_hex (expect 128 hex chars): {e}")))?;
+    let rh = grin_ext::recovery::rewind_hash(&ext).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(rh))
+}
+
 fn parse_network(s: &str) -> Result<grin_ext::Network, JsValue> {
     match s {
         "mainnet" => Ok(grin_ext::Network::Mainnet),

@@ -1002,3 +1002,44 @@ pub(crate) fn derive_input_blind_with_fallback(
         diagnostics.join("\n"),
     ))
 }
+
+/// Recover the BIP32 path of one of our own on-chain outputs from its
+/// commitment + value alone, so a stateless scan-based wallet can spend it.
+///
+/// The v3 `/wallet/grin/scan` returns `{commit, value, ...}` but NOT the
+/// derivation path, while [`create_send_transaction`] REQUIRES each input's
+/// `path` to re-derive its blinding factor. With no server-side output store to
+/// look the path up in, we search for it: for each candidate child index `n` in
+/// `0..=max_n`, try the standard Smirk layout `[0, 0, n, 0]` against the
+/// existing candidate matrix ([`derive_input_blind_with_fallback`]:
+/// v3/legacy × Regular/None × depth-3/4). The first `n` whose derived blind
+/// reproduces `commitment` is this output's index; return its path.
+///
+/// This is pure reuse of the SAME matching logic `create_send_transaction`
+/// applies per input — no new money logic. `is_coinbase` is irrelevant here (it
+/// only changes kernel features, not the output's blinding factor), so we probe
+/// with `false`.
+///
+/// Returns `None` if no index in range matches — the caller must then DROP that
+/// output from the spendable set (never feed an unidentified input to the send
+/// builder: a wrong path silently yields a bad blind and an invalid tx).
+pub fn identify_output(
+    v3_ext_key: &[u8; 64],
+    legacy_ext_key: Option<&[u8; 64]>,
+    commitment: [u8; 33],
+    value: u64,
+    max_n: u32,
+) -> Option<[u32; 4]> {
+    for n in 0..=max_n {
+        let candidate = UnspentOutput {
+            path: [0, 0, n, 0],
+            amount: value,
+            commitment,
+            is_coinbase: false,
+        };
+        if derive_input_blind_with_fallback(v3_ext_key, legacy_ext_key, &candidate).is_ok() {
+            return Some([0, 0, n, 0]);
+        }
+    }
+    None
+}

@@ -352,6 +352,9 @@ async function loadAssetHistory(
   wallet: UnlockedWallet,
   userId: string | undefined,
 ): Promise<AssetDetailTxRow[]> {
+  // Grin (the only consumer of userId) is now scan-based with no server history;
+  // kept in the signature for call-site stability.
+  void userId;
   if (assetId === 'btc' || assetId === 'ltc') {
     const addr = wallet.addresses[assetId];
     if (!addr) return [];
@@ -399,21 +402,13 @@ async function loadAssetHistory(
     );
   }
   if (assetId === 'grin') {
-    if (!userId) return [];
-    const r = await chainProviders.grin().getHistory(userId);
-    if (r.error || !r.data) return [];
-    return r.data.transactions.map(
-      (t): AssetDetailTxRow => ({
-        kind: 'grin',
-        direction: t.direction === 'receive' ? 'in' : 'out',
-        amountAtomic: BigInt(t.amount),
-        feeAtomic: BigInt(t.fee),
-        kernelExcess: t.kernel_excess,
-        slateId: t.slate_id,
-        status: t.status,
-        timestamp: t.created_at,
-      }),
-    );
+    // Grin on v3 is non-custodial: there is no server-side transaction history.
+    // `POST /wallet/grin/scan` returns the current UTXO set only, not a
+    // send/receive log, and Mimblewimble commitments carry no amount/direction a
+    // third party could reconstruct. Activity history would require a local
+    // transaction journal (future work); for now show none rather than hit a
+    // dead custodial endpoint.
+    return [];
   }
   return [];
 }

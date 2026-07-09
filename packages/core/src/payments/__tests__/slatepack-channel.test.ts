@@ -90,6 +90,27 @@ test('nostr channel: respond → original sender inbox shows to-finalize', async
   assert.equal(aliceInbox[0]!.counterpartyRef, bob.pubkeyHex);
 });
 
+test('nostr channel: settle retires the slateId on BOTH the recipient and the sender', async () => {
+  const relay = fakeRelay();
+  const alice = generateBurnerIdentity();
+  const bob = generateBurnerIdentity();
+  const aliceCh = new NostrGiftwrapChannel(relay.ioFor(alice));
+  const bobCh = new NostrGiftwrapChannel(relay.ioFor(bob));
+
+  // Full exchange: alice offers → bob responds → alice's inbox shows to-finalize.
+  await aliceCh.deliver({ slateId: SLATE, slatepack: 'S1', amountNanogrin: 1, recipientPubkeyHex: bob.pubkeyHex });
+  const bobInbox = await bobCh.inbox();
+  await bobCh.respond(SLATE, 'S2', bobInbox[0]!.counterpartyRef);
+  assert.equal((await aliceCh.inbox()).length, 1, 'alice has a to-finalize before settle');
+
+  // Alice broadcasts and settles (addressed to bob). Without self-addressing,
+  // alice's own inbox would still resolve the slateId to to-finalize forever.
+  await aliceCh.settle(SLATE, bob.pubkeyHex);
+
+  assert.equal((await bobCh.inbox()).length, 0, 'recipient inbox retired');
+  assert.equal((await aliceCh.inbox()).length, 0, 'sender inbox retired via self-addressed finalize');
+});
+
 test('nostr channel: cancel retires the slateId from the recipient inbox', async () => {
   const relay = fakeRelay();
   const alice = generateBurnerIdentity();
@@ -149,6 +170,9 @@ function fakeGrin(overrides: Record<string, unknown> = {}) {
     async cancelGrinSlatepack() {
       return { data: { success: true } };
     },
+    async finalizeGrinSlatepack() {
+      return { data: { broadcast: true } };
+    },
     ...overrides,
   } as never;
 }
@@ -167,6 +191,27 @@ test('backend channel: deliver/inbox/respond/cancel map to the v3 grin API', asy
 
   await ch.respond(SLATE, 'S2'); // no throw
   await ch.cancel(SLATE); // no throw
+});
+
+test('backend channel: settle flips the relay row via relay/finalize (best-effort)', async () => {
+  let called = false;
+  const ch = new BackendRelayChannel({
+    grin: fakeGrin({
+      finalizeGrinSlatepack: async () => {
+        called = true;
+        return { data: { broadcast: true } };
+      },
+    }),
+    userId: 'u-bob',
+  });
+  await ch.settle(SLATE);
+  assert.equal(called, true);
+  // A finalize failure must not throw (never undo an on-chain broadcast).
+  const errCh = new BackendRelayChannel({
+    grin: fakeGrin({ finalizeGrinSlatepack: async () => ({ error: 'boom' }) }),
+    userId: 'u-bob',
+  });
+  await errCh.settle(SLATE); // no throw
 });
 
 test('backend channel: deliver without a recipientUserId throws; errors surface', async () => {

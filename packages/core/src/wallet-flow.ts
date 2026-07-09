@@ -39,6 +39,10 @@ import type { SmirkApi } from './api';
 import { loadCapabilities, capAllowsPrices } from './api';
 import { chainProviders, type ChainProviderRegistry } from './chain';
 import { solvePowChallenge, type AltchaPayload } from './pow';
+import type { GrinPendingOverlay } from './payments/grin-pending-overlay';
+
+/** Grin coinbase maturity: coinbase outputs are unspendable for 1440 blocks. */
+const GRIN_COINBASE_MATURITY = 1440;
 
 export interface BootstrapAuthResult {
   userId: string;
@@ -417,6 +421,23 @@ export interface FetchBalancesOptions {
    * per-asset error semantics).
    */
   onAssetBalance?: (assetId: keyof Balances, balance: AssetBalance) => void;
+
+  /**
+   * The wallet's Grin `rewind_hash` (64-hex view credential). Computed on the
+   * host side (which has wasm + the mnemonic) and threaded down so `@smirk/core`
+   * stays wasm-free. When absent, the Grin balance is returned zeroed with no
+   * network round-trip (never throws) — a host that can't derive it (locked, no
+   * wasm) simply shows 0 for Grin.
+   */
+  grinRewindHash?: string;
+
+  /**
+   * The client-only Grin pending overlay. Used to (a) subtract just-spent
+   * inputs from `confirmed`, and (b) surface unconfirmed change/incoming as
+   * `pending`. Reconciled against the fresh scan at fetch time. When absent, the
+   * balance is derived from scan alone (no pending/exclusion adjustment).
+   */
+  grinPending?: GrinPendingOverlay;
 }
 
 export async function fetchAllBalances(
@@ -511,8 +532,8 @@ export async function fetchAllBalances(
     ),
     tap(
       'grin',
-      visible('grin')
-        ? fetchGrinBalance(providers, bootstrap.userId)
+      visible('grin') && options.grinRewindHash
+        ? fetchGrinBalance(providers, options.grinRewindHash, options.grinPending)
         : Promise.resolve(zero),
     ),
   ]);
@@ -660,28 +681,62 @@ async function fetchLwsBalance(
   };
 }
 
+/**
+ * Grin balance from `POST /wallet/grin/scan` (the source of truth) + chain tip
+ * + the minimal local pending overlay. Grin has NO custodial balance endpoint;
+ * we recompute every field from the scanned UTXO set:
+ *
+ *   confirmed = Σ value of MATURE outputs NOT in the pending-spent overlay
+ *   locked    = Σ value of on-chain-but-immature outputs (coinbase inside 1440,
+ *               or tip < lock_height)
+ *   pending   = Σ overlay change/incoming values not yet visible in the scan
+ *
+ * Maturity: coinbase matures at `height + 1440`; regular outputs at
+ * `max(height, lock_height)`. `scan.total_balance` is deliberately NOT trusted
+ * for `confirmed` — it neither splits maturity nor subtracts pending-spent.
+ */
 async function fetchGrinBalance(
   providers: ChainProviderRegistry,
-  userId: string,
+  rewindHash: string,
+  overlay: GrinPendingOverlay | undefined,
 ): Promise<AssetBalance> {
-  const result = await providers.grin().getBalance(userId);
-  if (result.error || !result.data) {
-    return { confirmed: 0n, pending: 0n, error: result.error ?? 'Network error' };
+  const grin = providers.grin();
+  const [scanRes, heightRes] = await Promise.all([grin.scan({ rewindHash }), grin.getHeight()]);
+  if (scanRes.error || !scanRes.data) {
+    return { confirmed: 0n, pending: 0n, error: scanRes.error ?? 'Network error' };
   }
-  // Map the backend's three-bucket model onto the shared AssetBalance
-  // shape:
-  //   unspent (≥10 confs)                    → confirmed (spendable now)
-  //   on-chain but <10 confs / 'locked' DB   → locked   (in chain, maturing)
-  //   no block_height yet ('unconfirmed')    → pending  (in mempool only)
-  // Matches XMR/WOW semantics so the asset row reads the same way
-  // across chains. Earlier this lumped `locked + pending` together and
-  // displayed everything in-flight as "pending", confusing on a chain
-  // where most of the wait time is post-broadcast confirmation depth.
-  return {
-    confirmed: BigInt(result.data.confirmed),
-    locked: BigInt(result.data.locked),
-    pending: BigInt(result.data.pending),
-  };
+  const outputs = scanRes.data.outputs;
+  // Tip is best-effort: without it we can't prove maturity, so treat every
+  // on-chain output as still maturing (locked) rather than over-report
+  // spendable. tip=0 → nothing counts as mature.
+  const tip = heightRes.data?.height ?? 0;
+
+  // Reconcile the overlay against this fresh scan BEFORE reading it, so settled
+  // entries stop excluding inputs / inflating pending.
+  if (overlay) await overlay.reconcile(outputs);
+  const pendingSpent = overlay ? await overlay.selectablePendingSpent() : new Set<string>();
+
+  let confirmed = 0n;
+  let locked = 0n;
+  for (const o of outputs) {
+    const spendableHeight = o.is_coinbase
+      ? o.height + GRIN_COINBASE_MATURITY
+      : Math.max(o.height, o.lock_height);
+    const mature = o.height > 0 && tip >= spendableHeight;
+    if (mature) {
+      // Just-spent (broadcast, not yet mined) inputs must not read as spendable.
+      if (!pendingSpent.has(o.commit)) confirmed += BigInt(o.value);
+    } else if (o.height > 0) {
+      // On chain but still maturing (coinbase < 1440, or tip < lock_height).
+      locked += BigInt(o.value);
+    }
+    // o.height === 0 shouldn't appear in a confirmed-UTXO scan; ignore.
+  }
+
+  // Unconfirmed change/incoming the scan can't see yet → pending.
+  const pending = overlay ? BigInt(await overlay.pendingChangeValue(outputs)) : 0n;
+
+  return { confirmed, locked, pending };
 }
 
 /**

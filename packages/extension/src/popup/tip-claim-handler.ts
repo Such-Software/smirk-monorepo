@@ -50,6 +50,11 @@ import {
   monero as wasmMonero,
   type GrinSweepVoucherParams,
 } from '@smirk/wasm';
+import {
+  grinOverlay,
+  grinRewindHashFromMnemonic,
+  resolveGrinSpendable,
+} from './grin-flows';
 import { decryptTipKeyBackup, getTipKeyBackup } from './tip-key-backup';
 
 /**
@@ -934,18 +939,35 @@ async function sweepGrin(
     extended_private_key_hex: string;
   };
 
-  // Next free child index lives in grin_outputs; the new output we
-  // mint via the sweep occupies that slot. Backend's atomic
-  // broadcast records the change row in the same call so a partial
-  // failure doesn't leak an unspendable output.
-  const grinOutputs = await chainProviders.grin().listOutputs(userId);
-  if (grinOutputs.error || !grinOutputs.data) {
+  // The claimer mints one new output (the swept value) — reserve a fresh BIP32
+  // child index for it. v3 has no server output store, so the index counter is
+  // client-owned in the pending overlay. Seed it from a scan first (recognizes
+  // the highest on-chain index) so we never reuse an index and produce a
+  // duplicate, unspendable commitment.
+  void userId; // v3 is non-custodial: no server output store keyed by user.
+  // Use THE shared overlay singleton (not a fresh instance) so this claim's
+  // child-index reservation serializes against the always-on ~30s balance
+  // reconcile and any concurrent send/receive — a private overlay here would
+  // race the reconcile and could rewind the counter (duplicate commitment →
+  // fund loss). The overlay's per-storage-key global lock backstops this even so.
+  const overlay = grinOverlay;
+  try {
+    await resolveGrinSpendable({
+      mnemonic: wallet.mnemonic,
+      rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+      overlay,
+    });
+  } catch (e) {
     return {
       ok: false,
-      error: grinOutputs.error ?? 'Failed to fetch Grin output index',
+      error: `Failed to scan Grin outputs for claim index: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
-  const nextChild = grinOutputs.data.next_child_index;
+  // ATOMICALLY reserve the claimer output's index (read-and-increment in one
+  // serialized step) so a concurrent mint flow can't be handed the same index →
+  // duplicate commitment → fund loss. A reserved index that ends up unused (e.g.
+  // the sweep build/broadcast fails below) is simply skipped — harmless.
+  const nextChild = await overlay.reserveNextChildIndex();
   const claimerPath: [number, number, number, number] = [0, 0, nextChild, 0];
 
   // Grin v5.x fee policy: `(numIn + 21·numOut + 3·numKern) × 500_000`
@@ -988,32 +1010,14 @@ async function sweepGrin(
     };
   }
 
-  // `slate_id` MUST be a valid UUID — the backend's broadcast
-  // handler parses it as `uuid::Uuid::parse()` and rejects anything
-  // else with VALIDATION_ERROR. Voucher sweeps don't have a real
-  // slate ceremony, so we mint a fresh v4 UUID for backend
-  // bookkeeping. The matching `grin_transactions` row doesn't exist
-  // (recipient never called recordGrinTransaction) so the backend's
-  // status UPDATE is a no-op — the broadcast itself + the
-  // changeOutput INSERT still run, which is all we need.
-  //
-  // (Earlier this passed `kernel_excess_hex` which is a 66-char hex
-  // string — never parses as UUID — and every Grin claim 500'd at
-  // the validation gate.)
+  // Broadcast the sweep tx. Backend reads only `{ tx }` on v3 (no server output
+  // store). wasm tx_json is typed `unknown` because the JSON.parse boundary
+  // doesn't carry a schema; the wasm side always emits a JSON object
+  // (Transaction body) — see serialize_voucher_tx_json in
+  // crates/grin-ext/src/voucher.rs.
+  const sweepSlateId = uuidV4();
   const broadcast = await chainProviders.grin().broadcast({
-    userId,
-    slateId: uuidV4(),
-    // wasm tx_json is typed `unknown` because the JSON.parse boundary
-    // doesn't carry a schema. The wasm side always emits a JSON object
-    // (Transaction body) — see GrinSweepVoucherResult.tx_json docstring
-    // and serialize_voucher_tx_json in crates/grin-ext/src/voucher.rs.
     tx: result.tx_json as object,
-    changeOutput: {
-      keyId: pathToKeyId(claimerPath),
-      nChild: nextChild,
-      amount: voucher.amount - fee,
-      commitment: result.output.commitment_hex,
-    },
   });
   if (broadcast.error || !broadcast.data) {
     return {
@@ -1021,6 +1025,13 @@ async function sweepGrin(
       error: `Grin broadcast failed: ${broadcast.error ?? 'unknown'}`,
     };
   }
+
+  // Show the swept value as pending incoming until scan confirms it on chain.
+  // The claimer output's index was already reserved atomically above — do NOT
+  // bump again here or it would double-advance and skip an index.
+  await overlay.addPending(sweepSlateId, {
+    incoming: { commit: result.output.commitment_hex, value: voucher.amount - fee },
+  });
 
   // Use the kernel excess as the txid for UI display — Grin txs
   // don't have stable txids the way UTXO chains do, but the kernel
@@ -1038,19 +1049,6 @@ function uuidV4(): string {
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = bytesToHex(bytes);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-/** Pack a Grin 4-level path into the 17-byte key_id wire format the
- *  backend stores. Matches `pathToKeyId` in grin-flows.ts. */
-function pathToKeyId(path: [number, number, number, number]): string {
-  const out = new Uint8Array(17);
-  out[0] = 4;
-  const view = new DataView(out.buffer);
-  view.setUint32(1, path[0], false);
-  view.setUint32(5, path[1], false);
-  view.setUint32(9, path[2], false);
-  view.setUint32(13, path[3], false);
-  return bytesToHex(out);
 }
 
 // silence unused-import warning for hexToBytes — kept for parity with

@@ -15,11 +15,7 @@ import type { ApiResponse } from '../api/client';
 import type {
   FeeEstimate,
   FeeModel,
-  GrinBalance,
   GrinBroadcastResult,
-  GrinHistory,
-  GrinOutputListing,
-  GrinRecordResult,
   GrinScanResult,
   LwsBalance,
   LwsDeactivateResult,
@@ -55,9 +51,11 @@ export interface ChainCapabilities {
   requiresRegistration: boolean;
   /** ring-CT: spends need decoy/ring members (getRandomOutputs). */
   hasDecoys: boolean;
-  /** grin: seed-only recovery by rangeproof rewind (scanUnspent). */
+  /** grin: seed-only recovery via view-key rewind scan (`scan`). */
   hasRecoveryScan: boolean;
-  /** grin: outputs live in a server-side store with a lock/spend lifecycle. */
+  /** grin (legacy): whether outputs live in a server-side store with a
+   *  lock/spend lifecycle. Always false on v3 — the client owns output state
+   *  and reads it from `scan` each call. */
   serverSideOutputStore: boolean;
 }
 
@@ -102,38 +100,23 @@ export interface LwsChainProvider extends BaseChainProvider {
   deactivateAccount(address: string): Promise<ApiResponse<LwsDeactivateResult>>;
 }
 
-/** Mimblewimble (grin): no addresses, no amounts; rangeproof rewind + a
- *  server-side output store with an explicit lock/spend lifecycle. */
+/** Mimblewimble (grin): no addresses, no amounts, no server-side store. Balance
+ *  + spendable UTXOs come from a view-key rewind `scan` (the source of truth);
+ *  the client owns output state via a local pending overlay. */
 export interface GrinChainProvider extends BaseChainProvider {
   readonly asset: 'grin';
-  getBalance(userId: string): Promise<ApiResponse<GrinBalance>>;
-  listOutputs(userId: string): Promise<ApiResponse<GrinOutputListing>>;
-  getHistory(userId: string): Promise<ApiResponse<GrinHistory>>;
-  broadcast(params: {
-    userId: string;
-    slateId: string;
-    tx: object;
-    changeOutput?: { keyId: string; nChild: number; amount: number; commitment: string };
-  }): Promise<ApiResponse<GrinBroadcastResult>>;
-  /** Seed-only recovery: paginated walk of the unspent MMR with rangeproofs. */
-  scanUnspent(params: {
-    startIndex?: number | undefined;
+  /**
+   * Rewind the UTXO set with the wallet's view-only `rewindHash` and return its
+   * currently-unspent outputs. Source of truth for balance + spendable inputs;
+   * stores nothing server-side. `scan` IS recovery (rewinds the whole set).
+   */
+  scan(params: {
+    rewindHash: string;
     startHeight?: number | undefined;
-    max?: number | undefined;
+    restorePowNonce?: number | undefined;
   }): Promise<ApiResponse<GrinScanResult>>;
-  recordOutput(params: {
-    userId: string;
-    keyId: string;
-    nChild: number;
-    amount: number;
-    commitment: string;
-    txSlateId?: string;
-    blockHeight?: number;
-    lockHeight?: number;
-  }): Promise<ApiResponse<GrinRecordResult>>;
-  lockOutputs(params: { userId: string; outputIds: string[]; txSlateId: string }): Promise<ApiResponse<void>>;
-  unlockOutputs(params: { userId: string; txSlateId: string }): Promise<ApiResponse<void>>;
-  spendOutputs(params: { userId: string; txSlateId: string }): Promise<ApiResponse<void>>;
+  /** Relay a finalized tx to the node. Backend reads only `{ tx }`. */
+  broadcast(params: { tx: object }): Promise<ApiResponse<GrinBroadcastResult>>;
 }
 
 export type AnyChainProvider = UtxoChainProvider | LwsChainProvider | GrinChainProvider;

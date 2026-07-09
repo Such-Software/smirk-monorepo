@@ -91,6 +91,248 @@ key. *(Earlier builds used random per-output nonces, which are not
 seed-derivable; those outputs remain spendable but are outside seed-only
 recovery.)*
 
+## How a Grin payment travels
+
+The crypto sections above cover how a slate is *built* and *signed*. This section
+covers how that slate *moves between two wallets* — the part Grin's interactive
+protocol forces on every payment, since sender and receiver must exchange a slate
+before a transaction exists.
+
+Smirk is read through a **public-backend / federation lens**: `api.smirk.cash` is
+one backend among many, and nothing in the Grin data plane may assume it is the
+only one. That single principle sorts every transport and discovery mechanism into
+two buckets — **federated** (works across independent backends and self-hosters)
+and **same-instance** (a convenience shortcut that only works when both parties
+live on the same backend).
+
+### Non-custodial by construction
+
+The backend holds **no Grin balance, no output set, and no transaction history**.
+The only Grin state any server persists is the `grin_slatepacks` relay mailbox
+(see below), and even that is transient. The server-side Grin surface is just
+three stateless proxies to a Grin node / view-wallet:
+
+| Endpoint | Purpose | Stores? |
+|---|---|---|
+| `POST /wallet/grin/scan {rewind_hash, start_height?}` | View-only rewind scan → `{outputs[], total_balance, last_pmmr_index}` | No |
+| `GET  /wallet/grin/height` | Chain tip, for confirmation counting | No |
+| `POST /wallet/grin/broadcast {tx}` | Relay a finalized tx to the network | No |
+
+Everything else — **which outputs are yours, their values, their heights, your
+balance** — is recomputed from a fresh **rewind scan on every refresh**. The
+wallet keeps *no* custodial output store; the scan of the chain's small Grin UTXO
+set *is* the wallet state. The only local persistence is a **minimal pending
+overlay** (see below) that bridges the few blocks between broadcasting a
+transaction and the next scan that reflects it. The backend is a chain-access
+relay, not a wallet. Any Grin light-wallet-server exposing these three routes can
+back a Smirk wallet, which is exactly what the planned standalone `grin-lws`
+service makes explicit.
+
+**Balance is derived from a scan, not asked of a server, and not read from a
+store.** On every balance refresh the wallet:
+
+1. derives the extended key from the seed and computes a **rewind hash**
+   (`rewindHash(extKeyHex)` — a 32-byte view credential; see *Output recovery*);
+2. calls `POST /wallet/grin/scan {rewind_hash, start_height}`, which returns the
+   wallet's recognized **unspent outputs** — `{commit, value, height, mmr_index,
+   is_coinbase, lock_height}` each — computed purely from the view credential. The
+   scan stores nothing server-side and is the source of truth for this refresh;
+3. fetches the tip (`GET /wallet/grin/height`) to compute maturity;
+4. reconciles the pending overlay against the scan (drops entries the scan now
+   proves settled), then folds the overlay in to cover the confirmation gap.
+
+Balance is recomputed from the returned `outputs[]`, **not** taken from the
+scan's `total_balance` field (which neither subtracts just-spent inputs nor splits
+maturity). Per-output maturity: `spendableHeight = is_coinbase ? height + 1440 :
+max(height, lock_height)`; an output is *mature* when `tip ≥ spendableHeight`. The
+three balance buckets:
+
+- **confirmed** (spendable now) = Σ value of mature outputs whose `commit` is
+  **not** in the overlay's pending-spent set;
+- **locked** (on-chain, maturing) = Σ value of on-chain-but-immature outputs
+  (coinbase inside its 1440-block window, or `tip < lock_height`);
+- **pending** (in-flight incoming/change) = Σ value of overlay change/incoming
+  entries whose `commit` has **not yet** appeared in `outputs[]` — a scan only
+  sees the confirmed UTXO set, so unconfirmed money is overlay-only until mined.
+
+### The pending overlay
+
+The overlay is deliberately **not** an output store, a balance ledger, or
+spent-bookkeeping — it exists solely to bridge the window between a broadcast and
+the scan that confirms it. It is a small client-only structure (in the extension,
+`chrome.storage.local` key `grin_pending_v1`; in `@smirk/core` a pure module over
+an injected storage adapter, so core stays platform-agnostic). Keyed by broadcast
+slate id, each entry records: the input `commit`s the tx consumes (to **exclude**
+from selection until they are mined), the unconfirmed **change** output (to show as
+pending), any **incoming** output on the receive side (to show as pending), and a
+broadcast timestamp for an age-out backstop. Alongside the entries it carries one
+**monotonic `nextChildIndex`** counter.
+
+Clearing is **scan-driven, never optimistic**: an entry is deleted only when the
+scan proves its inputs are gone *and* its change has confirmed (a 7-day backstop
+sweeps stuck entries so a cancelled/lost slate can't wedge selection). On an
+explicit user cancel, its entry is deleted immediately so the inputs become
+selectable again.
+
+**Index reuse is money-critical.** With no server output store there is no
+server-supplied `next_child_index`; the wallet owns the counter itself, seeded on
+load to `max(identified path[2]) + 1` and bumped on every created change/receive
+output. Reusing an index re-derives an identical commitment, making the second
+output unspendable — so the counter ships together with the path-identification
+helper described under *Seed-only recovery*.
+
+### The three transports
+
+A slate is one payload; how it reaches the counterparty is a transport choice.
+
+| Transport | Bucket | When | Discovery key |
+|---|---|---|---|
+| **Nostr gift-wrap** | **Federated (default)** | Recipient is reachable by Nostr identity | npub / NIP-05 |
+| **Manual clipboard** | **Federated (universal)** | No online channel — user copies the armored slatepack | slatepack address (age-encrypts to it) |
+| **Backend relay** | **Same-instance** | Both parties on the same backend | backend `user_id` |
+
+- **Nostr gift-wrap** is the federated default. Each slate leg (S1/S2/S3, I1/I2/I3)
+  is wrapped in a NIP-59 kind-1059 gift-wrap addressed to the counterparty's npub
+  and published to relays. It crosses backends, needs no shared server, and the
+  metadata-hiding envelope reveals neither sender, amount, nor slate to relays.
+- **Manual clipboard** is the universal fallback — always available, no network
+  dependency at all. The wallet armors the slate (`BEGINSLATEPACK…ENDSLATEPACK`),
+  age-encrypting it to the recipient's slatepack address when known, and the user
+  carries each leg across by copy/paste. Correct for cold, offline, or
+  address-only recipients.
+- **Backend relay** (`grin_slatepacks` mailbox) is a same-instance convenience: the
+  sender POSTs the slatepack keyed by the recipient's backend `user_id`, the
+  recipient polls, responds, and the server flips the row's status through its
+  lifecycle. It only works when both parties are registered on the *same* backend —
+  there is no cross-backend relay federation — so it is strictly a shortcut, never
+  a requirement.
+
+### Recipient discovery
+
+How an address in the send box resolves to a transport:
+
+- **npub / NIP-05** → **Nostr gift-wrap** (federated). A NIP-05 handle
+  (`user@domain`) is domain-scoped and resolves across backends.
+- **backend `user_id`** (via public `GET /users/by-username/{username}`, which
+  returns the user's registered Grin and Nostr public keys) → **backend relay**
+  when same-instance, else Nostr if the looked-up user exposes an npub.
+- **bare slatepack address** (`grin1…`) → **manual clipboard** by default, since a
+  raw Grin address carries no routing hint on its own.
+
+**The address → npub bridge.** To let a raw `grin1…` address route automatically
+over Nostr, a backend lookup resolves a Grin slatepack address (or Grin public key)
+to the owning user's Nostr npub (indexing `user_keys.grin → user → nostr npub`).
+When that bridge resolves, a bare-address send is upgraded from clipboard to Nostr
+gift-wrap. It is a **same-instance** lookup — it only knows users registered on the
+queried backend — so cross-backend bare-address sends stay clipboard until the
+sender has the recipient's npub or NIP-05 directly.
+
+Discovery registration is via `POST /api/v1/keys {asset:"grin", public_key}`
+(the `user_keys` table), which makes a wallet's Grin address findable by username
+on that backend. This is a same-instance directory convenience, not a custodial
+binding — the key is published for discovery, not held for spending.
+
+### Seed-only recovery
+
+Because the backend stores no Grin state and the wallet keeps no output store, a
+wallet is fully reconstructable from its **12-word seed alone**: re-derive the
+extended key, compute the rewind hash, scan. The scan returns the recognized
+unspent set and their values, so a fresh re-import immediately *sees* its full
+balance with nothing to restore — the scan *is* the recovery. (This subsumes the
+old client-side "recover outputs" path entirely; there is no separate recovery
+step.)
+
+Restoring the ability to *spend* each recovered output requires its BIP32 path,
+which the scan response does **not** carry (it returns commitments, not proofs or
+paths). Smirk outputs are deterministic, so the path is recoverable from the seed:
+a bounded wasm helper, **`grin_identify_output(extKey, legacyExtKey, commit,
+value, maxChild)`**, searches `n ∈ [0, maxChild]` across the v3/legacy key schemes
+and the Regular/None switch-commitment modes, recomputes each Pedersen commitment,
+and returns the matching `[0,0,n,0]` path (or null). Input selection identifies
+each scanned output this way before spending it — an output whose path cannot be
+identified is dropped rather than fed to the builder, since a wrong path silently
+produces a bad blinding factor. When `grin-lws` lands (below), its
+`/get_unspent_outs` returns the recovered path directly and the brute-force
+identify search is no longer needed.
+
+Legacy pre-HF2 / random-nonce outputs fall outside rewind-scan recognition and
+remain proof-recovery-only.
+
+### Future direction: `grin-lws`
+
+The current `POST /wallet/grin/scan` is a **stateless on-demand proxy** — it
+rewinds the whole UTXO set per request and stores nothing, which is fine for
+Grin's small UTXO set but does no path recovery and does not scale to many
+accounts. The planned `grin-lws` is a **real light-wallet-server with a DB**,
+mirroring `monero-lws`: register a `rewind_hash` (the view credential), run a
+background chain scanner that stores each account's outputs *with their recovered
+paths* and marks spends, and serve `get_balance` / `get_unspent_outs` /
+`submit_raw_tx` / `height` fast. Its `get_unspent_outs` returns outputs **with**
+`key_id` / `n_child`, so the client spends directly with no `grin_identify_output`
+search. It is a standalone, public-clean, anyone-can-run service (env-configured,
+no Smirk-specific detail); the backend proxies it exactly as it proxies the
+Monero/Wownero LWS, forwarding only the view-only `rewind_hash` and storing
+nothing. Until it ships, the on-demand scan plus `grin_identify_output` cover the
+same ground.
+
+### Lifecycle per transport
+
+Grin's two ceremonies each have three legs. The *crypto* of each leg is identical
+across transports (see the slate-construction rows in **Status**); only the
+*carrier* of each leg and the settlement signalling differ.
+
+**Send (sender-initiated): S1 → S2 → S3**
+
+1. **S1** — sender scans, identifies each mature output's path, selects inputs
+   (greedy largest-first with fee iteration) **minus** any commit already in the
+   overlay's pending-spent set, and builds the initial slate
+   (`createSendTransaction`), which emits a change output at `nextChildIndex`.
+2. **S2** — recipient adds their output + range proof + partial signature
+   (`signIncomingSendSlate`) and returns the slate.
+3. **S3** — sender finalizes (`finalizeSendSlate`) and broadcasts via
+   `POST /wallet/grin/broadcast {tx}`. **Only on a successful broadcast** does the
+   sender add a pending-overlay entry (spent input commits + change) and bump
+   `nextChildIndex` — S1 alone may never finalize, so nothing is recorded until the
+   tx is actually on the wire. The excluded-from-selection guarantee then holds
+   from broadcast until the next scan shows the inputs gone.
+
+Per transport: over **Nostr**, each leg is a gift-wrap, and a successful S3 emits a
+`finalizeNotice` settlement gift-wrap so the recipient's inbox item retires by
+protocol (not just optimistically); a **cancel** publishes a kind-1059 cancel
+gift-wrap and deletes the overlay entry (inputs become selectable again). Over the
+**backend relay**, the server flips the mailbox row `pending_recipient →
+pending_sender → finalized` and a `settle` call hits relay-finalize after
+broadcast; cancel calls the relay cancel endpoint and deletes the overlay entry.
+Over **manual clipboard**, the user carries each leg by hand and there is no
+settlement signal beyond the on-chain confirmation the next scan observes. All
+three route through one `selectSendChannel` / `SlatepackChannel` abstraction —
+send, receive, respond, and cancel share the same transport plumbing.
+
+**Invoice (receiver-initiated): I1 → I2 → I3**
+
+1. **I1** — payee builds an invoice slate naming the amount (`createInvoice`).
+2. **I2** — payer scans, identifies + selects inputs (minus pending-spent) and adds
+   inputs, fee, and their partial signature (`signInvoice`).
+3. **I3** — payee finalizes (`finalizeInvoice`) and broadcasts, then records its
+   incoming output in the overlay and bumps `nextChildIndex`.
+
+The same three transports carry the invoice legs. On the receive side generally
+(incoming send or invoice), a broadcast records an `incoming` overlay entry so the
+received amount shows as *pending* until a scan confirms it, and bumps
+`nextChildIndex` so the receive index is never reused. Cancelling clears the
+relevant overlay entry.
+
+**Money-critical invariants (all transports):**
+
+- **Exclude-until-mined.** An input a broadcast tx consumes is added to the
+  pending-spent set on successful broadcast and excluded from selection until a
+  scan proves it gone — preventing an accidental double-spend of the same UTXO in
+  the confirmation gap. This is enforced identically whether the carrier is Nostr,
+  relay, or clipboard.
+- **No index reuse.** `nextChildIndex` is monotonic and bumped on every created
+  change/receive output; reusing it would re-derive an identical, unspendable
+  commitment.
+
 ## Test methodology
 
 Two-tier verification before any feature ships:

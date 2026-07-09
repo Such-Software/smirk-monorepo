@@ -59,8 +59,8 @@ pub use bulletproof::{
 pub use kernel::{grin_kernel_features_bytes, grin_kernel_sig_msg};
 pub use keys::{
     grin_derive_extended_key, grin_derive_extended_key_legacy_bip39, grin_derive_keys,
-    grin_secp256k1_public_key, grin_slatepack_address, grin_slatepack_address_secret,
-    grin_slatepack_address_to_pubkey_hex,
+    grin_rewind_hash, grin_secp256k1_public_key, grin_slatepack_address,
+    grin_slatepack_address_secret, grin_slatepack_address_to_pubkey_hex,
 };
 pub use multiparty::{
     grin_point_add, grin_point_sum, grin_schnorr_aggregate_partials,
@@ -83,8 +83,9 @@ pub use transaction::{grin_pubkey_to_commitment, grin_slate_to_transaction_bytes
 pub use voucher::{grin_create_grin_voucher, grin_sweep_grin_voucher};
 pub use wallet_flows::{
     grin_create_invoice, grin_create_send_transaction, grin_finalize_invoice,
-    grin_finalize_send_slate, grin_random_secret_nonce, grin_sign_incoming_send_slate,
-    grin_sign_invoice, grin_slate_v4_from_bin_hex, grin_slate_v4_to_bin_hex,
+    grin_finalize_send_slate, grin_identify_output, grin_random_secret_nonce,
+    grin_sign_incoming_send_slate, grin_sign_invoice, grin_slate_v4_from_bin_hex,
+    grin_slate_v4_to_bin_hex,
 };
 
 /// grin-ext crate version. Useful for runtime version sanity checks.

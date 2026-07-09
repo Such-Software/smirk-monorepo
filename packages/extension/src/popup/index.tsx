@@ -131,9 +131,10 @@ import {
   inspectSlatepack,
   canonicalGrinSlatepackAddress,
   calcGrinFee,
-  recoverGrinOutputs,
-  shouldRecoverGrin,
-  RECOVER_GRIN_BIRTHDAY_HEIGHT,
+  makeGrinResolver,
+  resolveGrinSpendable,
+  grinRewindHashFromMnemonic,
+  grinOverlay,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
 import {
@@ -396,6 +397,27 @@ async function fetchGrinInbox(
     })),
   ];
   return { items, loading: false, error: null };
+}
+
+// The client-only Grin pending overlay (v3 is non-custodial — no server output
+// store) is the shared `grinOverlay` singleton exported from ./grin-flows, so
+// this popup, the tip/claim handler, and the inbox actions all mutate ONE
+// instance over the single chrome.storage slot. Imported above.
+
+/**
+ * Compute the wallet's Grin `rewind_hash` (view-only scan credential) for
+ * fetchAllBalances. Requires wasm + mnemonic; returns undefined when either is
+ * unavailable (locked wallet), in which case the Grin balance is returned zeroed
+ * with no round-trip rather than throwing.
+ */
+async function computeGrinRewindHash(wallet: UnlockedWallet): Promise<string | undefined> {
+  if (!wallet.mnemonic) return undefined;
+  try {
+    await ensureWasmInit();
+    return grinRewindHashFromMnemonic(wallet.mnemonic);
+  } catch {
+    return undefined;
+  }
 }
 
 const verifyKeyImage = async ({
@@ -709,9 +731,12 @@ function App() {
       const visible = visibleAssetIds(await store.load(), listAssets()).map(
         (a) => a.id,
       );
+      const grinRewindHash = await computeGrinRewindHash(wallet);
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         visibleAssetIds: visible,
+        ...(grinRewindHash ? { grinRewindHash } : {}),
+        grinPending: grinOverlay,
         onAssetBalance: (assetId, balance) => {
           setSession((prev) => {
             if (!prev) return prev;
@@ -792,9 +817,12 @@ function App() {
       const visible = visibleAssetIds(await store.load(), listAssets()).map(
         (a) => a.id,
       );
+      const grinRewindHash = await computeGrinRewindHash(wallet);
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         visibleAssetIds: visible,
+        ...(grinRewindHash ? { grinRewindHash } : {}),
+        grinPending: grinOverlay,
         onAssetBalance: (assetId, balance) => {
           setSession((prev) => {
             if (!prev || !prev.balances) return prev;
@@ -925,53 +953,28 @@ function App() {
     if (!session?.bootstrap?.userId) return;
     if (!api.getAccessToken()) return;
     const mnemonic = walletState.wallet.mnemonic;
-    const userId = session.bootstrap.userId;
-    const wallet = walletState.wallet;
-    const bootstrap = session.bootstrap;
     void (async () => {
       await ensureWasmInit();
-      // Opt-in: skip Grin address registration + recovery entirely when the
-      // backend advertises no Grin relay (permissive on unknown/legacy caps).
+      // Opt-in: skip Grin key registration entirely when the backend advertises
+      // no Grin relay (permissive on unknown/legacy caps).
       if (!capAllowsGrin(await loadCapabilities(api))) return;
       try {
+        // Register the CANONICAL bech32 slatepack address under the grin key so
+        // username→address discovery AND the address→npub/user lookup
+        // (find_user_by_grin_address WHERE public_key = addr) match. buildKeysList
+        // stored @smirk/core's custom-derived hex at auth — the wrong value — so
+        // re-register the canonical address here (idempotent UPSERT).
+        //
+        // v3 has no seed-only "recovery" step: POST /wallet/grin/scan already IS
+        // recovery (rewind_hash rewinds the whole UTXO set), so balance and
+        // spendable inputs are recovered on every fetch. No output store to seed.
         const canonical = canonicalGrinSlatepackAddress(mnemonic);
-        const res = await api.registerGrinAddress(canonical);
-        if (res.error) {
-          console.warn('[smirk-popup] register canonical grin address rejected:', res.error);
-        } else {
-          console.info('[smirk-popup] registered canonical grin address:', canonical);
-        }
-        // STEP 4: seed-only Grin recovery (off by default; opt-in via build config).
-        // Idempotent (backend dedupes by commitment) + best-effort, so it's
-        // safe to run on every unlock and never blocks the wallet.
-        if (shouldRecoverGrin(canonical)) {
-          try {
-            // Coalesce mid-scan refreshes: while one is in flight, skip — the
-            // post-scan refresh below catches anything missed. Keeps the
-            // balance live during the (minutes-long) full scan to the tip.
-            let recoveryRefreshing = false;
-            const recovery = await recoverGrinOutputs(mnemonic, userId, {
-              startHeight: RECOVER_GRIN_BIRTHDAY_HEIGHT,
-              onRecovered: () => {
-                if (recoveryRefreshing) return;
-                recoveryRefreshing = true;
-                void refreshBalances(wallet, bootstrap).finally(() => {
-                  recoveryRefreshing = false;
-                });
-              },
-            });
-            console.info('[smirk-popup] grin recovery:', recovery);
-            // Final refresh to settle the full recovered total once the scan
-            // completes (the mid-scan refreshes are best-effort/coalesced).
-            if (recovery.recovered > 0) {
-              await refreshBalances(wallet, bootstrap);
-            }
-          } catch (e) {
-            console.warn('[smirk-popup] grin recovery threw:', e);
-          }
+        const res = await api.registerKey('grin', canonical);
+        if (res.error && res.status !== 404) {
+          console.warn('[smirk-popup] register canonical grin key rejected:', res.error);
         }
       } catch (e) {
-        console.warn('[smirk-popup] register canonical grin address threw:', e);
+        console.warn('[smirk-popup] register canonical grin key threw:', e);
       }
     })();
   }, [walletState, session?.bootstrap?.userId]);
@@ -1627,13 +1630,19 @@ function HomeRouter({
           // useEffect).
           if (assetId === 'grin') {
             if (!options?.amountAtomic) return null;
-            const grinUserId = session?.bootstrap?.userId;
-            if (!grinUserId) return null;
-            const outs = await chainProviders.grin().listOutputs(grinUserId);
-            if (outs.error || !outs.data) return null;
-            const spendable = outs.data.outputs
-              .filter((o) => o.status === 'unspent')
-              .sort((a, b) => b.amount - a.amount);
+            if (!wallet.mnemonic) return null;
+            await ensureWasmInit();
+            let resolved;
+            try {
+              resolved = await resolveGrinSpendable({
+                mnemonic: wallet.mnemonic,
+                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                overlay: grinOverlay,
+              });
+            } catch {
+              return null;
+            }
+            const spendable = [...resolved.outputs].sort((a, b) => b.amount - a.amount);
             const target = Number(options.amountAtomic);
             // Iterate until input count converges (fee itself moves the
             // target). Cap at MAX_ITER to stay fast; the count almost
@@ -1770,13 +1779,7 @@ function HomeRouter({
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
-          // Smirk-to-Smirk auto-detect (look up recipient address →
-          // user_id, drop slatepack at relay) lands in Phase 3.3 when
-          // the address-to-user endpoint is wired through the API
-          // client. For now, every Grin send is clipboard-mode; the
-          // recipient pastes our S1 into their wallet and pastes the
-          // S2 response back.
-          const recipientUserId: string | undefined = undefined;
+          let recipientUserId: string | undefined;
           // If the recipient field is a Nostr npub OR a NIP-05 name
           // (alice@goblin.st — federation), route the send over the gift-wrap
           // channel instead of a grin slatepack address. npub/hex resolve
@@ -1812,43 +1815,41 @@ function HomeRouter({
             }
             recipientPubkeyHex = res.resolution.pubkeyHex;
           }
-          // Gift-wrap the S1 under the ACTIVE identity (from the vault), so a send
-          // from a burner/imported identity is signed by it, not always account 0.
-          const senderNostrIdentity = recipientPubkeyHex
-            ? await getActiveNostrIdentity(wallet.mnemonic)
-            : undefined;
+          // Bare grin1 slatepack address: look up its registered owner so we can
+          // route over a channel (finding #1 fix — address→npub/user bridge).
+          // Prefer the owner's npub (Nostr, Goblin-interoperable); else their
+          // backend user_id (same-instance relay); else fall through to manual.
+          if (!recipientPubkeyHex && !isNip05Name(toAddress)) {
+            const owner = await api.getGrinAddressUser(toAddress).catch(() => null);
+            if (owner?.data?.registered) {
+              const ownerNpubHex = owner.data.npub ? recipientNpubToHex(owner.data.npub) : null;
+              if (ownerNpubHex) recipientPubkeyHex = ownerNpubHex;
+              else if (owner.data.user_id) recipientUserId = owner.data.user_id;
+            }
+          }
+          // Build both transports under the ACTIVE identity (from the vault), so a
+          // send from a burner/imported identity is gift-wrapped by IT, not always
+          // account 0. selectSendChannel inside startGrinSend picks Nostr vs backend.
+          const identity = await getActiveNostrIdentity(wallet.mnemonic);
+          const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
           try {
             const result = await startGrinSend({
-              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               senderSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
-              ...(recipientPubkeyHex
-                ? { recipientPubkeyHex }
-                : { recipientSlatepackAddress: toAddress }),
-              ...(senderNostrIdentity ? { senderNostrIdentity } : {}),
+              ...(recipientPubkeyHex ? { recipientPubkeyHex } : {}),
               ...(recipientUserId ? { recipientUserId } : {}),
+              // Encrypt to the grin address for the non-Nostr paths (backend relay
+              // + manual); the Nostr path armors plain (gift-wrap secures it).
+              ...(recipientPubkeyHex ? {} : { recipientSlatepackAddress: toAddress }),
+              channels,
               amount: Number(amountAtomic),
-              resolver: {
-                fetchSpendable: async () => {
-                  const r = await chainProviders.grin().listOutputs(grinUserId);
-                  if (r.error || !r.data) {
-                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
-                  }
-                  return {
-                    outputs: r.data.outputs
-                      .filter((o) => o.status === 'unspent')
-                      .map((o) => ({
-                        id: o.id,
-                        key_id: o.key_id,
-                        n_child: o.n_child,
-                        amount: o.amount,
-                        commitment: o.commitment,
-                        is_coinbase: o.is_coinbase,
-                      })),
-                    next_child_index: r.data.next_child_index,
-                  };
-                },
-              },
+              resolver: makeGrinResolver({
+                mnemonic: wallet.mnemonic,
+                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                overlay: grinOverlay,
+              }),
+              // Reserve the selected inputs + change index at build time.
+              overlay: grinOverlay,
             });
             return {
               ok: true,
@@ -1870,15 +1871,19 @@ function HomeRouter({
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
+          await ensureWasmInit();
+          const identity = await getActiveNostrIdentity(wallet.mnemonic);
+          const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
           try {
             const result = await processGrinS2({
-              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               s2,
               sender_context_json: senderContextJson,
               sender_inputs: JSON.parse(senderInputsJson),
               ...(changeOutputJson ? { change_output: JSON.parse(changeOutputJson) } : {}),
               ...(relayId ? { relay_id: relayId } : {}),
+              channels,
+              overlay: grinOverlay,
             });
             return {
               ok: true,
@@ -1890,10 +1895,20 @@ function HomeRouter({
           }
         }}
         onGrinCancel={async ({ slateId, relayId }) => {
+          if (!wallet.mnemonic) {
+            // Still free the reserved inputs locally even if we can't build the
+            // channel to notify the counterparty.
+            await grinOverlay.remove(slateId).catch(() => undefined);
+            return;
+          }
+          await ensureWasmInit();
+          const identity = await getActiveNostrIdentity(wallet.mnemonic);
+          const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
           await cancelGrinSend({
-            userId: grinUserId,
             slate_id: slateId,
             ...(relayId ? { relay_id: relayId } : {}),
+            channels,
+            overlay: grinOverlay,
           }).catch(() => undefined);
         }}
         onExit={() => void navigate('home')}
@@ -1964,32 +1979,16 @@ function HomeRouter({
           await ensureWasmInit();
           try {
             const result = await startGrinInvoice({
-              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               receiverSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
               amount: Number(amountAtomic),
               fee: Number(feeAtomic),
-              resolver: {
-                fetchSpendable: async () => {
-                  const r = await chainProviders.grin().listOutputs(grinUserId);
-                  if (r.error || !r.data) {
-                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
-                  }
-                  return {
-                    outputs: r.data.outputs
-                      .filter((o) => o.status === 'unspent')
-                      .map((o) => ({
-                        id: o.id,
-                        key_id: o.key_id,
-                        n_child: o.n_child,
-                        amount: o.amount,
-                        commitment: o.commitment,
-                        is_coinbase: o.is_coinbase,
-                      })),
-                    next_child_index: r.data.next_child_index,
-                  };
-                },
-              },
+              resolver: makeGrinResolver({
+                mnemonic: wallet.mnemonic,
+                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                overlay: grinOverlay,
+              }),
+              overlay: grinOverlay,
             });
             return {
               ok: true,
@@ -2010,10 +2009,10 @@ function HomeRouter({
           await ensureWasmInit();
           try {
             const result = await processGrinI2({
-              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               i2,
               receiver_context_json: receiverContextJson,
+              overlay: grinOverlay,
             });
             return {
               ok: true,
@@ -2026,16 +2025,12 @@ function HomeRouter({
         }}
         onCancel={async ({ slateId }) => {
           if (!slateId) return;
-          // Phase 3.5 will add server-side unlock-reserved-output cleanup.
-          // For now, mark cancelled on backend so it stops appearing in
-          // pending lists.
-          await api
-            .updateGrinTransaction({
-              userId: grinUserId,
-              slateId,
-              status: 'cancelled',
-            })
-            .catch(() => undefined);
+          // v3 has no server tx record to mark cancelled. startGrinInvoice records
+          // NO pending-incoming entry (it doesn't inflate the pending balance), so
+          // there's normally nothing to drop; the reserved receive-output index is
+          // intentionally never released (reuse would risk a duplicate commitment).
+          // remove() stays as a harmless no-op / safety net for any later entry.
+          await grinOverlay.remove(slateId).catch(() => undefined);
         }}
         onExit={() => void navigate('home/receive')}
       />
@@ -2055,31 +2050,15 @@ function HomeRouter({
           await ensureWasmInit();
           try {
             const signed = await signIncomingGrinSlate({
-              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               receiverSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
               s1Armored,
-              resolver: {
-                fetchSpendable: async () => {
-                  const r = await chainProviders.grin().listOutputs(grinUserId);
-                  if (r.error || !r.data) {
-                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
-                  }
-                  return {
-                    outputs: r.data.outputs
-                      .filter((o) => o.status === 'unspent')
-                      .map((o) => ({
-                        id: o.id,
-                        key_id: o.key_id,
-                        n_child: o.n_child,
-                        amount: o.amount,
-                        commitment: o.commitment,
-                        is_coinbase: o.is_coinbase,
-                      })),
-                    next_child_index: r.data.next_child_index,
-                  };
-                },
-              },
+              resolver: makeGrinResolver({
+                mnemonic: wallet.mnemonic,
+                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                overlay: grinOverlay,
+              }),
+              overlay: grinOverlay,
             });
             // When the S1 came from a Smirk relay row (Inbox tap), post
             // the S2 back via the relay's `sign` endpoint so the
@@ -2335,31 +2314,15 @@ function HomeRouter({
           await ensureWasmInit();
           try {
             const signed = await signGrinInvoice({
-              userId: grinUserId,
               mnemonic: wallet.mnemonic,
               payerSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
               i1Armored,
-              resolver: {
-                fetchSpendable: async () => {
-                  const r = await chainProviders.grin().listOutputs(grinUserId);
-                  if (r.error || !r.data) {
-                    throw new Error(r.error ?? 'Failed to fetch Grin outputs');
-                  }
-                  return {
-                    outputs: r.data.outputs
-                      .filter((o) => o.status === 'unspent')
-                      .map((o) => ({
-                        id: o.id,
-                        key_id: o.key_id,
-                        n_child: o.n_child,
-                        amount: o.amount,
-                        commitment: o.commitment,
-                        is_coinbase: o.is_coinbase,
-                      })),
-                    next_child_index: r.data.next_child_index,
-                  };
-                },
-              },
+              resolver: makeGrinResolver({
+                mnemonic: wallet.mnemonic,
+                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                overlay: grinOverlay,
+              }),
+              overlay: grinOverlay,
             });
             // See `signGrinSlatepack` rationale at the receiver-S2
             // handler above — receiver is in a valid state regardless,
@@ -2446,12 +2409,18 @@ function HomeRouter({
         }}
         onSubmit={async (fields) => {
           await ensureWasmInit();
-          // BTC/LTC fully wired below. XMR/WOW + Grin currently surface
-          // a "ships next commit" error inside the dispatcher.
+          // Grin voucher tips are scan-based (non-custodial): thread the view-only
+          // rewind hash + the client pending overlay so createGrinTip can select
+          // inputs and reserve child indices.
+          const grinRewindHash = wallet.mnemonic
+            ? grinRewindHashFromMnemonic(wallet.mnemonic)
+            : undefined;
           return dispatchSocialTip({
             wallet,
             senderUserId: grinUserId,
             fields,
+            grinPending: grinOverlay,
+            ...(grinRewindHash ? { grinRewindHash } : {}),
             // Record pendingOutgoing on tip broadcast so the sender's
             // balance reflects the deduction immediately — matches the
             // SendWizard onSubmit flow above. Without this, XMR/WOW

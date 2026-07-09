@@ -120,57 +120,36 @@ export interface LwsDeactivateResult {
 }
 
 // ---- Mimblewimble (grin) ----
-export interface GrinBalance {
-  confirmed: number;
-  locked: number;
-  pending: number;
-  total: number;
-}
-export interface GrinOutput {
-  id: string;
-  key_id: string;
-  n_child: number;
-  amount: number;
-  commitment: string;
-  is_coinbase: boolean;
-  block_height: number | null;
-  status: 'unconfirmed' | 'unspent' | 'locked' | 'spent';
-}
-export interface GrinOutputListing {
-  outputs: GrinOutput[];
-  /** Next BIP32 child index; load-bearing for deterministic key derivation. */
-  next_child_index: number;
-}
-export interface GrinHistoryEntry {
-  id: string;
-  slate_id: string;
-  amount: number;
-  fee: number;
-  direction: 'send' | 'receive';
-  status: 'pending' | 'signed' | 'finalized' | 'confirmed' | 'cancelled';
-  counterparty_user_id: string | null;
-  created_at: string;
-  kernel_excess: string | null;
-}
-export interface GrinHistory {
-  transactions: GrinHistoryEntry[];
-}
+//
+// Grin is NON-CUSTODIAL: there is no server-side output store, balance, or
+// history. `POST /wallet/grin/scan` rewinds the UTXO set with the wallet's
+// view-only `rewind_hash` and returns its currently-unspent outputs — the
+// single source of truth for balance and spendable inputs. The client owns
+// output state; balance/maturity/pending are derived from scan + a minimal
+// local pending overlay (see payments/grin-pending-overlay.ts).
 export interface GrinScanOutput {
+  /** 33-byte Pedersen commitment, lowercase hex. Stable output identifier. */
   commit: string;
-  block_height: number | null;
+  /** Value in nanogrin. */
+  value: number;
+  /** Block height the output was mined at (0 if not yet confirmed). */
+  height: number;
+  /** MMR position; only an incremental-scan hint, not used for correctness. */
   mmr_index: number;
-  proof: string | null;
+  is_coinbase: boolean;
+  /** Kernel lock height; the output is unspendable until tip >= lock_height. */
+  lock_height: number;
 }
 export interface GrinScanResult {
-  highest_index: number;
-  last_retrieved_index: number;
   outputs: GrinScanOutput[];
+  /** Backend's own sum; NOT trusted for `confirmed` (doesn't split maturity
+   *  nor subtract pending-spent). Kept for parity/diagnostics only. */
+  total_balance: number;
+  /** Optional incremental-scan hint; correctness uses a full scan each call. */
+  last_pmmr_index: number;
 }
 export interface GrinBroadcastResult {
   success: boolean;
-}
-export interface GrinRecordResult {
-  id: string;
 }
 
 // ---- Fee model ----

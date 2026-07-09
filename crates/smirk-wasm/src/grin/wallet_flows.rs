@@ -15,8 +15,8 @@ use wasm_bindgen::prelude::*;
 
 use grin_ext::{
     create_invoice, create_send_transaction, finalize_invoice, finalize_send_slate,
-    serialize_slate_v4, serialize_slate_v4_bin, sign_incoming_send_slate, sign_invoice,
-    ChangeOutputInfo, CreateInvoiceParams, CreateSendTxParams, FinalizeInvoiceParams,
+    identify_output, serialize_slate_v4, serialize_slate_v4_bin, sign_incoming_send_slate,
+    sign_invoice, ChangeOutputInfo, CreateInvoiceParams, CreateSendTxParams, FinalizeInvoiceParams,
     FinalizeSendParams, KernelFeatures, ReceiverContext, SenderContext, SignIncomingSendParams,
     SignInvoiceParams, UnspentOutput,
 };
@@ -531,4 +531,40 @@ pub fn grin_slate_v4_from_bin_hex(bin_hex: &str) -> Result<String, JsValue> {
     let bin = hex::decode(bin_hex).map_err(err_string)?;
     let slate = grin_ext::deserialize_slate_v4_bin(&bin).map_err(err_string)?;
     serialize_slate_v4(&slate).map_err(err_string)
+}
+
+/// Recover the BIP32 path of one of the wallet's own on-chain outputs from its
+/// commitment + value alone. Enables stateless scan-based spending: the v3
+/// `/wallet/grin/scan` returns `{commit, value, ...}` but not the derivation
+/// path, while `grin_create_send_transaction` requires each input's path to
+/// re-derive its blinding factor.
+///
+/// Searches child indices `n` in `0..=max_n` over the standard Smirk layout
+/// `[0, 0, n, 0]`, applying the SAME candidate matrix the send builder uses per
+/// input (v3/legacy key × Regular/None switch × depth-3/4). Returns the matching
+/// 4-level path as a JSON array (e.g. `"[0,0,7,0]"`), or the string `"null"` if
+/// no index in range reproduces the commitment (caller must then drop that
+/// output — never feed an unidentified input to the send builder).
+///
+/// `legacy_ext_key_hex` may be empty to skip the legacy fallback. `value` is in
+/// nanogrin.
+#[wasm_bindgen]
+pub fn grin_identify_output(
+    ext_key_hex: &str,
+    legacy_ext_key_hex: &str,
+    commit_hex: &str,
+    value: u64,
+    max_n: u32,
+) -> Result<String, JsValue> {
+    let ext_key = hex_to_64(ext_key_hex, "ext_key_hex")?;
+    let legacy_ext_key = if legacy_ext_key_hex.is_empty() {
+        None
+    } else {
+        Some(hex_to_64(legacy_ext_key_hex, "legacy_ext_key_hex")?)
+    };
+    let commitment = hex_to_33(commit_hex, "commit_hex")?;
+    match identify_output(&ext_key, legacy_ext_key.as_ref(), commitment, value, max_n) {
+        Some(path) => serde_json::to_string(&path).map_err(err_string),
+        None => Ok("null".to_string()),
+    }
 }

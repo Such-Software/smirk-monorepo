@@ -126,24 +126,15 @@ export class SmirkApi
   registerLws: WalletLwsMethods['registerLws'];
   deactivateLws: WalletLwsMethods['deactivateLws'];
 
-  // Grin
+  // Grin (non-custodial: scan is the source of truth; no server output store)
+  scanGrin: GrinMethods['scanGrin'];
+  getGrinAddressUser: GrinMethods['getGrinAddressUser'];
+  broadcastGrinTransaction: GrinMethods['broadcastGrinTransaction'];
   createGrinRelay: GrinMethods['createGrinRelay'];
   getGrinPendingSlatepacks: GrinMethods['getGrinPendingSlatepacks'];
   signGrinSlatepack: GrinMethods['signGrinSlatepack'];
   finalizeGrinSlatepack: GrinMethods['finalizeGrinSlatepack'];
   cancelGrinSlatepack: GrinMethods['cancelGrinSlatepack'];
-  getGrinUserBalance: GrinMethods['getGrinUserBalance'];
-  getGrinUserHistory: GrinMethods['getGrinUserHistory'];
-  getGrinOutputs: GrinMethods['getGrinOutputs'];
-  scanGrinUnspentOutputs: GrinMethods['scanGrinUnspentOutputs'];
-  recordGrinOutput: GrinMethods['recordGrinOutput'];
-  lockGrinOutputs: GrinMethods['lockGrinOutputs'];
-  unlockGrinOutputs: GrinMethods['unlockGrinOutputs'];
-  spendGrinOutputs: GrinMethods['spendGrinOutputs'];
-  recordGrinTransaction: GrinMethods['recordGrinTransaction'];
-  updateGrinTransaction: GrinMethods['updateGrinTransaction'];
-  broadcastGrinTransaction: GrinMethods['broadcastGrinTransaction'];
-  registerGrinAddress: GrinMethods['registerGrinAddress'];
 
   // Swap bookkeeping (Trocador)
   createSwap: SwapMethods['createSwap'];
@@ -214,23 +205,14 @@ export class SmirkApi
     this.registerLws = lws.registerLws;
     this.deactivateLws = lws.deactivateLws;
 
+    this.scanGrin = grin.scanGrin;
+    this.getGrinAddressUser = grin.getGrinAddressUser;
+    this.broadcastGrinTransaction = grin.broadcastGrinTransaction;
     this.createGrinRelay = grin.createGrinRelay;
     this.getGrinPendingSlatepacks = grin.getGrinPendingSlatepacks;
     this.signGrinSlatepack = grin.signGrinSlatepack;
     this.finalizeGrinSlatepack = grin.finalizeGrinSlatepack;
     this.cancelGrinSlatepack = grin.cancelGrinSlatepack;
-    this.getGrinUserBalance = grin.getGrinUserBalance;
-    this.getGrinUserHistory = grin.getGrinUserHistory;
-    this.getGrinOutputs = grin.getGrinOutputs;
-    this.scanGrinUnspentOutputs = grin.scanGrinUnspentOutputs;
-    this.recordGrinOutput = grin.recordGrinOutput;
-    this.lockGrinOutputs = grin.lockGrinOutputs;
-    this.unlockGrinOutputs = grin.unlockGrinOutputs;
-    this.spendGrinOutputs = grin.spendGrinOutputs;
-    this.recordGrinTransaction = grin.recordGrinTransaction;
-    this.updateGrinTransaction = grin.updateGrinTransaction;
-    this.broadcastGrinTransaction = grin.broadcastGrinTransaction;
-    this.registerGrinAddress = grin.registerGrinAddress;
 
     this.createSwap = swap.createSwap;
     this.getSwap = swap.getSwap;

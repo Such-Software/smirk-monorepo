@@ -1,26 +1,30 @@
 /**
- * Grin wallet API methods — slatepack relay and output management.
+ * Grin wallet API methods — scan (balance + spendable UTXOs), broadcast,
+ * address→user discovery, and the slatepack relay mailbox.
  *
- * The slatepack relay is a backend convenience: instead of forcing users
- * to copy/paste slatepacks out-of-band (Telegram, email, ...), the sender
- * posts a slatepack to `/wallet/grin/relay/create` and the recipient pulls
- * it from `GET /wallet/grin/relay/pending`. The relay never sees plaintext
- * slate contents — slatepacks are encrypted to the recipient's slatepack
- * address. The backend just routes ciphertext.
+ * Grin on the v3 backend is NON-CUSTODIAL and nearly stateless: there is NO
+ * server-side output store, balance endpoint, history, or output
+ * lock/spend/record lifecycle. The client owns output state; the backend only:
  *
- * The v3 backend keys every relay entry on its `slate_id` (a UUID) and
- * identifies the caller from the bearer token — there is no separate row
- * `id` and no `user_id`/`relay_id` in the request bodies. This adapter keeps
- * the five method signatures stable for existing callers by (a) synthesizing
- * the legacy per-item `id` from `slate_id` (so `relayId` round-trips back as
- * the `slate_id` the v3 respond/cancel endpoints want), and (b) splitting the
- * flat `{ relays }` response into the caller's two buckets by lifecycle
- * status: `pending_recipient` → the caller must respond (`pending_to_sign`),
- * `pending_sender` → the recipient responded, caller finalizes
- * (`pending_to_finalize`).
+ *   - `POST /wallet/grin/scan` — rewinds the UTXO set with the wallet's
+ *     `rewind_hash` (a view-only credential) and returns the matching outputs.
+ *     Stores nothing. This is the SOURCE OF TRUTH for balance + spendable inputs.
+ *   - `GET  /wallet/grin/height` — chain tip (for maturity math).
+ *   - `POST /wallet/grin/broadcast {tx}` — relays a finalized tx to the node.
+ *   - `GET  /wallet/grin/address/{addr}/user` — resolve a bech32 grin address to
+ *     its registered owner (user_id + npub) for send routing.
  *
- * Output management mirrors `grin-wallet`'s output store (UnspentOut,
- * Locked, Spent) so the wallet shell can render correct balances.
+ * The slatepack relay (`/wallet/grin/relay/*`) is a same-instance convenience
+ * mailbox: instead of copy/pasting slatepacks out-of-band, the sender posts to
+ * `relay/create` and the recipient pulls from `relay/pending`. The relay never
+ * sees plaintext — slatepacks are encrypted to the recipient's slatepack
+ * address. v3 keys every entry on its `slate_id` and identifies the caller from
+ * the bearer token.
+ *
+ * The custodial surface (getGrinUserBalance / getGrinOutputs / record / lock /
+ * unlock / spend / recordGrinTransaction / updateGrinTransaction / scanUnspent /
+ * registerGrinAddress) was deleted — those endpoints 404 on v3. Balance +
+ * recovery now come from `scan`; address registration moved to `POST /keys`.
  */
 
 import { ApiClient, ApiResponse } from './client';
@@ -48,15 +52,60 @@ interface GrinRelayEntryV3 {
   tx_hash: string | null;
 }
 
+/** A single output from `POST /wallet/grin/scan` (raw snake_case). */
+export interface GrinScanOutputWire {
+  commit: string;
+  value: number;
+  height: number;
+  mmr_index: number;
+  is_coinbase: boolean;
+  lock_height: number;
+}
+
+export interface GrinScanResponse {
+  outputs: GrinScanOutputWire[];
+  total_balance: number;
+  last_pmmr_index: number;
+}
+
 export interface GrinMethods {
+  // ----- Scan (balance + spendable UTXOs; source of truth) -----
+  /**
+   * Rewind the node's UTXO set with the wallet's `rewind_hash` (view-only) and
+   * return this wallet's currently-unspent outputs. Stores nothing server-side.
+   * Idempotent read → retryable. `rewind_hash` is a 64-hex view credential
+   * derived from the public root key; it can read but never spend.
+   */
+  scanGrin(params: {
+    rewindHash: string;
+    startHeight?: number | undefined;
+    restorePowNonce?: number | undefined;
+  }): Promise<ApiResponse<GrinScanResponse>>;
+
+  // ----- Address → user discovery (send routing) -----
+  /**
+   * Resolve a bech32 grin slatepack address to its registered owner, so a
+   * bare-address send can route to the owner's npub (Nostr) or user_id
+   * (backend relay) instead of only manual clipboard handoff.
+   */
+  getGrinAddressUser(address: string): Promise<
+    ApiResponse<{ registered: boolean; user_id?: string | null; npub?: string | null }>
+  >;
+
+  // ----- Broadcast -----
+  /** Relay a finalized tx to the node. Backend reads only `{ tx }`. */
+  broadcastGrinTransaction(params: {
+    tx: object;
+  }): Promise<ApiResponse<{ success: boolean }>>;
+
   // ----- Slatepack relay -----
   createGrinRelay(params: {
     senderUserId: string;
     slatepack: string;
     slateId: string;
     amount: number;
-    recipientUserId?: string;
-    recipientAddress?: string;
+    /** REQUIRED: v3 relay routes by recipient user_id (no address→user lookup). */
+    recipientUserId: string;
   }): Promise<ApiResponse<{ id: string; expires_at: string }>>;
 
   getGrinPendingSlatepacks(userId: string): Promise<
@@ -98,158 +147,43 @@ export interface GrinMethods {
     relayId: string;
     userId: string;
   }): Promise<ApiResponse<{ success: boolean }>>;
-
-  // ----- User balance and history -----
-  getGrinUserBalance(userId: string): Promise<
-    ApiResponse<{ confirmed: number; locked: number; pending: number; total: number }>
-  >;
-
-  getGrinUserHistory(userId: string): Promise<
-    ApiResponse<{
-      transactions: Array<{
-        id: string;
-        slate_id: string;
-        amount: number;
-        fee: number;
-        direction: 'send' | 'receive';
-        status: 'pending' | 'signed' | 'finalized' | 'confirmed' | 'cancelled';
-        counterparty_user_id: string | null;
-        created_at: string;
-        kernel_excess: string | null;
-      }>;
-    }>
-  >;
-
-  // ----- Output management -----
-  getGrinOutputs(userId: string): Promise<
-    ApiResponse<{
-      outputs: Array<{
-        id: string;
-        key_id: string;
-        n_child: number;
-        amount: number;
-        commitment: string;
-        is_coinbase: boolean;
-        block_height: number | null;
-        status: 'unconfirmed' | 'unspent' | 'locked' | 'spent';
-      }>;
-      next_child_index: number;
-    }>
-  >;
-
-  /**
-   * Page the node's UNSPENT output set WITH rangeproofs, for seed-only
-   * recovery (the client rewinds each proof with its view key). Bounded
-   * from the wallet birthday (`startHeight` is mapped to a start MMR index
-   * server-side) and paginated by `startIndex` (pass `lastRetrievedIndex +
-   * 1` from the previous page; stop when `lastRetrievedIndex` reaches
-   * `highestIndex`). JWT-required. Response is raw snake_case.
-   */
-  scanGrinUnspentOutputs(params: {
-    startIndex?: number | undefined;
-    startHeight?: number | undefined;
-    max?: number | undefined;
-  }): Promise<
-    ApiResponse<{
-      highest_index: number;
-      last_retrieved_index: number;
-      outputs: Array<{
-        commit: string;
-        block_height: number | null;
-        mmr_index: number;
-        proof: string | null;
-      }>;
-    }>
-  >;
-
-  recordGrinOutput(params: {
-    userId: string;
-    keyId: string;
-    nChild: number;
-    amount: number;
-    commitment: string;
-    /** Originating slate UUID. Omit for recovered outputs (no slate); the
-     *  backend stores NULL. Sending "" yields a 400 (invalid UUID). */
-    txSlateId?: string;
-    blockHeight?: number;
-    lockHeight?: number;
-  }): Promise<ApiResponse<{ id: string }>>;
-
-  lockGrinOutputs(params: {
-    userId: string;
-    outputIds: string[];
-    txSlateId: string;
-  }): Promise<ApiResponse<void>>;
-
-  unlockGrinOutputs(params: {
-    userId: string;
-    txSlateId: string;
-  }): Promise<ApiResponse<void>>;
-
-  spendGrinOutputs(params: {
-    userId: string;
-    txSlateId: string;
-  }): Promise<ApiResponse<void>>;
-
-  // ----- Transaction management -----
-  recordGrinTransaction(params: {
-    userId: string;
-    slateId: string;
-    amount: number;
-    fee: number;
-    direction: 'send' | 'receive';
-    counterpartyAddress?: string;
-  }): Promise<ApiResponse<{ id: string }>>;
-
-  updateGrinTransaction(params: {
-    userId: string;
-    slateId: string;
-    status: 'pending' | 'signed' | 'finalized' | 'confirmed' | 'cancelled';
-    kernelExcess?: string;
-  }): Promise<ApiResponse<void>>;
-
-  broadcastGrinTransaction(params: {
-    userId: string;
-    slateId: string;
-    tx: object;
-    /** Optional change-output details. v0.3+ clients pass this so the
-     *  backend atomically records the change row alongside the
-     *  broadcast — eliminating the orphan-on-cancel window where a
-     *  pre-broadcast record left an `unconfirmed` row stranded if the
-     *  user cancelled. v0.2.4 clients don't send this (they call
-     *  `recordGrinOutput` separately pre-broadcast); backend's INSERT
-     *  uses ON CONFLICT (commitment) DO NOTHING so both paths
-     *  coexist. */
-    changeOutput?: {
-      keyId: string;
-      nChild: number;
-      amount: number;
-      commitment: string;
-    };
-  }): Promise<ApiResponse<{ success: boolean }>>;
-
-  // ----- Address registration -----
-  /**
-   * Register (or update) the user's bech32 slatepack address in the
-   * backend `wallets` table. The Grin relay's address-match query
-   * joins on `wallets.address` for asset='grin'; without this call
-   * the table stays empty for Grin (the equivalent of XMR/WOW's
-   * `registerLws`). Call on every bootstrap — idempotent UPSERT.
-   */
-  registerGrinAddress(
-    address: string,
-  ): Promise<ApiResponse<{ address: string }>>;
 }
 
 export function createGrinMethods(client: ApiClient): GrinMethods {
   return {
+    // ----- Scan -----
+    async scanGrin(params) {
+      return client.retryableRequest<GrinScanResponse>('/wallet/grin/scan', {
+        method: 'POST',
+        body: JSON.stringify({
+          rewind_hash: params.rewindHash,
+          ...(params.startHeight !== undefined ? { start_height: params.startHeight } : {}),
+          ...(params.restorePowNonce !== undefined
+            ? { restore_pow_nonce: params.restorePowNonce }
+            : {}),
+        }),
+      });
+    },
+
+    // ----- Address → user discovery -----
+    async getGrinAddressUser(address) {
+      return client.retryableRequest(
+        `/wallet/grin/address/${encodeURIComponent(address)}/user`,
+        { method: 'GET' },
+      );
+    },
+
+    // ----- Broadcast (backend reads only { tx }) -----
+    async broadcastGrinTransaction(params) {
+      return client.request('/wallet/grin/broadcast', {
+        method: 'POST',
+        body: JSON.stringify({ tx: params.tx }),
+      });
+    },
+
     // ----- Slatepack relay (v3: /wallet/grin/relay/*, keyed on slate_id,
     // caller identified by the bearer token) -----
     async createGrinRelay(params) {
-      // v3 requires a REGISTERED recipient (recipient_user_id); it does not
-      // accept a bare slatepack address. Address-only relay needs a backend
-      // address→userId lookup that v3 doesn't expose yet, so callers must
-      // resolve the recipient's userId first.
       const res = await client.request<GrinRelayEntryV3>('/wallet/grin/relay/create', {
         method: 'POST',
         body: JSON.stringify({
@@ -334,136 +268,6 @@ export function createGrinMethods(client: ApiClient): GrinMethods {
       return client.retryableRequest('/wallet/grin/relay/cancel', {
         method: 'POST',
         body: JSON.stringify({ slate_id: params.relayId }),
-      });
-    },
-
-    // ----- User balance and history -----
-    async getGrinUserBalance(userId) {
-      return client.retryableRequest(`/wallet/grin/user/${userId}/balance`, { method: 'GET' });
-    },
-
-    async getGrinUserHistory(userId) {
-      return client.retryableRequest(`/wallet/grin/user/${userId}/history`, { method: 'GET' });
-    },
-
-    // ----- Output management -----
-    async getGrinOutputs(userId) {
-      return client.retryableRequest(`/wallet/grin/user/${userId}/outputs`, { method: 'GET' });
-    },
-
-    async scanGrinUnspentOutputs(params) {
-      // Idempotent read (paging the UTXO set) → retryable.
-      return client.retryableRequest('/wallet/grin/unspent-outputs', {
-        method: 'POST',
-        body: JSON.stringify({
-          start_index: params.startIndex,
-          start_height: params.startHeight,
-          max: params.max,
-        }),
-      });
-    },
-
-    async recordGrinOutput(params) {
-      return client.request('/wallet/grin/outputs', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: params.userId,
-          key_id: params.keyId,
-          n_child: params.nChild,
-          amount: params.amount,
-          commitment: params.commitment,
-          // Omit (→ JSON drops undefined → backend None → NULL) when empty;
-          // recovered outputs have no slate and "" is an invalid UUID (400).
-          tx_slate_id: params.txSlateId || undefined,
-          block_height: params.blockHeight,
-          lock_height: params.lockHeight,
-        }),
-      });
-    },
-
-    async lockGrinOutputs(params) {
-      return client.request('/wallet/grin/outputs/lock', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: params.userId,
-          output_ids: params.outputIds,
-          tx_slate_id: params.txSlateId,
-        }),
-      });
-    },
-
-    async unlockGrinOutputs(params) {
-      return client.retryableRequest('/wallet/grin/outputs/unlock', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: params.userId,
-          tx_slate_id: params.txSlateId,
-        }),
-      });
-    },
-
-    async spendGrinOutputs(params) {
-      return client.retryableRequest('/wallet/grin/outputs/spend', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: params.userId,
-          tx_slate_id: params.txSlateId,
-        }),
-      });
-    },
-
-    // ----- Transaction management -----
-    async recordGrinTransaction(params) {
-      return client.request('/wallet/grin/transactions', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: params.userId,
-          slate_id: params.slateId,
-          amount: params.amount,
-          fee: params.fee,
-          direction: params.direction,
-          counterparty_address: params.counterpartyAddress,
-        }),
-      });
-    },
-
-    async updateGrinTransaction(params) {
-      return client.request('/wallet/grin/transactions/update', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: params.userId,
-          slate_id: params.slateId,
-          status: params.status,
-          kernel_excess: params.kernelExcess,
-        }),
-      });
-    },
-
-    async broadcastGrinTransaction(params) {
-      return client.request('/wallet/grin/broadcast', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: params.userId,
-          slate_id: params.slateId,
-          tx: params.tx,
-          ...(params.changeOutput
-            ? {
-                change_output: {
-                  key_id: params.changeOutput.keyId,
-                  n_child: params.changeOutput.nChild,
-                  amount: params.changeOutput.amount,
-                  commitment: params.changeOutput.commitment,
-                },
-              }
-            : {}),
-        }),
-      });
-    },
-
-    async registerGrinAddress(address) {
-      return client.request('/wallet/grin/address/register', {
-        method: 'POST',
-        body: JSON.stringify({ address }),
       });
     },
   };
