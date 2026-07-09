@@ -9,9 +9,9 @@
  * (`@smirk/core` `GrinPendingOverlay`):
  *
  *   - `resolveGrinSpendable` — scan → maturity filter → exclude just-spent
- *     (overlay) → recover each output's BIP32 path via `wasmGrin.identifyOutput`
- *     (scan returns no path). This is the scan-based replacement for the old
- *     custodial `listOutputs`.
+ *     (overlay) → recover each output's BIP32 path (preferring grin-lws's
+ *     verified `key_id`, else the `wasmGrin.identifyOutput` search). This is the
+ *     scan-based replacement for the old custodial `listOutputs`.
  *   - `startGrinSend` — sender's S1: select inputs, build S1, RESERVE the spent
  *     inputs + change index in the overlay AT BUILD TIME (so a concurrent
  *     send/receive/invoice can neither re-select the inputs nor re-derive the
@@ -67,6 +67,38 @@ const GRIN_COINBASE_MATURITY = 1440;
  * send/receive time, never on a plain balance refresh.
  */
 const GRIN_IDENTIFY_SEARCH_SPAN = 2000;
+
+/**
+ * Parse a Grin output identifier (`key_id`) into the canonical Smirk spend path.
+ *
+ * grin-lws recovers `key_id` by rewinding the output's rangeproof, which
+ * cryptographically binds the commitment to its value and derivation path, so a
+ * `key_id` it returns is already verified server-side. We use it to skip the
+ * client-side `identifyOutput` search entirely.
+ *
+ * A Grin identifier is 17 bytes: a 1-byte depth followed by four big-endian u32
+ * path elements. We accept ONLY the exact depth-4 `[0, 0, n, 0]` layout every
+ * Smirk output uses, returning `[0, 0, n, 0]`. Anything else (wrong length,
+ * non-canonical shape, unparseable) returns null, so the caller falls back to
+ * the verified `identifyOutput` search that covers the full candidate matrix.
+ * The spendable child index is `path[2]`, NOT the trailing `n_child`. A wrong
+ * path can only yield an invalid (node-rejected) tx, never a fund loss.
+ */
+function parseGrinCanonicalKeyId(
+  keyId: string,
+): [number, number, number, number] | null {
+  if (!/^[0-9a-fA-F]{34}$/.test(keyId)) return null;
+  const u32 = (byteOffset: number) => parseInt(keyId.slice(byteOffset * 2, byteOffset * 2 + 8), 16);
+  const depth = parseInt(keyId.slice(0, 2), 16);
+  const p0 = u32(1);
+  const p1 = u32(5);
+  const p2 = u32(9);
+  const p3 = u32(13);
+  // Only the canonical depth-4 [0,0,n,0] layout; defer anything else to the
+  // verified identify search.
+  if (depth !== 4 || p0 !== 0 || p1 !== 0 || p3 !== 0) return null;
+  return [0, 0, p2, 0];
+}
 
 // ============================================================================
 // Helpers
@@ -173,8 +205,9 @@ export interface GrinSpendable {
  * 2. reconcile the overlay against the scan (clear settled entries first).
  * 3. keep MATURE outputs (coinbase ≥1440 confs; regular past lock_height) that
  *    are NOT in the overlay's pending-spent set (just-broadcast, not yet mined).
- * 4. recover each output's path via `identifyOutput` — DROP (warn) any output
- *    whose path can't be identified (never feed a wrong path to the send
+ * 4. recover each output's path: prefer grin-lws's verified `key_id` (skips the
+ *    search), else fall back to the `identifyOutput` search. DROP (warn) any
+ *    output whose path can't be recovered (never feed a wrong path to the send
  *    builder: it silently yields a bad blind and an invalid tx).
  * 5. seed the child-index counter to max(identified path[2]) + 1 so a new output
  *    never reuses an index (reuse = duplicate commitment = fund loss).
@@ -215,7 +248,15 @@ export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpen
   const outputs: GrinUnspentOutput[] = [];
   const identifiedIndices: number[] = [];
   for (const o of selectable) {
-    const path = wasmGrin.identifyOutput(extKeyHex, legacyExtKeyHex, o.commit, BigInt(o.value), maxN);
+    // Prefer grin-lws's recovered path: `key_id` came from a verified rangeproof
+    // rewind, so when it is the canonical Smirk shape we spend directly and skip
+    // the O(span) identify search. Fall back to the client-side search when the
+    // scan carried no usable key_id (the grin-wallet fallback path, or a
+    // non-canonical identifier).
+    const fromKeyId = o.key_id ? parseGrinCanonicalKeyId(o.key_id) : null;
+    const path =
+      fromKeyId ??
+      wasmGrin.identifyOutput(extKeyHex, legacyExtKeyHex, o.commit, BigInt(o.value), maxN);
     if (!path) {
       console.warn(
         '[grin-spend] could not identify derivation path for output; dropping from selection:',

@@ -139,6 +139,16 @@ export interface GrinScanOutput {
   is_coinbase: boolean;
   /** Kernel lock height; the output is unspendable until tip >= lock_height. */
   lock_height: number;
+  /** Recovered derivation key id, populated only on the grin-lws path (the
+   *  grin-wallet fallback leaves it null). When present and canonical it gives
+   *  the spend path directly, so the client can skip the identify search. */
+  key_id?: string | null;
+  /** grin's `path[depth-1]`, NOT the spendable child index (that is `path[2]`
+   *  in the depth-4 layout); kept for parity only. */
+  n_child?: number | null;
+  /** grin-lws maturity verdict; the client recomputes maturity itself, so this
+   *  is diagnostic only. */
+  spendable?: boolean | null;
 }
 export interface GrinScanResult {
   outputs: GrinScanOutput[];
@@ -147,6 +157,10 @@ export interface GrinScanResult {
   total_balance: number;
   /** Optional incremental-scan hint; correctness uses a full scan each call. */
   last_pmmr_index: number;
+  /** grin-lws sync state; null on the grin-wallet fallback. Diagnostic only:
+   *  the backend already gates trust on these server-side. */
+  scanned_height?: number | null;
+  blockchain_height?: number | null;
 }
 export interface GrinBroadcastResult {
   success: boolean;

@@ -597,6 +597,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/grin/address/{addr}/user": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a bare Grin address to its owning user's Nostr routing identity.
+         * @description The address→npub bridge (see [`GrinAddressUserResponse`]). JWT-gated: only
+         *     authenticated senders resolve routing. An address unknown to this backend
+         *     returns the constant-shape `registered: false` response — the caller then
+         *     falls back to manual clipboard or the same-instance relay.
+         */
+        get: operations["address_user"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/grin/broadcast": {
         parameters: {
             query?: never;
@@ -1264,6 +1287,11 @@ export interface components {
         FeatureCapabilities: {
             /** @description Public curated Nostr feed for this instance. See `feed`. */
             feed: boolean;
+            /**
+             * @description Grin light-wallet-server (grin-lws) scan path is available — fast balance
+             *     scans via grin-lws, with the authoritative grin-wallet scan as fallback.
+             */
+            grin_lws: boolean;
             /** @description Grin async slatepack relay mailbox. */
             grin_relay: boolean;
             /** @description Nostr-native identity (NIP-98 login/link, NIP-05 directory). */
@@ -1326,6 +1354,33 @@ export interface components {
             /** @description The broadcast transaction hash/kernel (recorded for reference). */
             tx_hash: string;
         };
+        /**
+         * @description Resolution of a bare Grin address to its owning user's routing identity.
+         *
+         *     The address→npub **bridge**: given a `grin1…` slatepack address, report
+         *     whether it belongs to a user registered on *this* backend and, if so, that
+         *     user's linked Nostr pubkey so a bare-address send can be upgraded to a
+         *     federated Nostr gift-wrap instead of the same-instance relay.
+         *
+         *     NOTE (federation): this is a **same-instance convenience**. It can only
+         *     resolve addresses whose owner registered their Grin key here (via `POST
+         *     /keys`). It is *not* a federated directory — a wallet on another backend
+         *     won't be found. `registered: false` (a constant-shape miss, mirroring
+         *     `GET /users/by-username`) means "unknown to this instance", at which point
+         *     the sender falls back to manual clipboard / the backend relay.
+         */
+        GrinAddressUserResponse: {
+            /**
+             * @description The owning user's linked Nostr pubkey (x-only hex), when they have one.
+             *     This is what the sender feeds the Nostr gift-wrap channel to route the
+             *     slate over Nostr. `None` when the user registered no Nostr identity.
+             */
+            npub?: string | null;
+            /** @description Whether the address resolved to a user on this backend. */
+            registered: boolean;
+            /** @description The owning user's id (UUID), when `registered`. */
+            user_id?: string | null;
+        };
         /** @description Broadcast a finalized, signed Grin transaction (built + signed by the wallet). */
         GrinBroadcastRequest: {
             /** @description The finalized transaction object (grin node `push_transaction` input). */
@@ -1344,10 +1399,19 @@ export interface components {
             /** Format: int64 */
             height: number;
             is_coinbase: boolean;
+            /** @description Recovered derivation key id — populated only on the grin-lws path. */
+            key_id?: string | null;
             /** Format: int64 */
             lock_height: number;
             /** Format: int64 */
             mmr_index: number;
+            /**
+             * Format: int32
+             * @description Recovered child index — populated only on the grin-lws path.
+             */
+            n_child?: number | null;
+            /** @description Spendable at the current tip — populated only on the grin-lws path. */
+            spendable?: boolean | null;
             /** Format: int64 */
             value: number;
         };
@@ -1375,10 +1439,22 @@ export interface components {
         GrinScanResponse: {
             /**
              * Format: int64
+             * @description Chain tip observed by grin-lws at scan time — present only on the grin-lws
+             *     path.
+             */
+            blockchain_height?: number | null;
+            /**
+             * Format: int64
              * @description Resume point (`last_pmmr_index`) for the next incremental scan.
              */
             last_pmmr_index: number;
             outputs: components["schemas"]["GrinOutput"][];
+            /**
+             * Format: int64
+             * @description How far grin-lws has scanned this account — present only on the grin-lws
+             *     path (the authoritative grin-wallet path leaves it null).
+             */
+            scanned_height?: number | null;
             /** Format: int64 */
             total_balance: number;
         };
@@ -2752,6 +2828,36 @@ export interface operations {
             };
             /** @description User has no key for this asset */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    address_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Grin address (registered public key) */
+                addr: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Address resolution result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrinAddressUserResponse"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

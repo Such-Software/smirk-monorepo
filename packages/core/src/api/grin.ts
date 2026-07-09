@@ -60,12 +60,23 @@ export interface GrinScanOutputWire {
   mmr_index: number;
   is_coinbase: boolean;
   lock_height: number;
+  /** Recovered derivation key id; populated only on the grin-lws path (the
+   *  on-demand grin-wallet fallback leaves these null). Its presence lets the
+   *  client spend directly, without the client-side identify search. */
+  key_id?: string | null;
+  n_child?: number | null;
+  spendable?: boolean | null;
 }
 
 export interface GrinScanResponse {
   outputs: GrinScanOutputWire[];
   total_balance: number;
   last_pmmr_index: number;
+  /** grin-lws sync state; null on the grin-wallet fallback path. The backend
+   *  already gates on these server-side, so the client keeps them for
+   *  diagnostics only. */
+  scanned_height?: number | null;
+  blockchain_height?: number | null;
 }
 
 export interface GrinMethods {

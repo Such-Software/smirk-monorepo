@@ -32,6 +32,7 @@ import {
   cancelGrinSend,
   startGrinSend,
   startGrinInvoice,
+  resolveGrinSpendable,
 } from '../grin-flows';
 
 type AnyFn = (...args: unknown[]) => unknown;
@@ -336,6 +337,127 @@ test('processGrinI2 records NOTHING when the broadcast fails', async () => {
     /Broadcast failed/,
   );
   assert.equal(await overlay.pendingChangeValue([]), 0, 'no pending recorded on failed broadcast');
+});
+
+// A canonical Smirk identifier for child index 42: depth 4, path [0, 0, 42, 0]
+// (0x2a = 42), each element a big-endian u32. This is what grin-lws returns as
+// `key_id`; the spendable index is path[2], NOT the trailing n_child.
+const KEY_ID_IDX_42 = '04' + '00000000' + '00000000' + '0000002a' + '00000000';
+
+/** Swap in a grin provider whose scan returns `outputs` and tip `height`.
+ *  Also stubs the wasm key-derivation + identify so we can assert whether the
+ *  client-side identify search runs. Returns a probe of identify calls. */
+function stubScanProvider(
+  outputs: unknown[],
+  height: number,
+): { identifyCalls: string[] } {
+  chainProviders.setGrin({
+    asset: 'grin',
+    capabilities: {} as never,
+    scan: async () => ({ data: { outputs, total_balance: 0, last_pmmr_index: 0 }, status: 200 }),
+    broadcast: async () => ({ data: { success: true }, status: 200 }),
+    getHeight: async () => ({ data: { height }, status: 200 }),
+    estimateFee: async () => ({ data: { model: 'formula' }, status: 200 }),
+  } as never);
+  const identifyCalls: string[] = [];
+  const w = wasmGrin as unknown as Record<string, AnyFn>;
+  w.deriveExtendedKey = () => JSON.stringify({ extended_private_key_hex: '11'.repeat(32) });
+  w.deriveExtendedKeyLegacyBip39 = () => '22'.repeat(32);
+  // Default identify: record the commit and "find" it at index 7.
+  w.identifyOutput = (..._a: unknown[]) => {
+    identifyCalls.push(String(_a[2]));
+    return [0, 0, 7, 0];
+  };
+  return { identifyCalls };
+}
+
+const scanDeps = (overlay: GrinPendingOverlay) => ({
+  mnemonic:
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+  rewindHash: 'ab'.repeat(32),
+  overlay,
+});
+
+test('resolveGrinSpendable spends via grin-lws key_id and SKIPS the identify search', async () => {
+  const { identifyCalls } = stubScanProvider(
+    [
+      {
+        commit: COMMIT_A,
+        value: 5_000_000_000,
+        height: 100,
+        mmr_index: 1,
+        is_coinbase: false,
+        lock_height: 0,
+        key_id: KEY_ID_IDX_42,
+        n_child: 0,
+        spendable: true,
+      },
+    ],
+    200, // tip well past the output → mature
+  );
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+
+  const res = await resolveGrinSpendable(scanDeps(overlay));
+
+  // The path came straight from key_id (index 42 = path[2]), no search ran.
+  assert.deepEqual(res.outputs, [
+    { path: [0, 0, 42, 0], amount: 5_000_000_000, commitment_hex: COMMIT_A, is_coinbase: false },
+  ]);
+  assert.deepEqual(identifyCalls, [], 'identifyOutput must not run when key_id is present');
+  // The counter is seeded past the recognized index so a new output never reuses it.
+  assert.equal(await overlay.nextChildIndex(), 43);
+});
+
+test('resolveGrinSpendable falls back to the identify search when key_id is absent', async () => {
+  const { identifyCalls } = stubScanProvider(
+    [
+      {
+        commit: COMMIT_A,
+        value: 5_000_000_000,
+        height: 100,
+        mmr_index: 1,
+        is_coinbase: false,
+        lock_height: 0,
+        key_id: null, // grin-wallet fallback path: no recovered key_id
+      },
+    ],
+    200,
+  );
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+
+  const res = await resolveGrinSpendable(scanDeps(overlay));
+
+  // No key_id → the verified client-side search runs and supplies the path.
+  assert.deepEqual(identifyCalls, [COMMIT_A], 'identifyOutput runs on the fallback path');
+  assert.deepEqual(res.outputs, [
+    { path: [0, 0, 7, 0], amount: 5_000_000_000, commitment_hex: COMMIT_A, is_coinbase: false },
+  ]);
+});
+
+test('resolveGrinSpendable ignores a NON-canonical key_id and falls back to identify', async () => {
+  // A malformed / non-Smirk-shaped identifier (depth 3) must never be trusted as
+  // a spend path; the verified search takes over.
+  const NON_CANONICAL = '03' + '00000000' + '00000000' + '0000002a' + '00000000';
+  const { identifyCalls } = stubScanProvider(
+    [
+      {
+        commit: COMMIT_A,
+        value: 5_000_000_000,
+        height: 100,
+        mmr_index: 1,
+        is_coinbase: false,
+        lock_height: 0,
+        key_id: NON_CANONICAL,
+      },
+    ],
+    200,
+  );
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+
+  const res = await resolveGrinSpendable(scanDeps(overlay));
+
+  assert.deepEqual(identifyCalls, [COMMIT_A], 'non-canonical key_id defers to the search');
+  assert.equal(res.outputs[0]?.path[2], 7);
 });
 
 test('cancelGrinSend does NOT free inputs (or notify) once the tx has broadcast', async () => {
