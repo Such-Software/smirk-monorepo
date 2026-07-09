@@ -97,15 +97,21 @@ test('getAppEncryptionKey: NOT_CONNECTED when the origin has no permission', asy
   assert.equal(res.error?.code, 'NOT_CONNECTED');
 });
 
-test('getAppEncryptionKey: LOCKED when the wallet is locked', async () => {
-  const { handler } = recordingApproval();
+test('getAppEncryptionKey: locked wallet routes through approval (popup unlocks), not LOCKED', async () => {
+  // A locked wallet must NOT short-circuit with LOCKED before the
+  // approval popup can open — the popup (ApprovalApp) renders the
+  // unlock screen, and only after unlock does the derive run. Here the
+  // recording handler stands in for "user unlocked + approved".
+  const { handler, seen } = recordingApproval();
   const dispatch = createWalletHandler({
     provider: fakeProvider(false),
     permissions: memStore(connected()),
     approval: handler,
   });
   const res = await dispatch(req('getAppEncryptionKey', {}), ORIGIN);
-  assert.equal(res.error?.code, 'LOCKED');
+  assert.notEqual(res.error?.code, 'LOCKED');
+  assert.equal(seen[0]?.kind, 'appEncKey'); // routed to the approval flow
+  assert.deepEqual(res.result, { publicKey: 'ab'.repeat(32), scheme: APP_ENC_SCHEME });
 });
 
 test('getAppEncryptionKey: first use prompts firstGrant, persists scope, returns key+scheme', async () => {
@@ -209,15 +215,19 @@ test('nostrEncrypt/Decrypt: with the scope, routes op+scheme+peer and returns da
   assert.equal(encReq?.kind === 'nostrCrypt' && encReq.peer, 'cd'.repeat(32));
 });
 
-test('nostrEncrypt: LOCKED when the wallet is locked', async () => {
-  const { handler } = recordingApproval();
+test('nostrEncrypt: locked wallet routes through approval (popup unlocks), not LOCKED', async () => {
+  // Same principle as getAppEncryptionKey: a locked wallet opens the
+  // approval popup (which unlocks) instead of rejecting with LOCKED.
+  const { handler, seen } = recordingApproval();
   const dispatch = createWalletHandler({
     provider: fakeProvider(false),
     permissions: memStore(connectedNostr()),
     approval: handler,
   });
   const res = await dispatch(req('nostrEncrypt', { peer: 'ab'.repeat(32), plaintext: 'hi' }), ORIGIN);
-  assert.equal(res.error?.code, 'LOCKED');
+  assert.notEqual(res.error?.code, 'LOCKED');
+  assert.equal(seen[0]?.kind, 'nostrCrypt'); // routed to the approval flow
+  assert.equal(res.result, 'out:encrypt:nip44');
 });
 
 // ── NIP-07 self-connect (the Magick Market login fix) ───────────────────────

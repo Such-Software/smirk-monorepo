@@ -106,19 +106,28 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'connect': {
-      await assertUnlocked(deps.provider);
       const params = req.params as { assets?: SmirkAsset[] };
       const requestedAssets = normalizeAssets(params.assets);
 
-      // If we already have a permission that covers the request,
-      // skip the prompt — returns immediately.
+      // Fast path: an already-covered permission on an UNLOCKED wallet
+      // serves public keys straight from the cache, no prompt. When the
+      // wallet is LOCKED we deliberately fall through to the approval
+      // popup instead of returning LOCKED here — the popup renders the
+      // unlock screen (ApprovalApp) and only resolves the connect once
+      // the user has unlocked. `isUnlocked()` is passive (it just picks
+      // fast-path vs. prompt; it never opens a popup).
       const existing = await deps.permissions.get(origin.origin);
-      if (hasAssetsAuthorized(existing, requestedAssets)) {
+      if (
+        (await deps.provider.isUnlocked()) &&
+        hasAssetsAuthorized(existing, requestedAssets)
+      ) {
         await touch(deps.permissions, existing!);
         return await deps.provider.getPublicKeys(existing!.assets);
       }
 
-      // Otherwise prompt. User may grant a narrower set than asked.
+      // Otherwise prompt (a locked wallet lands here too — the approval
+      // popup unlocks first, then shows the connect prompt). User may
+      // grant a narrower set than asked.
       const decision = await deps.approval({
         kind: 'connect',
         origin,
@@ -164,14 +173,16 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'signMessage': {
-      await assertUnlocked(deps.provider);
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       const params = req.params as { message: string };
       // Always prompt per-signature. Signatures are auth credentials
       // for the receiving service; auto-signing every request would
       // let a connected origin impersonate the user without a refresh
-      // prompt. Approval popup computes the signature in its
-      // unlocked-wallet context and returns the result.
+      // prompt. No pre-check for LOCKED here: the approval popup renders
+      // the unlock screen when the wallet is locked, so a locked wallet
+      // opens the prompt instead of getting a LOCKED error. The popup
+      // computes the signature in its unlocked-wallet context (the seed
+      // never reaches this routing layer) and returns the result.
       const decision = await deps.approval({
         kind: 'signMessage',
         origin,
@@ -192,7 +203,9 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'requestPayment': {
-      await assertUnlocked(deps.provider);
+      // No LOCKED pre-check — the approval popup unlocks first, then
+      // shows the payment confirmation and sends from the unlocked
+      // wallet. Asset-scope is still enforced from the stored grant.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       const params = req.params as {
         asset: 'btc' | 'ltc' | 'xmr' | 'wow';
@@ -233,8 +246,8 @@ async function dispatchInner<M extends SmirkMethod>(
       // require unlock so the popup has somewhere to deposit them,
       // and we still prompt the user to confirm so a hostile page
       // can't silently fire a claim that pre-confirms a tip the
-      // user hasn't seen.
-      await assertUnlocked(deps.provider);
+      // user hasn't seen. No LOCKED pre-check — the approval popup
+      // unlocks first, then the claim deposits into the unlocked wallet.
       const params = req.params as { tipId: string; fragmentKey: string };
       const decision = await deps.approval({
         kind: 'claimPublicTip',
@@ -263,14 +276,22 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'getNostrPublicKey': {
-      await assertUnlocked(deps.provider);
       // A standard NIP-07 dapp (Magick Market, any Nostr app) calls
       // window.nostr.getPublicKey() directly and NEVER calls our proprietary
       // connect(). So the Nostr grant IS the connection for a pure-Nostr origin —
       // do NOT require a pre-existing permission. The npub is still a dedicated,
       // cross-site-correlatable disclosure, so it always prompts on first ask.
+      //
+      // We route through the approval popup when the origin isn't yet
+      // granted OR when the wallet is LOCKED. In the locked case the npub
+      // can't be read from the (empty) SW public cache, so returning
+      // LOCKED here would stop the popup from opening — instead the popup
+      // renders the unlock screen (ApprovalApp) first, then the grant
+      // disclosure, and only reads the npub once unlocked. `isUnlocked()`
+      // stays passive (it just decides fast-path vs. prompt).
       const existing = await deps.permissions.get(origin.origin);
-      if (!existing || !hasNostrAuthorized(existing)) {
+      const alreadyGranted = !!existing && hasNostrAuthorized(existing);
+      if (!alreadyGranted || !(await deps.provider.isUnlocked())) {
         const decision = await deps.approval({ kind: 'nostrGrant', origin });
         if (!decision.approved) {
           throw new HandlerError('USER_REJECTED', 'User declined to share their Nostr identity');
@@ -293,13 +314,16 @@ async function dispatchInner<M extends SmirkMethod>(
             };
         await deps.permissions.set(next);
       } else {
-        await touch(deps.permissions, existing);
+        // else ⇒ alreadyGranted && unlocked, so `existing` is non-null.
+        await touch(deps.permissions, existing!);
       }
       return await deps.provider.getNostrPublicKey();
     }
 
     case 'signNostrEvent': {
-      await assertUnlocked(deps.provider);
+      // No LOCKED pre-check — the approval popup renders the unlock
+      // screen when locked, then signs with the unlocked wallet. Scope +
+      // money-tier session enforcement below all run on the stored grant.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       if (!hasNostrAuthorized(perm)) {
         throw new HandlerError(
@@ -343,7 +367,9 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'getAppEncryptionKey': {
-      await assertUnlocked(deps.provider);
+      // No LOCKED pre-check — the approval popup unlocks first, then
+      // derives the key in its unlocked context (the seed never reaches
+      // this routing layer). The one-time disclosure still gates below.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       const params = req.params as { context?: string };
       const context = params.context ?? '';
@@ -376,7 +402,8 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'appSealOpen': {
-      await assertUnlocked(deps.provider);
+      // No LOCKED pre-check — the approval popup unlocks first, then
+      // opens the sealed box in its unlocked context. Scope gated below.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       if (!hasE2eeAuthorized(perm)) {
         throw new HandlerError(
@@ -408,7 +435,8 @@ async function dispatchInner<M extends SmirkMethod>(
       // as getNostrPublicKey). Runs silently once granted — a per-call prompt on
       // every DM decrypt would be unusable (matches Goblin's session model, where
       // 1/7/1059 are session-grantable and only 17/30402/22242 are money-tier).
-      await assertUnlocked(deps.provider);
+      // No LOCKED pre-check — the approval popup unlocks first, then runs
+      // the crypto in its unlocked context. Scope gated below.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       if (!hasNostrAuthorized(perm)) {
         throw new HandlerError(
