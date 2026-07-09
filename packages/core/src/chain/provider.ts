@@ -46,8 +46,9 @@ export interface ChainCapabilities {
   feeModel: FeeModel;
   /** ring-CT: a view key is required to read balances/outputs. */
   requiresViewKey: boolean;
-  /** ring-CT (registerLws) + grin (registerGrinAddress): the server must know
-   *  the account before it can serve its data. */
+  /** ring-CT (registerLws): the server must know the account before it can
+   *  serve its data. Grin does NOT require this on v3 — its key registration
+   *  (POST /keys) is discovery-only, not a precondition for the rewind scan. */
   requiresRegistration: boolean;
   /** ring-CT: spends need decoy/ring members (getRandomOutputs). */
   hasDecoys: boolean;
