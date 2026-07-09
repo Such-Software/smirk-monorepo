@@ -4,7 +4,31 @@
  */
 
 export interface paths {
-    "/api/v1/auth/check-restore": {
+    "/.well-known/nostr.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * NIP-05 resolution for Smirk usernames.
+         * @description Looks up the user by lowercased `?name=` and, if they have a linked
+         *     `nostr_pubkey`, returns it in `names` (with the default relay hints under
+         *     `relays`). An unknown name, an unlinked user, or an absent `name` parameter
+         *     all return an empty document — this endpoint never errors on the lookup path
+         *     and never discloses which usernames exist.
+         */
+        get: operations["well_known_nostr"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/check-restore": {
         parameters: {
             query?: never;
             header?: never;
@@ -14,19 +38,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Check if a wallet restore is valid.
-         * @description This endpoint is called BEFORE restore to verify:
-         *     1. The wallet was previously created in Smirk (fingerprint exists)
-         *     2. The mnemonic is correct (all 5 derived keys match stored keys)
+         * Check whether a wallet restore is valid (created here + keys match).
+         * @description Two governors run BEFORE any user lookup: a per-IP limit
+         *     ([`RESTORE_IP_THRESHOLD`]) that bounds distinct-fingerprint scanning, and a
+         *     per-fingerprint failure limit ([`RESTORE_FAIL_THRESHOLD`]); either trips a
+         *     429. The per-IP limit uses [`client_ip`] so an untrusted `X-Forwarded-For`
+         *     cannot evade it. Every attempt is recorded (peppered fingerprint, salted IP).
          *
-         *     If fingerprint doesn't exist, the extension should redirect to onboarding
-         *     with a message that this wallet was not created in Smirk.
-         *
-         *     # Rate Limiting
-         *
-         *     In addition to per-IP rate limiting (5/min), this endpoint tracks failed
-         *     restore attempts per fingerprint. If there are more than 3 failed attempts
-         *     for a fingerprint in the last hour, the request is rejected.
+         *     The known/unknown branches are equalized: the unknown branch runs the same
+         *     key-comparison loop against an empty stored set, so the two paths do the same
+         *     work and the response does not become a timing oracle for existence beyond the
+         *     already-intentional `exists` field.
          */
         post: operations["check_restore"];
         delete?: never;
@@ -35,7 +57,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/auth/extension": {
+    "/auth/extension": {
         parameters: {
             query?: never;
             header?: never;
@@ -46,14 +68,22 @@ export interface paths {
         put?: never;
         /**
          * Register a new extension wallet or authenticate an existing one.
-         * @description Uses the BTC public key hash as the unique identity.
-         *     If the pubkey_hash already exists, returns tokens for that user.
-         *     If new, creates a user and registers all provided keys.
+         * @description The BTC pubkey hash is the unique identity. A signed timestamp proves control
+         *     of the BTC private key (defeats registration with a stolen public key). When
+         *     the PoW gate applies and the wallet is new, a valid `altcha_solution` is
+         *     required; a returning user (a known `pubkey_hash`) bypasses PoW.
          *
-         *     # Security
+         *     ## Derivation rotation is authenticated (account-takeover defense)
          *
-         *     Requires a signed timestamp to prove ownership of the BTC private key.
-         *     This prevents registration with stolen public keys.
+         *     A known `seed_fingerprint` at a NEW `pubkey_hash` (the wallet changed its
+         *     derivation scheme) may re-point the existing user row — but ONLY when the
+         *     request also carries a `rotation_signature` that verifies against the BTC key
+         *     already on file for that user (proving control of the seed-derived key, not
+         *     merely knowledge of the fingerprint, which `check_restore` discloses and is
+         *     not secret). A bare fingerprint match WITHOUT a valid rotation proof is
+         *     treated as a brand-new identity: a fresh user row is created on the new
+         *     `pubkey_hash` and the matched victim row is never modified. The rotation path
+         *     is gated by PoW exactly like any other new-pubkey registration.
          */
         post: operations["extension_register"];
         delete?: never;
@@ -62,7 +92,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/auth/logout": {
+    "/auth/logout": {
         parameters: {
             query?: never;
             header?: never;
@@ -71,6 +101,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /**
+         * Revoke the session backing a refresh token. Idempotent: an unknown or
+         *     already-revoked token still returns success (logout should never error).
+         */
         post: operations["logout"];
         delete?: never;
         options?: never;
@@ -78,17 +112,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/auth/me": {
+    "/auth/me": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get current user info from JWT.
-         * @description Extracts the user ID from the Bearer token and returns user info.
-         */
+        /** The authenticated user's own info. */
         get: operations["get_me"];
         put?: never;
         post?: never;
@@ -98,7 +129,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/auth/pow-challenge": {
+    "/auth/nostr": {
         parameters: {
             query?: never;
             header?: never;
@@ -108,21 +139,173 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Issue a fresh proof-of-work challenge for the wallet to solve
-         *     before calling `/auth/extension`. The wallet POSTs the solved
-         *     payload as the `altcha_solution` field of its registration
-         *     request.
-         * @description Stateless: the challenge embeds an HMAC signature over its own
-         *     fields plus an expiry timestamp, so we don't track issued
-         *     challenges anywhere. Verification re-derives the HMAC at registration
-         *     time. See `core::pow` for the protocol details.
+         * Sign in with a Nostr identity (NIP-98 HTTP Auth, login grade).
+         * @description The `Nostr <base64(event)>` token is read from the `Authorization` header and
+         *     verified against the canonical `config.identity.public_api_url` + `/auth/nostr`
+         *     (never the request Host). The npub must ALREADY be linked to a user (see
+         *     [`nostr_link`]); this endpoint NEVER creates a user — an unlinked npub is 401.
+         */
+        post: operations["nostr_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/nostr/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link a Nostr identity (npub) to the authenticated user.
+         * @description Dual auth: the Bearer JWT identifies the user; a NIP-98 *signed-action* proof
+         *     (not a login token) proves control of the npub AND binds a server-issued
+         *     single-use `nonce`, the purpose `nostr_link`, and this exact request via the
+         *     request-descriptor hash. On success the npub is stored so a later
+         *     [`nostr_login`] resolves to the same wallet; a collision is 409.
          *
-         *     # Rate limiting
+         *     Flow: the wallet first calls `GET /auth/nostr/link-challenge` (authenticated)
+         *     to obtain a single-use `nonce`, signs an action committing to it, then POSTs
+         *     here. The nonce is consumed atomically ([`Database::consume_challenge`]) and
+         *     cross-checked to have been issued to THIS user.
          *
-         *     This endpoint is on the strict 5/min governor (same as
-         *     `/auth/extension`). An attacker can't generate unlimited
-         *     challenges to brute-force later; each one expires in 10 minutes
-         *     and is single-shot against the rate-limited register endpoint.
+         *     ## Descriptor binding is a CONTRACT (not an implementation detail)
+         *
+         *     The `payload` tag binds `descriptor_sha256(request_descriptor("POST",
+         *     "/api/v1/auth/nostr/link", "", b""))` — an EMPTY body hash, with no query.
+         *     The JSON `{nostr_token, nonce}` rides in the HTTP body but is deliberately NOT
+         *     part of the signed descriptor (it carries the proof itself, so it cannot also
+         *     be inside it). The wallet MUST build the identical descriptor. This exact
+         *     method/path/query/empty-body shape is a cross-impl contract, pinned in a shared
+         *     test vector (`descriptor_sha256` KAT in this file's tests, mirroring the
+         *     nip98.rs interop test) so the binding cannot silently drift at integration time.
+         */
+        post: operations["nostr_link"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/nostr/link-challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Issue a single-use nonce for linking a Nostr identity.
+         * @description Authenticated (Bearer JWT). The nonce is bound to the calling user (as the
+         *     challenge `subject`) and the `nostr_link` purpose, valid for a short TTL, and
+         *     consumed atomically by [`nostr_link`]. It pairs with the signed-action proof
+         *     there: the wallet signs an action committing to THIS nonce, so the server can
+         *     prove the npub-holder authorized the link for THIS account and the request
+         *     cannot be replayed.
+         */
+        get: operations["nostr_link_challenge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/nostr/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * npub-native registration. Verifies a NIP-98 signed-action over a server nonce,
+         *     re-runs the abuse gates keyed on the npub (a create path must not bypass the
+         *     PoW/invite/payment gates that `/auth/extension` enforces), then get-or-creates
+         *     by npub with a `seed_fingerprint` MERGE so a wallet that already has a row
+         *     (BTC-anchored, or previously linked) is never split into two identities.
+         * @description SECURITY NOTE: the proof binds an EMPTY-body descriptor (the same contract as
+         *     `/auth/nostr/link`), so replay is prevented by the single-use nonce and npub
+         *     control is proven, but the chain `keys` are TLS-bound rather than
+         *     proof-bound. Binding the key list into the signed payload is a documented
+         *     hardening follow-up (defends a TLS-breaking active MITM swapping the keys).
+         */
+        post: operations["nostr_register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/nostr/register-challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Issue a single-use nonce for npub-native registration. UNAUTHENTICATED: no
+         *     user exists yet, so (unlike the link challenge) the nonce is subject-less; the
+         *     register signed-action binds it purely as replay protection.
+         */
+        get: operations["nostr_register_challenge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/payment-invoice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a registration-payment invoice on the operator's processor.
+         * @description Public (pre-registration) and deliberately cheap: it only binds an invoice to
+         *     the wallet's `pubkey_hash`, which is worthless to anyone who cannot later
+         *     prove control of that BTC key at `/auth/extension`. The unauthenticated-surface
+         *     rate limiter bounds invoice spam and unpaid invoices expire on the processor,
+         *     so no signature proof is required here. Returns 400 when the pay gate is off
+         *     or the wallet is already registered (it would bypass payment anyway).
+         */
+        post: operations["payment_invoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/pow-challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a fresh proof-of-work challenge for the wallet to solve before calling
+         *     `/auth/extension`. The solved payload is sent back as the request's
+         *     `altcha_solution`.
+         * @description Stateless: the challenge embeds an HMAC signature over its own fields plus an
+         *     expiry, so no issued-challenge store is needed. See [`crate::core::pow`].
          */
         post: operations["pow_challenge"];
         delete?: never;
@@ -131,24 +314,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/auth/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Refresh an access token using a refresh token. */
-        post: operations["refresh_token"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/auth/website/challenge": {
+    "/auth/refresh": {
         parameters: {
             query?: never;
             header?: never;
@@ -158,9 +324,36 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Generate a challenge for website authentication.
-         * @description The challenge is stored in memory and expires after 5 minutes.
-         *     The client signs with their preferred asset key.
+         * Rotate a refresh token.
+         * @description Verifies the JWT, then re-looks-up the ACTIVE session by peppered hash
+         *     (`get_session_by_token_hash` already filters revoked/expired) — a missing row
+         *     means the token was revoked, expired, or already rotated, and is rejected.
+         *     The session's `user_id` is asserted equal to the JWT `sub` (defense-in-depth
+         *     against any future token-confusion class). The old session is revoked and a
+         *     fresh pair issued (revoke-then-issue); the `revoke_session` race-loser also
+         *     rejects, so a stolen token cannot be reused.
+         */
+        post: operations["refresh_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/website/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a website-auth challenge bound to the requesting origin.
+         * @description The challenge is stored in `state.web_challenges` keyed by its own nonce and
+         *     expires shortly (see [`WebChallenge`]). The returned `challenge` message is
+         *     what the wallet signs; `challenge_id` is the nonce to present at verify.
          */
         post: operations["website_challenge"];
         delete?: never;
@@ -169,7 +362,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/auth/website/verify": {
+    "/auth/website/verify": {
         parameters: {
             query?: never;
             header?: never;
@@ -179,9 +372,14 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Verify website auth signature and issue JWT.
-         * @description User signs with their preferred asset key. We look up the user
-         *     by that asset's public key and verify the signature.
+         * Verify a website-auth signature and mint a `Platform::Web` session.
+         * @description The challenge is CONSUMED (removed from the map) before any signature work,
+         *     so it is strictly single-use: a replayed `challenge_id` — or the loser of two
+         *     concurrent verifies — finds nothing and is rejected. After consume we check
+         *     expiry, verify the signature over the challenge message with the algorithm
+         *     for the submitted asset, resolve the ALREADY-registered user by the proven
+         *     key's `pubkey_hash` (never creating one), and issue a session. All failure
+         *     messages are literals (no oracle).
          */
         post: operations["website_verify"];
         delete?: never;
@@ -190,19 +388,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/debug/pending/{asset}": {
+    "/capabilities": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Debug endpoint to check pending transaction detection status.
-         * @description Returns diagnostic info about the pending tx pipeline: how many unconfirmed
-         *     txs are in the database, whether webhooks exist, and whether ZMQ is configured.
-         */
-        get: operations["debug_pending_status"];
+        /** Describe this instance's enabled chains and features. */
+        get: operations["capabilities"];
         put?: never;
         post?: never;
         delete?: never;
@@ -211,100 +405,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/grin/relay": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create a slatepack relay entry for a send transaction.
-         * @description The sender creates an S1 slate and stores it here for the recipient to pick up.
-         *     The relay entry expires after 24 hours.
-         *
-         *     # Recipient Identification
-         *
-         *     Either `recipient_user_id` or `recipient_address` should be provided:
-         *     - `recipient_user_id`: For sending to a known Smirk user
-         *     - `recipient_address`: For sending to a slatepack address
-         *
-         *     If both are empty, the relay is essentially a "public" offer that
-         *     won't be automatically matched to any recipient (not recommended).
-         */
-        post: operations["create_grin_relay"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/grin/relay/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cancel a pending slatepack relay.
-         * @description Either the sender or recipient can cancel a pending relay. After cancellation:
-         *     - The relay status becomes 'cancelled'
-         *     - Locked outputs should be unlocked (client's responsibility)
-         *     - The transaction will not complete
-         *
-         *     # When to Cancel
-         *
-         *     - Transaction expired (24 hours)
-         *     - User changed their mind
-         *     - Counterparty is unresponsive
-         *
-         *     # Notes
-         *
-         *     - Cannot cancel a finalized transaction (already broadcast)
-         *     - The client should call `unlock_grin_outputs` after cancelling to restore funds
-         */
-        post: operations["cancel_grin_relay"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/grin/relay/finalize": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Finalize the transaction and broadcast it to the Grin network.
-         * @description The sender finalizes the slate locally with WASM and submits the finalized
-         *     slatepack here. The backend:
-         *     1. Decodes the slatepack to extract the transaction
-         *     2. Broadcasts to the Grin node
-         *     3. Updates relay status to 'finalized'
-         *     4. Updates all related grin_transactions to 'finalized'
-         *
-         *     # Authorization
-         *
-         *     Only the original sender can finalize their transaction.
-         */
-        post: operations["finalize_grin_relay"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/grin/relay/pending/{user_id}": {
+    "/health": {
         parameters: {
             query?: never;
             header?: never;
@@ -312,20 +413,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get pending slatepacks for a user.
-         * @description Returns two lists:
-         *     - `pending_to_sign`: Slates where this user is the recipient and needs to sign
-         *     - `pending_to_finalize`: Slates where this user is the sender and the recipient has signed
-         *
-         *     # Recipient Matching
-         *
-         *     A slate is matched to a recipient if:
-         *     - `recipient_user_id` matches, OR
-         *     - `recipient_address` matches the user's registered Grin wallet address
-         *
-         *     Both conditions are checked to support different sending methods.
+         * Liveness probe.
+         * @description Returns `200` with `{ "status": "ok" }` whenever the server is up. Used by
+         *     load balancers and uptime checks; requires no authentication.
          */
-        get: operations["get_grin_pending"];
+        get: operations["health"];
         put?: never;
         post?: never;
         delete?: never;
@@ -334,7 +426,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/grin/relay/sign": {
+    "/keys": {
         parameters: {
             query?: never;
             header?: never;
@@ -344,25 +436,18 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Store the signed slatepack (S2) from the recipient.
-         * @description After the recipient signs the slate locally with WASM, they submit the
-         *     signed slatepack here. The status changes from 'pending_recipient' to
-         *     'pending_sender', and the sender can retrieve it to finalize.
-         *
-         *     # Authorization
-         *
-         *     Only the intended recipient can sign:
-         *     - Either `recipient_user_id` matches, OR
-         *     - `recipient_address` matches the user's registered Grin wallet address
+         * Register or update one of the authenticated user's per-asset public keys.
+         * @description Idempotent: the DB upsert keys on `(user_id, asset, key_type)`, so re-posting
+         *     the same asset replaces the stored key material in place.
          */
-        post: operations["sign_grin_relay"];
+        post: operations["register_key"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/balance": {
+    "/premium/activate": {
         parameters: {
             query?: never;
             header?: never;
@@ -371,24 +456,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Get balance for a BTC or LTC address via Electrum.
-         * @description This queries Electrum servers to get the balance for a given address.
-         *     The balance is split into confirmed (in blocks) and unconfirmed (in mempool).
-         *
-         *     # Notes
-         *
-         *     - Unconfirmed balance can be negative if there's a pending outgoing transaction
-         *     - Total = confirmed + unconfirmed
-         */
-        post: operations["get_utxo_balance"];
+        /** Verify a settled premium invoice and extend the caller's premium window. */
+        post: operations["activate"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/broadcast": {
+    "/premium/invoice": {
         parameters: {
             query?: never;
             header?: never;
@@ -397,100 +473,23 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Broadcast a signed BTC or LTC transaction.
-         * @description The transaction must be fully signed and valid. This endpoint
-         *     submits it to the network via either local node or Electrum servers,
-         *     depending on configuration (BTC_USE_LOCAL_NODE / LTC_USE_LOCAL_NODE).
-         *
-         *     # Configuration
-         *
-         *     - `BTC_USE_LOCAL_NODE=true`: Use local Bitcoin Core RPC
-         *     - `LTC_USE_LOCAL_NODE=true`: Use local Litecoin Core RPC
-         *     - Otherwise: Use Electrum servers
-         *
-         *     # Security
-         *
-         *     The backend cannot modify or sign transactions - it only broadcasts
-         *     what the client provides. The private key never leaves the client.
-         */
-        post: operations["broadcast_tx"];
+        /** Mint a premium invoice for a chosen plan, bound to the caller. */
+        post: operations["invoice"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/fees": {
+    "/premium/status": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /**
-         * Estimate fee rates for BTC or LTC.
-         * @description Returns fee rates for different confirmation speeds:
-         *     - **fast**: Target 1-2 blocks (~10-20 min for BTC, ~2.5-5 min for LTC)
-         *     - **normal**: Target 3-6 blocks (~30-60 min for BTC, ~7.5-15 min for LTC)
-         *     - **slow**: Target 12-24 blocks (~2-4 hours for BTC, ~30-60 min for LTC)
-         *
-         *     # Transaction Size Estimation
-         *
-         *     To calculate total fee:
-         *     `fee = size_in_vbytes * fee_rate`
-         *
-         *     Typical sizes:
-         *     - P2WPKH input: ~68 vB
-         *     - P2WPKH output: ~31 vB
-         *     - Overhead: ~10 vB
-         *
-         *     Example: 1-in-2-out transaction ≈ 68 + 31*2 + 10 = 140 vB
-         */
-        post: operations["estimate_fee"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/address/register": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Register (or update) the authenticated user's Grin slatepack
-         *     address. Idempotent — re-registers from the same wallet are
-         *     no-ops via the `(user_id, asset)` unique constraint's
-         *     `ON CONFLICT DO UPDATE`.
-         * @description POST /api/v1/wallet/grin/address/register
-         */
-        post: operations["register_grin_address"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/address/{address}/user": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Look up whether a Grin slatepack address is registered to any
-         *     Smirk user. Returns only a boolean — no user_id exposure.
-         */
-        get: operations["lookup_slatepack_address"];
+        /** The caller's current premium status. */
+        get: operations["status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -499,248 +498,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/grin/broadcast": {
+    "/prices": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /**
-         * Broadcast a finalized Grin transaction to the network.
-         * @description The client finalizes the transaction locally and sends the transaction
-         *     JSON here. The backend submits it to the Grin node via the Foreign API.
-         *
-         *     After successful broadcast:
-         *     - Transaction status is updated to 'finalized'
-         *     - Locked outputs are marked as 'spent'
-         *
-         *     # Why use Foreign API
-         *
-         *     We use the Grin node's Foreign API push_transaction endpoint rather than
-         *     the wallet API. This avoids slatepack format compatibility issues between
-         *     the extension's WASM wallet library and the backend's grin-wallet daemon.
-         */
-        post: operations["broadcast_grin_transaction"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/outputs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record a new Grin output (called after signing a receive transaction).
-         * @description When a user signs an incoming slate (S1 -> S2), they create a new output.
-         *     This endpoint records that output so it can be spent later.
-         *
-         *     # Idempotency
-         *
-         *     If an output with the same commitment already exists, returns the existing
-         *     record without modification. This allows safe retry of the recording.
-         */
-        post: operations["record_grin_output"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/outputs/lock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Lock outputs for a pending send transaction.
-         * @description When initiating a send, outputs are locked to prevent double-spend.
-         *     Locked outputs are excluded from balance calculations and future sends.
-         *
-         *     If the transaction fails or is cancelled, call [`unlock_grin_outputs`] to
-         *     restore the outputs to spendable status.
-         */
-        post: operations["lock_grin_outputs"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/outputs/spend": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Mark locked outputs as spent after transaction finalization.
-         * @description Called after a transaction is successfully broadcast to the network.
-         *     Spent outputs are permanently marked and cannot be respent.
-         */
-        post: operations["spend_grin_outputs"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/outputs/unlock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Unlock outputs when a send transaction is cancelled.
-         * @description Restores previously locked outputs to spendable status.
-         *     Called when a transaction fails or is explicitly cancelled.
-         */
-        post: operations["unlock_grin_outputs"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/scan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Scan for commitments on the Grin blockchain.
-         * @description Takes a list of commitments and checks which ones exist on-chain.
-         *     Used for wallet restore via bulletproof rewind - the extension
-         *     generates possible commitments and we check which ones are real.
-         *
-         *     Uses the Grin node's Foreign API get_outputs endpoint.
-         */
-        post: operations["scan_grin_commitments"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/transactions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record a Grin transaction for history tracking.
-         * @description Called when initiating or receiving a transaction. Creates a record
-         *     in the grin_transactions table with 'pending' status.
-         *
-         *     # Idempotency
-         *
-         *     Uses ON CONFLICT to handle duplicate (user_id, slate_id, direction) tuples.
-         *     Duplicate calls return the existing transaction ID.
-         */
-        post: operations["record_grin_transaction"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/transactions/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Update a Grin transaction status.
-         * @description Status progression:
-         *     - **pending** → signed: After recipient signs (receive) or sender creates slate (send)
-         *     - **signed** → finalized: After sender finalizes and broadcasts
-         *     - **finalized** → confirmed: After transaction is mined (optional, not always tracked)
-         *     - Any → cancelled: If transaction is cancelled before finalization
-         */
-        post: operations["update_grin_transaction"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/unspent-outputs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Page the Grin node's UNSPENT (UTXO) set WITH rangeproofs, for seed-only
-         *     output recovery (the client rewinds each proof with its view key).
-         * @description Authenticated: rangeproofs are ~676 bytes/output across the whole UTXO
-         *     set, so this must not be open like `scan_grin_commitments`. Bounded by
-         *     `start_height` (the wallet birthday → start MMR index) and paginated by
-         *     `start_index`. Returns the node's OutputListing
-         *     (`{highest_index, last_retrieved_index, outputs:[{commit, block_height,
-         *     mmr_index, proof}]}`); the client pages until `last_retrieved_index`
-         *     reaches `highest_index`.
-         */
-        post: operations["get_grin_unspent_outputs"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/wallet/grin/user/{user_id}/balance": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get a user's Grin balance from transaction history.
-         * @description Balance is calculated from the grin_transactions table:
-         *     - **confirmed** = 10+ confirmations, spendable
-         *     - **locked** = has block_height but not yet confirmed (1-9 confirmations)
-         *     - **pending** = no block_height yet (0 confirmations, any non-confirmed status)
-         *
-         *     Note: Unlike XMR/BTC, Grin balance is tracked by the backend because the
-         *     blockchain doesn't support address-based queries.
-         */
-        get: operations["get_grin_user_balance"];
+        /** Current fiat prices for the enabled feeds. */
+        get: operations["prices"];
         put?: never;
         post?: never;
         delete?: never;
@@ -749,7 +515,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/grin/user/{user_id}/history": {
+    "/users/by-username/{username}": {
         parameters: {
             query?: never;
             header?: never;
@@ -757,11 +523,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get a user's Grin transaction history.
-         * @description Returns the most recent 100 transactions, newest first.
-         *     Includes both pending and completed transactions.
+         * Resolve a username to its user and that user's receiving public keys.
+         * @description Public: this is how a sender discovers where to send. The lookup is
+         *     case-insensitive (the handle is canonicalized lowercase). An unknown handle
+         *     returns the same constant-shape response with `registered: false`.
          */
-        get: operations["get_grin_user_history"];
+        get: operations["lookup_username"];
         put?: never;
         post?: never;
         delete?: never;
@@ -770,7 +537,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/grin/user/{user_id}/outputs": {
+    "/users/me/username": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The authenticated user's own username (or `null`). */
+        get: operations["get_my_username"];
+        put?: never;
+        /**
+         * Claim or update the authenticated user's username.
+         * @description The submitted value is lowercased, validated, and checked against the
+         *     reserved list before the DB write. The UNIQUE constraint is the atomic claim:
+         *     a collision (taken or reserved) is a 409, never a 500.
+         */
+        post: operations["set_username"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{user_id}/keys": {
         parameters: {
             query?: never;
             header?: never;
@@ -778,18 +568,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get a user's spendable Grin outputs.
-         * @description Returns all outputs that can be used as inputs for a send transaction.
-         *     Outputs are sorted by amount (smallest first) for efficient coin selection.
-         *
-         *     The `next_child_index` ensures key derivation paths are never reused,
-         *     which is critical for Mimblewimble privacy (reusing paths leaks information).
-         *
-         *     **On-chain verification**: For outputs marked as 'unspent', we verify they
-         *     still exist on-chain via the Grin node. This prevents selecting stale outputs
-         *     that were spent by transactions not properly tracked in the database.
+         * List a user's per-asset receiving public keys.
+         * @description Public: a sender fetches these to construct a payment to `user_id`.
          */
-        get: operations["get_grin_outputs"];
+        get: operations["get_user_keys"];
         put?: never;
         post?: never;
         delete?: never;
@@ -798,22 +580,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/grin/user/{user_id}/sync": {
+    "/users/{user_id}/keys/{asset}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Sync a user's Grin wallet from backend database.
-         * @description Returns ALL outputs (including spent) and transaction history.
-         *     Used for wallet restore when the user is a known Smirk user.
-         *
-         *     The `next_child_index` ensures key derivation paths are never reused,
-         *     even if some outputs have been spent.
-         */
-        get: operations["sync_grin_wallet"];
+        /** Fetch a user's receiving public key for one asset. */
+        get: operations["get_user_key_for_asset"];
         put?: never;
         post?: never;
         delete?: never;
@@ -822,21 +597,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/heights": {
+    "/wallet/grin/broadcast": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get current blockchain heights for all supported networks.
-         * @description This is useful for wallet creation to determine the start height for LWS,
-         *     and for displaying sync status in the extension.
-         *
-         *     Heights are fetched in parallel - any failures are logged but don't fail the request.
-         */
-        get: operations["get_blockchain_heights"];
+        get?: never;
+        put?: never;
+        /** Broadcast a finalized, signed Grin transaction. */
+        post: operations["broadcast"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/grin/height": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Grin chain tip height (for confirmation counting). */
+        get: operations["height"];
         put?: never;
         post?: never;
         delete?: never;
@@ -845,7 +631,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/history": {
+    "/wallet/grin/relay/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -854,20 +640,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Get transaction history for a BTC or LTC address.
-         * @description Returns all transactions touching this address, both confirmed and mempool.
-         *     Transactions are sorted newest first. Includes amount data (received/sent)
-         *     for the most recent transactions.
-         */
-        post: operations["get_history"];
+        /** Cancel a relay (sender or recipient), unless already finalized. */
+        post: operations["cancel"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/lws/balance": {
+    "/wallet/grin/relay/create": {
         parameters: {
             query?: never;
             header?: never;
@@ -876,26 +657,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Get wallet balance from LWS.
-         * @description Returns balance components and spent output candidates for client-side verification.
-         *     The client uses WASM to verify which outputs are actually spent by computing key images.
-         *
-         *     # Balance Calculation
-         *
-         *     The client should compute: `true_balance = total_received - verified_spent_total`
-         *
-         *     Where `verified_spent_total` is the sum of amounts from `spent_outputs` where the
-         *     client-computed key image matches the server-provided `key_image`.
-         */
-        post: operations["get_lws_balance"];
+        /** Post a slatepack addressed to a registered recipient (sender = caller). */
+        post: operations["create"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/lws/deactivate": {
+    "/wallet/grin/relay/finalize": {
         parameters: {
             query?: never;
             header?: never;
@@ -905,25 +675,18 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Deactivate a wallet from LWS scanning.
-         * @description This stops LWS from scanning the specified address, saving server resources.
-         *     The account is set to "inactive" status and webhooks are removed.
-         *
-         *     Use this after claiming a tip to clean up temporary tip addresses.
-         *
-         *     # Security
-         *
-         *     Requires authentication. User must own the address (either as a wallet
-         *     or as a tip sender/recipient) to prevent DoS attacks on other users' addresses.
+         * Record that the sender finalized + broadcast the transaction (sender only).
+         *     The backend does NOT finalize or broadcast — the wallet does that locally and
+         *     reports the resulting tx hash here.
          */
-        post: operations["deactivate_lws"];
+        post: operations["finalize"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/lws/decoys": {
+    "/wallet/grin/relay/get": {
         parameters: {
             query?: never;
             header?: never;
@@ -933,47 +696,34 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Get random outputs for decoy selection in ring signatures.
-         * @description Returns random outputs from the blockchain that can be used as decoys
-         *     when constructing transactions. The count should typically be 15
-         *     (for ring size 16 = 15 decoys + 1 real input).
-         *
-         *     # Privacy Note
-         *
-         *     The LWS selects outputs using a gamma distribution to mimic real spending
-         *     patterns, providing better privacy than uniform random selection.
+         * Poll a relay's current state (sender or recipient). The sender uses this to
+         *     fetch the recipient's response once status is `pending_sender`.
          */
-        post: operations["get_random_outs"];
+        post: operations["get_relay"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/lws/history": {
+    "/wallet/grin/relay/pending": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** The caller's inbox: relays awaiting their response. */
+        get: operations["pending"];
         put?: never;
-        /**
-         * Get transaction history from LWS.
-         * @description Returns transaction history for XMR/WOW wallets. LWS maintains the full history
-         *     from the wallet's registration start_height (birthday).
-         *
-         *     Transactions are sorted newest first, with pending (mempool) transactions at the top.
-         */
-        post: operations["get_lws_history"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/lws/register": {
+    "/wallet/grin/relay/respond": {
         parameters: {
             query?: never;
             header?: never;
@@ -982,29 +732,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Register a wallet with the Light Wallet Server.
-         * @description This enables the backend to scan for incoming transactions and provide balance
-         *     information to the extension. For XMR, this registers with the Monero LWS.
-         *     For WOW, this registers with the Wownero LWS.
-         *
-         *     The endpoint also:
-         *     - Stores the wallet in the database for user association
-         *     - Registers HTTP webhooks for 0-conf notifications (backup to ZMQ)
-         *
-         *     # Idempotency
-         *
-         *     If the wallet is already registered with LWS, this endpoint succeeds silently.
-         *     The database record and webhooks are updated regardless.
-         */
-        post: operations["register_lws"];
+        /** Attach the recipient's response, advancing to `pending_sender`. */
+        post: operations["respond"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/lws/submit": {
+    "/wallet/grin/scan": {
         parameters: {
             query?: never;
             header?: never;
@@ -1013,54 +749,117 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Submit a signed XMR/WOW transaction for broadcast.
-         * @description The transaction should be fully constructed and signed client-side
-         *     using smirk-wasm. This endpoint simply relays it to the daemon
-         *     via the LWS.
-         *
-         *     # Security
-         *
-         *     The backend cannot modify or sign transactions - it only broadcasts
-         *     what the client provides. The spend key never leaves the client.
-         */
-        post: operations["submit_raw_tx"];
+        /** View-only scan for the outputs a `rewind_hash` recognizes. */
+        post: operations["scan"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/lws/unspent": {
+    "/wallet/heights": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Current tip height for every enabled chain (one round-trip). */
+        get: operations["heights"];
         put?: never;
-        /**
-         * Get unspent outputs for transaction construction.
-         * @description Returns outputs owned by this wallet that can be spent, along with
-         *     fee information needed for transaction construction.
-         *
-         *     # Confirmation Requirements
-         *
-         *     Only returns outputs with enough confirmations to be spendable:
-         *     - XMR: 10 confirmations
-         *     - WOW: 4 confirmations
-         *
-         *     Mempool (unconfirmed) outputs are excluded.
-         */
-        post: operations["get_unspent_outs"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/wallet/utxos": {
+    "/wallet/lws/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Balance + scan state for an account. */
+        post: operations["balance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/lws/confirmations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirmation count for a transaction (daemon). */
+        post: operations["confirmations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/lws/height": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Current chain height (daemon) for confirmation counting. */
+        post: operations["height"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/lws/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Transaction history (confirmed + mempool) for an account. */
+        post: operations["history"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/lws/random_outs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Random decoy outputs for ring construction. */
+        post: operations["random_outs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/lws/register": {
         parameters: {
             query?: never;
             header?: never;
@@ -1070,19 +869,146 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Get UTXOs for a BTC or LTC address.
-         * @description Returns all unspent outputs for the address, which can be used
-         *     to construct transactions client-side.
-         *
-         *     # Transaction Construction
-         *
-         *     When building a transaction, the client:
-         *     1. Selects UTXOs whose total value >= amount + fee
-         *     2. Creates inputs referencing each selected UTXO (txid:vout)
-         *     3. Creates outputs for recipient and change
-         *     4. Signs each input with the private key
+         * Register an account (its view key) with the LWS so it begins scanning.
+         *     Idempotent at the LWS; pass `start_height` to scan from a wallet birthday.
          */
-        post: operations["get_utxos"];
+        post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/lws/submit_tx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Broadcast a finalized, signed Monero/Wownero transaction. */
+        post: operations["submit_tx"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/lws/unspent_outs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unspent outputs for an account (for client-side spend construction). */
+        post: operations["unspent_outs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/utxo/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirmed/unconfirmed balance for a BTC/LTC address. */
+        post: operations["balance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/utxo/broadcast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Broadcast a finalized, signed BTC/LTC transaction. */
+        post: operations["broadcast"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/utxo/fee": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fee-rate estimate (sat/vB) for confirmation within `blocks` blocks. */
+        post: operations["fee"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/utxo/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirmed + mempool transaction history for a BTC/LTC address. */
+        post: operations["history"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/utxo/tip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Best-chain tip height (for client-side confirmation counting). */
+        post: operations["tip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/utxo/utxos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unspent outputs for a BTC/LTC address. */
+        post: operations["utxos"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1093,1228 +1019,950 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description Public key for a specific asset. */
+        ActivateReq: {
+            invoice_id: string;
+        };
+        /** @description An address query for a UTXO asset. */
+        AddressRequest: {
+            /** @description The address to query (validated by the Electrum client). */
+            address: string;
+            /** @description `btc` or `ltc`. */
+            asset: string;
+        };
+        AmountOutsDto: {
+            amount: string;
+            outputs: components["schemas"]["RandomOutputDto"][];
+        };
+        /** @description A per-asset public key submitted by the wallet. */
         AssetPublicKey: {
             asset: string;
             public_key: string;
-            /** @description For XMR/WOW: public spend key (view key derived from main key) */
+            /** @description XMR/WOW only: public spend key. */
             public_spend_key?: string | null;
         };
-        /** @description Signature for a single asset. */
-        AssetSignature: {
+        /** @description An asset-only query. */
+        AssetRequest: {
+            /** @description `btc` or `ltc`. */
             asset: string;
+        };
+        /** @description One asset's signature over the challenge message. */
+        AssetSignature: {
+            /** @description Asset whose key produced the signature (`btc`, `ltc`, `xmr`, `wow`, `grin`). */
+            asset: string;
+            /** @description The public key that produced the signature (format depends on asset). */
             public_key: string;
+            /**
+             * @description Signature over the challenge message. BIP-137 base64 for BTC/LTC; 64-byte
+             *     hex Ed25519 for XMR/WOW/Grin.
+             */
             signature: string;
         };
-        /** @description Response for successful authentication. */
+        /** @description Successful session response: a JWT pair plus minimal user info. */
         AuthResponse: {
             access_token: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Access-token lifetime in seconds.
+             */
             expires_in: number;
+            /** @description `true` when this request created the user (extension registration only). */
+            is_new: boolean;
             refresh_token: string;
             user: components["schemas"]["UserInfo"];
         };
         /**
-         * @description Response for balance query.
-         *
-         *     The returned data requires client-side verification to compute true balance:
-         *     `true_balance = total_received - sum(verified spent_outputs amounts)`
-         *
-         *     This design ensures the server cannot lie about the balance.
+         * @description Confirmed/unconfirmed balance in satoshis. The client computes any total
+         *     (kept as separate integer fields — no lossy server-side sum).
          */
         BalanceResponse: {
-            /**
-             * Format: int64
-             * @description Current blockchain height
-             */
-            blockchain_height: number;
-            /**
-             * Format: int64
-             * @description Locked balance in atomic units (10-block protocol lock after confirmation)
-             */
-            locked_balance: number;
-            /**
-             * Format: int64
-             * @description Pending/unconfirmed balance in atomic units (0-conf mempool txs)
-             *     This can be NEGATIVE for outgoing transactions (spent more than received as change)
-             */
-            pending_balance: number;
-            /**
-             * Format: int64
-             * @description Last scanned height
-             */
-            scanned_height: number;
-            /**
-             * @description Spent output candidates - client must verify with spend key to compute true balance
-             *     True balance = total_received - sum(verified spent_outputs amounts)
-             *     Includes both confirmed AND mempool spent outputs
-             */
-            spent_outputs: components["schemas"]["SpentOutputCandidate"][];
-            /**
-             * Format: int64
-             * @description Height at which wallet was registered
-             */
-            start_height: number;
-            /**
-             * Format: int64
-             * @description Total received in atomic units (view-only balance, doesn't account for spends)
-             */
-            total_received: number;
-            /**
-             * Format: int64
-             * @description Number of transactions
-             */
-            transaction_count: number;
-        };
-        /**
-         * @description Response for blockchain heights query.
-         *
-         *     Provides current block heights for all supported networks in one request.
-         *     Useful for wallet creation (determining start heights) and sync status.
-         */
-        BlockchainHeightsResponse: {
-            /**
-             * Format: int64
-             * @description Bitcoin block height (None if unavailable)
-             */
-            btc?: number | null;
-            /**
-             * Format: int64
-             * @description Grin block height (None if unavailable)
-             */
-            grin?: number | null;
-            /**
-             * Format: int64
-             * @description Litecoin block height (None if unavailable)
-             */
-            ltc?: number | null;
-            /**
-             * Format: int64
-             * @description Wownero block height (None if unavailable)
-             */
-            wow?: number | null;
-            /**
-             * Format: int64
-             * @description Monero block height (None if unavailable)
-             */
-            xmr?: number | null;
-        };
-        /** @description Request to broadcast a finalized Grin transaction. */
-        BroadcastGrinTransactionRequest: {
-            change_output?: null | components["schemas"]["ChangeOutputRecord"];
-            /** @description Slate ID */
-            slate_id: string;
-            /** @description The transaction JSON (from client's finalized slate) */
-            tx: unknown;
-            /** @description User ID */
-            user_id: string;
-        };
-        /** @description Response from broadcasting a Grin transaction. */
-        BroadcastGrinTransactionResponse: {
-            /** @description Whether broadcast was successful */
-            success: boolean;
-        };
-        /** @description Request to broadcast a signed transaction. */
-        BroadcastTxRequest: {
-            /** @description The asset type (btc or ltc) */
+            address: string;
             asset: string;
-            /** @description The signed raw transaction hex */
+            /** Format: int64 */
+            confirmed: number;
+            /** Format: int64 */
+            unconfirmed: number;
+        };
+        /** @description A broadcast request: a finalized, signed raw transaction. */
+        BroadcastRequest: {
+            /** @description `btc` or `ltc`. */
+            asset: string;
+            /** @description Hex-encoded signed transaction. */
             tx_hex: string;
         };
-        /** @description Response from broadcasting a transaction. */
-        BroadcastTxResponse: {
-            /** @description The asset type */
-            asset: string;
-            /** @description The transaction ID (hash) */
+        BroadcastResponse: {
+            /** @description The broadcast transaction id. */
             txid: string;
         };
-        /** @description Request to cancel a relay. */
-        CancelGrinRelayRequest: {
-            /** @description Relay entry ID */
-            relay_id: string;
-            /** @description User ID of the requester */
-            user_id: string;
+        CapabilitiesResponse: {
+            chains: components["schemas"]["ChainCapabilities"];
+            /**
+             * Format: int32
+             * @description Capabilities contract version (additive changes do not bump it).
+             */
+            contract_version: number;
+            features: components["schemas"]["FeatureCapabilities"];
+            feed?: null | components["schemas"]["FeedCapability"];
+            messaging?: null | components["schemas"]["MessagingCapability"];
+            premium?: null | components["schemas"]["PremiumCapability"];
+            /** @description Registration gates for a new wallet on this instance. */
+            registration: components["schemas"]["RegistrationCapability"];
+            /** @description Wallet restore (import) policy for this instance. */
+            restore: components["schemas"]["RestoreCapability"];
+            /** @description Backend version (Cargo package version). */
+            version: string;
+        };
+        ChainCapabilities: {
+            btc: components["schemas"]["ChainCapability"];
+            grin: components["schemas"]["ChainCapability"];
+            ltc: components["schemas"]["ChainCapability"];
+            wow: components["schemas"]["ChainCapability"];
+            xmr: components["schemas"]["ChainCapability"];
         };
         /**
-         * @description Change-output details forwarded by v0.3+ clients on broadcast.
-         *     Schema mirrors `record_grin_output` request, minus tx_slate_id
-         *     (we already have it on the request).
+         * @description Per-chain availability. `network` is the configured network for UTXO chains
+         *     (so the wallet derives addresses for the right one); `null` for chains whose
+         *     network isn't a backend setting.
          */
-        ChangeOutputRecord: {
-            /** Format: int64 */
-            amount: number;
-            commitment: string;
-            key_id: string;
-            /** Format: int32 */
-            n_child: number;
+        ChainCapability: {
+            enabled: boolean;
+            network?: string | null;
         };
-        /** @description Request body for checking if a restore is valid. */
+        /**
+         * @description Ask whether a wallet (by seed fingerprint) was created on this backend, and
+         *     whether the submitted keys match.
+         */
         CheckRestoreRequest: {
-            /** @description Seed fingerprint: hex(SHA256(SHA256(bip39_seed))[0:8]) */
+            /** @description Seed fingerprint (16 or 64 hex chars). */
             fingerprint: string;
-            /** @description Public keys for all 5 assets (for verification) */
+            /** @description Submitted per-asset public keys, for verification. */
             keys: components["schemas"]["AssetPublicKey"][];
         };
-        /** @description Response for restore check. */
+        /**
+         * @description Restore-check result. Constant-shape: the same fields are always present so
+         *     the response is not a structure oracle, and `user_id` is never returned (no
+         *     enumeration).
+         *
+         *     NOTE: `exists` is an INTENTIONAL disclosure (the wallet uses it to decide
+         *     whether to offer a restore). It is throttled per fingerprint AND per IP, and
+         *     nothing downstream treats fingerprint-existence as authority — the
+         *     derivation-rotation path in [`extension_register`] requires a key-control
+         *     proof, not a bare fingerprint.
+         */
         CheckRestoreResponse: {
-            /** @description Error message if keys don't match */
-            error?: string | null;
-            /** @description Whether the fingerprint exists in the database */
+            /** @description Whether the fingerprint exists on this backend. */
             exists: boolean;
-            /** @description Whether all submitted keys match stored keys */
+            /**
+             * @description Whether every submitted key matches the stored key. `None` when the
+             *     fingerprint does not exist.
+             */
             keys_valid?: boolean | null;
-            /** @description User ID - always None for security (prevents enumeration attacks) */
-            user_id?: string | null;
             /**
              * Format: int64
-             * @description WOW blockchain start height for LWS registration (if wallet was created in Smirk)
+             * @description WOW scan-start height, if the wallet was created here.
              */
             wow_start_height?: number | null;
             /**
              * Format: int64
-             * @description XMR blockchain start height for LWS registration (if wallet was created in Smirk)
+             * @description XMR scan-start height, if the wallet was created here.
              */
             xmr_start_height?: number | null;
         };
-        /** @description Request to create a slatepack relay entry. */
-        CreateGrinRelayRequest: {
+        /** @description Confirmation-count query for a tx. */
+        ConfirmationsRequest: {
+            asset: string;
+            /** @description Transaction id (64 hex). */
+            txid: string;
+        };
+        ConfirmationsResponse: {
+            asset: string;
             /**
              * Format: int64
-             * @description Amount in nanogrin (accepts integer, float, or string for JS compatibility)
+             * @description Confirmations, or `null` if the tx is unknown / not yet in a block.
              */
-            amount: number;
-            /** @description Recipient's slatepack address (for address-based transfers) */
-            recipient_address?: string | null;
-            /** @description Recipient's user ID (for Smirk-to-Smirk transfers) */
-            recipient_user_id?: string | null;
-            /** @description Sender's user ID */
-            sender_user_id: string;
-            /** @description Slate ID from the transaction */
+            confirmations?: number | null;
+        };
+        /** @description Create a relay: post an (encrypted) slatepack addressed to a registered user. */
+        CreateRelayRequest: {
+            /**
+             * Format: int64
+             * @description Amount in nanogrin (informational; the real amount is in the slate).
+             */
+            amount_nanogrin: number;
+            /**
+             * Format: uuid
+             * @description Recipient (a registered Smirk user id).
+             */
+            recipient_user_id: string;
+            /** @description The Grin slate id (the transaction's slate UUID). */
             slate_id: string;
-            /** @description The slatepack content (armored slate) */
+            /** @description The armored slatepack (encrypted to the recipient). */
             slatepack: string;
         };
-        /** @description Response for creating a relay entry. */
-        CreateGrinRelayResponse: {
-            /** @description When this relay expires (ISO 8601) */
-            expires_at: string;
-            /** @description Relay entry ID */
-            id: string;
-        };
-        /**
-         * @description Request to deactivate a wallet from LWS scanning.
-         *
-         *     Use this to stop LWS from scanning an address that is no longer needed,
-         *     such as a tip address after funds have been claimed.
-         */
-        DeactivateLwsRequest: {
-            /** @description The primary address to deactivate */
-            address: string;
-            /** @description The asset type (xmr or wow) */
-            asset: string;
-        };
-        /** @description Response for LWS deactivation. */
-        DeactivateLwsResponse: {
-            message: string;
-            success: boolean;
-        };
-        /** @description Request to estimate fee rate. */
-        EstimateFeeRequest: {
-            /** @description The asset type (btc or ltc) */
-            asset: string;
-            /**
-             * Format: int32
-             * @description Target confirmation blocks (default: 6)
-             */
-            blocks?: number;
-        };
-        /**
-         * @description Response containing fee estimates.
-         *
-         *     Fee rates are in satoshis per virtual byte (sat/vB).
-         *     Virtual bytes account for SegWit's weight calculation.
-         */
-        EstimateFeeResponse: {
-            /** @description The asset type */
-            asset: string;
-            /**
-             * Format: double
-             * @description Fee rate in sat/vB for fast confirmation (1-2 blocks)
-             */
-            fast?: number | null;
-            /**
-             * Format: double
-             * @description Fee rate in sat/vB for normal confirmation (3-6 blocks)
-             */
-            normal?: number | null;
-            /**
-             * Format: double
-             * @description Fee rate in sat/vB for slow confirmation (12-24 blocks)
-             */
-            slow?: number | null;
-        };
-        /** @description Response for extension registration. */
-        ExtensionAuthResponse: {
-            access_token: string;
-            /** Format: int64 */
-            expires_in: number;
-            refresh_token: string;
-            user: components["schemas"]["ExtensionUserInfo"];
-        };
-        /** @description Request body for extension registration. */
+        /** @description Register a new extension wallet or re-authenticate an existing one. */
         ExtensionRegisterRequest: {
             /**
-             * @description Optional proof-of-work solution. Required when `POW_REQUIRED=true`
-             *     in the backend config; ignored otherwise (graceful-migration
-             *     window for v0.2.x clients). v0.3.0 clients always send one so
-             *     flipping `POW_REQUIRED=true` later doesn't break them. See
-             *     `core::pow` for the protocol and rollout strategy.
+             * @description Optional proof-of-work solution. Required when the PoW gate applies to
+             *     this pubkey (see [`pow_applies`]); otherwise ignored.
              */
             altcha_solution?: Record<string, never>;
-            /** @description Public keys for each supported asset */
+            /**
+             * @description Operator-minted invite code. Required when the instance enables the invite
+             *     registration gate (see `/capabilities` → `registration.invite_required`);
+             *     ignored otherwise and for returning wallets.
+             */
+            invite_code?: string | null;
+            /**
+             * @description Public keys for each supported asset. A `btc` key is required (it is the
+             *     identity).
+             */
             keys: components["schemas"]["AssetPublicKey"][];
             /**
-             * @description Seed fingerprint: hex(SHA256(SHA256(bip39_seed))[0:8])
-             *     Required for new wallet creation, used for restore validation
+             * @description Settled payment-invoice id from `/auth/payment-invoice`. Required when the
+             *     instance enables the pay-to-register gate (see `/capabilities` →
+             *     `registration.payment_required`); ignored otherwise and for returning
+             *     wallets. Its settlement is verified against the processor and the invoice
+             *     atomically consumed (single-use) before the wallet is granted.
+             */
+            payment_invoice_id?: string | null;
+            /**
+             * @description Derivation-rotation proof: BIP-137 base64 signature of the SAME
+             *     `smirk-auth-{signed_timestamp}` message under the BTC key ALREADY ON FILE
+             *     for the user identified by `seed_fingerprint`. Required to re-point an
+             *     existing user row; without it (or if it does not verify against the stored
+             *     key) a fingerprint match is treated as a brand-new identity and the
+             *     existing row is never touched. See [`extension_register`].
+             */
+            rotation_signature?: string | null;
+            /**
+             * @description Seed fingerprint `hex(SHA256(SHA256(seed))[..])`. Used for restore and to
+             *     LOCATE a candidate user row for the derivation-rotation path. By itself it
+             *     is NOT authority: a rotation also requires `rotation_signature` below.
              */
             seed_fingerprint?: string | null;
             /**
-             * @description Bitcoin message signature of "smirk-auth-{timestamp}" using BTC private key
-             *     Format: 64 bytes compact (r || s) hex encoded (128 chars)
+             * @description BIP-137 base64 signature of `smirk-auth-{signed_timestamp}` under the
+             *     SUBMITTED (new) BTC key. Proves control of the key in `keys`.
              */
             signature: string;
             /**
              * Format: int64
-             * @description Unix timestamp (seconds) that was signed
+             * @description Unix seconds that were signed to prove BTC key ownership.
              */
             signed_timestamp: number;
-            /** @description Optional username (must be unique, 3-32 chars, lowercase alphanumeric + underscore) */
+            /** @description Optional reserved username. */
             username?: string | null;
             /**
              * Format: int64
-             * @description Wallet creation timestamp (for sync optimization)
+             * @description Wallet creation time (unix seconds), to bound chain scans.
              */
             wallet_birthday?: number | null;
-            /**
-             * Format: int64
-             * @description WOW blockchain height at wallet creation (for LWS restore optimization)
-             */
+            /** Format: int64 */
             wow_start_height?: number | null;
-            /**
-             * Format: int64
-             * @description XMR blockchain height at wallet creation (for LWS restore optimization)
-             */
+            /** Format: int64 */
             xmr_start_height?: number | null;
         };
-        /** @description User info for extension auth response. */
-        ExtensionUserInfo: {
-            id: string;
-            is_new: boolean;
-            username?: string | null;
-        };
-        /** @description Request to finalize and broadcast a transaction. */
-        FinalizeGrinRelayRequest: {
-            /** @description The finalized slatepack (S3) */
-            finalized_slatepack: string;
-            /** @description Relay entry ID */
-            relay_id: string;
-            /** @description User ID of the finalizer (sender) */
-            user_id: string;
-        };
-        /** @description Request to get wallet balance. */
-        GetBalanceRequest: {
-            /** @description The primary address */
-            address: string;
-            /** @description The asset type (xmr or wow) */
-            asset: string;
-            /** @description The private view key (hex encoded) */
-            view_key: string;
-        };
-        /** @description Response for getting pending slatepacks. */
-        GetGrinPendingResponse: {
-            /** @description Slates waiting for this user to finalize (they are the sender) */
-            pending_to_finalize: components["schemas"]["PendingSlatepackEntry"][];
-            /** @description Slates waiting for this user to sign (they are the recipient) */
-            pending_to_sign: components["schemas"]["PendingSlatepackEntry"][];
-        };
-        /** @description Request to get transaction history for an address. */
-        GetHistoryRequest: {
-            /** @description The address to query */
-            address: string;
-            /** @description The asset type (btc or ltc) */
-            asset: string;
-        };
-        /** @description Response containing transaction history. */
-        GetHistoryResponse: {
-            /** @description The address queried */
-            address: string;
-            /** @description The asset type */
-            asset: string;
-            /** @description List of transactions (newest first) */
-            transactions: components["schemas"]["HistoryEntry"][];
-        };
-        /** @description Request to get transaction history from LWS. */
-        GetLwsHistoryRequest: {
-            /** @description The primary address */
-            address: string;
-            /** @description The asset type (xmr or wow) */
-            asset: string;
-            /** @description The private view key (hex encoded) */
-            view_key: string;
-        };
-        /** @description Response for transaction history. */
-        GetLwsHistoryResponse: {
-            /** @description The asset type */
-            asset: string;
+        FeatureCapabilities: {
+            /** @description Public curated Nostr feed for this instance. See `feed`. */
+            feed: boolean;
+            /** @description Grin async slatepack relay mailbox. */
+            grin_relay: boolean;
+            /** @description Nostr-native identity (NIP-98 login/link, NIP-05 directory). */
+            nostr_identity: boolean;
             /**
-             * Format: int64
-             * @description Current blockchain height
+             * @description npub-native registration: a wallet can register + authenticate from its
+             *     seed-derived Nostr key alone (POST /auth/nostr/register), no BTC signature.
+             *     The wallet uses this to choose the NIP-98 bootstrap over the legacy BTC one.
              */
-            blockchain_height: number;
-            /**
-             * Format: int64
-             * @description Height up to which wallet has been scanned
-             */
-            scanned_height: number;
-            /** @description Transaction history (newest first) */
-            transactions: components["schemas"]["LwsHistoryEntry"][];
+            nostr_native_auth: boolean;
+            /** @description First-party Nostr relay (encrypted DM inbox). See `messaging` for details. */
+            nostr_relay: boolean;
+            /** @description Paid premium tier for general Nostr posting to the relay. See `premium`. */
+            premium_relay: boolean;
+            /** @description Fiat price feed. */
+            prices: boolean;
+            /** @description Tipping (parked). */
+            tips: boolean;
         };
-        /** @description Request to get random outputs for decoy selection. */
-        GetRandomOutsRequest: {
-            /** @description The asset type (xmr or wow) */
+        /** @description A fee-estimate request. */
+        FeeRequest: {
+            /** @description `btc` or `ltc`. */
             asset: string;
             /**
              * Format: int32
-             * @description Number of decoys needed per input (typically 15 for ring size 16)
+             * @description Target confirmation within this many blocks.
              */
-            count: number;
+            blocks: number;
         };
-        /** @description Response for random outputs query. */
-        GetRandomOutsResponse: {
-            /** @description List of random outputs (decoys) */
-            outputs: components["schemas"]["RandomOutput"][];
-        };
-        /** @description Request to get unspent outputs for transaction construction. */
-        GetUnspentOutsRequest: {
-            /** @description The primary address */
-            address: string;
-            /** @description The asset type (xmr or wow) */
+        FeeResponse: {
             asset: string;
-            /** @description The private view key (hex encoded) */
-            view_key: string;
-        };
-        /** @description Response for unspent outputs query. */
-        GetUnspentOutsResponse: {
             /**
-             * Format: int64
-             * @description Fee mask for rounding
+             * Format: double
+             * @description Estimated fee rate in sat/vB, or `null` if the server can't estimate.
              */
-            fee_mask: number;
-            /**
-             * Format: int32
-             * @description Fork version
-             */
-            fork_version: number;
-            /** @description List of unspent outputs */
-            outputs: components["schemas"]["UnspentOutput"][];
-            /**
-             * Format: int64
-             * @description Fee per byte (for tx construction)
-             */
-            per_byte_fee: number;
-        };
-        /** @description Request to get UTXO balance via Electrum. */
-        GetUtxoBalanceRequest: {
-            /** @description The address to query */
-            address: string;
-            /** @description The asset type (btc or ltc) */
-            asset: string;
-        };
-        /** @description Request to get UTXOs for an address. */
-        GetUtxosRequest: {
-            /** @description The address to query */
-            address: string;
-            /** @description The asset type (btc or ltc) */
-            asset: string;
-        };
-        /** @description Response containing UTXOs for an address. */
-        GetUtxosResponse: {
-            /** @description The address queried */
-            address: string;
-            /** @description The asset type */
-            asset: string;
-            /** @description List of UTXOs */
-            utxos: components["schemas"]["Utxo"][];
+            sat_per_vb?: number | null;
         };
         /**
-         * @description A Grin output (similar to UTXO) for spending.
-         *
-         *     In Mimblewimble, outputs are Pedersen commitments that encode:
-         *     - A value (hidden by blinding factor)
-         *     - A blinding factor (known only to owner)
-         *
-         *     The client uses the key derivation path to recover the blinding factor
-         *     needed to spend this output.
+         * @description Public curated feed details (present only when `features.feed`). A read-only
+         *     web feed (e.g. `feed.<domain>`) reads from the relay and shows posts per the
+         *     operator's curation knobs.
          */
-        GrinOutput: {
-            /**
-             * Format: int64
-             * @description Amount in nanogrin
-             */
-            amount: number;
-            /**
-             * Format: int64
-             * @description Block height (if confirmed)
-             */
-            block_height?: number | null;
-            /** @description Pedersen commitment (hex) - the on-chain identifier for this output */
-            commitment: string;
-            /** @description Output ID (internal database ID) */
-            id: string;
-            /** @description Key derivation path (e.g., "m/0/1/0") */
-            key_id: string;
-            /**
-             * Format: int64
-             * @description Lock height (0 = no timelock)
-             */
-            lock_height: number;
-            /**
-             * Format: int64
-             * @description MMR index (if confirmed) - position in the output MMR
-             */
-            mmr_index?: number | null;
-            /**
-             * Format: int32
-             * @description Derivation index (n_child in path)
-             */
-            n_child: number;
-            /** @description Status: unconfirmed, unspent, locked, spent */
-            status: string;
-            /** @description Slate ID that created this output */
-            tx_slate_id?: string | null;
+        FeedCapability: {
+            /** @description Specific featured npubs to surface. */
+            allowlist_npubs: string[];
+            /** @description Extra relays to also pull the allowlisted authors from. */
+            extra_relays: string[];
+            /** @description The operator's npub for owner filtering + display; `null` when unset. */
+            owner_npub?: string | null;
+            /** @description The relay the feed reads from (mirrors `messaging.relay_url`). */
+            relay_url: string;
+            /** @description Include the operator's own posts. */
+            show_owner: boolean;
+            /** @description Include premium members' posts (all general notes on the gated relay). */
+            show_premium: boolean;
         };
-        /** @description Result of get_unspent_outputs / get_pmmr_indices (node OutputListing). */
-        GrinOutputListing: {
-            /**
-             * Format: int64
-             * @description The highest (last available) output MMR index on-chain.
-             */
-            highest_index: number;
-            /**
-             * Format: int64
-             * @description The last insertion index retrieved — pass this+1 as the next
-             *     `start_index` to page forward; for get_pmmr_indices it is the start
-             *     index corresponding to the requested block height.
-             */
-            last_retrieved_index: number;
-            /** @description The outputs in this page (empty for get_pmmr_indices). */
-            outputs?: components["schemas"]["GrinUnspentOutput"][];
+        /** @description Record that the sender finalized + broadcast the transaction. */
+        FinalizeRelayRequest: {
+            slate_id: string;
+            /** @description The broadcast transaction hash/kernel (recorded for reference). */
+            tx_hash: string;
         };
-        /** @description Response for getting user's Grin outputs. */
-        GrinOutputsResponse: {
-            /**
-             * Format: int32
-             * @description Next available child index for key derivation
-             *     (ensures we never reuse a derivation path)
-             */
-            next_child_index: number;
-            /** @description Spendable outputs (unspent + unconfirmed) */
-            outputs: components["schemas"]["GrinOutput"][];
-            /**
-             * Format: int64
-             * @description Total spendable amount in nanogrin
-             */
-            total_spendable: number;
+        /** @description Broadcast a finalized, signed Grin transaction (built + signed by the wallet). */
+        GrinBroadcastRequest: {
+            /** @description The finalized transaction object (grin node `push_transaction` input). */
+            tx: Record<string, never>;
         };
-        /** @description A found output from the blockchain scan. */
-        GrinScanFoundOutput: {
-            /** @description The commitment that was found */
-            commit: string;
-            /**
-             * Format: int64
-             * @description Block height where the output was included
-             */
+        GrinBroadcastResponse: {
+            ok: boolean;
+        };
+        GrinHeightResponse: {
+            /** Format: int64 */
             height: number;
-            /**
-             * Format: int64
-             * @description MMR index position
-             */
-            mmr_index: number;
         };
-        /** @description Request to scan for commitments on-chain. */
-        GrinScanRequest: {
-            /** @description List of commitment hex strings to check */
-            commitments: string[];
-        };
-        /** @description Response for commitment scan. */
-        GrinScanResponse: {
-            /** @description Outputs that were found on-chain */
-            found: components["schemas"]["GrinScanFoundOutput"][];
-            /** @description Commitments that were not found */
-            not_found: string[];
-        };
-        /** @description A Grin output for sync response (includes all states, not just spendable). */
-        GrinSyncOutput: {
-            /**
-             * Format: int64
-             * @description Amount in nanogrin
-             */
-            amount: number;
-            /**
-             * Format: int64
-             * @description Block height (if confirmed)
-             */
-            block_height?: number | null;
-            /** @description Pedersen commitment (hex) */
-            commitment: string;
-            /** @description When created */
-            created_at: string;
-            /** @description Output ID (internal database ID) */
-            id: string;
-            /** @description Key derivation path (e.g., "m/0/1/0") */
-            key_id: string;
-            /**
-             * Format: int64
-             * @description Lock height (0 = no timelock)
-             */
-            lock_height: number;
-            /**
-             * Format: int64
-             * @description MMR index (if confirmed)
-             */
-            mmr_index?: number | null;
-            /**
-             * Format: int32
-             * @description Derivation index (n_child in path)
-             */
-            n_child: number;
-            /** @description Status: unconfirmed, unspent, locked, spent */
-            status: string;
-        };
-        /** @description Response for wallet sync (restore from backend DB). */
-        GrinSyncResponse: {
-            /**
-             * Format: int32
-             * @description Next available child index for key derivation
-             */
-            next_child_index: number;
-            /** @description All outputs (including spent, for n_child tracking) */
-            outputs: components["schemas"]["GrinSyncOutput"][];
-            /** @description Transaction history */
-            transactions: components["schemas"]["GrinSyncTransaction"][];
-        };
-        /** @description A Grin transaction for sync response. */
-        GrinSyncTransaction: {
-            /**
-             * Format: int64
-             * @description Amount in nanogrin
-             */
-            amount: number;
-            /**
-             * Format: int64
-             * @description Block height (if confirmed)
-             */
-            block_height?: number | null;
-            /** @description Counterparty slatepack address (if known) */
-            counterparty_address?: string | null;
-            /** @description When created */
-            created_at: string;
-            /** @description Direction: "send" or "receive" */
-            direction: string;
-            /**
-             * Format: int64
-             * @description Fee in nanogrin (0 for receives)
-             */
-            fee: number;
-            /** @description Transaction ID (internal database ID) */
-            id: string;
-            /** @description Kernel excess (on-chain tx identifier, available after finalization) */
-            kernel_excess?: string | null;
-            /** @description Slate ID (Grin's transaction identifier) */
-            slate_id: string;
-            /** @description Status: pending, signed, finalized, confirmed, cancelled */
-            status: string;
-        };
-        /** @description A transaction history entry for display. */
-        GrinTransactionEntry: {
-            /**
-             * Format: int64
-             * @description Amount in nanogrin
-             */
-            amount: number;
-            /** @description Counterparty user ID if known */
-            counterparty_user_id?: string | null;
-            /** @description When created */
-            created_at: string;
-            /** @description Direction: "send" or "receive" */
-            direction: string;
-            /**
-             * Format: int64
-             * @description Fee in nanogrin (0 for receives)
-             */
-            fee: number;
-            /** @description Transaction ID (our internal ID) */
-            id: string;
-            /**
-             * @description Kernel excess (on-chain tx identifier, available after finalization)
-             *     This can be used to look up the transaction in a Grin block explorer
-             */
-            kernel_excess?: string | null;
-            /** @description Slate ID (Grin's transaction identifier) */
-            slate_id: string;
-            /** @description Status: pending, signed, finalized, confirmed, cancelled */
-            status: string;
-        };
-        /** @description Response for user's Grin transaction history. */
-        GrinTransactionHistoryResponse: {
-            transactions: components["schemas"]["GrinTransactionEntry"][];
-        };
-        /**
-         * @description One unspent output from the node's get_unspent_outputs Foreign API
-         *     (OutputPrintable). Unlike `GrinOutputInfo`, `block_height` is
-         *     `Option<u64>` (matching the node's type) and `proof` carries the
-         *     rangeproof bytes (hex) when the query is made with include_proof=true —
-         *     required for seed-only recovery via bulletproof rewind.
-         */
-        GrinUnspentOutput: {
-            /**
-             * Format: int64
-             * @description Block height the output was included at (None if not yet on a block).
-             */
-            block_height?: number | null;
-            /** @description The Pedersen commitment (hex). */
+        /** @description A single output recovered by a view-only scan. Amounts are nanogrin. */
+        GrinOutput: {
             commit: string;
-            /**
-             * Format: int64
-             * @description Output MMR index.
-             */
+            /** Format: int64 */
+            height: number;
+            is_coinbase: boolean;
+            /** Format: int64 */
+            lock_height: number;
+            /** Format: int64 */
             mmr_index: number;
-            /** @description Rangeproof bytes (hex), present only when include_proof=true. */
-            proof?: string | null;
+            /** Format: int64 */
+            value: number;
         };
         /**
-         * @description Request to page the node's UNSPENT output set (with rangeproofs) for
-         *     seed-only wallet recovery.
+         * @description A view-only scan request. Carries the `rewind_hash` view credential, so it
+         *     deliberately omits `Debug` (never logged).
          */
-        GrinUnspentOutputsRequest: {
+        GrinScanRequest: {
             /**
              * Format: int64
-             * @description Max outputs per page (capped server-side).
+             * @description Restore proof-of-work nonce. Required when the instance prices the
+             *     requested restore depth (see `/capabilities` → `restore.pow_*`); bound to
+             *     `(grin, rewind_hash, start_height)` (see `restore_pow`).
              */
-            max?: number | null;
+            restore_pow_nonce?: number | null;
+            /** @description The wallet's `rewind_hash` (64 hex). Forwarded to grin-wallet; not stored. */
+            rewind_hash: string;
             /**
              * Format: int64
-             * @description Wallet birthday block height — converted to a start index so the
-             *     scan is bounded (not from genesis). Ignored if `start_index` set.
+             * @description Scan from this block height (wallet birthday / last scanned). Omit for full.
              */
             start_height?: number | null;
+        };
+        /** @description Result of a view-only scan: recognized outputs, total, and the resume index. */
+        GrinScanResponse: {
             /**
              * Format: int64
-             * @description Output-MMR index to start from. Wins over `start_height` — used to
-             *     page forward (`last_retrieved_index + 1` from the previous page).
+             * @description Resume point (`last_pmmr_index`) for the next incremental scan.
              */
-            start_index?: number | null;
+            last_pmmr_index: number;
+            outputs: components["schemas"]["GrinOutput"][];
+            /** Format: int64 */
+            total_balance: number;
+        };
+        /** @description Liveness response. */
+        HealthResponse: {
+            /** @description Always `"ok"` when the service is reachable. */
+            status: string;
+        };
+        HeightResponse: {
+            asset: string;
+            /** Format: int64 */
+            height: number;
         };
         /**
-         * @description Response for user's Grin balance.
-         *
-         *     Balance is calculated from the grin_transactions table, not by querying
-         *     the blockchain directly (Grin doesn't support address-based queries).
-         *
-         *     States mirror XMR/WOW behavior:
-         *     - **confirmed**: 10+ confirmations, fully spendable
-         *     - **locked**: 1-9 confirmations, on-chain but not yet spendable
-         *     - **pending**: broadcast but not yet in a block (0 confirmations)
+         * @description Current tip height per chain. `null` = the chain is disabled on this instance
+         *     or its source was unreachable for this request.
          */
-        GrinUserBalanceResponse: {
+        HeightsResponse: {
             /**
              * Format: int64
-             * @description Spendable balance (10+ confirmations) in nanogrin
+             * @example 955860
              */
-            confirmed: number;
-            /**
-             * Format: int64
-             * @description Locked balance (1-9 confirmations, on-chain but not spendable) in nanogrin
-             */
-            locked: number;
-            /**
-             * Format: int64
-             * @description Pending balance (broadcast but not yet in a block) in nanogrin
-             */
-            pending: number;
-            /**
-             * Format: int64
-             * @description Total balance in nanogrin
-             */
-            total: number;
+            btc?: number | null;
+            /** Format: int64 */
+            grin?: number | null;
+            /** Format: int64 */
+            ltc?: number | null;
+            /** Format: int64 */
+            wow?: number | null;
+            /** Format: int64 */
+            xmr?: number | null;
         };
-        /** @description A single transaction in history. */
+        /** @description A transaction-history entry. */
         HistoryEntry: {
             /**
              * Format: int64
-             * @description Fee in satoshis (only for mempool txs, if known)
+             * @description Fee in satoshis (mempool entries only).
              */
             fee?: number | null;
             /**
              * Format: int64
-             * @description Block height (-1 or 0 if unconfirmed/mempool)
+             * @description Block height (`0`/negative for unconfirmed).
              */
             height: number;
-            /**
-             * Format: int64
-             * @description Total satoshis received at the queried address in this tx
-             */
-            total_received?: number | null;
-            /**
-             * Format: int64
-             * @description Total satoshis sent from the queried address in this tx (requires prevout data)
-             */
-            total_sent?: number | null;
-            /** @description Transaction ID */
             txid: string;
         };
-        /**
-         * @description A spent output candidate in transaction history.
-         *
-         *     These are outputs that MAY have been spent - the client must verify
-         *     by computing key images using the spend key and comparing to `key_image`.
-         */
-        HistorySpentOutput: {
-            /**
-             * Format: int64
-             * @description Amount in atomic units
-             */
-            amount: number;
-            /** @description Key image found on chain (client verifies this matches locally computed key image) */
-            key_image: string;
-            /**
-             * Format: int64
-             * @description Output index within the original receive transaction
-             */
-            out_index: number;
-            /** @description Transaction public key (needed for key image computation) */
-            tx_pub_key: string;
+        HistoryResponse: {
+            address: string;
+            asset: string;
+            transactions: components["schemas"]["HistoryEntry"][];
         };
-        /** @description Request to lock outputs for spending. */
-        LockGrinOutputsRequest: {
-            /** @description Output IDs to lock */
-            output_ids: string[];
-            /** @description Slate ID of the send transaction */
-            tx_slate_id: string;
-            /** @description User ID */
-            user_id: string;
+        InvoiceReq: {
+            /** @description Plan id (see `/capabilities` → `premium.plans`), e.g. `quarter`. */
+            plan: string;
         };
-        /** @description Logout (revoke refresh token). */
+        InvoiceResp: {
+            amount: string;
+            currency: string;
+            invoice_id: string;
+            /** @description Where to pay (a checkout URL or address). */
+            pay_to: string;
+            plan: string;
+        };
         LogoutRequest: {
             refresh_token: string;
         };
-        /** @description A transaction entry for history display. */
-        LwsHistoryEntry: {
-            /**
-             * Format: int64
-             * @description Block height (0 for mempool/unconfirmed)
-             */
-            height: number;
-            /** @description Whether this transaction is pending (in mempool) */
-            is_pending: boolean;
-            /** @description Payment ID if present */
-            payment_id?: string | null;
-            /**
-             * @description Spent output candidates - client must verify with spend key
-             *     Client computes: verified_sent = sum(outputs where computed_key_image matches key_image)
-             */
-            spent_outputs: components["schemas"]["HistorySpentOutput"][];
-            /** @description Timestamp (ISO 8601 string, empty for mempool) */
-            timestamp: string;
-            /**
-             * Format: int64
-             * @description Amount received in this tx (atomic units) - verified by view key
-             */
-            total_received: number;
-            /** @description Transaction hash */
-            txid: string;
-        };
-        /** @description User info for /auth/me response. */
-        MeResponse: {
-            id: string;
-            /** Format: int64 */
-            telegram_id?: number | null;
-            telegram_username?: string | null;
-            username?: string | null;
-        };
-        /** @description Debug info for pending transaction detection pipeline. */
-        PendingDebugResponse: {
-            asset: string;
-            last_pending_at?: string | null;
-            /** Format: int64 */
-            pending_tx_count: number;
-            /** Format: int64 */
-            webhook_count: number;
-            zmq_configured: boolean;
-        };
-        /** @description A pending slatepack entry for API response. */
-        PendingSlatepackEntry: {
-            /**
-             * Format: int64
-             * @description Amount in nanogrin
-             */
-            amount: number;
-            /** @description When created (ISO 8601) */
-            created_at: string;
-            /** @description When this expires (ISO 8601) */
-            expires_at: string;
-            /** @description Relay entry ID */
-            id: string;
-            /** @description Sender's user ID */
-            sender_user_id: string;
-            /** @description Slate ID */
-            slate_id: string;
-            /** @description Slatepack content (S1 for pending_to_sign, S2 for pending_to_finalize) */
-            slatepack: string;
+        LogoutResponse: {
+            success: boolean;
         };
         /**
-         * @description A random output for use as a decoy.
-         *
-         *     Decoys are included in ring signatures to provide privacy. The verifier
-         *     cannot determine which output in the ring is the real input.
+         * @description Result of resolving a username. Constant-shape: the same fields are always
+         *     present, so the response is not a structure oracle.
          */
-        RandomOutput: {
-            /**
-             * Format: int64
-             * @description Global output index
-             */
-            global_index: number;
-            /** @description Output public key (hex) */
-            public_key: string;
-            /** @description RingCT commitment (hex) */
-            rct: string;
+        LookupUsernameResponse: {
+            public_keys?: null | components["schemas"]["PublicKeysInfo"];
+            /** @description Whether a user owns this username. */
+            registered: boolean;
+            /** @description The resolved user id (UUID string), if registered. */
+            user_id?: string | null;
+            /** @description The canonical (lowercased) username, if registered. */
+            username?: string | null;
         };
-        /** @description Request to record a new Grin output (when receiving). */
-        RecordGrinOutputRequest: {
+        /** @description Asset-only query. */
+        LwsAssetRequest: {
+            /** @description `xmr` or `wow`. */
+            asset: string;
+        };
+        /**
+         * @description Balance + scan state, as a **verification passthrough**. The backend holds no
+         *     spend key, so it cannot net out spends; the wallet computes the true spendable
+         *     balance client-side: `total_received − sum(spent_outputs it verifies with the
+         *     spend key) − locked_balance`. `spent_outputs` are therefore CANDIDATES (some
+         *     are ring decoys of the user's own outputs); `pending_balance` is the 0-conf
+         *     (mempool) received.
+         */
+        LwsBalanceResponse: {
+            asset: string;
+            /** Format: int64 */
+            blockchain_height: number;
+            /** Format: int64 */
+            locked_balance: number;
             /**
              * Format: int64
-             * @description Amount in nanogrin (accepts integer, float, or string)
+             * @description Unconfirmed (mempool) received — 0-conf. `0` until the LWS reports mempool
+             *     rows (the monero-lws mempool feature); never negative.
              */
-            amount: number;
-            /** @description Pedersen commitment (hex) */
-            commitment: string;
-            /** @description Key derivation path */
-            key_id: string;
+            pending_balance: number;
+            /** Format: int64 */
+            scanned_height: number;
+            /**
+             * @description Candidate spent outputs (confirmed + mempool) for client-side key-image
+             *     verification with the spend key. Never authoritative server-side.
+             */
+            spent_outputs: components["schemas"]["SpentOutputDto"][];
+            /** Format: int64 */
+            start_height: number;
+            /** Format: int64 */
+            total_received: number;
+            /** Format: int64 */
+            transaction_count: number;
+        };
+        LwsHistoryResponse: {
+            asset: string;
+            transactions: components["schemas"]["TxDto"][];
+        };
+        /**
+         * @description First-party Nostr relay details (present only when `features.nostr_relay`).
+         *     The wallet connects here as its DM inbox (alongside the public interop
+         *     relays) and adapts its UI to the policy.
+         */
+        MessagingCapability: {
             /**
              * Format: int32
-             * @description Derivation index
+             * @description NIP-13 PoW bits required on cross-ecosystem inbound (0 = off).
              */
-            n_child: number;
-            /** @description Slate ID that created this output */
-            tx_slate_id?: string | null;
-            /** @description User ID */
-            user_id: string;
+            inbound_pow_bits: number;
+            /** @description The ws(s):// relay URL clients connect to. */
+            relay_url: string;
+            /** @description NIPs the relay speaks (e.g. `[1, 17, 44, 59]`). */
+            supported_nips: number[];
+            /** @description Write policy: `inbox-outbox` | `author-allowlist` | `open` | `premium-post`. */
+            write_policy: string;
         };
-        /** @description Response for recording a Grin output. */
-        RecordGrinOutputResponse: {
-            id: string;
-            status: string;
+        MyUsernameResponse: {
+            /** @description The caller's username, or `null` if they have not claimed one. */
+            username?: string | null;
         };
-        /** @description Request to record a Grin transaction. */
-        RecordGrinTransactionRequest: {
+        NostrLinkChallengeResponse: {
+            /**
+             * @description Server-issued single-use nonce (hex). The wallet embeds it as the signed
+             *     action's `challenge` tag when calling `POST /auth/nostr/link`.
+             */
+            nonce: string;
+        };
+        /**
+         * @description Link a Nostr identity to the authenticated user. This is a STATE CHANGE, so
+         *     it carries a signed-action proof, not a login-grade token.
+         */
+        NostrLinkRequest: {
+            /**
+             * @description The server-issued single-use nonce the signed action must bind (the
+             *     event's `challenge` tag).
+             */
+            nonce: string;
+            /**
+             * @description The `Nostr <base64(event)>` signed-action token proving control of the
+             *     npub AND committing to the server nonce + this request.
+             */
+            nostr_token: string;
+        };
+        NostrLinkResponse: {
+            /** @description The linked x-only Nostr pubkey (hex). */
+            nostr_pubkey: string;
+        };
+        /**
+         * @description Register (or resolve) a wallet keyed by its **Nostr identity**: the
+         *     self-sovereign, npub-native create path. Unlike [`nostr_login`] (create-never)
+         *     and [`nostr_link`] (needs a prior BTC-authed JWT), this MINTS a user from the
+         *     npub alone: no BTC signature is ever required. The npub is the identity anchor;
+         *     the chain `keys` still ship (for tip addresses + restore) but are NOT the auth
+         *     proof.
+         */
+        NostrRegisterRequest: {
+            altcha_solution?: Record<string, never>;
+            invite_code?: string | null;
+            /**
+             * @description Chain public keys (for tip addresses + restore). A `btc` key is expected
+             *     for pay-to-register invoice binding, but it is no longer the identity.
+             */
+            keys: components["schemas"]["AssetPublicKey"][];
+            /** @description The server-issued single-use nonce (from `/auth/nostr/register-challenge`). */
+            nonce: string;
+            /**
+             * @description `Nostr <base64(event)>` signed-action token proving control of the npub AND
+             *     binding the server nonce + the `nostr_register` purpose.
+             */
+            nostr_token: string;
+            payment_invoice_id?: string | null;
+            seed_fingerprint?: string | null;
+            username?: string | null;
             /**
              * Format: int64
-             * @description Amount in nanogrin (accepts integer, float, or string)
+             * @description Wallet creation time (unix seconds), to bound chain scans.
              */
-            amount: number;
-            /** @description Counterparty slatepack address (if known) */
-            counterparty_address?: string | null;
-            /** @description Counterparty user ID (if known) */
-            counterparty_user_id?: string | null;
-            /** @description Direction: "send" or "receive" */
-            direction: string;
-            /**
-             * Format: int64
-             * @description Fee in nanogrin (accepts integer, float, or string)
-             */
-            fee: number;
-            /** @description Slate ID */
-            slate_id: string;
-            /** @description User ID */
-            user_id: string;
+            wallet_birthday?: number | null;
+            /** Format: int64 */
+            wow_start_height?: number | null;
+            /** Format: int64 */
+            xmr_start_height?: number | null;
         };
-        /** @description Response for recording a Grin transaction. */
-        RecordGrinTransactionResponse: {
+        OkResponse: {
+            ok: boolean;
+        };
+        /** @description Request a registration-payment invoice for a wallet about to register. */
+        PaymentInvoiceRequest: {
+            /**
+             * @description The wallet's BTC public key. Its hash is the identity the invoice binds
+             *     to; only a later `/auth/extension` proving control of this key can redeem
+             *     the settled invoice, so this endpoint needs no separate proof.
+             */
+            btc_public_key: string;
+        };
+        /** @description A created payment invoice: what to pay, and the id to present at registration. */
+        PaymentInvoiceResponse: {
+            /** @description Price to pay. */
+            amount: string;
+            /** @description Price currency. */
+            currency: string;
+            /** @description Opaque invoice id — send it back as `/auth/extension`'s `payment_invoice_id`. */
+            invoice_id: string;
+            /** @description Where to pay (a hosted checkout URL, or an address). */
+            pay_to: string;
+        };
+        PendingRelaysResponse: {
+            relays: components["schemas"]["RelayEntry"][];
+        };
+        /**
+         * @description Premium tier details (present only when `features.premium_relay`). The wallet
+         *     renders the plan tiers (discount visible) and gates general-Nostr posting to
+         *     the Smirk relay on the user's premium status; wallet events stay free.
+         */
+        PremiumCapability: {
+            currency: string;
+            plans: components["schemas"]["PremiumPlanInfo"][];
+            /** @description The relay premium posting targets (mirrors `messaging.relay_url`). */
+            relay_url: string;
+        };
+        /**
+         * @description A single premium plan (discount tier): `days` of relay-posting access for
+         *     `amount` in [`PremiumCapability::currency`].
+         */
+        PremiumPlanInfo: {
+            amount: string;
+            /** Format: int32 */
+            days: number;
             id: string;
         };
-        /** @description Request body for token refresh. */
+        PricesResponse: {
+            /** @description Fiat currency the quotes are in (e.g. `"usd"`). */
+            currency: string;
+            /** @description Asset symbol → price in `currency`. Only enabled feeds appear. */
+            prices: {
+                [key: string]: number;
+            };
+            /** @description RFC 3339 timestamp of the last successful refresh; `null` until the first. */
+            updated_at?: string | null;
+        };
+        /** @description A user's per-asset receiving public keys, by asset. */
+        PublicKeysInfo: {
+            btc?: string | null;
+            grin?: string | null;
+            ltc?: string | null;
+            wow?: string | null;
+            xmr?: string | null;
+        };
+        /** @description A decoy output. */
+        RandomOutputDto: {
+            /** Format: int64 */
+            global_index: number;
+            public_key: string;
+            rct: string;
+        };
+        /** @description Request decoy outputs for ring construction. */
+        RandomOutsRequest: {
+            /** @description Amounts to request decoys for (`["0"]` for RingCT). */
+            amounts: string[];
+            asset: string;
+            /**
+             * Format: int32
+             * @description Decoys per real output (protocol ring size; clamped server-side).
+             */
+            count: number;
+        };
+        RandomOutsResponse: {
+            amount_outs: components["schemas"]["AmountOutsDto"][];
+            asset: string;
+        };
         RefreshTokenRequest: {
             refresh_token: string;
         };
-        /** @description Request body for registering a Grin slatepack address. */
-        RegisterGrinAddressRequest: {
-            /**
-             * @description Slatepack address (bech32, e.g. `grin1...` on mainnet or
-             *     `tgrin1...` on testnet).
-             */
-            address: string;
+        /** @description Register or update one of the caller's per-asset public keys. */
+        RegisterKeyRequest: {
+            /** @description Asset the key is for (`btc`, `ltc`, `xmr`, `wow`, `grin`). */
+            asset: string;
+            /** @description The public key (format depends on the asset). */
+            public_key: string;
+            /** @description XMR/WOW only: the public spend key. */
+            public_spend_key?: string | null;
         };
-        /** @description Response — echoes the stored address so the client can verify. */
-        RegisterGrinAddressResponse: {
+        /** @description Register (or import-with-height) an account for LWS scanning. */
+        RegisterRequest: {
             address: string;
-        };
-        /**
-         * @description Request to register a wallet with LWS for balance scanning.
-         *
-         *     After registration, the LWS will begin scanning the blockchain for transactions
-         *     to this address. The `start_height` parameter controls where scanning begins:
-         *     - For new wallets: Omit to start from current height (instant sync)
-         *     - For restored wallets: Provide the wallet birthday to scan historical transactions
-         */
-        RegisterLwsRequest: {
-            /** @description The primary address */
-            address: string;
-            /** @description The asset type (xmr or wow) */
             asset: string;
             /**
              * Format: int64
-             * @description Optional start height for scanning (block height).
-             *     If not provided, scanning starts from current blockchain height.
-             *     For wallets created in the past, this should be set to avoid scanning
-             *     the entire blockchain (which can take hours/days).
+             * @description Restore proof-of-work nonce. Required when the instance prices the
+             *     requested restore depth (see `/capabilities` → `restore.pow_*`); ignored
+             *     otherwise. Bound to `(asset, address, start_height)` (see `restore_pow`).
+             */
+            restore_pow_nonce?: number | null;
+            /**
+             * Format: int64
+             * @description Scan from this block height (wallet birthday). Omit to scan from now.
              */
             start_height?: number | null;
-            /** @description The user ID (from /auth/extension registration) */
-            user_id: string;
-            /** @description The private view key (hex encoded) */
+            /** @description Private view key (64 hex). Forwarded to the LWS; never stored or logged. */
             view_key: string;
         };
-        /** @description Response for LWS registration. */
-        RegisterLwsResponse: {
-            message: string;
-            /**
-             * Format: int64
-             * @description The start height used for scanning
-             */
-            start_height?: number | null;
-            success: boolean;
-        };
-        /** @description Request to submit a signed slatepack. */
-        SignGrinRelayRequest: {
-            /** @description Relay entry ID */
-            relay_id: string;
-            /** @description The signed slatepack (S2) */
-            signed_slatepack: string;
-            /** @description User ID of the signer (recipient) */
-            user_id: string;
-        };
         /**
-         * @description Response for slatepack address lookup.
-         *
-         *     Pre-2026-06-13 this also carried `user_id: Option<String>` for
-         *     the Grin recipient-restore flow's convenience. The 2026-06-13
-         *     independent reviewer flagged it as a pre-login enumeration vector
-         *     — anonymous callers could pump `lookup_slatepack_address` to
-         *     build an address↔user_id map. The follow-up pass (this commit)
-         *     strips the field entirely: the restore flow doesn't actually
-         *     need the user_id pre-authentication; the boolean `found` is
-         *     enough to gate "should I prompt for password to restore" vs
-         *     "treat as new wallet." Authenticated user_id lookups for Grin
-         *     continue via `/wallet/grin/relay/*` which all require a JWT.
+         * @description Registration gates this instance enforces for a NEW wallet (returning wallets
+         *     and self-hosting bypass them). The wallet uses these to shape onboarding —
+         *     prompt for an invite code, solve PoW, etc.
          */
-        SlatepackAddressLookupResponse: {
-            /** @description Whether the address was found */
-            found: boolean;
-        };
-        /** @description Request to mark outputs as spent. */
-        SpendGrinOutputsRequest: {
-            /** @description Slate ID of the finalized transaction */
-            tx_slate_id: string;
-            /** @description User ID */
-            user_id: string;
-        };
-        /**
-         * @description A spent output candidate for client-side verification.
-         *
-         *     The server reports outputs it believes are spent based on key images seen on chain.
-         *     The client must verify each one by:
-         *     1. Computing the key image using spend key + tx_pub_key + out_index
-         *     2. Checking if computed key image matches `key_image` field
-         *     3. Only counting verified matches as spent
-         *
-         *     This prevents the server from lying about spent outputs (which would inflate balance).
-         */
-        SpentOutputCandidate: {
+        RegistrationCapability: {
+            /** @description A valid operator-minted invite code is required to register. */
+            invite_required: boolean;
             /**
-             * Format: int64
-             * @description Amount in atomic units
+             * @description The registration price + currency — present only when `payment_required`,
+             *     so the wallet can show "registration costs X" before minting an invoice.
              */
-            amount: number;
-            /** @description Key image found on chain (client verifies this matches locally computed key image) */
-            key_image: string;
+            payment_amount?: string | null;
+            payment_currency?: string | null;
             /**
-             * Format: int64
-             * @description Output index within the original receive transaction
+             * @description A settled payment invoice (from `/auth/payment-invoice`) is required to
+             *     register a new wallet.
              */
-            out_index: number;
-            /** @description Transaction public key (needed for key image computation) */
-            tx_pub_key: string;
-        };
-        /** @description Request to broadcast a signed XMR/WOW transaction. */
-        SubmitRawTxRequest: {
+            payment_required: boolean;
+            /** @description A proof-of-work solution is required to register. */
+            pow_required: boolean;
             /**
-             * Format: int64
-             * @description Optional: amount in atomic units
+             * @description How the enabled gates combine: `"all"` (satisfy every gate; the default)
+             *     or `"any"` (the gates are alternatives; satisfy one). PoW is orthogonal
+             *     and applies regardless. The wallet routes onboarding on this: multiple
+             *     gates + `"any"` => "pick a method" buttons; `"all"` => satisfy each.
              */
-            amount?: number | null;
-            /** @description The asset type (xmr or wow) */
-            asset: string;
-            /** @description Optional: recipient address (for instant pending detection on smirk-to-smirk sends) */
-            recipient_address?: string | null;
-            /** @description Optional: transaction hash */
-            tx_hash?: string | null;
-            /** @description The signed raw transaction hex */
-            tx_hex: string;
+            registration_mode: string;
         };
-        /** @description Response from submitting a transaction. */
-        SubmitRawTxResponse: {
-            /** @description Status message */
+        /** @description A relay entry as returned to an authorized party. */
+        RelayEntry: {
+            /** Format: int64 */
+            amount_nanogrin: number;
+            created_at: string;
+            expires_at: string;
+            finalized_at?: string | null;
+            recipient_user_id?: string | null;
+            /** @description The recipient's response slatepack, once provided. */
+            response_slatepack?: string | null;
+            sender_user_id: string;
+            slate_id: string;
+            /** @description The sender's armored slatepack (what the recipient responds to). */
+            slatepack_content: string;
             status: string;
-            /** @description Whether the transaction was accepted */
-            success: boolean;
+            tx_hash?: string | null;
         };
-        /** @description Request to unlock outputs (on send failure/cancel). */
-        UnlockGrinOutputsRequest: {
-            /** @description Slate ID of the cancelled transaction */
-            tx_slate_id: string;
-            /** @description User ID */
-            user_id: string;
+        /** @description The recipient's response to a pending relay. */
+        RespondRelayRequest: {
+            /** @description The armored response slatepack (recipient's partial signature added). */
+            response_slatepack: string;
+            slate_id: string;
         };
         /**
-         * @description An unspent output from LWS.
-         *
-         *     These outputs can be used as inputs when constructing a transaction.
-         *     The client must filter out any that are actually spent (using key image verification)
-         *     before including them as transaction inputs.
+         * @description This instance's wallet-restore (import) policy. The wallet uses it to adapt
+         *     its import UX — hide/grey the restore-height field under `create-only`, warn
+         *     when a chosen date exceeds the bound. `max_depth_days` is present only for
+         *     the `bounded` policy.
          */
-        UnspentOutput: {
-            /**
-             * Format: int64
-             * @description Amount in atomic units
-             */
-            amount: number;
-            /**
-             * Format: int64
-             * @description Global output index on blockchain
-             */
-            global_index: number;
-            /**
-             * Format: int64
-             * @description Block height
-             */
-            height: number;
+        RestoreCapability: {
+            /** Format: int32 */
+            max_depth_days?: number | null;
+            /** @description `create-only` | `bounded` | `unlimited`. */
+            policy: string;
+            /** Format: int32 */
+            pow_days_per_bit: number;
             /**
              * Format: int32
-             * @description Output index within transaction
+             * @description Restore PoW pricing curve: a restore depth (days) free of PoW, then `+1`
+             *     hashcash difficulty bit per `pow_days_per_bit` days beyond it
+             *     (`0` = pricing off), capped at `pow_max_bits`. The wallet computes its
+             *     required difficulty from this + the restore date and solves the hashcash.
              */
-            index: number;
-            /** @description Output public key (hex) */
-            public_key: string;
-            /** @description RingCT commitment (hex) */
-            rct: string;
+            pow_free_days: number;
+            /** Format: int32 */
+            pow_max_bits: number;
+        };
+        SetUsernameRequest: {
             /**
-             * @description Key images seen on-chain that might indicate this output is spent.
-             *     Client must compute actual key image and check if it's in this list.
+             * @description Desired username (3-32 chars, lowercase `[a-z0-9_]`, no leading/trailing
+             *     underscore). Submitted values are lowercased before validation.
              */
-            spend_key_images?: string[];
-            /** @description Timestamp (ISO 8601 string) */
-            timestamp: string;
-            /** @description Transaction hash */
-            tx_hash: string;
-            /** @description Transaction public key (hex) */
+            username: string;
+        };
+        SetUsernameResponse: {
+            /** @description The username as stored (lowercased). */
+            username: string;
+        };
+        /** @description Identify a relay by its slate id (poll / cancel). */
+        SlateIdRequest: {
+            slate_id: string;
+        };
+        /** @description A candidate spent output (verify with the spend key before trusting). */
+        SpentOutputDto: {
+            /** Format: int64 */
+            amount: number;
+            key_image: string;
+            /** Format: int64 */
+            mixin: number;
+            /** Format: int64 */
+            out_index: number;
             tx_pub_key: string;
         };
-        /** @description Request to update transaction status. */
-        UpdateGrinTransactionRequest: {
-            /** @description Kernel excess (if finalizing) - the on-chain transaction identifier */
-            kernel_excess?: string | null;
-            /** @description Slate ID */
-            slate_id: string;
-            /** @description New status: pending, signed, finalized, confirmed, cancelled */
-            status: string;
-            /** @description User ID */
-            user_id: string;
+        StatusResp: {
+            /** @description Whether the caller currently holds active premium. */
+            active: boolean;
+            /** @description Premium expiry (RFC3339), or null if never premium / lapsed. */
+            premium_until?: string | null;
         };
-        /** @description User info included in auth response. */
+        /** @description Submit a finalized, signed transaction. */
+        SubmitRequest: {
+            asset: string;
+            /** @description Hex-encoded signed transaction blob. */
+            tx_hex: string;
+        };
+        TipResponse: {
+            asset: string;
+            /**
+             * Format: int64
+             * @description Best-chain tip height.
+             */
+            height: number;
+        };
+        /** @description A transaction in the account's history. */
+        TxDto: {
+            hash: string;
+            /** Format: int64 */
+            height: number;
+            mempool: boolean;
+            payment_id?: string | null;
+            spent_outputs: components["schemas"]["SpentOutputDto"][];
+            timestamp: string;
+            /** Format: int64 */
+            total_received: number;
+            /**
+             * Format: int64
+             * @description "Possible" sent — candidate spends, not authoritative.
+             */
+            total_sent: number;
+            /** Format: int64 */
+            unlock_time: number;
+        };
+        /** @description An unspent output for spend construction. */
+        UnspentOutputDto: {
+            /** Format: int64 */
+            amount: number;
+            /** Format: int64 */
+            global_index: number;
+            /** Format: int64 */
+            height: number;
+            /** Format: int32 */
+            index: number;
+            public_key: string;
+            rct: string;
+            /** @description Key images seen on-chain that may correspond to this output being spent. */
+            spend_key_images: string[];
+            timestamp: string;
+            tx_hash: string;
+            tx_pub_key: string;
+        };
+        UnspentOutsResponse: {
+            asset: string;
+            /** Format: int64 */
+            fee_mask: number;
+            /** Format: int32 */
+            fork_version: number;
+            outputs: components["schemas"]["UnspentOutputDto"][];
+            /** Format: int64 */
+            per_byte_fee: number;
+        };
+        /** @description Minimal, non-enumerable user info returned to a signed-in client. */
         UserInfo: {
             id: string;
-            /** Format: int64 */
-            telegram_id?: number | null;
-            telegram_username?: string | null;
+            /** @description Linked Nostr pubkey (x-only hex), if any. */
+            nostr_pubkey?: string | null;
+            username?: string | null;
         };
-        /**
-         * @description A single UTXO (Unspent Transaction Output).
-         *
-         *     UTXOs are the fundamental building blocks of Bitcoin transactions.
-         *     Each UTXO represents a specific amount of coins that can be spent
-         *     exactly once in a future transaction.
-         */
+        /** @description A single per-asset public key. */
+        UserKeyInfo: {
+            /** @description Asset the key is for (lowercase: `btc`, `ltc`, `xmr`, `wow`, `grin`). */
+            asset: string;
+            public_key: string;
+            /** @description XMR/WOW only: the public spend key. */
+            public_spend_key?: string | null;
+        };
+        /** @description A user's full set of per-asset public keys. */
+        UserKeysResponse: {
+            keys: components["schemas"]["UserKeyInfo"][];
+        };
+        /** @description A single unspent output. */
         Utxo: {
             /**
              * Format: int64
-             * @description Block height (0 if unconfirmed)
+             * @description Block height; `0` if unconfirmed.
              */
             height: number;
-            /** @description Transaction ID that created this output */
             txid: string;
-            /**
-             * Format: int64
-             * @description Value in satoshis
-             */
+            /** Format: int64 */
             value: number;
-            /**
-             * Format: int32
-             * @description Output index within the transaction (vout)
-             */
+            /** Format: int64 */
             vout: number;
         };
-        /** @description Response for UTXO balance query. */
-        UtxoBalanceResponse: {
-            /** @description The address queried */
+        UtxosResponse: {
             address: string;
-            /** @description The asset type */
             asset: string;
-            /**
-             * Format: int64
-             * @description Confirmed balance in satoshis
-             */
-            confirmed: number;
-            /**
-             * Format: int64
-             * @description Total balance (confirmed + unconfirmed) in satoshis
-             */
-            total: number;
-            /**
-             * Format: int64
-             * @description Unconfirmed balance in satoshis (can be negative for outgoing)
-             */
-            unconfirmed: number;
+            utxos: components["schemas"]["Utxo"][];
         };
-        /** @description Request for generating a website auth challenge. */
+        /** @description Address + private view key for a per-account query. */
+        ViewRequest: {
+            address: string;
+            /** @description `xmr` or `wow`. */
+            asset: string;
+            /** @description Private view key (64 hex). Forwarded to the LWS; never stored or logged. */
+            view_key: string;
+        };
+        /** @description Request a website-auth challenge for a calling origin. */
         WebsiteChallengeRequest: {
-            /** @description Origin of the requesting website (e.g., "https://smirk.to") */
+            /**
+             * @description Origin of the requesting website (e.g. `https://smirk.cash`). Bound into
+             *     the challenge message so a signature for one origin is not reusable at
+             *     another.
+             */
             origin: string;
         };
-        /** @description Response containing the challenge to sign. */
+        /** @description The challenge to sign, with the handle and expiry the wallet echoes back. */
         WebsiteChallengeResponse: {
-            /** @description The challenge message to sign with all keys */
+            /** @description The exact message string to sign with the wallet's key. */
             challenge: string;
-            /** @description Challenge ID for verification */
+            /** @description Opaque handle to present at verify time (this is the challenge nonce). */
             challenge_id: string;
-            /** @description When the challenge expires (ISO 8601) */
+            /** @description When the challenge expires (RFC 3339). */
             expires_at: string;
         };
-        /** @description Request to verify website auth. */
+        /** @description Verify a website-auth challenge with a single asset signature. */
         WebsiteVerifyRequest: {
-            /** @description Challenge ID from challenge response */
+            /** @description The `challenge_id` returned by [`website_challenge`] (the challenge nonce). */
             challenge_id: string;
-            /** @description Single signature from user's chosen asset */
+            /** @description The wallet's signature over the challenge message. */
             signature: components["schemas"]["AssetSignature"];
+        };
+        /**
+         * @description NIP-05 well-known document.
+         *
+         *     * `names` maps each resolved local part to its x-only Nostr pubkey (hex).
+         *     * `relays` maps each returned pubkey to a list of recommended relay URLs.
+         *
+         *     Both maps are empty when the name is unknown, unlinked, or omitted.
+         */
+        WellKnownResponse: {
+            /** @description `{ local_part: nostr_pubkey_hex }`. Empty when nothing resolved. */
+            names: {
+                [key: string]: string;
+            };
+            /** @description `{ nostr_pubkey_hex: [relay_url, ...] }`. Empty when nothing resolved. */
+            relays: {
+                [key: string]: string[];
+            };
         };
     };
     responses: never;
@@ -2325,6 +1973,29 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    well_known_nostr: {
+        parameters: {
+            query?: {
+                /** @description NIP-05 local part to resolve */
+                name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description NIP-05 directory document (empty when unresolved) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WellKnownResponse"];
+                };
+            };
+        };
+    };
     check_restore: {
         parameters: {
             query?: never;
@@ -2338,7 +2009,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Wallet restore validation result */
+            /** @description Restore validation result */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2362,13 +2033,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Extension wallet registered or authenticated */
+            /** @description Wallet registered or authenticated */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ExtensionAuthResponse"];
+                    "application/json": components["schemas"]["AuthResponse"];
                 };
             };
         };
@@ -2386,12 +2057,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Session revoked successfully */
+            /** @description Session revoked */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LogoutResponse"];
+                };
             };
         };
     };
@@ -2404,14 +2077,209 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current authenticated user info */
+            /** @description Current authenticated user */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MeResponse"];
+                    "application/json": components["schemas"]["UserInfo"];
                 };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nostr_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session for the linked Nostr identity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthResponse"];
+                };
+            };
+            /** @description Invalid NIP-98 token or no linked account */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nostr_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NostrLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Linked npub */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NostrLinkResponse"];
+                };
+            };
+            /** @description Invalid proof or missing session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description npub already linked to another account */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nostr_link_challenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Single-use link nonce */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NostrLinkChallengeResponse"];
+                };
+            };
+            /** @description Missing or invalid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nostr_register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NostrRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Wallet registered or authenticated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthResponse"];
+                };
+            };
+            /** @description Invalid proof or nonce */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Seed already registered under a different Nostr identity */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nostr_register_challenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Single-use register nonce */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NostrLinkChallengeResponse"];
+                };
+            };
+        };
+    };
+    payment_invoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaymentInvoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Payment invoice created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentInvoiceResponse"];
+                };
+            };
+            /** @description Pay gate off, already registered, or invalid key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Payment processor unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -2446,7 +2314,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Token refreshed successfully */
+            /** @description Token refreshed */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2479,6 +2347,13 @@ export interface operations {
                     "application/json": components["schemas"]["WebsiteChallengeResponse"];
                 };
             };
+            /** @description Invalid origin */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     website_verify: {
@@ -2494,7 +2369,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Website authentication verified, tokens issued */
+            /** @description Website authentication verified; session issued */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2503,70 +2378,273 @@ export interface operations {
                     "application/json": components["schemas"]["AuthResponse"];
                 };
             };
+            /** @description Invalid asset or signature format */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid/expired challenge, bad signature, or unknown wallet */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
-    debug_pending_status: {
+    capabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enabled chains and features */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesResponse"];
+                };
+            };
+        };
+    };
+    health: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Service is up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    register_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Key registered or updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserKeyInfo"];
+                };
+            };
+            /** @description Invalid asset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    activate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivateReq"];
+            };
+        };
+        responses: {
+            /** @description Premium extended */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusResp"];
+                };
+            };
+            /** @description Unknown, unpaid, or already-used invoice */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    invoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvoiceReq"];
+            };
+        };
+        responses: {
+            /** @description Invoice minted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceResp"];
+                };
+            };
+            /** @description Premium off or unknown plan */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Premium status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusResp"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    prices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest cached prices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PricesResponse"];
+                };
+            };
+            /** @description Price feed disabled on this server */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    lookup_username: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Asset type: 'xmr' or 'wow' */
-                asset: string;
+                /** @description Username to resolve */
+                username: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Pending transaction detection pipeline status */
+            /** @description Username resolution result */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PendingDebugResponse"];
+                    "application/json": components["schemas"]["LookupUsernameResponse"];
                 };
             };
         };
     };
-    create_grin_relay: {
+    get_my_username: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateGrinRelayRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Relay entry created successfully */
+            /** @description Caller's username */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CreateGrinRelayResponse"];
+                    "application/json": components["schemas"]["MyUsernameResponse"];
                 };
             };
-        };
-    };
-    cancel_grin_relay: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CancelGrinRelayRequest"];
-            };
-        };
-        responses: {
-            /** @description Relay cancelled successfully */
-            200: {
+            /** @description Missing or invalid token */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2574,7 +2652,7 @@ export interface operations {
             };
         };
     };
-    finalize_grin_relay: {
+    set_username: {
         parameters: {
             query?: never;
             header?: never;
@@ -2583,12 +2661,28 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FinalizeGrinRelayRequest"];
+                "application/json": components["schemas"]["SetUsernameRequest"];
             };
         };
         responses: {
-            /** @description Transaction finalized and broadcast successfully */
+            /** @description Username claimed or updated */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetUsernameResponse"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Username is taken or reserved */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2596,188 +2690,76 @@ export interface operations {
             };
         };
     };
-    get_grin_pending: {
+    get_user_keys: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /**
-                 * @description User ID (UUID)
-                 * @example 550e8400-e29b-41d4-a716-446655440000
-                 */
+                /** @description User id (UUID) */
                 user_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Pending slatepacks for the user */
+            /** @description The user's public keys */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GetGrinPendingResponse"];
+                    "application/json": components["schemas"]["UserKeysResponse"];
                 };
             };
-        };
-    };
-    sign_grin_relay: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SignGrinRelayRequest"];
-            };
-        };
-        responses: {
-            /** @description Slatepack signed successfully */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_utxo_balance: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GetUtxoBalanceRequest"];
-            };
-        };
-        responses: {
-            /** @description UTXO balance for BTC or LTC address */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UtxoBalanceResponse"];
-                };
-            };
-        };
-    };
-    broadcast_tx: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BroadcastTxRequest"];
-            };
-        };
-        responses: {
-            /** @description Broadcast signed BTC or LTC transaction */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BroadcastTxResponse"];
-                };
-            };
-        };
-    };
-    estimate_fee: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EstimateFeeRequest"];
-            };
-        };
-        responses: {
-            /** @description Fee rate estimates for BTC or LTC */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EstimateFeeResponse"];
-                };
-            };
-        };
-    };
-    register_grin_address: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegisterGrinAddressRequest"];
-            };
-        };
-        responses: {
-            /** @description Address registered or updated */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RegisterGrinAddressResponse"];
-                };
-            };
-            /** @description Invalid bech32 address */
+            /** @description Malformed user id */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing or invalid JWT */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
         };
     };
-    lookup_slatepack_address: {
+    get_user_key_for_asset: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Slatepack address (grin1.../tgrin1...) */
-                address: string;
+                /** @description User id (UUID) */
+                user_id: string;
+                /** @description Asset (btc, ltc, xmr, wow, grin) */
+                asset: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Whether address is registered (pre-login restore endpoint) */
+            /** @description The user's key for this asset */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SlatepackAddressLookupResponse"];
+                    "application/json": components["schemas"]["UserKeyInfo"];
                 };
+            };
+            /** @description Invalid asset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description User has no key for this asset */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
-    broadcast_grin_transaction: {
+    broadcast: {
         parameters: {
             query?: never;
             header?: never;
@@ -2786,35 +2768,35 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BroadcastGrinTransactionRequest"];
+                "application/json": components["schemas"]["GrinBroadcastRequest"];
             };
         };
         responses: {
-            /** @description Transaction broadcast successful */
+            /** @description Transaction broadcast */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BroadcastGrinTransactionResponse"];
+                    "application/json": components["schemas"]["GrinBroadcastResponse"];
                 };
             };
-            /** @description Invalid IDs */
+            /** @description Grin disabled or malformed transaction */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing or invalid JWT */
+            /** @description Missing or invalid token */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description JWT user_id does not match body user_id */
-            403: {
+            /** @description Upstream node unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2822,44 +2804,40 @@ export interface operations {
             };
         };
     };
-    record_grin_output: {
+    height: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecordGrinOutputRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Output recorded or returned existing */
+            /** @description Chain tip height */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecordGrinOutputResponse"];
+                    "application/json": components["schemas"]["GrinHeightResponse"];
                 };
             };
-            /** @description Invalid user_id or output data */
+            /** @description Grin disabled */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing or invalid JWT */
+            /** @description Missing or invalid token */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description JWT user_id does not match body user_id */
-            403: {
+            /** @description Upstream node unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2867,7 +2845,7 @@ export interface operations {
             };
         };
     };
-    lock_grin_outputs: {
+    cancel: {
         parameters: {
             query?: never;
             header?: never;
@@ -2876,33 +2854,35 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LockGrinOutputsRequest"];
+                "application/json": components["schemas"]["SlateIdRequest"];
             };
         };
         responses: {
-            /** @description Outputs locked for pending send */
+            /** @description Relay cancelled */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description Invalid IDs */
-            400: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["RelayEntry"];
                 };
-                content?: never;
             };
-            /** @description Missing or invalid JWT */
+            /** @description Missing or invalid token */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description JWT user_id does not match body user_id */
-            403: {
+            /** @description Relay not found, not yours, or feature disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Relay is already finalized */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2910,7 +2890,7 @@ export interface operations {
             };
         };
     };
-    spend_grin_outputs: {
+    create: {
         parameters: {
             query?: never;
             header?: never;
@@ -2919,33 +2899,35 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SpendGrinOutputsRequest"];
+                "application/json": components["schemas"]["CreateRelayRequest"];
             };
         };
         responses: {
-            /** @description Outputs marked as spent */
+            /** @description Relay created (PendingRecipient) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RelayEntry"];
+                };
             };
-            /** @description Invalid IDs */
+            /** @description Invalid input or unregistered recipient */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing or invalid JWT */
+            /** @description Missing or invalid token */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description JWT user_id does not match body user_id */
-            403: {
+            /** @description Relay feature disabled */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2953,7 +2935,7 @@ export interface operations {
             };
         };
     };
-    unlock_grin_outputs: {
+    finalize: {
         parameters: {
             query?: never;
             header?: never;
@@ -2962,33 +2944,42 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UnlockGrinOutputsRequest"];
+                "application/json": components["schemas"]["FinalizeRelayRequest"];
             };
         };
         responses: {
-            /** @description Outputs unlocked and unconfirmed change cleaned */
+            /** @description Relay marked finalized */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RelayEntry"];
+                };
             };
-            /** @description Invalid IDs */
+            /** @description Invalid tx hash */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Missing or invalid JWT */
+            /** @description Missing or invalid token */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description JWT user_id does not match body user_id */
-            403: {
+            /** @description Relay not found, not yours, or feature disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Relay is not awaiting finalization */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2996,7 +2987,131 @@ export interface operations {
             };
         };
     };
-    scan_grin_commitments: {
+    get_relay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlateIdRequest"];
+            };
+        };
+        responses: {
+            /** @description The relay entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelayEntry"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Relay not found, not yours, or feature disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    pending: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Relays awaiting the caller's response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingRelaysResponse"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Relay feature disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    respond: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RespondRelayRequest"];
+            };
+        };
+        responses: {
+            /** @description Response stored (PendingSender) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelayEntry"];
+                };
+            };
+            /** @description Invalid response slatepack */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Relay not found, not yours, or feature disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Relay is not awaiting a recipient response */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    scan: {
         parameters: {
             query?: never;
             header?: never;
@@ -3009,7 +3124,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Commitment scan results (pre-login wallet restore) */
+            /** @description Recognized outputs + balance + resume index */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3018,53 +3133,22 @@ export interface operations {
                     "application/json": components["schemas"]["GrinScanResponse"];
                 };
             };
-            /** @description Invalid commitments or exceeds 1000 limit */
+            /** @description Grin disabled or malformed rewind_hash */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-        };
-    };
-    record_grin_transaction: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecordGrinTransactionRequest"];
-            };
-        };
-        responses: {
-            /** @description Transaction recorded or existing returned */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecordGrinTransactionResponse"];
-                };
-            };
-            /** @description Invalid IDs or direction */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Missing or invalid JWT */
+            /** @description Missing or invalid token */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description JWT user_id does not match body user_id */
-            403: {
+            /** @description Upstream node unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3072,257 +3156,7 @@ export interface operations {
             };
         };
     };
-    update_grin_transaction: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateGrinTransactionRequest"];
-            };
-        };
-        responses: {
-            /** @description Transaction status updated */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Invalid IDs or status */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Missing or invalid JWT */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description JWT user_id does not match body user_id */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_grin_unspent_outputs: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GrinUnspentOutputsRequest"];
-            };
-        };
-        responses: {
-            /** @description Paginated UTXO set with rangeproofs (seed-only recovery) */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GrinOutputListing"];
-                };
-            };
-            /** @description Missing or invalid JWT */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_grin_user_balance: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description User UUID */
-                user_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description User's Grin balance with confirmed/locked/pending amounts */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GrinUserBalanceResponse"];
-                };
-            };
-            /** @description Invalid user_id */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Missing or invalid JWT */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description JWT user_id does not match path user_id */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_grin_user_history: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description User UUID */
-                user_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description User's Grin transaction history (most recent 100) */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GrinTransactionHistoryResponse"];
-                };
-            };
-            /** @description Invalid user_id */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Missing or invalid JWT */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description JWT user_id does not match path user_id */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_grin_outputs: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description User UUID */
-                user_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description User's spendable Grin outputs with verification against blockchain */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GrinOutputsResponse"];
-                };
-            };
-            /** @description Invalid user_id */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Missing or invalid JWT */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description JWT user_id does not match path user_id */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    sync_grin_wallet: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description User UUID */
-                user_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Full wallet sync (all outputs, transactions, next key index) */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GrinSyncResponse"];
-                };
-            };
-            /** @description Invalid user_id */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Missing or invalid JWT */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description JWT user_id does not match path user_id */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_blockchain_heights: {
+    heights: {
         parameters: {
             query?: never;
             header?: never;
@@ -3331,18 +3165,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current block height for each supported network */
+            /** @description Tip height per chain (null if disabled/unreachable) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BlockchainHeightsResponse"];
+                    "application/json": components["schemas"]["HeightsResponse"];
                 };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
-    get_history: {
+    balance: {
         parameters: {
             query?: never;
             header?: never;
@@ -3351,22 +3192,43 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["GetHistoryRequest"];
+                "application/json": components["schemas"]["ViewRequest"];
             };
         };
         responses: {
-            /** @description Transaction history for BTC or LTC address */
+            /** @description Account balance and scan state */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GetHistoryResponse"];
+                    "application/json": components["schemas"]["LwsBalanceResponse"];
                 };
+            };
+            /** @description Invalid/disabled asset, address, or view key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
-    get_lws_balance: {
+    confirmations: {
         parameters: {
             query?: never;
             header?: never;
@@ -3375,11 +3237,326 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["GetBalanceRequest"];
+                "application/json": components["schemas"]["ConfirmationsRequest"];
             };
         };
         responses: {
-            /** @description Balance retrieved from LWS */
+            /** @description Confirmation count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmationsResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset or txid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    height: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LwsAssetRequest"];
+            };
+        };
+        responses: {
+            /** @description Chain height */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HeightResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    history: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ViewRequest"];
+            };
+        };
+        responses: {
+            /** @description Account transaction history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LwsHistoryResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset, address, or view key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    random_outs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RandomOutsRequest"];
+            };
+        };
+        responses: {
+            /** @description Decoy outputs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RandomOutsResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset or request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Account registered for scanning */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset, address, or view key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    submit_tx: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Transaction submitted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset or malformed tx hex */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    unspent_outs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ViewRequest"];
+            };
+        };
+        responses: {
+            /** @description Unspent outputs + fee parameters */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnspentOutsResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset, address, or view key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    balance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddressRequest"];
+            };
+        };
+        responses: {
+            /** @description Address balance in satoshis */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3388,9 +3565,30 @@ export interface operations {
                     "application/json": components["schemas"]["BalanceResponse"];
                 };
             };
+            /** @description Invalid/disabled asset or address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
-    deactivate_lws: {
+    broadcast: {
         parameters: {
             query?: never;
             header?: never;
@@ -3399,22 +3597,43 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DeactivateLwsRequest"];
+                "application/json": components["schemas"]["BroadcastRequest"];
             };
         };
         responses: {
-            /** @description Wallet deactivated from LWS scanning */
+            /** @description Broadcast accepted; returns the txid */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeactivateLwsResponse"];
+                    "application/json": components["schemas"]["BroadcastResponse"];
                 };
+            };
+            /** @description Invalid/disabled asset or malformed tx hex */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
-    get_random_outs: {
+    fee: {
         parameters: {
             query?: never;
             header?: never;
@@ -3423,22 +3642,43 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["GetRandomOutsRequest"];
+                "application/json": components["schemas"]["FeeRequest"];
             };
         };
         responses: {
-            /** @description Random outputs for ring signature decoys */
+            /** @description Fee estimate */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GetRandomOutsResponse"];
+                    "application/json": components["schemas"]["FeeResponse"];
                 };
+            };
+            /** @description Invalid/disabled asset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
-    get_lws_history: {
+    history: {
         parameters: {
             query?: never;
             header?: never;
@@ -3447,22 +3687,43 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["GetLwsHistoryRequest"];
+                "application/json": components["schemas"]["AddressRequest"];
             };
         };
         responses: {
-            /** @description Transaction history retrieved from LWS */
+            /** @description Transaction history */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GetLwsHistoryResponse"];
+                    "application/json": components["schemas"]["HistoryResponse"];
                 };
+            };
+            /** @description Invalid/disabled asset or address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
-    register_lws: {
+    tip: {
         parameters: {
             query?: never;
             header?: never;
@@ -3471,22 +3732,43 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RegisterLwsRequest"];
+                "application/json": components["schemas"]["AssetRequest"];
             };
         };
         responses: {
-            /** @description Wallet registered with LWS */
+            /** @description Chain tip height */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RegisterLwsResponse"];
+                    "application/json": components["schemas"]["TipResponse"];
                 };
+            };
+            /** @description Invalid/disabled asset */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
-    submit_raw_tx: {
+    utxos: {
         parameters: {
             query?: never;
             header?: never;
@@ -3495,66 +3777,39 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SubmitRawTxRequest"];
+                "application/json": components["schemas"]["AddressRequest"];
             };
         };
         responses: {
-            /** @description Transaction submitted for broadcast */
+            /** @description Unspent outputs */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SubmitRawTxResponse"];
+                    "application/json": components["schemas"]["UtxosResponse"];
                 };
             };
-        };
-    };
-    get_unspent_outs: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GetUnspentOutsRequest"];
-            };
-        };
-        responses: {
-            /** @description Unspent outputs for transaction construction */
-            200: {
+            /** @description Invalid/disabled asset or address */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["GetUnspentOutsResponse"];
-                };
+                content?: never;
             };
-        };
-    };
-    get_utxos: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GetUtxosRequest"];
-            };
-        };
-        responses: {
-            /** @description Unspent transaction outputs for BTC or LTC address */
-            200: {
+            /** @description Missing or invalid token */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["GetUtxosResponse"];
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
                 };
+                content?: never;
             };
         };
     };
