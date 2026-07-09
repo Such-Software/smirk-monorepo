@@ -54,9 +54,8 @@ in v0.3 because their funds are at different addresses.
 
 Rather than carrying v1/v2 derivation + sweep flows in the monorepo
 extension forever, we ship this one-time script as the recovery path.
-See `docs/V0_3_PLAN.md` → "Legacy v1/v2 migration" for the population
-data that informed this decision (40 unmigrated users, <$50 total max
-exposure as of 2026-05-11).
+This decision was informed by the legacy v1/v2 migration population
+data (40 unmigrated users, <$50 total max exposure as of 2026-05-11).
 
 ## Usage
 
@@ -90,5 +89,5 @@ A single self-contained HTML page that does the same derivation in a
 browser sandbox would be friendlier for non-CLI users (and easier to
 DM to the 7 known WOW-balance-holders). Not yet built — the Node CLI
 covers the underlying logic; the HTML version is a packaging task that
-loads `@smirk/wasm` + `@smirk/core/hd` via a bundler. Tracked in
-`smirk-backend/docs/TECHNICAL_DEBT.md` item #11.
+loads `@smirk/wasm` + `@smirk/core/hd` via a bundler. Tracked
+internally.

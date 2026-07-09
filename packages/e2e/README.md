@@ -85,6 +85,10 @@ on vs off), so at most one runs per config; the other skips cleanly.
 | `create-new-wallet` | generate → answer verify challenge → register → Home | open registration |
 | `pay-to-register` | fresh wallet is **blocked** by the payment gate | payment gate on |
 | `nostr-identity` | Settings → Nostr link/login identity screen | `nostr_identity` on |
+| `grin-send-nostr` | Grin Send accepts an npub + a NIP-05 name as recipient (routes over gift-wrap, not slatepack) → advances to amount | alice seed, grin on |
+| `goblin-paylink` | pasting a `goblin:` checkout URI pre-fills the Grin Send flow (npub → pubkey, amount from the link) | alice seed, grin on |
+| `session-cache-restore` | reopening the popup restores from the session cache — no re-onboard, no key/offscreen sign-in error | alice seed |
+| `feed` | Feed tab is present + renders **iff** the backend advertises `features.feed` (absent otherwise) | alice seed |
 
 ## Not yet covered (needs infra)
 

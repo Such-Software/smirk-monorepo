@@ -9,7 +9,7 @@ UI / asset / swap libraries that power both. Version numbers refer to
 the public wallet build.
 
 Backend changes that don't affect wallet behaviour land separately in
-the private `smirk-backend` repo and aren't echoed here.
+the public `smirk-backend-core` repo and aren't echoed here.
 
 ## [Unreleased]
 
@@ -24,6 +24,28 @@ for the running ship plan.
   of relying on server-side records — matching how Bitcoin/Litecoin and
   Monero/Wownero already restore. Outputs created by earlier builds remain
   spendable. See `docs/grin.md` → "Output recovery".
+- **Nostr / Goblin interop.** The wallet now exposes a NIP-07
+  `window.nostr` provider, so Nostr-native sites — including
+  Goblin / Magick Market dapps — can request your public key and have
+  events signed without a separate extension. A multi-identity vault
+  with an in-wallet identity switcher keeps distinct Nostr keypairs
+  apart, and payment-capable actions sit behind a short-lived
+  "money-tier" session so a signing grant can't silently move funds.
+  Grin payments can also travel as NIP-59 gift-wrapped direct
+  messages, so a slatepack exchange no longer needs a shared server.
+- **Federation — no single hard-coded backend.** Smirk is now
+  self-hostable end to end: the backend host (`homeDomain`) is
+  configurable and nothing assumes `api.smirk.cash`. You can pay by
+  NIP-05 address (`name@domain`), with a counterparty's key pinned on
+  first use (TOFU) so a later key swap is flagged rather than trusted
+  silently.
+- **Grin is now fully non-custodial.** The backend no longer holds
+  Grin balances, outputs, or transaction records — the old custodial
+  endpoints and the server-side wallets table are gone. The client
+  scans the chain with its own view key (building on the seed-only
+  recovery above) and tracks in-flight sends with a client-side
+  pending overlay; the backend keeps only stateless scan / height /
+  broadcast / relay helpers. See `docs/grin.md`.
 
 ## [0.3.0] — 2026-06-04
 
@@ -153,7 +175,7 @@ audience that reads CHANGELOGs cares.
 
 ### Backend (announced for transparency)
 
-The private backend received seven hardening passes alongside the
+The `smirk-backend-core` backend received seven hardening passes alongside the
 wallet work. None of them changes the wire format you interact
 with, but for the security-conscious:
 
@@ -229,5 +251,5 @@ Smirk-published Electrum proxy for BTC/LTC, Smirk-operated Grin
 node. Trocador swaps are off by default — only activated when
 you tap into the Swap tab.
 
-[Unreleased]: https://github.com/SuchSoftware/smirk-monorepo/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/SuchSoftware/smirk-monorepo/releases/tag/v0.3.0
+[Unreleased]: https://github.com/Such-Software/smirk-monorepo/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Such-Software/smirk-monorepo/releases/tag/v0.3.0

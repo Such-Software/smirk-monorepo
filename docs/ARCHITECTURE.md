@@ -39,10 +39,10 @@ smirk-monorepo/
 │   ├── core/          @smirk/core         — wallet logic, API, keystore, HD
 │   ├── ui/            @smirk/ui           — Preact components (shell-agnostic)
 │   ├── wasm/          @smirk/wasm         — WASM facade over `crates/smirk-wasm`
-│   ├── swap/          @smirk/swap         — swap orchestration (ThorchainSwap, NativeSwap)
+│   ├── swap/          @smirk/swap         — swap orchestration (ThorchainSwap, Trocador aggregator today; native signing planned)
 │   ├── extension/     @smirk/extension    — Chrome MV3 / Firefox MV3 shell
 │   ├── mobile/        @smirk/mobile       — (future) Capacitor shell
-│   └── desktop/       @smirk/desktop      — (future) Tauri shell
+│   └── desktop/       @smirk/desktop      — Tauri shell
 └── crates/
     ├── smirk-wasm/    — Rust→WASM crypto facade (XMR/WOW/BTC/LTC signing, Grin)
     ├── grin-ext/      — Grin / Mimblewimble protocol, 6 wallet orchestrators, slate v4 (JSON+bin), cross-validated against grin-wallet
@@ -329,8 +329,8 @@ WebKitGTK with no workaround).
 - **WASM build:** `crates/smirk-wasm/build.sh` runs `wasm-bindgen
   --target no-modules` and drops output in `crates/smirk-wasm/pkg/`.
   Build with `make wasm` from the monorepo root.
-- **Backend:** separate repo (`smirk-backend`). Rust/Axum.
-  `cargo build --release --bin tipbot-backend`.
+- **Backend:** separate repo (`smirk-backend-core`). Rust/Axum.
+  `cargo build --release --bin smirk-backend-core`.
 
 ## Audit posture cross-references
 

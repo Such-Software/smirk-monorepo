@@ -157,11 +157,10 @@ against Grim GUI for the standard zero-entropy BIP39 mnemonic.
 
 ## Layer 3: end-to-end test matrix (pre-release)
 
-**Status: planned, requires the TS migration + production extension.**
-
-Once the TypeScript packages are populated and the existing
-smirk-extension is migrated into `packages/extension/`, the matrix
-to run before each public release:
+**Status: harness in place.** The TypeScript packages now exist —
+`packages/extension/` (the production extension) and `packages/e2e/`
+(the end-to-end harness) — so this matrix runs before each public
+release:
 
 ### Per-asset send / receive
 

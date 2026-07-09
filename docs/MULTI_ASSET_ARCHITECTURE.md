@@ -187,7 +187,7 @@ A useful mental model when adding chains:
 |---|---|
 | UTXO (BTC, LTC, future BCH/DOGE) | 1 HTTP call to indexer per asset |
 | CryptoNote (XMR, WOW)             | 1 LWS register (idempotent) + 1 balance fetch per asset |
-| Mimblewimble (Grin)               | 1 backend DB+daemon query per asset |
+| Mimblewimble (Grin)               | 1 backend scan/rewind of the UTXO set per asset; backend stores nothing |
 | EVM (ETH, future L2s)             | 1 RPC `eth_getBalance` per asset, possibly multiple if multi-token |
 | Future: stablecoin tokens         | 1 contract call per token per asset, multiplied by chain count |
 

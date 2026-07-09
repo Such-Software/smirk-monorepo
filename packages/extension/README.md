@@ -30,9 +30,6 @@ Tracked for v0.3.x / v0.4 follow-up:
 - `requestPayment` from dapp → wallet send-wizard handoff.
 - `claimPublicTip` via dapp.
 - `signMessage` for XMR / WOW / Grin (ed25519 path).
-- Standalone "Sent Tips" Settings screen — the `SentTipsScreen`
-  component exists but isn't mounted in v0.3.0 (replaced by inline
-  asset-row clawback). Either wire it or remove the dead component.
 
 ## Layout
 
@@ -48,7 +45,9 @@ packages/extension/
     ├── background/          # MV3 service worker
     │   └── dapp/            # Dapp bridge: dispatch, provider, approval, permissions, inject-policy
     ├── content/             # Content-script bridge (page ↔ SW), gated by inject-policy
-    └── inject/              # Page-context bootstrap (defines window.smirk; bundled as IIFE)
+    ├── inject/              # Page-context bootstrap (defines window.smirk; bundled as IIFE)
+    ├── dapp-popup/          # Wallet-foreground dapp executor shared with Tauri/mobile (extension trusted context is background/dapp)
+    └── backend-boot.ts      # Backend selection at context boot (build default → durable user backend-config)
 ```
 
 ## Build

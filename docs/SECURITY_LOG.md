@@ -5,6 +5,85 @@ monorepo. New entries on top.
 
 ---
 
+## 2026-06-13 — Session cache v2 shipped: plaintext mnemonic removed ("Approach B")
+
+**Severity:** Medium hardening (removes the plaintext, user-recoverable
+recovery phrase from the session cache; resolves the exposure
+documented in the entry below)
+**Reporter:** follow-up to the same-day `keystore.ts` header review
+**Status:** Shipped in v0.3.0. The runtime re-architecture the entry
+below tracked as a "Planned fix" is complete — though the shipped
+design differs from the plan (see "Why Approach B" below).
+
+### What shipped
+
+The mnemonic-in-`chrome.storage.session` cache is gone. The v2
+session cache stores **derived leaf keys + addresses only** — never
+the mnemonic, never the seed. Concretely, in
+[`packages/core/src/keystore.ts`](../packages/core/src/keystore.ts):
+
+- `SESSION_CACHE_KEY` payloads went from the v1 shape
+  `{ mnemonic, fingerprint, expiresAtMs }` to the v2
+  `SessionCachePayload` shape `{ version: 2, _noMnemonic: true, keys,
+  addresses, fingerprint, expiresAtMs }`.
+- `rebuildUnlockedFromMnemonic` is deleted. Its replacement,
+  `restoreUnlockedFromCache({ keys, addresses, fingerprint })`,
+  reconstructs the `UnlockedWallet` from cached leaf material with
+  `mnemonic === undefined` and `seed === undefined`.
+- Surfaces that actually need the phrase or seed (BTC/LTC PSBT
+  signing, every Grin surface, Show Seed / Export Seed) gate-check
+  for those fields and force a fresh password unlock when a cache
+  restore leaves them absent.
+- `parseSessionCache` is a defence-in-depth regression guard: it
+  returns `null` (→ drop the cache, re-prompt once) for any payload
+  missing `version: 2`, missing the `_noMnemonic: true` brand, or
+  carrying a `mnemonic` field at all. The `_noMnemonic` brand is a
+  compile-time + runtime tripwire — a future commit that re-adds a
+  `mnemonic` field would have to strip the brand, which surfaces in
+  review.
+- The auto-lock TTL is now hard-capped at `AUTO_LOCK_MAX_MINUTES`
+  (24h) via `clampAutoLockMinutes`. The old
+  `Number.MAX_SAFE_INTEGER` "Never" sentinel and the negative-int
+  "Never" convention are gone; any out-of-band stored preference
+  self-heals to the cap on read.
+
+### Why Approach B instead of the wrapped-key plan
+
+The entry below planned a **wrapped-key** design (Approach A):
+generate a non-extractable AES wrapping key in SW memory, encrypt
+the *seed bytes*, and store the wrapped blob in `storage.session`.
+The shipped design ("Approach B") is simpler and strictly better on
+the property that matters: it never puts the seed **or** the
+mnemonic in the cache at all — only the already-derived leaf keys
+and addresses the popup needs to render balances and prepare the
+operations that don't require the seed. No wrapping key to manage,
+no SW-memory key handle whose loss silently invalidates the cache,
+and the highest-value secret — the recovery phrase a user types into
+another wallet to drain every chain — simply isn't present to
+disclose.
+
+### Residual exposure
+
+Process-memory disclosure (attached debugger, privileged malware,
+mid-flight heap snapshot) can still read the cached **derived keys**
+while a session is warm — the same class of exposure the popup's own
+unlocked state has always had. What changed is that the recovery
+phrase and the BIP39 seed no longer sit in `storage.session`, so a
+snapshot no longer yields the user-recoverable, cross-wallet-portable
+secret. Seed-gated surfaces (above) still force a password
+round-trip, so the phrase's lifetime collapses to the unlock ceremony
+itself.
+
+### Compatibility
+
+No migration, dual-parse, or shim. A pre-2026-06-13 v1 cache entry
+(mnemonic-bearing) fails `parseSessionCache` and is dropped; the user
+re-enters their password once. The deliberate decision was to break
+v0.2.4 cache compat rather than carry a mnemonic-shaped payload
+forward for one release of convenience.
+
+---
+
 ## 2026-06-13 — Auto-unlock cache: keystore.ts header lied about plaintext mnemonic
 
 **Severity:** Documentation defect (no runtime change)

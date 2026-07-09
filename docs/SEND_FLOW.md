@@ -152,9 +152,9 @@ Keep `@smirk/ui` pure presentation — all chain logic in
      `selected_sum >= amount + estimated_fee`. Reject if not enough.
    - Build unsigned PSBT (BIP174):
      - Inputs: each selected UTXO with `witness_utxo`, `bip32_derivation`
-       (origin = our master xprv fingerprint + path **`m/44'/coin'/0'/0/0`**
-       — same path for every input, since Smirk uses a single-address
-       scheme).
+       (origin = our master xprv fingerprint + path **`m/84'/coin'/0'/0/0`**
+       — native segwit BIP84; same path for every input, since Smirk uses
+       a single-address scheme).
      - Outputs: `[recipient: amount, change: selected_sum - amount - fee]`
        where `change_address` = `fromAddress` (single-address scheme;
        no separate change-index derivation). Skip the change output if
@@ -255,6 +255,18 @@ bf3ad28 (handler + fee preview + spent-output filter) and b2ec790
 ---
 
 ## Grin (Mimblewimble — interactive)
+
+> **Update (2026-07 — non-custodial):** Grin is now fully **non-custodial**
+> and **scan-based**. The backend keeps no Grin outputs or wallet state; it
+> exposes only `POST /wallet/grin/scan` + `GET /wallet/grin/height` +
+> `POST /wallet/grin/broadcast` + `/relay/*`, and the client recomputes
+> balance from a view-only rewind scan (plus a client-side pending overlay)
+> on every refresh. The interactive ceremony below is otherwise unchanged,
+> but the slatepack hand-off is no longer copy-out-of-band only — each leg
+> now travels over one of three transports: **Nostr NIP-59 gift-wrap**
+> (federated default), **manual** copy/paste, or a **same-instance backend
+> relay** (`grin_slatepacks` mailbox). No transport assumes `api.smirk.cash`.
+> See `docs/grin.md` for details.
 
 **Hardest case.** Sender and receiver run an interactive ceremony where
 they each contribute signing material before the kernel can be

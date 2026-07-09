@@ -41,7 +41,7 @@ All functions return JSON for ergonomic consumption from TypeScript.
 
 ## Why a fork instead of upstream contribution
 
-The Wownero changes (RCT type 8, ring 22, commitment scaling) sit deep in the transaction construction path and don't feature-flag cleanly without upstream API changes the upstream maintainers haven't adopted. The fork is small (~1 commit of protocol changes) and the upstream-merge workflow is straightforward — see [WOWNERO_OXIDE.md](https://github.com/Such-Software/smirk-backend/blob/main/docs/WOWNERO_OXIDE.md) (in the backend repo, alongside the upstream fcmp++ migration plan).
+The Wownero changes (RCT type 8, ring 22, commitment scaling) sit deep in the transaction construction path and don't feature-flag cleanly without upstream API changes the upstream maintainers haven't adopted. The fork is small (~1 commit of protocol changes) and the upstream-merge workflow is straightforward: because the Wownero deltas are isolated to a single commit on the transaction-construction path, rebasing onto a newer upstream (including the eventual fcmp++ migration) stays a contained operation.
 
 ## Publishing
 

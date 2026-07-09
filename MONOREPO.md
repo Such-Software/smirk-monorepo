@@ -47,7 +47,7 @@ Output: `crates/smirk-wasm/pkg/` (gitignored, produced by `make wasm`).
 
 Smirk's Grin / Mimblewimble protocol implementation. Built up from primitives (HMAC-SHA512, k256 / secp256k1zkp, ed25519, etc.) rather than forked from upstream `grin-wallet`, because we need to extend it with features that don't exist upstream (atomic-swap adaptor signatures, NRD-kernel time-locks, custom slate workflows).
 
-Currently shipped: seed → extended key, BIP32 child derivation, slatepack address (Grim-verified), Schnorr sign/verify, SlateV4 types + JSON round-trip, Pedersen + Bulletproofs. Still in flight: slatepack codec, slate construction, NRD kernels, multi-party Schnorr aggregation, adaptor sigs. See [docs/grin.md](docs/grin.md) for the full status table.
+Currently shipped: seed → extended key, BIP32 child derivation, slatepack address (Grim-verified), Schnorr sign/verify (single + multi-party + adaptor), SlateV4 types + JSON round-trip + compact binary, Pedersen + Bulletproofs, slatepack codec, full slate construction (standard + invoice), NRD kernels, transaction wire-format assembly, and payment proofs — cross-validated against `grin_wallet_libwallet` 5.4.0. See [docs/grin.md](docs/grin.md) for the full status table.
 
 ### `crates/btc-ext/`
 
@@ -85,7 +85,7 @@ const addr = grin.slatepackAddress(mnemonic, 0, 'mainnet');
 Shared TypeScript code consumed by the browser extension, mobile app, and desktop app. Imports zero WASM — stays loadable in any context (browser, service worker, Node, Deno).
 
 Currently shipped:
-- **API client** — `SmirkApi` class + singleton `api`; covers auth, keys, link tips, social tips, wallet UTXO (BTC/LTC), wallet LWS (XMR/WOW), Grin slatepack relay + output store, prices/sparklines, blockchain heights. Bearer-token auth, 30s timeout, exponential-backoff retries on 5xx for idempotent endpoints.
+- **API client** — `SmirkApi` class + singleton `api`; covers auth, keys, link tips, social tips, wallet UTXO (BTC/LTC), wallet LWS (XMR/WOW), Grin scan + slatepack relay, prices/sparklines, blockchain heights. Bearer-token auth, 30s timeout, exponential-backoff retries on 5xx for idempotent endpoints.
 - **Crypto** — PBKDF2-SHA256 (WebCrypto, 600k iters) + XChaCha20-Poly1305 for at-rest seed encryption; secp256k1 ECDH for tip envelopes; BIP-137 Bitcoin message signing for `extensionRegister` proof-of-key-control.
 - **Address derivation + validation** — bech32 P2WPKH for BTC/LTC, Cryptonote (prefix + spend + view + Keccak checksum, Monero base58) for XMR/WOW, slatepack bech32 for Grin.
 - **HD wallet** — BIP39 mnemonic ↔ seed, BIP32 secp256k1 derivation for BTC/LTC, three derivation generations (v1 legacy / v2 buggy SLIP-10 / v3 Cake-compatible) for XMR/WOW so old wallets can be swept.
@@ -133,10 +133,13 @@ The vite config at `packages/extension/vite.config.ts` copies the WASM bundle fr
 
 Transport-agnostic dapp injection layer. Wire protocol (JSON-RPC-shaped envelope), `WalletHandler` dispatcher, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. The extension wires platform-specific adapters (`chrome.runtime.sendMessage`, `chrome.windows.create` for approvals, `chrome.storage.local` for permissions); future Capacitor mobile + Tauri desktop builds will swap in their own adapters around the same handler.
 
+### `packages/desktop/` — `@smirk/desktop`
+
+Tauri 2.x desktop wallet shell (Windows/macOS/Linux, shipped v0.3.0) with an embedded dapp browser. Wraps the extension popup via a `chrome.*` shim (storage backed by `tauri-plugin-store`); each browser tab is a borderless `WebviewWindow` positioned over the wallet UI's frame slot.
+
 ### Planned (not yet populated)
 
 - `packages/mobile/` — Capacitor app (iOS + Android), v0.4
-- `packages/desktop/` — Tauri app (Win/Mac/Linux), v0.5+
 
 ## Git subtree workflow
 

@@ -33,7 +33,7 @@ Top-level navigation is **verbs**, not **nouns**:
 | Tab          | Purpose                                                       |
 |--------------|---------------------------------------------------------------|
 | **Home**     | Total balance, action row, asset list, recent activity        |
-| **Swap**     | Cross-chain swap interface (THORChain v0.3, native v0.4+)     |
+| **Swap**     | Cross-chain swap interface (Trocador aggregator v0.3; THORChain/native v0.4+) |
 | **Inbox**    | Slatepacks, swap rounds, incoming tips with notes, e2ee DMs   |
 | **Settings** | Wallet config, custom RPC servers, view-key export, seed      |
 
@@ -172,7 +172,8 @@ Inside the Swap tab:
 
 The same Swap tab eventually hosts native (P2P, adaptor-signature)
 swaps in v0.4+. Same UI surface, different backend. Aggregator
-(THORChain) vs Native (P2P) is a sub-toggle, not a separate tab.
+(Trocador today; THORChain planned) vs Native (P2P) is a sub-toggle,
+not a separate tab.
 
 ## Principle 5 — Tip Maker as a wizard, not a form
 
@@ -436,7 +437,7 @@ Preact components in `packages/ui/` keep visual consistency.
 
 ## Status
 
-Direction set 2026-05-08. As of 2026-05-13:
+Direction set 2026-05-08. As of 2026-07-09:
 
 - **Principle 1 (action-centric)** — shipped. Bottom nav has Home /
   Swap / Inbox / Settings; Home leads with UnifiedBalance + ActionRow
@@ -446,8 +447,8 @@ Direction set 2026-05-08. As of 2026-05-13:
 - **Principle 3 (Unified Inbox)** — partial. Inbox tab placeholder
   exists; Grin Phase 3.3 populates it with pending exchanges +
   Smirk-to-Smirk relay auto-detect. Tips/messages land v0.4+.
-- **Principle 4 (Swap top-level)** — placeholder tab; THORChain wiring
-  is the next major track after Grin.
+- **Principle 4 (Swap top-level)** — Trocador is the shipped swap
+  aggregator; THORChain and native (P2P) swaps deferred to v0.4+.
 - **Principle 5 (Tip Maker wizard)** — pending; immediate next track
   after Grin Phase 4.
 - **Principle 6 (asset registry)** — shipped via `@smirk/assets` (44

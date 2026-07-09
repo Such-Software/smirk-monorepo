@@ -50,8 +50,9 @@ HTML cannot express the concept. A button is a `<button>`, not
 
 ### Live regions
 
-Use a single `<LiveRegion>` component (in `@smirk/ui`) for every
-dynamic-update announcement. Politeness levels map to event severity:
+A single `<LiveRegion>` component (planned for `@smirk/ui`) will
+handle every dynamic-update announcement. Politeness levels map to
+event severity:
 
 | Event class | Politeness | Example |
 | ----------- | ---------- | ------- |
@@ -70,8 +71,9 @@ Pattern: focus moves into the dialog on open, focus is trapped while
 the dialog is open, Escape closes the dialog, focus returns to the
 trigger element on close.
 
-The `<Dialog>` component in `@smirk/ui` implements this. Build new
-modal interactions on top of `<Dialog>`. If you find yourself wiring
+A `<Dialog>` component (planned for `@smirk/ui`) will implement this.
+Build new modal interactions on top of `<Dialog>`. If you find
+yourself wiring
 focus manually, you're either extending `<Dialog>` (good — submit a
 PR) or duplicating it (bad — use the component).
 
@@ -87,8 +89,9 @@ new tab strips on those primitives.
 
 ### Focus trap
 
-Used inside dialogs and wizards. The `useFocusTrap()` hook in
-`@smirk/ui` handles the mechanics. Apply when an interaction must
+Used inside dialogs and wizards. A `useFocusTrap()` hook (planned
+for `@smirk/ui`) will handle the mechanics. Apply when an interaction
+must
 not let focus escape until completed.
 
 ### Skip link
@@ -123,7 +126,7 @@ that path leads to platform-divergent shortcuts and conflict bugs.
 ### Contrast
 
 WCAG AA: **4.5:1 for text**, **3:1 for large text and UI components**.
-AAA: 7:1 for text. Themes are checked in CI via
+AAA: 7:1 for text. Themes will be checked in CI via a planned
 `packages/ui/src/themes/__tests__/contrast.test.ts` — a theme that
 fails AA must either be fixed or accompanied by an HC ("High
 Contrast") sibling variant.
