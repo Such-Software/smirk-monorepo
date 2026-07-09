@@ -1288,6 +1288,15 @@ function App() {
           await finishOnboardRegister(wallet, onboardBootstrap);
         }}
         reserveSmirkName={async (handle) => {
+          // Double-import guard: handles are PER-INSTANCE, so ask THIS backend
+          // whether the wallet already owns one before claiming. Importing the
+          // same seed twice otherwise re-runs the claim and falsely reports a
+          // fresh reservation. `getMe` is read-only; skip the claim if a
+          // username is already set and surface it instead of re-claiming.
+          const me = await api.getMe();
+          if (me.data?.username) {
+            throw new Error(`You already have @${me.data.username}.`);
+          }
           const res = await api.setMySmirkUsername(handle);
           if (res.error) {
             throw new Error(res.error);

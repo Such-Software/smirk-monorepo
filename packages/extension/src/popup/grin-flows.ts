@@ -43,6 +43,7 @@ import {
   type SlatepackChannels,
 } from '@smirk/core';
 import { grin as wasmGrin } from '@smirk/wasm';
+import { recordGrinTx, updateGrinTxStatus } from './grin-tx-journal';
 import type {
   GrinChangeOutputInfo,
   GrinCreateInvoiceResult,
@@ -643,6 +644,26 @@ export async function startGrinSend(args: {
     relay_id = encodeCounterparty(channel.kind, recipient.pubkeyHex ?? recipient.userId!);
   }
 
+  // Best-effort tx-journal (display-only history; NEVER gates money). Record the
+  // send as pending at build time; processGrinS2 upgrades it to finalized +
+  // kernelExcess after broadcast. A failure here must never break the send.
+  void recordGrinTx({
+    slateId: sendResult.slate_id,
+    direction: 'send',
+    amountNanogrin: args.amount,
+    fee,
+    ...(args.recipientUserId ?? args.recipientSlatepackAddress ?? args.recipientPubkeyHex
+      ? {
+          counterparty:
+            args.recipientUserId ??
+            args.recipientSlatepackAddress ??
+            args.recipientPubkeyHex,
+        }
+      : {}),
+    status: 'pending',
+    createdAt: Date.now(),
+  }).catch(() => undefined);
+
   return {
     slate_id: sendResult.slate_id,
     armored,
@@ -720,6 +741,18 @@ export async function processGrinS2(args: {
       : {}),
   });
 
+  // Best-effort tx-journal: upgrade the build-time `pending` row (if the send
+  // build journalled one) to `finalized` + its on-chain kernel excess. amount 0
+  // preserves whatever the build recorded (see recordGrinTx merge semantics).
+  void recordGrinTx({
+    slateId,
+    direction: 'send',
+    amountNanogrin: 0,
+    status: 'finalized',
+    kernelExcess: finalize.kernel_excess_hex,
+    createdAt: Date.now(),
+  }).catch(() => undefined);
+
   // Settle the exchange on its channel (S3 notice / relay finalize). Best-effort:
   // never undo an on-chain broadcast.
   if (args.relay_id) {
@@ -754,6 +787,9 @@ export async function cancelGrinSend(args: {
   // attempt the wire-cancel of a possibly-broadcast tx on an unknown state.)
   const pending = await args.overlay.load().catch(() => null);
   if (pending === null || pending.entries[args.slate_id]?.broadcast) return;
+  // Best-effort tx-journal: mark the row cancelled (display-only; runs only on a
+  // genuine pre-broadcast cancel, never for a broadcast tx).
+  void updateGrinTxStatus(args.slate_id, 'cancelled').catch(() => undefined);
   // Free the reserved inputs immediately (they become selectable again).
   // remove() re-checks the broadcast flag, so this can only free a pre-broadcast
   // reservation.
@@ -998,6 +1034,16 @@ export async function processGrinI2(args: {
         incoming: { commit: ctx.commitment, value: ctx.amount },
         broadcast: true,
       });
+      // Best-effort tx-journal: our invoice was paid — record a finalized
+      // receive with its on-chain kernel excess (display-only).
+      void recordGrinTx({
+        slateId,
+        direction: 'receive',
+        amountNanogrin: ctx.amount,
+        status: 'finalized',
+        kernelExcess: finalize.kernel_excess_hex,
+        createdAt: Date.now(),
+      }).catch(() => undefined);
     }
   } catch {
     // Non-fatal: the next scan still surfaces the confirmed output.
@@ -1080,6 +1126,17 @@ export async function signIncomingGrinSlate(args: {
   await args.overlay.addPending(parsed.id, {
     incoming: { commit: signed.output.commitment_hex, value: signed.output.amount },
   });
+
+  // Best-effort tx-journal: we signed an incoming send as S2 — record it as a
+  // pending receive (the sender broadcasts; scan later confirms the amount).
+  void recordGrinTx({
+    slateId: parsed.id,
+    direction: 'receive',
+    amountNanogrin: amount,
+    ...(s1Sender ? { counterparty: s1Sender } : {}),
+    status: 'pending',
+    createdAt: Date.now(),
+  }).catch(() => undefined);
 
   return {
     slate_id: parsed.id,

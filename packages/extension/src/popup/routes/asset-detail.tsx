@@ -20,6 +20,7 @@ import { clawbackSocialTip } from '../tip-claim-handler';
 import { listTipKeyBackups, removeTipKeyBackup } from '../tip-key-backup';
 import { isTipStale } from '../tip-inbox';
 import { bytesToHex } from '../format';
+import { readGrinJournal, type GrinTxJournalEntry } from '../grin-tx-journal';
 import type { WalletSession } from '../types';
 
 /**
@@ -402,13 +403,29 @@ async function loadAssetHistory(
     );
   }
   if (assetId === 'grin') {
-    // Grin on v3 is non-custodial: there is no server-side transaction history.
-    // `POST /wallet/grin/scan` returns the current UTXO set only, not a
-    // send/receive log, and Mimblewimble commitments carry no amount/direction a
-    // third party could reconstruct. Activity history would require a local
-    // transaction journal (future work); for now show none rather than hit a
-    // dead custodial endpoint.
-    return [];
+    // Grin on v3 is non-custodial: `POST /wallet/grin/scan` returns the current
+    // UTXO set only — no send/receive log — and Mimblewimble commitments carry no
+    // amount/direction a third party could reconstruct. So history comes from the
+    // client-side append-only tx journal (grin-tx-journal.ts), which records each
+    // flow's metadata at build/finalize/sign/tip time. Purely DISPLAY — it never
+    // gates spending — and best-effort: a bad journal yields [], never a throw.
+    const entries = await readGrinJournal().catch(() => []);
+    return entries.map(grinJournalEntryToRow);
   }
   return [];
+}
+
+/** Map a client tx-journal entry onto the UI's `grin` history-row shape. */
+function grinJournalEntryToRow(e: GrinTxJournalEntry): AssetDetailTxRow {
+  return {
+    kind: 'grin',
+    direction: e.direction === 'send' ? 'out' : 'in',
+    amountAtomic: BigInt(Math.max(0, Math.round(e.amountNanogrin))),
+    feeAtomic: BigInt(Math.max(0, Math.round(e.fee ?? 0))),
+    kernelExcess: e.kernelExcess ?? null,
+    slateId: e.slateId,
+    status: e.status,
+    ...(e.counterparty ? { counterpartyUsername: e.counterparty } : {}),
+    timestamp: new Date(e.createdAt).toISOString(),
+  };
 }

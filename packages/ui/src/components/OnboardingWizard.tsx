@@ -945,9 +945,9 @@ function ImportWarning({
     <div>
       <ScreenHeader title="Before you import" onBack={onBack} />
       <p style={{ ...bodyTextStyle, margin: '4px 0 14px' }}>
-        Paste any 12-word recovery phrase. Smirk derives its own addresses from
-        it, so a phrase from another wallet imports fine but shows empty
-        balances.
+        Paste your 12-word recovery phrase. Smirk uses standard BIP39
+        derivation, so a phrase from most wallets — including Cake — imports
+        cleanly and restores the same addresses and balances here.
       </p>
       <div
         style={{
@@ -961,7 +961,7 @@ function ImportWarning({
         }}
       >
         <div style={{ fontWeight: 600, marginBottom: 6 }}>
-          A seed from another wallet won't work as you expect
+          Good to know before you import
         </div>
         <ul
           style={{
@@ -974,15 +974,16 @@ function ImportWarning({
           }}
         >
           <li>
-            MetaMask, Cake, Electrum, Trezor, etc. use different
-            derivation paths.
+            Standard 12-word phrases restore your addresses and
+            balances for the chains Smirk supports.
           </li>
           <li>
-            You'll see empty balances — funds are safe, but visible in
-            the wallet that generated the seed.
+            A wallet that uses a non-standard derivation path may show
+            an empty balance for some assets — your funds are always
+            safe and remain visible in that wallet.
           </li>
           <li>
-            To move funds into Smirk, send to a Smirk receive address
+            You can also send funds to a Smirk receive address anytime
             after onboarding.
           </li>
         </ul>

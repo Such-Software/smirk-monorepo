@@ -48,6 +48,7 @@ import type { TipPlatform, TipSubmitFields, TipSubmitOutcome } from '@smirk/ui';
 import { grin as wasmGrin } from '@smirk/wasm';
 import { send } from './send-handler';
 import { resolveGrinSpendable } from './grin-flows';
+import { recordGrinTx } from './grin-tx-journal';
 import { storeTipKeyBackup } from './tip-key-backup';
 
 /**
@@ -857,6 +858,19 @@ async function createGrinTip(
       ? { change: { commit: voucherResult.change.commitment_hex, value: voucherResult.change.amount } }
       : {}),
   });
+
+  // Best-effort tx-journal: a tip is an outgoing send. Record it finalized with
+  // its on-chain kernel excess (display-only; NEVER gates money).
+  void recordGrinTx({
+    slateId,
+    direction: 'send',
+    amountNanogrin: voucherAmount,
+    fee,
+    counterparty: fields.isPublic ? 'public link' : `@${fields.username}`,
+    status: 'finalized',
+    kernelExcess: voucherResult.kernel_excess_hex,
+    createdAt: Date.now(),
+  }).catch(() => undefined);
 
   // 10. Phase 2 — attach the slate_id (acts as the funding identifier
   //     for Grin since the kernel commit IS the on-chain identity).
