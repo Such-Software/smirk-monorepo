@@ -237,14 +237,6 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     publicTradeUrl: 'https://trocador.app/trade?id={ID}',
   },
   {
-    id: 'moonpay',
-    kind: 'CEX',
-    name: 'MoonPay',
-    blurb: 'Buy BTC / LTC / XMR with USD or EUR. Card and bank.',
-    status: 'coming_soon',
-    statusNote: 'Drops in when MoonPay onboarding clears (post-v0.3).',
-  },
-  {
     id: 'native_atomic',
     kind: 'DEX',
     name: 'Native atomic swaps',

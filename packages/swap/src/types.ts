@@ -66,8 +66,8 @@ export type SwapStatus =
  *   - CEX aggregator (Trocador): `toAddress` + `refundAddress` required.
  *   - DEX (THORChain): `toAddress` required; refund derives from the
  *     deposit chain automatically.
- *   - Onramp (MoonPay): nothing extra; provider's hosted UI collects
- *     destination during KYC.
+ *   - Onramp (hosted-UI fiat): nothing extra; the provider's hosted UI
+ *     collects the destination during KYC.
  *   - Native atomic (Grin↔BTC, WOW↔XMR): `counterpartyData` required;
  *     the multi-round protocol replaces address routing.
  *
