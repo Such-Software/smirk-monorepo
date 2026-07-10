@@ -556,6 +556,19 @@ async function fetchUtxoBalance(
   };
 }
 
+/**
+ * Accounts (`asset:address`) already sent to LWS registration this session.
+ *
+ * LWS registration is one-time account setup, NOT something to repeat on every
+ * balance poll. A re-register carrying the fixed wallet birthday makes the
+ * backend rescan the account backwards to that birthday and reset its scan
+ * cursor: the account then reads a 0 balance, slowly re-backfills, and gets
+ * reset again on the next poll, so an old-birthday wallet never catches up. We
+ * register at most once per account per session (the backend also treats an
+ * existing account's re-registration as a no-op, but we don't rely on that).
+ */
+const registeredLwsAccounts = new Set<string>();
+
 async function fetchLwsBalance(
   providers: ChainProviderRegistry,
   userId: string,
@@ -566,20 +579,21 @@ async function fetchLwsBalance(
   startHeight: number | undefined,
   verifyKeyImage: KeyImageVerifier | undefined,
 ): Promise<AssetBalance> {
-  // Best-effort idempotent registration. Backend treats re-registrations
-  // as no-ops; we intentionally don't fail the whole balance fetch if
-  // this errors. Pass the previously-stored scan height so LWS resumes
-  // from the right block on re-registration of an imported wallet.
+  // Best-effort registration, at most ONCE per account per session (see
+  // `registeredLwsAccounts` for why repeating it corrupts the balance).
   //
-  // Awaited (not raced): for a first-ever XMR/WOW use the LWS account
-  // doesn't exist yet, so a racing getLwsBalance call returns "address
-  // not found" — surfacing that as a one-tick error is the kind of
-  // jank we shouldn't ship. The ~100-200 ms savings for returning
-  // wallets aren't worth the first-use UX cliff.
-  await providers
-    .lws(asset)
-    .registerAccount(userId, address, viewKeyHex, startHeight)
-    .catch(() => undefined);
+  // Still awaited before the FIRST read (not raced): for a first-ever XMR/WOW
+  // use the LWS account doesn't exist yet, so an unregistered getLwsBalance
+  // errors — surfacing that as a one-tick "0 with error" is jank we shouldn't
+  // ship. Every subsequent read skips registration and just reads.
+  const acctKey = `${asset}:${address}`;
+  if (!registeredLwsAccounts.has(acctKey)) {
+    registeredLwsAccounts.add(acctKey);
+    await providers
+      .lws(asset)
+      .registerAccount(userId, address, viewKeyHex, startHeight)
+      .catch(() => undefined);
+  }
 
   const result = await providers.lws(asset).getBalance(address, viewKeyHex);
   if (result.error || !result.data) {
