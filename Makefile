@@ -112,10 +112,12 @@ ext-chrome: wasm
 	npm run build --workspace @smirk/wasm
 	npm run build --workspace @smirk/core
 	npm run build --workspace @smirk/ui
+	npm run build --workspace @such-software/smirk-dapp-api
 	npm run build:chrome --workspace @smirk/extension
 
 ext-firefox: wasm
 	npm run build --workspace @smirk/wasm
 	npm run build --workspace @smirk/core
 	npm run build --workspace @smirk/ui
+	npm run build --workspace @such-software/smirk-dapp-api
 	npm run build:firefox --workspace @smirk/extension
