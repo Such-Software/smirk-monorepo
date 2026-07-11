@@ -106,6 +106,23 @@ export interface TipMakerProps {
    *  the user types a known handle (their last-tipped asset wins
    *  there — that's the stronger signal). */
   prefilledAssetId?: string;
+  /**
+   * Whether this backend can serve TARGETED (@username / platform) tips.
+   *
+   * There is currently NO targeted-tips capability on `BackendCapabilities`, and
+   * the shipped backend is PUBLIC-ONLY: it rejects a targeted tip with a 400 at
+   * submit time. So this defaults to `false`, and the composer:
+   *   - opens as a PUBLIC share-URL tip (the out-of-box tip the backend accepts),
+   *     rather than the old default of a targeted @username tip that 400s, and
+   *   - hides the "anyone with the link can claim" toggle, so a user can't flip
+   *     the composer into a targeted tip the backend can't fulfil.
+   *
+   * A future backend that advertises targeted-tip support can pass
+   * `allowTargeted` (wired from that capability) to restore the recipient
+   * composer + public/targeted toggle. Keep this capability-driven — do NOT
+   * hardcode it true, or a public-only instance regresses to the 400 trap.
+   */
+  allowTargeted?: boolean;
 }
 
 const PLATFORM_LABEL: Record<TipPlatform, string> = {
@@ -211,7 +228,11 @@ export function TipMaker(props: TipMakerProps) {
   const [username, setUsername] = useState('');
   const [assetId, setAssetId] = useState<string>(defaultAssetId);
   const [amountText, setAmountText] = useState('');
-  const [isPublic, setIsPublic] = useState(false);
+  // Default to a PUBLIC share-URL tip unless this backend can serve targeted
+  // tips (see `allowTargeted`). The shipped backend is public-only, so the
+  // out-of-box tip must be one it accepts — a targeted default would 400 on
+  // submit the moment the user filled the composer and pressed Send.
+  const [isPublic, setIsPublic] = useState(!props.allowTargeted);
   const [senderAnonymous, setSenderAnonymous] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -469,13 +490,19 @@ export function TipMaker(props: TipMakerProps) {
           borderRadius: 8,
         }}
       >
-        <Toggle
-          checked={isPublic}
-          onChange={setIsPublic}
-          label="Anyone with the link can claim"
-          hint="Generates a share URL; anyone who opens it first claims the tip."
-          testid="tip-public-toggle"
-        />
+        {/* Public/targeted toggle — only when this backend can actually serve a
+            targeted tip. On a public-only backend the tip is ALWAYS a public
+            share-URL tip, so surfacing this toggle would just let the user
+            compose a targeted tip the backend 400s. See `allowTargeted`. */}
+        {props.allowTargeted && (
+          <Toggle
+            checked={isPublic}
+            onChange={setIsPublic}
+            label="Anyone with the link can claim"
+            hint="Generates a share URL; anyone who opens it first claims the tip."
+            testid="tip-public-toggle"
+          />
+        )}
         <Toggle
           checked={senderAnonymous}
           onChange={setSenderAnonymous}

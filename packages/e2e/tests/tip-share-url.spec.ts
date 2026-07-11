@@ -152,9 +152,10 @@ test('public BTC tip → success screen surfaces the shareable claim URL', async
   await tipAction.click();
   await expect(page.getByTestId('tip-submit-btn')).toBeVisible();
 
-  // Public tip: flip the toggle so the flow mints a share URL (and drops the
-  // recipient input — public tips need no username).
-  await page.getByTestId('tip-public-toggle').check();
+  // Public tip: on a public-only backend the composer already defaults to a
+  // public share-URL tip (the targeted toggle is hidden, since the backend can't
+  // serve targeted tips), so there's nothing to flip — the flow mints a share URL
+  // and drops the recipient input out of the box.
 
   // Force the funding asset to BTC so the URL is live immediately
   // (shareUrlPending:false). The default asset is largest-balance, which could

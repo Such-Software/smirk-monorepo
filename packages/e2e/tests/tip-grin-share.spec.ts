@@ -178,8 +178,10 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
   await page.getByTestId('home-action-tip').click();
   await expect(page.getByTestId('tip-submit-btn')).toBeVisible();
 
-  // Public tip: flip the toggle so the flow mints a share URL / claim link.
-  await page.getByTestId('tip-public-toggle').check();
+  // Public tip: on a public-only backend the composer already defaults to a
+  // public share-URL tip (the targeted toggle is hidden, since the backend can't
+  // serve targeted tips), so there's nothing to flip — the flow mints a share
+  // URL / claim link out of the box.
 
   // Force the funding asset to GRIN (default is largest-balance).
   await page.getByTestId('tip-asset-dropdown').click();

@@ -404,8 +404,81 @@ test('resolveGrinSpendable spends via grin-lws key_id and SKIPS the identify sea
     { path: [0, 0, 42, 0], amount: 5_000_000_000, commitment_hex: COMMIT_A, is_coinbase: false },
   ]);
   assert.deepEqual(identifyCalls, [], 'identifyOutput must not run when key_id is present');
-  // The counter is seeded past the recognized index so a new output never reuses it.
-  assert.equal(await overlay.nextChildIndex(), 43);
+  // The counter is NOT seeded from an UNVERIFIED key_id index: the client never
+  // re-derived the commitment for [0,0,42,0], so a hostile/buggy LWS can't move
+  // nextChildIndex. Only identifyOutput-verified indices seed it (see the tests
+  // below); here nothing was verified, so the counter stays put.
+  assert.equal(await overlay.nextChildIndex(), 0);
+});
+
+test('resolveGrinSpendable does NOT seed the counter from an unverified (even absurd) key_id', async () => {
+  // A hostile/buggy LWS reports a key_id claiming a wild child index. We still
+  // spend via that path (a wrong path only yields a node-rejected tx, never a
+  // loss), but it must NOT poison the money-critical child-index counter.
+  const KEY_ID_HUGE = '04' + '00000000' + '00000000' + '7fffffff' + '00000000'; // idx 0x7fffffff
+  const { identifyCalls } = stubScanProvider(
+    [
+      {
+        commit: COMMIT_A,
+        value: 5_000_000_000,
+        height: 100,
+        mmr_index: 1,
+        is_coinbase: false,
+        lock_height: 0,
+        key_id: KEY_ID_HUGE,
+      },
+    ],
+    200,
+  );
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+
+  const res = await resolveGrinSpendable(scanDeps(overlay));
+
+  // Spendable via the key_id path (index 0x7fffffff = 2147483647).
+  assert.equal(res.outputs[0]?.path[2], 0x7fffffff);
+  assert.deepEqual(identifyCalls, [], 'identifyOutput must not run when key_id is present');
+  // Counter untouched — the absurd index never reached it.
+  assert.equal(await overlay.nextChildIndex(), 0);
+});
+
+test('resolveGrinSpendable seeds the counter ONLY from the identify-verified index, not the key_id', async () => {
+  // Two selectable outputs: one recovered via key_id (index 42, unverified), one
+  // with no key_id that goes through the verified identify search (stubbed to
+  // index 7). The counter must seed from the VERIFIED 7 (→ 8), never the 42.
+  const COMMIT_B = '0a'.repeat(33);
+  const { identifyCalls } = stubScanProvider(
+    [
+      {
+        commit: COMMIT_A,
+        value: 5_000_000_000,
+        height: 100,
+        mmr_index: 1,
+        is_coinbase: false,
+        lock_height: 0,
+        key_id: KEY_ID_IDX_42, // unverified → spend-only, never seeds
+      },
+      {
+        commit: COMMIT_B,
+        value: 2_000_000_000,
+        height: 100,
+        mmr_index: 2,
+        is_coinbase: false,
+        lock_height: 0,
+        key_id: null, // → verified identify search → index 7
+      },
+    ],
+    200,
+  );
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+
+  const res = await resolveGrinSpendable(scanDeps(overlay));
+
+  // Both are spendable (key_id path for A, verified search path for B).
+  assert.deepEqual(res.outputs.map((o) => o.path[2]).sort((a, b) => a - b), [7, 42]);
+  // identify ran only for the key_id-less output.
+  assert.deepEqual(identifyCalls, [COMMIT_B], 'identify runs only when key_id is absent');
+  // Seeded from the VERIFIED index 7 (+1), NOT the higher unverified key_id 42.
+  assert.equal(await overlay.nextChildIndex(), 8);
 });
 
 test('resolveGrinSpendable falls back to the identify search when key_id is absent', async () => {

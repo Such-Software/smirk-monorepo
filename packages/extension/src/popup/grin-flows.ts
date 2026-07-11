@@ -205,12 +205,14 @@ export interface GrinSpendable {
  * 2. reconcile the overlay against the scan (clear settled entries first).
  * 3. keep MATURE outputs (coinbase ≥1440 confs; regular past lock_height) that
  *    are NOT in the overlay's pending-spent set (just-broadcast, not yet mined).
- * 4. recover each output's path: prefer grin-lws's verified `key_id` (skips the
- *    search), else fall back to the `identifyOutput` search. DROP (warn) any
- *    output whose path can't be recovered (never feed a wrong path to the send
- *    builder: it silently yields a bad blind and an invalid tx).
- * 5. seed the child-index counter to max(identified path[2]) + 1 so a new output
- *    never reuses an index (reuse = duplicate commitment = fund loss).
+ * 4. recover each output's path: prefer grin-lws's `key_id` (skips the search),
+ *    else fall back to the `identifyOutput` search. DROP (warn) any output whose
+ *    path can't be recovered (never feed a wrong path to the send builder: it
+ *    silently yields a bad blind and an invalid tx).
+ * 5. seed the child-index counter to max(CLIENT-VERIFIED path[2]) + 1 so a new
+ *    output never reuses an index (reuse = duplicate commitment = fund loss).
+ *    Only `identifyOutput`-verified indices seed it — a raw `key_id` index is
+ *    trusted for spending but never moves the counter (see the seed note below).
  */
 export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpendable> {
   const grin = chainProviders.grin();
@@ -246,17 +248,33 @@ export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpen
   const maxN = persisted + GRIN_IDENTIFY_SEARCH_SPAN;
 
   const outputs: GrinUnspentOutput[] = [];
-  const identifiedIndices: number[] = [];
+  // ONLY indices we cryptographically verified client-side may seed the
+  // money-critical child-index counter. `wasmGrin.identifyOutput` re-derives the
+  // output's blinding factor and checks that it reproduces `o.commit`, so an
+  // index it returns is bound to the rangeproof/commitment. A raw `key_id` index
+  // is NOT verified here (grin-lws asserts the rangeproof rewind server-side, but
+  // a hostile/buggy LWS could report a wrong index), so it must never move the
+  // counter — see the residual-trust note on the seed below.
+  const verifiedIndices: number[] = [];
   for (const o of selectable) {
-    // Prefer grin-lws's recovered path: `key_id` came from a verified rangeproof
-    // rewind, so when it is the canonical Smirk shape we spend directly and skip
-    // the O(span) identify search. Fall back to the client-side search when the
-    // scan carried no usable key_id (the grin-wallet fallback path, or a
-    // non-canonical identifier).
+    // SPEND PATH: prefer grin-lws's recovered `key_id`. When it is the canonical
+    // Smirk shape we spend directly and skip the O(span) identify search. Fall
+    // back to the client-side verified search when the scan carried no usable
+    // key_id (the grin-wallet fallback path, or a non-canonical identifier).
     const fromKeyId = o.key_id ? parseGrinCanonicalKeyId(o.key_id) : null;
-    const path =
-      fromKeyId ??
-      wasmGrin.identifyOutput(extKeyHex, legacyExtKeyHex, o.commit, BigInt(o.value), maxN);
+    let path = fromKeyId;
+    if (!path) {
+      path = wasmGrin.identifyOutput(
+        extKeyHex,
+        legacyExtKeyHex,
+        o.commit,
+        BigInt(o.value),
+        maxN,
+      );
+      // Only a path returned by the verified search is safe to seed the counter:
+      // it is cryptographically bound to this output's commitment.
+      if (path) verifiedIndices.push(path[2]);
+    }
     if (!path) {
       console.warn(
         '[grin-spend] could not identify derivation path for output; dropping from selection:',
@@ -264,14 +282,26 @@ export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpen
       );
       continue;
     }
-    identifiedIndices.push(path[2]);
     outputs.push({ path, amount: o.value, commitment_hex: o.commit, is_coinbase: o.is_coinbase });
   }
 
-  // Seed the counter from the highest on-chain index we recognized, so the next
-  // new output allocates a fresh index. seedNextChildIndex never rewinds.
-  if (identifiedIndices.length > 0) {
-    await deps.overlay.seedNextChildIndex(Math.max(...identifiedIndices) + 1);
+  // Seed the counter from the highest index we CRYPTOGRAPHICALLY VERIFIED, so the
+  // next new output allocates a fresh index. seedNextChildIndex never rewinds.
+  //
+  // Residual trust: `@smirk/wasm` exposes no O(1) "commitment for a path+value"
+  // primitive, and the scan output carries no rangeproof for `recoverOutput`, so
+  // there is no cheap per-`key_id` verification. We therefore split the trust:
+  //   - `key_id` is still trusted for SPENDING (fast path). That is safe: a wrong
+  //     path only yields a bad blind → an invalid, node-rejected tx, never a loss
+  //     of funds (a duplicate-commitment mint is likewise consensus-rejected).
+  //   - `key_id` indices do NOT seed the counter, so a hostile/buggy LWS cannot
+  //     poison `nextChildIndex` (e.g. push it toward u32 overflow, or deflate it
+  //     to force a reuse). The trade-off: a fresh restore whose every output
+  //     carries a `key_id` won't seed the counter from scan and leans on the
+  //     persisted counter + consensus reject-on-reuse; that reject is non-fatal
+  //     (the failed mint self-heals — reserveNextChildIndex already advanced).
+  if (verifiedIndices.length > 0) {
+    await deps.overlay.seedNextChildIndex(Math.max(...verifiedIndices) + 1);
   }
   const nextChildIndex = await deps.overlay.nextChildIndex();
   return { outputs, nextChildIndex };
