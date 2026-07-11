@@ -342,6 +342,19 @@ pub fn point_sum(points: &[[u8; 33]]) -> Result<[u8; 33], String> {
 ///
 /// Returns the partial scalar `s_i = k_i + e · x_i` (32 bytes) where
 /// `e = blake2b32(R_total || P_total || msg)`.
+///
+/// # Safety: single-use nonce
+///
+/// `secret_nonce` MUST be freshly generated and used EXACTLY ONCE. Producing
+/// two partial signatures over different messages (or different `R_total` /
+/// `P_total`) with the same `secret_nonce` lets anyone solve for `secret_key`
+/// from the two `s_i` values: `x = (s - s') / (e - e')`. This is the classic
+/// nonce-reuse key-extraction that BIP 327 (MuSig2) warns about. This function
+/// is stateless and CANNOT enforce single use; the caller owns that invariant.
+/// The intended long-term shape is a nonce state machine that generates,
+/// hands out, and then destroys each secret nonce so reuse is unrepresentable
+/// (tracked as a roadmap item). Until that lands, never call this twice with
+/// the same nonce, and never persist a secret nonce across sign attempts.
 pub fn partial_sign(
     secret_key: &[u8; 32],
     secret_nonce: &[u8; 32],
@@ -377,22 +390,9 @@ pub fn partial_sign(
 
     // Shared challenge using the QR-form R_total.
     let e = challenge_hash(&r_total_qr, public_key_total, msg)?;
-    eprintln!("[partial_sign] r_total_qr (33B) = {:02x?}", r_total_qr);
-    eprintln!("[partial_sign] public_key_total (33B) = {:02x?}", public_key_total);
-    eprintln!("[partial_sign] r_total_is_qr = {}", r_total_is_qr);
-    eprintln!("[partial_sign] e (scalar BE) = {:02x?}", &e.to_bytes()[..]);
-    eprintln!("[partial_sign] nonce_bytes IN = {:02x?}", secret_nonce);
-    eprintln!("[partial_sign] sk_bytes IN = {:02x?}", secret_key);
 
     // s_i = k_i_effective + e · x_i
     let s = nonce_scalar + e * sk.as_ref();
-
-    // DEBUG: print bytes raw vs converted
-    let raw = s.to_bytes();
-    let raw_slice: &[u8] = &raw;
-    eprintln!("[partial_sign] s.to_bytes() raw = {:02x?}", raw_slice);
-    let arr: [u8; 32] = raw.into();
-    eprintln!("[partial_sign] s.to_bytes().into() = {:02x?}", arr);
 
     Ok(s.to_bytes().into())
 }
@@ -528,6 +528,13 @@ pub fn final_signature(public_nonce_total: &[u8; 33], aggregate_s: &[u8; 32]) ->
 /// nonces — withOUT T mixed in. The function adds T internally to compute
 /// the offset challenge; this matches the canonical adaptor-sig math
 /// where the published signature's nonce is `(R_total_no_t + T)`.
+///
+/// # Safety: single-use nonce
+///
+/// Delegates to [`partial_sign`], so the same rule applies: `secret_nonce`
+/// MUST be fresh and used exactly once. Reusing it across two adaptor partials
+/// leaks `secret_key` (see [`partial_sign`]). Enforce single use at the caller
+/// until the nonce state machine lands.
 pub fn adaptor_partial_sign(
     secret_key: &[u8; 32],
     secret_nonce: &[u8; 32],
