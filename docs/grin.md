@@ -125,8 +125,9 @@ set *is* the wallet state. The only local persistence is a **minimal pending
 overlay** (see below) that bridges the few blocks between broadcasting a
 transaction and the next scan that reflects it. The backend is a chain-access
 relay, not a wallet. Any Grin light-wallet-server exposing these three routes can
-back a Smirk wallet, which is exactly what the planned standalone `grin-lws`
-service makes explicit.
+back a Smirk wallet, which is exactly what the standalone `grin-lws` service does:
+it is the default scan path in production today (see below), with the backend's
+direct `grin-wallet` scan as the fallback.
 
 **Balance is derived from a scan, not asked of a server, and not read from a
 store.** On every balance refresh the wallet:
@@ -243,37 +244,49 @@ old client-side "recover outputs" path entirely; there is no separate recovery
 step.)
 
 Restoring the ability to *spend* each recovered output requires its BIP32 path,
-which the scan response does **not** carry (it returns commitments, not proofs or
-paths). Smirk outputs are deterministic, so the path is recoverable from the seed:
-a bounded wasm helper, **`grin_identify_output(extKey, legacyExtKey, commit,
-value, maxChild)`**, searches `n ∈ [0, maxChild]` across the v3/legacy key schemes
-and the Regular/None switch-commitment modes, recomputes each Pedersen commitment,
-and returns the matching `[0,0,n,0]` path (or null). Input selection identifies
-each scanned output this way before spending it — an output whose path cannot be
-identified is dropped rather than fed to the builder, since a wrong path silently
-produces a bad blinding factor. When `grin-lws` lands (below), its
-`/get_unspent_outs` returns the recovered path directly and the brute-force
-identify search is no longer needed.
+which a bare rewind scan does **not** carry (it returns commitments, not proofs or
+paths). The default scan path, `grin-lws` (below), closes this gap: its
+`get_unspent_outs` recovers each output's `key_id` server-side by rewinding the
+rangeproof, so the client parses that verified `key_id` into the spend path and
+never has to search. The wallet spends directly from the LWS-provided `key_id`
+(the Phase 8 work in `grin-flows.ts`).
+
+The brute-force identify helper remains only as a fallback for the `grin-wallet`
+scan path, which returns commitments without a `key_id`. Smirk outputs are
+deterministic, so the path is recoverable from the seed: a bounded wasm helper,
+**`grin_identify_output(extKey, legacyExtKey, commit, value, maxChild)`**,
+searches `n ∈ [0, maxChild]` across the v3/legacy key schemes and the Regular/None
+switch-commitment modes, recomputes each Pedersen commitment, and returns the
+matching `[0,0,n,0]` path (or null). Input selection prefers the LWS `key_id` and
+uses this search only when the scan carried none; either way an output whose path
+cannot be resolved is dropped rather than fed to the builder, since a wrong path
+silently produces a bad blinding factor.
 
 Legacy pre-HF2 / random-nonce outputs fall outside rewind-scan recognition and
 remain proof-recovery-only.
 
-### Future direction: `grin-lws`
+### `grin-lws`: the default scan/spend path
 
-The current `POST /wallet/grin/scan` is a **stateless on-demand proxy** — it
-rewinds the whole UTXO set per request and stores nothing, which is fine for
-Grin's small UTXO set but does no path recovery and does not scale to many
-accounts. The planned `grin-lws` is a **real light-wallet-server with a DB**,
-mirroring `monero-lws`: register a `rewind_hash` (the view credential), run a
-background chain scanner that stores each account's outputs *with their recovered
-paths* and marks spends, and serve `get_balance` / `get_unspent_outs` /
-`submit_raw_tx` / `height` fast. Its `get_unspent_outs` returns outputs **with**
-`key_id` / `n_child`, so the client spends directly with no `grin_identify_output`
-search. It is a standalone, public-clean, anyone-can-run service (env-configured,
-no Smirk-specific detail); the backend proxies it exactly as it proxies the
-Monero/Wownero LWS, forwarding only the view-only `rewind_hash` and storing
-nothing. Until it ships, the on-demand scan plus `grin_identify_output` cover the
-same ground.
+`grin-lws` is a standalone Grin light-wallet-server. It is functional, deployed to
+production, and the default path behind `POST /wallet/grin/scan`. It is a **real
+light-wallet-server with a DB**, mirroring `monero-lws`: register a `rewind_hash`
+(the view credential), run a background chain scanner that stores each account's
+outputs *with their recovered paths* and marks spends, and serve `get_balance` /
+`get_unspent_outs` / `submit_raw_tx` / `height` fast. Its `get_unspent_outs`
+returns outputs **with** a recovered `key_id`, so the client spends directly with
+no `grin_identify_output` search. It is a standalone, public-clean, anyone-can-run
+service (env-configured, no Smirk-specific detail); the backend proxies it exactly
+as it proxies the Monero/Wownero LWS, forwarding only the view-only `rewind_hash`
+and storing nothing. Its own repository is public at
+[github.com/Such-Software/grin-lws](https://github.com/Such-Software/grin-lws).
+
+The backend still carries the older **stateless on-demand** scan (rewind the whole
+UTXO set per request, store nothing, recover no paths) as the fallback: when no
+`grin-lws` URL is configured, or a `grin-lws` scan fails, the scan runs against
+the authoritative `grin-wallet` view-wallet instead, and the client's
+`grin_identify_output` search fills in the paths that path-less response omits.
+The `grin_lws` field on `/capabilities` tells the wallet which path a given
+instance serves.
 
 ### Lifecycle per transport
 

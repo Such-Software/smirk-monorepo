@@ -515,6 +515,216 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tips/social": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a public tip (optionally as a two-phase draft). */
+        post: operations["create_social_tip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/claimable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tips CLAIMABLE by the caller. As with `received`, a public-only instance has
+         *     no targeted-claimable inbox, so this is always empty (served 200, not 404).
+         */
+        get: operations["get_claimable_social_tips"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/received": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tips RECEIVED by the caller. Public-only instances have no targeted-recipient
+         *     inbox (public tips are claimed via share URL, never delivered to a user), so
+         *     this is always empty — served (200) rather than 404 so the client's inbox
+         *     poll doesn't error on a targeted-only endpoint this instance doesn't serve.
+         */
+        get: operations["get_received_social_tips"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/sent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All tips the caller has sent, newest first. */
+        get: operations["get_sent_social_tips"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/{tip_id}/attach-funding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach a broadcast funding tx to a draft tip, advancing it into the funding
+         *     lifecycle (`pending_confirmation`; the funding worker later flips it to
+         *     `pending` once the on-chain receipt is confirmed AND covers `amount`).
+         * @description Idempotent: re-attaching the SAME txid is a no-op that returns the row; a
+         *     DIFFERENT txid on a tip that already has one (or a non-draft tip) is a 400;
+         *     an unknown / not-owned tip is a 404. Response mirrors create: the same
+         *     `CreateSocialTipResponse { tip_id, status, share_url }`.
+         */
+        post: operations["attach_funding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/{tip_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a still-unfunded draft (owner-only, draft-only). A funded/claimed tip
+         *     is recovered via clawback, not cancel.
+         */
+        post: operations["cancel_social_tip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/{tip_id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim a public tip: lock it into `claiming` and return the encrypted claim
+         *     key + tip address so the caller can sweep the funds to their own wallet.
+         * @description AUTHED, no body. The `claiming` state is a UX signal, not a cryptographic
+         *     lock — any URL holder may claim while the sweep hasn't confirmed (whoever
+         *     wins the on-chain sweep race wins the tip; the reconciler resolves the
+         *     winner). A non-claimable tip (missing, underfunded, clawed back, already
+         *     swept) is a 400.
+         */
+        post: operations["claim_social_tip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/{tip_id}/clawback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sender reclaims a tip's funds. AUTHED, no body. Succeeds for the sender on a
+         *     pending / pending_confirmation / claiming / funding_mismatch / cancelled tip
+         *     while its sweep hasn't confirmed; a settled or non-clawable tip is a 400.
+         */
+        post: operations["clawback_social_tip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/{tip_id}/confirm-sweep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record the claimer's broadcast sweep txid (first-recorder-wins). RECORD not
+         *     settle: the tip stays `claiming` and the reconciler owns the settle to
+         *     `claimed` once the sweep confirms on-chain. Idempotent; a second, different
+         *     txid does NOT overwrite the recorded winner. A tip that was never claimed is
+         *     a 400.
+         */
+        post: operations["confirm_sweep"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tips/social/{tip_id}/public": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public tip metadata for a share-URL holder. UNAUTHENTICATED: the tip id (a
+         *     UUID) is the bearer token. 404s for an unknown or non-public tip.
+         */
+        get: operations["get_public_social_tip"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users/by-username/{username}": {
         parameters: {
             query?: never;
@@ -1080,6 +1290,11 @@ export interface components {
              */
             signature: string;
         };
+        /** @description Attach a broadcast funding transaction to a draft tip. */
+        AttachFundingRequest: {
+            /** @description The on-chain funding transaction id (XMR/WOW txid, BTC/LTC txid). */
+            funding_txid: string;
+        };
         /** @description Successful session response: a JWT pair plus minimal user info. */
         AuthResponse: {
             access_token: string;
@@ -1115,6 +1330,9 @@ export interface components {
         BroadcastResponse: {
             /** @description The broadcast transaction id. */
             txid: string;
+        };
+        CancelTipResponse: {
+            ok: boolean;
         };
         CapabilitiesResponse: {
             chains: components["schemas"]["ChainCapabilities"];
@@ -1190,6 +1408,33 @@ export interface components {
              */
             xmr_start_height?: number | null;
         };
+        /**
+         * @description Claim a tip: lock it into `claiming` and receive the encrypted claim key +
+         *     tip address to sweep. Load-bearing INCONSISTENT key: `success` (not `ok`).
+         */
+        ClaimTipResponse: {
+            /**
+             * @description Hex-encoded AES-GCM ciphertext of the claim secret; `null` if the tip
+             *     stored none. Useless without the URL-fragment key.
+             */
+            encrypted_key?: string | null;
+            success: boolean;
+            tip_address?: string | null;
+        };
+        /** @description Sender clawback of a tip. Load-bearing INCONSISTENT key: `success` (not `ok`). */
+        ClawbackTipResponse: {
+            success: boolean;
+        };
+        /** @description Record the claimer's broadcast sweep transaction (first-recorder-wins). */
+        ConfirmSweepRequest: {
+            /** @description The broadcast sweep transaction id. */
+            sweep_txid: string;
+        };
+        ConfirmSweepResponse: {
+            status: string;
+            /** @description The WINNING (first-recorded) sweep txid, or `null` if none is recorded. */
+            sweep_txid?: string | null;
+        };
         /** @description Confirmation-count query for a tx. */
         ConfirmationsRequest: {
             asset: string;
@@ -1220,6 +1465,41 @@ export interface components {
             slate_id: string;
             /** @description The armored slatepack (encrypted to the recipient). */
             slatepack: string;
+        };
+        /**
+         * @description Create a public tip. Targeted-only fields (`platform`, `username`,
+         *     `grin_commitment`, `sender_anonymous`) are accepted for wire-compat but
+         *     ignored in this port.
+         */
+        CreateSocialTipRequest: {
+            /** Format: int64 */
+            amount: number;
+            asset: string;
+            /** @description SHA256 of the claim key (hex); the key itself never touches the server. */
+            claim_key_hash?: string | null;
+            /**
+             * @description Hex-encoded AES-GCM ciphertext of the claim secret; the backend cannot
+             *     decrypt it.
+             */
+            encrypted_key?: string | null;
+            funding_txid?: string | null;
+            grin_commitment?: string | null;
+            is_public: boolean;
+            platform?: string | null;
+            sender_anonymous?: boolean;
+            tip_address?: string | null;
+            /**
+             * @description Private view key for the tip address (XMR/WOW), so the backend can scan
+             *     it for funding + sweep.
+             */
+            tip_view_key?: string | null;
+            username?: string | null;
+        };
+        CreateSocialTipResponse: {
+            /** @description `{TIP_SHARE_BASE_URL}/{tip_id}` for a public tip, else null. */
+            share_url?: string | null;
+            status: string;
+            tip_id: string;
         };
         /** @description Register a new extension wallet or re-authenticate an existing one. */
         ExtensionRegisterRequest: {
@@ -1730,6 +2010,23 @@ export interface components {
             wow?: string | null;
             xmr?: string | null;
         };
+        PublicTipInfo: {
+            /** Format: int64 */
+            amount: number;
+            asset: string;
+            /** Format: int32 */
+            confirmations_required: number;
+            created_at: string;
+            /** @description Hex-encoded AES-GCM ciphertext; useless without the URL-fragment key. */
+            encrypted_key?: string | null;
+            /** Format: int32 */
+            funding_confirmations: number;
+            id: string;
+            is_claimable: boolean;
+            is_public: boolean;
+            status: string;
+            tip_address?: string | null;
+        };
         /** @description A decoy output. */
         RandomOutputDto: {
             /** Format: int64 */
@@ -1859,6 +2156,26 @@ export interface components {
             /** Format: int32 */
             pow_max_bits: number;
         };
+        SentTip: {
+            /** Format: int64 */
+            amount: number;
+            asset: string;
+            claimed_at?: string | null;
+            clawed_back_at?: string | null;
+            /** Format: int32 */
+            confirmations_required: number;
+            created_at: string;
+            /** Format: int32 */
+            funding_confirmations: number;
+            id: string;
+            is_claimable: boolean;
+            is_public: boolean;
+            /** @description Always null in the public-only port (no targeted recipients). */
+            recipient_platform?: string | null;
+            recipient_username?: string | null;
+            sender_user_id: string;
+            status: string;
+        };
         SetUsernameRequest: {
             /**
              * @description Desired username (3-32 chars, lowercase `[a-z0-9_]`, no leading/trailing
@@ -1873,6 +2190,9 @@ export interface components {
         /** @description Identify a relay by its slate id (poll / cancel). */
         SlateIdRequest: {
             slate_id: string;
+        };
+        SocialTipsResponse: {
+            tips: components["schemas"]["SentTip"][];
         };
         /** @description A candidate spent output (verify with the spend key before trusting). */
         SpentOutputDto: {
@@ -2670,6 +2990,390 @@ export interface operations {
                 };
             };
             /** @description Price feed disabled on this server */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_social_tip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSocialTipRequest"];
+            };
+        };
+        responses: {
+            /** @description Tip created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateSocialTipResponse"];
+                };
+            };
+            /** @description Tips off, targeted tip, or invalid input */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_claimable_social_tips: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Claimable tips (empty on a public-only instance) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SocialTipsResponse"];
+                };
+            };
+            /** @description Tips off */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_received_social_tips: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Received tips (empty on a public-only instance) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SocialTipsResponse"];
+                };
+            };
+            /** @description Tips off */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_sent_social_tips: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sent tips */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SocialTipsResponse"];
+                };
+            };
+            /** @description Tips off */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    attach_funding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tip id */
+                tip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachFundingRequest"];
+            };
+        };
+        responses: {
+            /** @description Funding attached */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateSocialTipResponse"];
+                };
+            };
+            /** @description Tips off, empty/oversized txid, or a conflicting funding tx */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such tip owned by the caller */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cancel_social_tip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tip id */
+                tip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draft cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelTipResponse"];
+                };
+            };
+            /** @description Tips off */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No cancellable draft */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    claim_social_tip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tip id */
+                tip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tip locked into claiming */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimTipResponse"];
+                };
+            };
+            /** @description Tips off or tip not claimable */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    clawback_social_tip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tip id */
+                tip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tip clawed back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClawbackTipResponse"];
+                };
+            };
+            /** @description Tips off or tip not clawable */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    confirm_sweep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tip id */
+                tip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmSweepRequest"];
+            };
+        };
+        responses: {
+            /** @description Sweep txid recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmSweepResponse"];
+                };
+            };
+            /** @description Tips off, empty/oversized txid, or tip not claiming */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_public_social_tip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Tip id */
+                tip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Public tip info */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTipInfo"];
+                };
+            };
+            /** @description Tips off */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such public tip */
             404: {
                 headers: {
                     [name: string]: unknown;

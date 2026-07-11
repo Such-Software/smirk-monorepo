@@ -68,6 +68,13 @@ export interface CreateSocialTipResponse {
   share_url: string | null;
 }
 
+// NOTE: `ClaimableTip` and `ReceivedTip` are the full/targeted-tip shape and
+// carry fields (`from_platform`, `sender_username`, `sender_anonymous`, ...) that
+// a PUBLIC backend does not emit. A public-only instance serves an empty list for
+// both `/tips/social/received` and `/tips/social/claimable` (200, never 404), so
+// these types describe the richer targeted-tip payload a full backend can return,
+// not what the public backend puts on the wire. Do NOT delete them: keep them so
+// a full-backend client stays typed.
 export interface ClaimableTip {
   id: string;
   asset: AssetType;

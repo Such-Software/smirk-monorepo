@@ -1,8 +1,8 @@
 # Multi-Asset Architecture
 
 > Where Smirk's asset surface is today (5 chains, ~6 capability flags,
-> one visibility helper) and where it goes when we add ETH, MoonPay,
-> Trocador, future stablecoins, future EVM L2s. This doc is the
+> one visibility helper) and where it goes when we add ETH, Trocador,
+> future stablecoins, future EVM L2s. This doc is the
 > opinionated map: what we're doing now, what we're deliberately NOT
 > doing now, and what the natural evolution looks like.
 

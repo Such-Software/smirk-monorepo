@@ -446,7 +446,11 @@ Direction set 2026-05-08. As of 2026-07-09:
 - **Principle 2 (no vault split)** — shipped. Asset list is flat.
 - **Principle 3 (Unified Inbox)** — partial. Inbox tab placeholder
   exists; Grin Phase 3.3 populates it with pending exchanges +
-  Smirk-to-Smirk relay auto-detect. Tips/messages land v0.4+.
+  Smirk-to-Smirk relay auto-detect. The public social-tips
+  receive/claim surface shipped in v0.3.0, and Grin public tips shipped
+  this session; the still-future pieces are the unified-inbox
+  auto-detect that folds tips and messages into one item list, and
+  free-form e2ee DMs (v0.4+).
 - **Principle 4 (Swap top-level)** — Trocador is the shipped swap
   aggregator; THORChain and native (P2P) swaps deferred to v0.4+.
 - **Principle 5 (Tip Maker wizard)** — pending; immediate next track
