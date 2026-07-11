@@ -100,6 +100,7 @@ export function AppShell({ routes, onPopOut, brand, headerActions, tabBadges, cl
           label={label}
           {...(iconUrl ? { iconUrl } : {})}
           {...(tabBadges ? { badges: tabBadges } : {})}
+          {...(headerActions !== undefined ? { extra: headerActions } : {})}
         />
       )}
 
@@ -195,10 +196,12 @@ function SidebarNav({
   label,
   iconUrl,
   badges,
+  extra,
 }: {
   label: string;
   iconUrl?: string;
   badges?: Partial<Record<Tab, number>>;
+  extra?: ComponentChildren;
 }) {
   // Reuse BottomNav's logic but render as a column. Single source of
   // truth for the tab list lives in BottomNav.
@@ -214,11 +217,20 @@ function SidebarNav({
     >
       <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
           padding: '12px 16px',
           borderBottom: '1px solid rgba(255,255,255,0.08)',
         }}
       >
         <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={20} />
+        {extra && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {extra}
+          </div>
+        )}
       </div>
       <BottomNav orientation="vertical" {...(badges ? { badges } : {})} />
     </aside>
