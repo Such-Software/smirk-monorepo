@@ -18,9 +18,13 @@ Tag the release commit `v0.X.Y` (no leading `v` prefix in
 
 ## Build environment
 
-Reproducibility is a real promise on this extension — the same git
-commit on the same Node/npm versions produces byte-identical zips
-(verified during the v0.3.0 prep). Inputs:
+Reproducibility is a real promise on this extension: the same git
+commit on the same Node/npm versions produces byte-identical build
+output (`packages/extension/dist`), verified during the v0.3.0 prep.
+The zip archive's own bytes vary with file mtimes, so reviewers
+reproduce by comparing the built `dist` against the uploaded package's
+contents (see the AMO note below), not by matching zip checksums. The
+published `SHA256SUMS` identify the exact uploaded artifacts. Inputs:
 
 - **Node:** `>=20.0.0` (matches the workspace `engines` field)
 - **npm:** ships with the matched Node release
@@ -134,11 +138,13 @@ mandatory.
    npm run build --workspace @such-software/smirk-dapp-api
    npm run build --workspace @smirk/ui
    npm run build:firefox --workspace @smirk/extension
-   ( cd packages/extension/dist && zip -r -X ../check.zip . )
-
-   # The resulting check.zip should byte-match the uploaded
-   # smirk-wallet-firefox-v0.3.0.zip. Confirmed SHA256:
-   #   5e78880fd0385ea523a447587e810e239f178fde8886436a6b0bc7e739daffa4
+   # Compare the freshly-built dist against the uploaded package by
+   # CONTENT. The build output is deterministic and byte-identical; the
+   # zip archive's own bytes differ only by file mtimes, so verify the
+   # files, not the archive:
+   mkdir _uploaded && ( cd _uploaded && unzip -q ../smirk-wallet-firefox-v0.3.0.zip )
+   diff -r _uploaded packages/extension/dist
+   # Empty output = the uploaded package was built from exactly this source.
    ```
 
 6. **Submit**. AMO review for a new version typically lands within
