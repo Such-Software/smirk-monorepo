@@ -15,6 +15,9 @@ import {
 } from '../nostr';
 
 export interface AuthMethods {
+  // NOTE: telegramLogin (POST /auth/telegram) is flat-only / legacy: namespaced
+  // smirk-backend-core does not serve it, and no shell code calls it. Kept for a
+  // flat backend that still exposes Telegram login; not gated because it is dead.
   telegramLogin(initData: string): Promise<
     ApiResponse<{
       accessToken: string;
@@ -73,6 +76,8 @@ export interface AuthMethods {
       accessToken: string;
       refreshToken: string;
       expiresIn: number;
+      /** Top-level on namespaced smirk-backend-core; read `isNew ?? user?.isNew`. */
+      isNew?: boolean;
       user: { id: string; username?: string; isNew?: boolean };
     }>
   >;
@@ -165,6 +170,8 @@ export interface AuthMethods {
       accessToken: string;
       refreshToken: string;
       expiresIn: number;
+      /** Top-level on namespaced smirk-backend-core; read `isNew ?? user?.isNew`. */
+      isNew?: boolean;
       user: { id: string; username?: string; isNew?: boolean };
     }>
   >;
@@ -182,6 +189,14 @@ interface AuthResponseCamel {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+  /**
+   * True when this request created the user. Namespaced smirk-backend-core's
+   * AuthResponse serializes `is_new` at the TOP LEVEL (sibling of `user`), so
+   * after snakeToCamel it lands here, not under `user`. Consumers must read
+   * `data.isNew ?? data.user?.isNew` to stay compatible with any flat backend
+   * that nested it under `user`.
+   */
+  isNew?: boolean;
   user: {
     id: string;
     telegramId?: number;

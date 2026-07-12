@@ -26,7 +26,7 @@ import { decryptPrivateKey, PBKDF2_ITERATIONS_LEGACY } from './crypto';
 import { btcAddress, ltcAddress } from './address';
 import { deriveLegacyBtcLtcKey, isValidMnemonic, mnemonicToSeed } from './hd';
 import { chainProviders } from './chain/registry';
-import { applyRelayFloor } from './fees';
+import { resolveFeeRateOrFallback } from './fees';
 import type { UnlockedWallet, WalletKeystore } from './keystore';
 import type { PlatformStorage } from './state/platform';
 
@@ -255,7 +255,7 @@ export async function sweepLegacyBtcLtc(
   const feeRates = await chainProviders.utxo(asset).estimateFee();
   const tiers =
     feeRates.data?.model === 'rate-estimate' ? feeRates.data : undefined;
-  const feeRate = applyRelayFloor(tiers?.normal ?? 10);
+  const feeRate = resolveFeeRateOrFallback(tiers?.normal);
 
   // 7. Size for ALL inputs -> one output. Fee scales with input count; never
   //    hardcode a 1-in vsize. 68 vB/P2WPKH input, 31 vB/output, ~11 vB header.

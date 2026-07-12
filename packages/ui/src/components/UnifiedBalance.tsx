@@ -17,6 +17,8 @@
  */
 
 import { ActionButton } from './ActionButton';
+import { FreshnessCue } from './FreshnessCue';
+import type { FreshnessCueProps } from './FreshnessCue';
 
 export interface UnifiedBalanceProps {
   /**
@@ -64,6 +66,13 @@ export interface UnifiedBalanceProps {
    * loading.
    */
   loading?: boolean;
+  /**
+   * Escalating freshness cue rendered beneath the total: a subtle "updating"
+   * dot while a background refresh runs, escalating to an amber warning (>30s)
+   * then a red error (>60s) if refreshes keep failing. Omit to render no cue.
+   * See {@link FreshnessCue}.
+   */
+  freshness?: FreshnessCueProps;
   class?: string;
 }
 
@@ -80,6 +89,7 @@ export function UnifiedBalance({
   hidden,
   onToggleHidden,
   loading,
+  freshness,
   class: className,
 }: UnifiedBalanceProps) {
   const showPending =
@@ -180,6 +190,8 @@ export function UnifiedBalance({
           {denominationLabel}
         </div>
       )}
+
+      {freshness && <FreshnessCue {...freshness} />}
 
       {(showPending || showLocked || showSending) && (
         <div

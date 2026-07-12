@@ -277,6 +277,13 @@ export class SmirkApi
   ): Promise<
     ApiResponse<{ prices: number[]; min: number; max: number; change_pct: number }>
   > {
+    // Namespaced smirk-backend-core has no /prices/sparkline route (it serves
+    // /prices only), so hitting it is a guaranteed 404. Degrade gracefully to an
+    // empty series: the asset-detail caller treats an empty `prices` as "no
+    // sparkline" and simply omits the strip (it renders only when prices.length > 1).
+    if (this.getWalletApiStyle() === 'namespaced') {
+      return Promise.resolve({ data: { prices: [], min: 0, max: 0, change_pct: 0 } });
+    }
     return this.request(`/prices/sparkline/${asset}`, { method: 'GET' });
   }
 

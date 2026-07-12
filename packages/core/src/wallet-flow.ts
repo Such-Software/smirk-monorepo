@@ -233,7 +233,9 @@ export async function bootstrapAuth(
   return {
     userId: result.data.user.id,
     ...(result.data.user.username !== undefined ? { username: result.data.user.username } : {}),
-    isNew: result.data.user.isNew ?? false,
+    // Namespaced backend puts is_new at the top level (data.isNew); a flat
+    // backend may nest it under user. Read both so onboarding branches correctly.
+    isNew: result.data.isNew ?? result.data.user.isNew ?? false,
     ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
     ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
   };
@@ -438,6 +440,15 @@ export interface FetchBalancesOptions {
    * balance is derived from scan alone (no pending/exclusion adjustment).
    */
   grinPending?: GrinPendingOverlay;
+
+  /**
+   * Active backend base URL. Folded into the one-time LWS-registration key
+   * ({@link registeredLwsAccounts}) alongside `bootstrap.userId` so a backend
+   * switch re-registers the account against the NEW instance instead of the
+   * old `asset:address` flag suppressing it forever. Optional: absent falls
+   * back to `''`, preserving the pre-federation single-backend behavior.
+   */
+  backendUrl?: string;
 }
 
 export async function fetchAllBalances(
@@ -506,6 +517,7 @@ export async function fetchAllBalances(
         ? fetchLwsBalance(
             providers,
             bootstrap.userId,
+            options.backendUrl ?? '',
             'xmr',
             wallet.addresses.xmr,
             xmrViewKeyHex,
@@ -521,6 +533,7 @@ export async function fetchAllBalances(
         ? fetchLwsBalance(
             providers,
             bootstrap.userId,
+            options.backendUrl ?? '',
             'wow',
             wallet.addresses.wow,
             wowViewKeyHex,
@@ -557,7 +570,8 @@ async function fetchUtxoBalance(
 }
 
 /**
- * Accounts (`asset:address`) already sent to LWS registration this session.
+ * Accounts (`backend|userId|asset:address`) already sent to LWS registration
+ * this session.
  *
  * LWS registration is one-time account setup, NOT something to repeat on every
  * balance poll. A re-register carrying the fixed wallet birthday makes the
@@ -566,12 +580,18 @@ async function fetchUtxoBalance(
  * reset again on the next poll, so an old-birthday wallet never catches up. We
  * register at most once per account per session (the backend also treats an
  * existing account's re-registration as a no-op, but we don't rely on that).
+ *
+ * The key includes the active backend URL + userId (not just `asset:address`)
+ * so a backend switch re-registers: the new instance's LWS account is a
+ * DIFFERENT account, and an `asset:address`-only flag from the old backend
+ * would otherwise suppress its one-time registration forever.
  */
 const registeredLwsAccounts = new Set<string>();
 
 async function fetchLwsBalance(
   providers: ChainProviderRegistry,
   userId: string,
+  backendUrl: string,
   asset: 'xmr' | 'wow',
   address: string,
   viewKeyHex: string,
@@ -586,7 +606,7 @@ async function fetchLwsBalance(
   // use the LWS account doesn't exist yet, so an unregistered getLwsBalance
   // errors — surfacing that as a one-tick "0 with error" is jank we shouldn't
   // ship. Every subsequent read skips registration and just reads.
-  const acctKey = `${asset}:${address}`;
+  const acctKey = `${backendUrl}|${userId}|${asset}:${address}`;
   if (!registeredLwsAccounts.has(acctKey)) {
     registeredLwsAccounts.add(acctKey);
     await providers

@@ -293,6 +293,14 @@ export interface SocialMethods {
 export function createSocialMethods(client: ApiClient): SocialMethods {
   return {
     async lookupSocial(platform, username) {
+      // Namespaced smirk-backend-core does NOT serve `/socials/*` (no third-party
+      // platform account mapping), so a platform-scoped lookup is a guaranteed 404
+      // there. Degrade cleanly to a clear error instead: the tip-send caller
+      // (lookupRecipientBtcPubkey) surfaces `error` to the user rather than throwing.
+      // Smirk-native handle lookups still work via lookupSmirkName (/users/by-username).
+      if (client.getWalletApiStyle() === 'namespaced') {
+        return { error: 'Social platform lookups are not available on this backend.' };
+      }
       return client.retryableRequest<SocialLookupResponse>(
         `/socials/lookup?platform=${encodeURIComponent(platform)}&username=${encodeURIComponent(username)}`,
         { method: 'GET' },
@@ -329,6 +337,13 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async getMyLinkedSocials() {
+      // Namespaced smirk-backend-core does NOT serve `/socials/me` (no linked
+      // third-party accounts), so it 404s there. An empty `socials` array is a
+      // valid, documented response, so return that on namespaced: the import
+      // "Welcome back" caller already treats an empty list as "no linked platforms".
+      if (client.getWalletApiStyle() === 'namespaced') {
+        return { data: { socials: [] } };
+      }
       // Read-only — retryable. Empty `socials` array is a valid
       // response (user has no linked platforms).
       return client.retryableRequest<LinkedSocialsResponse>('/socials/me', {

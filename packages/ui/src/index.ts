@@ -64,6 +64,14 @@ export type {
   HomeActionRowProps,
 } from './components/UnifiedBalance';
 
+export {
+  FreshnessCue,
+  computeFreshnessLevel,
+  FRESHNESS_WARN_MS,
+  FRESHNESS_ERROR_MS,
+} from './components/FreshnessCue';
+export type { FreshnessCueProps, FreshnessLevel } from './components/FreshnessCue';
+
 export { HomeTab } from './components/HomeTab';
 export type { HomeTabProps, HomeAssetRow } from './components/HomeTab';
 

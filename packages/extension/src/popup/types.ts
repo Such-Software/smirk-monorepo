@@ -15,10 +15,22 @@ export interface WalletSession {
   error: string | null;
   /** True while a balance refresh is in flight, for UI spinners. */
   refreshing: boolean;
-  /** When the latest successful balance fetch completed. */
+  /** When the latest balance fetch COMPLETED (even if some assets errored). Used
+   *  by the scan-progress banner's "last refreshed" line. Distinct from
+   *  {@link lastSuccessAt}, which only advances when fresh data actually landed. */
   refreshedAt: Date | null;
   /** Unix ms when balances FIRST went stale (a fetch errored while we held a
    *  good value), or null/absent when everything is fresh. Drives the "couldn't
    *  reach the backend for N minutes" warning; cleared on the next clean refresh. */
   balancesStaleSince?: number | null;
+  /** Unix ms of the last refresh that actually returned fresh data (at least one
+   *  attempted asset resolved without error). Anchors the escalating freshness
+   *  cue's time-since-last-success clock; does NOT advance on a fully-failed
+   *  refresh. Null/absent until the first fresh fetch lands this session. */
+  lastSuccessAt?: number | null;
+  /** True when the most recent COMPLETED refresh attempt failed to get any fresh
+   *  data (threw, or every attempted asset errored). Drives the freshness cue's
+   *  fail vs. succeed distinction; a single transient failure stays subtle until
+   *  the time-since-`lastSuccessAt` thresholds escalate it. */
+  lastRefreshFailed?: boolean;
 }

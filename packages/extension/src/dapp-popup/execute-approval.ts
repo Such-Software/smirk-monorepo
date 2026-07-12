@@ -20,6 +20,7 @@
 import {
   chainProviders,
   recentlySpentInputs,
+  resolveFeeRateOrFallback,
   type SessionState,
   type UnlockedWallet,
 } from '@smirk/core';
@@ -152,15 +153,13 @@ export async function executeApproval(
       // compute fee = ceil(vsize * 0) = 0, then trip the
       // `feeSat <= 0` guard and fail every dapp UTXO payment. Use
       // the same Electrum source as the SendWizard; if that
-      // roundtrip fails, drop to 1 sat/vB (relay floor for both
-      // BTC and LTC) so the tx still has a chance to land.
+      // roundtrip fails, resolveFeeRateOrFallback drops to the shared
+      // floored fallback (same as send/tip) so the tx still lands.
       let feeRateSatPerVb = 1;
       if (req.asset === 'btc' || req.asset === 'ltc') {
         const tiers = await chainProviders.utxo(req.asset).estimateFee().catch(() => null);
         const fee = tiers?.data?.model === 'rate-estimate' ? tiers.data : null;
-        if (typeof fee?.normal === 'number' && fee.normal > 0) {
-          feeRateSatPerVb = fee.normal;
-        }
+        feeRateSatPerVb = resolveFeeRateOrFallback(fee?.normal);
       }
 
       const result = await deps.send(

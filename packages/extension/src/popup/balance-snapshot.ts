@@ -26,6 +26,12 @@ type SerializedBalances = Record<keyof Balances, SerializedAssetBalance>;
 
 interface SerializedBalanceSnapshotEntry {
   fingerprint: string;
+  /** Active backend base URL this snapshot was fetched against. A flat<->namespaced
+   *  (or any cross-instance) backend switch keeps the SAME wallet fingerprint, so
+   *  keying on fingerprint alone would paint the old backend's numbers against the
+   *  new one. Validated on read; a mismatch returns null. Matches the base-URL
+   *  keying in `@smirk/core`'s capabilities-cache. */
+  backendUrl: string;
   balances: SerializedBalances;
   prices: Prices | null;
   cachedAt: number;
@@ -57,12 +63,16 @@ function deserializeAssetBalance(s: SerializedAssetBalance): Balances[keyof Bala
 
 export async function readBalanceSnapshot(
   walletFingerprint: string,
+  backendUrl: string,
 ): Promise<{ balances: Balances; prices: Prices | null; cachedAt: number } | null> {
   try {
     const raw = await sessionStorage.get(BALANCE_SNAPSHOT_KEY);
     if (!raw || typeof raw !== 'object') return null;
     const entry = raw as SerializedBalanceSnapshotEntry;
     if (entry.fingerprint !== walletFingerprint) return null;
+    // Reject a snapshot fetched against a different backend: the same wallet on a
+    // new instance must NOT paint the previous backend's balances.
+    if (entry.backendUrl !== backendUrl) return null;
     if (Date.now() - entry.cachedAt > BALANCE_SNAPSHOT_TTL_MS) return null;
     if (!entry.balances) return null;
     const balances = {
@@ -85,11 +95,13 @@ export async function readBalanceSnapshot(
 
 export async function writeBalanceSnapshot(
   walletFingerprint: string,
+  backendUrl: string,
   balances: Balances,
   prices: Prices | null,
 ): Promise<void> {
   const entry: SerializedBalanceSnapshotEntry = {
     fingerprint: walletFingerprint,
+    backendUrl,
     balances: {
       btc: serializeAssetBalance(balances.btc),
       ltc: serializeAssetBalance(balances.ltc),
@@ -104,5 +116,16 @@ export async function writeBalanceSnapshot(
     await sessionStorage.set(BALANCE_SNAPSHOT_KEY, entry);
   } catch (e) {
     console.warn('[smirk] balance snapshot write failed', e);
+  }
+}
+
+/** Drop the persisted snapshot. Call on a backend switch so the next unlock can't
+ *  paint the previous backend's balances (the backend-URL guard on read already
+ *  rejects a mismatch; clearing is belt-and-suspenders and frees the slot). */
+export async function clearBalanceSnapshot(): Promise<void> {
+  try {
+    await sessionStorage.remove(BALANCE_SNAPSHOT_KEY);
+  } catch {
+    /* best-effort */
   }
 }

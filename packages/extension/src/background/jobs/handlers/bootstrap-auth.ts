@@ -229,7 +229,9 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
         ...(result.data.user.username !== undefined
           ? { username: result.data.user.username }
           : {}),
-        isNew: result.data.user.isNew ?? false,
+        // Namespaced backend puts is_new at the top level (data.isNew); a flat
+        // backend may nest it under user. Read both so onboarding branches right.
+        isNew: result.data.isNew ?? result.data.user.isNew ?? false,
         ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
         ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
       },

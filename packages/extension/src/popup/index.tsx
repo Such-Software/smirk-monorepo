@@ -47,6 +47,7 @@ import {
   recentlySpentInputs,
   reconcilePendingOutgoing,
   chainProviders,
+  fallbackFeeTiers,
   deriveNostrIdentity,
   buildSlatepackChannels,
   readAllInbound,
@@ -88,7 +89,7 @@ import { respondToInboxItem } from './inbox-actions';
 import { getActiveNostrIdentity } from './nostr-vault';
 import { nip05Resolver, instanceHomeDomain } from './nip05';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
-import { readBalanceSnapshot, writeBalanceSnapshot } from './balance-snapshot';
+import { readBalanceSnapshot, writeBalanceSnapshot, clearBalanceSnapshot } from './balance-snapshot';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
 import {
   AppShell,
@@ -464,12 +465,40 @@ function openPopOut() {
 /** How long balances may stay stale before we warn the user in-app. */
 const BALANCE_STALE_WARN_MS = 15 * 60 * 1000;
 
+/** Steady-state background balance refresh cadence while the popup is open AND
+ *  visible. Keeps the number live without hammering (XMR/WOW chains advance
+ *  ~every 2 min); also gives the freshness cue real successes/failures to track.
+ *  Suppressed while a chain is mid-scan (the 8s scan poll covers that window). */
+const BACKGROUND_REFRESH_MS = 25_000;
+
+/** Debounce for the focus/visibility refresh: skip it if we already refreshed
+ *  within this window, so a rapid close/reopen (or an OS focus flurry) doesn't
+ *  stack redundant fetches on top of the periodic loop. */
+const FOCUS_REFRESH_MIN_GAP_MS = 5_000;
+
 /** Compute the next `balancesStaleSince` given the merged balances + the prior
  *  value: start the clock when any asset is stale, clear it when none are. */
 function nextStaleSince(balances: Balances | null, prior: number | null): number | null {
   const anyStale = !!balances && Object.values(balances).some((b) => b?.stale);
   if (!anyStale) return null;
   return prior ?? Date.now();
+}
+
+/** True when a refresh got NO fresh data: every asset we actually attempted came
+ *  back with an `error` (i.e. the backend/chains were unreachable). Drives the
+ *  freshness cue's "updates are failing" signal — a whole-cloth failure, not a
+ *  single flaky chain (one erroring asset among successes returns false, so a
+ *  transient blip never trips the escalating warning). Assets skipped for
+ *  visibility/derivation return zeroed with no error and are ignored here. */
+function allAttemptedBalancesFailed(
+  balances: Balances,
+  visibleIds: ReadonlyArray<string>,
+): boolean {
+  const attempted = visibleIds
+    .map((id) => balances[id as keyof Balances])
+    .filter((b): b is Balances[keyof Balances] => !!b);
+  if (attempted.length === 0) return false;
+  return attempted.every((b) => !!b.error);
 }
 
 
@@ -680,7 +709,7 @@ function App() {
     // header spinner spin so users know the numbers are being
     // re-fetched. Bootstrap-less placeholder so the existing render
     // path doesn't blow up; the real bootstrap lands in the try below.
-    const snap = await readBalanceSnapshot(wallet.fingerprint);
+    const snap = await readBalanceSnapshot(wallet.fingerprint, api.getBaseUrl());
     if (snap) {
       setSession({
         bootstrap: { userId: '', isNew: false },
@@ -689,6 +718,11 @@ function App() {
         error: null,
         refreshing: true,
         refreshedAt: new Date(snap.cachedAt),
+        // The snapshot was written on a past success, so anchor the freshness
+        // clock to it and open with no failure: the imminent refresh escalates
+        // only if it actually fails.
+        lastSuccessAt: snap.cachedAt,
+        lastRefreshFailed: false,
       });
     } else {
       setSession((prev) => prev ?? ({} as WalletSession));
@@ -735,6 +769,7 @@ function App() {
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         visibleAssetIds: visible,
+        backendUrl: api.getBaseUrl(),
         ...(grinRewindHash ? { grinRewindHash } : {}),
         grinPending: grinOverlay,
         onAssetBalance: (assetId, balance) => {
@@ -762,6 +797,7 @@ function App() {
       // Merge the fresh fetch over the pre-fetch snapshot so an asset whose fetch
       // errored keeps its last-known number (flagged stale) instead of flashing 0.
       const merged = mergeBalancesKeepLastKnown(snap?.balances ?? null, balances);
+      const failed = allAttemptedBalancesFailed(balances, visible);
       setSession((prev) => ({
         bootstrap,
         balances: merged,
@@ -770,9 +806,11 @@ function App() {
         refreshing: false,
         refreshedAt: new Date(),
         balancesStaleSince: nextStaleSince(merged, prev?.balancesStaleSince ?? null),
+        lastRefreshFailed: failed,
+        lastSuccessAt: failed ? (prev?.lastSuccessAt ?? snap?.cachedAt ?? null) : Date.now(),
       }));
       // Persist the merged (last-known) view for instant, non-zero next-open.
-      void writeBalanceSnapshot(wallet.fingerprint, merged, prices);
+      void writeBalanceSnapshot(wallet.fingerprint, api.getBaseUrl(), merged, prices);
     } catch (e) {
       // If a warm-path balance call rejected (auth error), drop the
       // cache and force a fresh bootstrap on the next render. Surface
@@ -799,6 +837,11 @@ function App() {
         refreshing: false,
         refreshedAt: prev?.refreshedAt ?? null,
         balancesStaleSince: prev?.balancesStaleSince ?? (snap ? Date.now() : null),
+        // Bootstrap/network failed outright: mark the attempt failed and hold the
+        // last-success anchor (snapshot cachedAt if that's all we have) so the
+        // cue escalates on TIME rather than jumping straight to red.
+        lastRefreshFailed: true,
+        lastSuccessAt: prev?.lastSuccessAt ?? snap?.cachedAt ?? null,
       }));
     }
   };
@@ -821,6 +864,7 @@ function App() {
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         visibleAssetIds: visible,
+        backendUrl: api.getBaseUrl(),
         ...(grinRewindHash ? { grinRewindHash } : {}),
         grinPending: grinOverlay,
         onAssetBalance: (assetId, balance) => {
@@ -873,6 +917,7 @@ function App() {
         }
       });
       let mergedForSnapshot: Balances = balances;
+      const failed = allAttemptedBalancesFailed(balances, visible);
       setSession((prev) => {
         const merged = mergeBalancesKeepLastKnown(prev?.balances ?? null, balances);
         mergedForSnapshot = merged;
@@ -885,10 +930,14 @@ function App() {
               refreshing: false,
               refreshedAt: new Date(),
               balancesStaleSince: nextStaleSince(merged, prev.balancesStaleSince ?? null),
+              lastRefreshFailed: failed,
+              // Advance the success anchor only when fresh data actually landed;
+              // a fully-failed refresh keeps the old anchor so the cue escalates.
+              lastSuccessAt: failed ? (prev.lastSuccessAt ?? null) : Date.now(),
             }
           : prev;
       });
-      void writeBalanceSnapshot(wallet.fingerprint, mergedForSnapshot, prices);
+      void writeBalanceSnapshot(wallet.fingerprint, api.getBaseUrl(), mergedForSnapshot, prices);
     } catch (e) {
       // A whole-refresh failure keeps the last-known balances (already in
       // session) and just surfaces the error + starts the stale clock.
@@ -899,6 +948,9 @@ function App() {
               error: e instanceof Error ? e.message : 'Refresh failed',
               refreshing: false,
               balancesStaleSince: prev.balancesStaleSince ?? Date.now(),
+              // Thrown refresh: mark failed, hold the last-success anchor so the
+              // freshness cue climbs from warn to error over time, not instantly.
+              lastRefreshFailed: true,
             }
           : prev,
       );
@@ -1079,6 +1131,64 @@ function App() {
       void refreshBalances(walletState.wallet, session.bootstrap);
     }, 8000);
     return () => clearInterval(handle);
+  }, [walletState, session]);
+
+  // Steady-state background refresh: keep balances live while the popup is open
+  // and visible, and give the freshness cue real successes/failures to track.
+  // Coordinated with the 8s scan poll above so the two never double-fetch:
+  //   - skips entirely while any chain is scanning (the scan poll owns that
+  //     window at its faster cadence), and
+  //   - the effect early-returns on `session.refreshing`, so no interval exists
+  //     while a refresh is already in flight (this and the scan poll both tear
+  //     down + rebuild on every `session` change, refreshing included).
+  // Deliberately does NOT stop on `session.error`: a persistent outage must keep
+  // retrying so the cue escalates and then recovers on its own.
+  useEffect(() => {
+    if (
+      walletState?.kind !== 'unlocked' ||
+      !session?.bootstrap?.userId ||
+      session.refreshing ||
+      !session.balances
+    ) {
+      return undefined;
+    }
+    const anyScanning = (Object.values(session.balances) as Array<{ scanProgress?: unknown }>).some(
+      (b) => b.scanProgress !== undefined,
+    );
+    if (anyScanning) return undefined; // the 8s scan poll owns this window
+
+    const handle = setInterval(() => {
+      // Don't poll a backgrounded popout — only refresh what the user can see.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void refreshBalances(walletState.wallet, session.bootstrap);
+    }, BACKGROUND_REFRESH_MS);
+    return () => clearInterval(handle);
+  }, [walletState, session]);
+
+  // Refresh on regained focus/visibility: a popup is usually reopened rather
+  // than left open, so a possibly-stale number should snap fresh the instant the
+  // user looks at it. Debounced against the periodic loop (and reopen flurries)
+  // via `FOCUS_REFRESH_MIN_GAP_MS`; skips when a refresh is already in flight so
+  // it can't stack on top of the loop.
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked' || !session?.bootstrap?.userId || !session.balances) {
+      return undefined;
+    }
+    const wallet = walletState.wallet;
+    const bootstrap = session.bootstrap;
+    const maybeRefresh = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (session.refreshing) return;
+      const last = session.refreshedAt ? session.refreshedAt.getTime() : 0;
+      if (Date.now() - last < FOCUS_REFRESH_MIN_GAP_MS) return;
+      void refreshBalances(wallet, bootstrap);
+    };
+    document.addEventListener('visibilitychange', maybeRefresh);
+    window.addEventListener('focus', maybeRefresh);
+    return () => {
+      document.removeEventListener('visibilitychange', maybeRefresh);
+      window.removeEventListener('focus', maybeRefresh);
+    };
   }, [walletState, session]);
 
   // Whenever we land in the `unlocked` state without an active session,
@@ -1524,6 +1634,10 @@ function App() {
                 invalidateCapabilities();
                 await clearBootstrapCache();
                 await clearDappPublicCache();
+                // Drop the balance snapshot too: it's keyed by the OLD backend, so
+                // the re-bootstrap against the new instance must not paint stale
+                // cross-backend numbers on first open.
+                await clearBalanceSnapshot();
                 setSession(null);
                 await refresh();
               }}
@@ -1623,8 +1737,12 @@ function HomeRouter({
             return { fast: null, normal: null, slow: null };
           }
           const r = await chainProviders.utxo(assetId).estimateFee();
-          if (r.error || r.data?.model !== 'rate-estimate') {
-            throw new Error(r.error ?? 'Failed to fetch fee rates');
+          if (r.error || r.data?.model !== 'rate-estimate' || r.data.normal == null) {
+            // Fee endpoint unavailable or returned no usable rate: fall back to a
+            // safe floored tier set instead of throwing, so Send stays usable (the
+            // tx still lands at a sane rate) rather than the button locking out.
+            // Overpaying slightly on a rare estimate outage beats stranding the user.
+            return fallbackFeeTiers();
           }
           return { fast: r.data.fast, normal: r.data.normal, slow: r.data.slow };
         }}
@@ -1779,6 +1897,13 @@ function HomeRouter({
                 w.fields.lastTxid = result.txid;
               }
             });
+            // Pull the real on-chain balance forward instead of waiting for the
+            // next periodic/scan poll. Two shots through the existing refresh
+            // path: one now (catches an already-reflected UTXO spend), one after
+            // a short delay (Electrum/LWS often need a few seconds to surface the
+            // mempool tx). Both are best-effort and reconcile pendingOutgoing.
+            void onRefresh();
+            setTimeout(() => void onRefresh(), 4000);
           }
           return result;
         }}
@@ -2552,6 +2677,14 @@ function HomeRouter({
         // users don't get a misleading "click me" affordance. Wire
         // this when denomination cycling lands (tracked for v0.3.x).
         loading: session?.refreshing ?? false,
+        // Escalating freshness cue: subtle "updating" dot on a live refresh,
+        // amber warning after 30s of failed refreshes, red error after 60s.
+        // Time-since-last-success based, so a single blip stays quiet.
+        freshness: {
+          refreshing: session?.refreshing ?? false,
+          lastSuccessAt: session?.lastSuccessAt ?? session?.refreshedAt?.getTime() ?? null,
+          lastAttemptFailed: session?.lastRefreshFailed ?? false,
+        },
       }}
       actions={{
         // Tip is opt-in: hidden when the backend advertises no social tips.

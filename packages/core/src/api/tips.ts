@@ -2,6 +2,13 @@
  * Tips API methods (link-based tipping — anyone with the URL can claim).
  *
  * Social tipping (targeted at @user) lives in `./social.ts`.
+ *
+ * FLAT-ONLY / DEAD: every method here targets the legacy `/tips`, `/tips/{id}`,
+ * `/tips/sent`, `/tips/received` routes, which namespaced smirk-backend-core does
+ * NOT serve (it ports only `/tips/social/*`). No shell code in packages/extension
+ * or packages/ui calls any of these (the live tip flows use ./social.ts). They are
+ * kept, un-gated, for a flat backend that still exposes them; if a caller is ever
+ * added on the namespaced path, gate or re-point it the way ./social.ts does.
  */
 
 import type { AssetType, TipInfo, CreateTipResponse } from '../types';

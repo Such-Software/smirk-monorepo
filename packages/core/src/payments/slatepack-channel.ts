@@ -80,8 +80,13 @@ export interface SlatepackChannel {
    *     ignored; routed by slate_id + bearer token).
    * Best-effort — a settle failure must not undo an on-chain broadcast, so
    * callers should not throw on failure.
+   *
+   * `txHash` is the broadcast tx reference (the finalized kernel excess hex). The
+   * backend relay records it on `relay/finalize`, whose handler REJECTS an empty
+   * tx_hash (400); pass the real value so the row finalizes. The Nostr channel
+   * ignores it (its finalize gift-wrap carries no tx hash).
    */
-  settle(slateId: string, counterpartyRef?: string): Promise<void>;
+  settle(slateId: string, counterpartyRef?: string, txHash?: string): Promise<void>;
 }
 
 // ── Backend relay transport ─────────────────────────────────────────────────
@@ -150,13 +155,16 @@ export class BackendRelayChannel implements SlatepackChannel {
 
   /** Flip the relay row to finalized after the sender broadcast. Best-effort:
    *  a relay finalize failure must never undo the on-chain broadcast. */
-  async settle(slateId: string): Promise<void> {
+  async settle(slateId: string, _counterpartyRef?: string, txHash?: string): Promise<void> {
     await this.deps.grin
       .finalizeGrinSlatepack({
         relayId: slateId,
         userId: this.deps.userId,
-        // relay/finalize is a status flip; no tx_hash to attach here.
-        finalizedSlatepack: '',
+        // relay/finalize records a tx reference and REJECTS an empty tx_hash (400).
+        // Prefer the real broadcast reference (finalized kernel excess hex); fall
+        // back to the slate_id (a non-empty UUID) so the row still finalizes when a
+        // caller has no hash to hand.
+        finalizedSlatepack: txHash && txHash.length > 0 ? txHash : slateId,
       })
       .catch(() => undefined);
   }

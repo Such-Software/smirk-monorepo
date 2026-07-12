@@ -235,7 +235,9 @@ async function bootstrapViaNostr(
   return {
     userId: res.data.user.id,
     ...(res.data.user.username !== undefined ? { username: res.data.user.username } : {}),
-    isNew: res.data.user.isNew ?? false,
+    // Namespaced backend puts is_new at the top level (data.isNew); a flat
+    // backend may nest it under user. Read both so onboarding branches correctly.
+    isNew: res.data.isNew ?? res.data.user.isNew ?? false,
     ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
     ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
   };

@@ -35,7 +35,7 @@ import { hex } from '@scure/base';
 
 import {
   api,
-  applyRelayFloor,
+  resolveFeeRateOrFallback,
   decryptTipPayload,
   decryptPublicTipPayload,
   decodeUrlFragmentKey,
@@ -581,10 +581,11 @@ async function sweepUtxo(
   // input + 31 vB header + output for any input count.
   const feeRates = await chainProviders.utxo(asset).estimateFee();
   const tiers = feeRates.data?.model === 'rate-estimate' ? feeRates.data : undefined;
-  // Clamp to the relay floor — an at-floor estimate (1.0 sat/vB) would
-  // make the sweep tx "rejected by network rules" (same bug that broke
-  // tip funding). See applyRelayFloor.
-  const feeRate = applyRelayFloor(tiers?.normal ?? 10);
+  // Relay-floored, degrading to the shared fallback when the estimate is
+  // unavailable — an at-floor estimate (1.0 sat/vB) would make the sweep tx
+  // "rejected by network rules" (same bug that broke tip funding), and a missing
+  // estimate must not strand a claimable tip. See resolveFeeRateOrFallback.
+  const feeRate = resolveFeeRateOrFallback(tiers?.normal);
   const estimatedVsize = 11 + 68 * utxos.length + 31;
   const feeSat = Math.max(
     Math.ceil(estimatedVsize * feeRate) + 1, // +1 to clear minrelaytxfee rounding

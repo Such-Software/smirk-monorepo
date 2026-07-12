@@ -830,7 +830,10 @@ export async function processGrinS2(args: {
     const cp = decodeCounterparty(args.relay_id);
     if (cp) {
       const channel = cp.kind === 'nostr' ? args.channels.nostr : args.channels.backend;
-      await channel.settle(slateId, cp.ref).catch(() => undefined);
+      // Pass the finalized kernel excess as the tx reference: the backend relay's
+      // relay/finalize rejects an empty tx_hash (400), so an empty string here
+      // silently failed every same-instance Grin settle. The Nostr channel ignores it.
+      await channel.settle(slateId, cp.ref, finalize.kernel_excess_hex).catch(() => undefined);
     }
   }
 

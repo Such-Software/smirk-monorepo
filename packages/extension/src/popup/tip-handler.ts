@@ -43,6 +43,7 @@ import {
   generateUrlFragmentKey,
   getPublicKey,
   randomBytes,
+  resolveFeeRateOrFallback,
 } from '@smirk/core';
 import type { TipPlatform, TipSubmitFields, TipSubmitOutcome } from '@smirk/ui';
 import { grin as wasmGrin } from '@smirk/wasm';
@@ -275,15 +276,13 @@ async function createBtcLtcTip(
 
   // 5. Estimate fee. We use the `normal` tier; users wanting custom
   //    fee control should use Send (not Tip).
+  // A fee-estimate outage must not strand the tip: fall back to a safe floored
+  // rate instead of aborting (and orphaning the draft). Fund safety is intact
+  // either way, since the tx is built + broadcast below only after this resolves.
   const feeRates = await chainProviders.utxo(asset).estimateFee();
-  if (feeRates.error || feeRates.data?.model !== 'rate-estimate') {
-    await api.cancelSocialTip(tipId).catch(() => undefined);
-    return {
-      ok: false,
-      error: feeRates.error ?? `Failed to estimate ${asset.toUpperCase()} fee`,
-    };
-  }
-  const feeRateSatPerVb = feeRates.data.normal ?? 10;
+  const estimatedNormal =
+    !feeRates.error && feeRates.data?.model === 'rate-estimate' ? feeRates.data.normal : null;
+  const feeRateSatPerVb = resolveFeeRateOrFallback(estimatedNormal);
 
   // 6. Build + sign + broadcast funding tx. If broadcast fails, the
   //    draft is wasted DB state — cancel it server-side to keep things

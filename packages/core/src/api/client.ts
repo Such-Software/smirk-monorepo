@@ -94,7 +94,10 @@ export class ApiClient {
     return getGlobalToken();
   }
 
-  async request<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
+  async request<T>(
+    endpoint: string,
+    options: RequestInit & { timeoutMs?: number } = {},
+  ): Promise<ApiResponse<T>> {
     const accessToken = getGlobalToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -111,7 +114,15 @@ export class ApiClient {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+      // Per-request timeout override. Most calls use DEFAULT_TIMEOUT_MS; the
+      // XMR/WOW decoy fetch (random_outs) can take far longer when the backend's
+      // monero-lws is cold (it re-pulls the full RCT output distribution, ~15-42s
+      // at idle), so that call passes a larger timeoutMs to avoid aborting a
+      // valid-but-slow send. See wallet-lws.ts getRandomOuts.
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      );
 
       const response = await fetch(url, {
         ...options,
