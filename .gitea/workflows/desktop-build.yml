@@ -1,0 +1,149 @@
+name: Desktop build (Gitea)
+
+# Builds + signs the Tauri desktop app on the Builds Gitea runners and uploads
+# the bundles as workflow artifacts. This is the Gitea counterpart to
+# .github/workflows/desktop-release.yml: GitHub Actions is disabled on the
+# primary repo, so the cross-platform build happens here and the signed
+# artifacts are attached to the GitHub release by hand (or a later step).
+#
+# It deliberately does NOT create a release: tauri-action's release step targets
+# the GitHub API, so here we just build, sign, and upload artifacts.
+#
+# ── SETUP (one-time) ──────────────────────────────────────────────────────────
+# 1. Runner labels: set `runs-on` below to match the labels your registered
+#    Gitea act_runners advertise. The defaults assume a Linux runner labelled
+#    `ubuntu-22.04` and a macOS runner labelled `macos`. Adjust if yours differ.
+#    (Windows is stubbed under `include:` for when that runner returns.)
+# 2. Action fetching: the runner must resolve `uses:` actions from GitHub, i.e.
+#    act_runner config `[default_actions_url] = https://github.com` (the default).
+# 3. Secrets (Repo/Org > Settings > Actions > Secrets). Optional: without them the
+#    build still runs and ships UNSIGNED bundles.
+#      TAURI_SIGNING_PRIVATE_KEY            updater key (cargo tauri signer generate)
+#      TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#      APPLE_CERTIFICATE                    base64 of the .p12 (macOS)
+#      APPLE_CERTIFICATE_PASSWORD
+#      APPLE_SIGNING_IDENTITY               e.g. "Developer ID Application: ... (TEAMID)"
+#      APPLE_ID  APPLE_PASSWORD  APPLE_TEAM_ID     (notarization)
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos
+            args: '--target universal-apple-darwin'
+            target: universal-apple-darwin
+            os_label: macos
+          - runner: ubuntu-22.04
+            # Explicit --target so the bundle lands in target/<target>/release,
+            # matching the macOS path (an empty target builds to target/release).
+            args: '--target x86_64-unknown-linux-gnu'
+            target: x86_64-unknown-linux-gnu
+            os_label: linux
+          # Windows: uncomment when the runner is back.
+          # - runner: windows
+          #   args: ''
+          #   target: x86_64-pc-windows-msvc
+          #   os_label: windows
+
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.os_label }} build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.os_label == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libxdo-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,${{ matrix.target }}
+
+      - name: Add macOS x86_64 target (universal binary)
+        if: matrix.os_label == 'macos'
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            packages/desktop/src-tauri
+
+      - name: Install wasm-bindgen-cli (version-matched to Cargo.lock)
+        shell: bash
+        run: |
+          WB_VERSION=$(cargo pkgid wasm-bindgen | sed 's/.*@//')
+          cargo install -f wasm-bindgen-cli --version "${WB_VERSION}"
+
+      - name: Build WASM
+        shell: bash
+        run: make wasm
+
+      - name: Install workspace deps
+        run: npm install
+
+      - name: Build TypeScript workspace
+        shell: bash
+        run: |
+          npm run build -w @smirk/wasm
+          npm run build -w @smirk/assets
+          npm run build -w @smirk/core
+          npm run build -w @smirk/ui
+          npm run build -w @smirk/dapp-api
+
+      # tauri-action builds + (on macOS) imports the cert into a temp keychain and
+      # signs + notarizes when the APPLE_* secrets are present. No tagName is set,
+      # so it does NOT create a release: it just produces the signed bundles.
+      - name: Build + sign Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        id: tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: packages/desktop
+          args: ${{ matrix.args }}
+
+      # Collect the installers + the updater signatures (.sig) + latest.json.
+      - name: Upload bundles
+        uses: actions/upload-artifact@v3
+        with:
+          name: smirk-desktop-${{ matrix.os_label }}-v0.3.0
+          if-no-files-found: error
+          path: |
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz*
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage*
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi*
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis*
