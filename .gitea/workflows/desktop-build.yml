@@ -47,13 +47,18 @@ jobs:
         include:
           - runner: macos-latest
             args: '--target universal-apple-darwin'
+            # `target` is only the Tauri bundle OUTPUT dir. `universal-apple-darwin`
+            # is NOT a real rustup target (no rust-std for it) — a universal binary
+            # is aarch64 + x86_64 lipo'd, so install BOTH real arches instead.
             target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             os_label: macos
           - runner: ubuntu-latest
             # Explicit --target so the bundle lands in target/<target>/release,
             # matching the macOS path (an empty target builds to target/release).
             args: '--target x86_64-unknown-linux-gnu'
             target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
             os_label: linux
           # Windows: uncomment when hashbags-win-runner is back (label: windows).
           # - runner: windows
@@ -86,11 +91,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown,${{ matrix.target }}
-
-      - name: Add macOS x86_64 target (universal binary)
-        if: matrix.os_label == 'macos'
-        run: rustup target add x86_64-apple-darwin
+          # rust_targets holds REAL rustup targets (both mac arches for the
+          # universal build); matrix.target is just the bundle output dir.
+          targets: wasm32-unknown-unknown,${{ matrix.rust_targets }}
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
