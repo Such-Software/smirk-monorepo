@@ -54,9 +54,14 @@ rust-clean:
 # placeholder imports that no bundler resolves out of the box (see ARCHITECTURE.md
 # "Build-pipeline gotchas"). no-modules emits a self-contained IIFE — works in any
 # WebView (extension, Capacitor, Tauri) without bundler-specific plugins.
+# wasm-bindgen ships with the rustup toolchain in ~/.cargo/bin, which is not on
+# PATH when a system cargo (e.g. /usr/bin/cargo) shadows the rustup one. Resolve
+# it explicitly so `make wasm` works from a bare shell and on the CI runners.
+WASM_BINDGEN ?= $(shell command -v wasm-bindgen 2>/dev/null || echo $(HOME)/.cargo/bin/wasm-bindgen)
+
 wasm:
 	cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
-	wasm-bindgen --target no-modules \
+	$(WASM_BINDGEN) --target no-modules \
 	  --out-dir crates/smirk-wasm/pkg \
 	  target/wasm32-unknown-unknown/release/smirk_wasm.wasm
 	@# Patches the no-modules output: (1) replaces broken `require("env")`
@@ -73,7 +78,7 @@ wasm:
 # Lives in pkg-node/ alongside pkg/ — both are gitignored.
 wasm-node:
 	cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
-	wasm-bindgen --target nodejs \
+	$(WASM_BINDGEN) --target nodejs \
 	  --out-dir crates/smirk-wasm/pkg-node \
 	  target/wasm32-unknown-unknown/release/smirk_wasm.wasm
 
