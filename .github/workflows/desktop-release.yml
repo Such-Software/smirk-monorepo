@@ -28,6 +28,13 @@ permissions:
 
 jobs:
   release:
+    # Real-GitHub only. The Gitea Builds mirror also sees this file (Gitea reads
+    # .github/workflows/ as well as .gitea/workflows/), but the desktop build
+    # there is owned by .gitea/workflows/desktop-build.yml — correct runner
+    # labels (ubuntu-latest / macos-latest) and API-key notarization. Gitea sets
+    # github.server_url to its own host, so this guard makes the job a no-op
+    # there and the two workflows never double-fire on a tag or dispatch.
+    if: ${{ github.server_url == 'https://github.com' }}
     strategy:
       fail-fast: false
       matrix:
