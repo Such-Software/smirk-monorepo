@@ -10,20 +10,27 @@ name: Desktop build (Gitea)
 # the GitHub API, so here we just build, sign, and upload artifacts.
 #
 # ── SETUP (one-time) ──────────────────────────────────────────────────────────
-# 1. Runner labels: set `runs-on` below to match the labels your registered
-#    Gitea act_runners advertise. The defaults assume a Linux runner labelled
-#    `ubuntu-22.04` and a macOS runner labelled `macos`. Adjust if yours differ.
-#    (Windows is stubbed under `include:` for when that runner returns.)
+# 1. Runner labels: `runs-on` below matches the Builds runners — linux-beast
+#    (label `ubuntu-latest`) and mac-mini-m2 (label `macos-latest`).
+#    (Windows is stubbed under `include:` for when hashbags-win-runner returns.)
 # 2. Action fetching: the runner must resolve `uses:` actions from GitHub, i.e.
 #    act_runner config `[default_actions_url] = https://github.com` (the default).
-# 3. Secrets (Repo/Org > Settings > Actions > Secrets). Optional: without them the
-#    build still runs and ships UNSIGNED bundles.
-#      TAURI_SIGNING_PRIVATE_KEY            updater key (cargo tauri signer generate)
-#      TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-#      APPLE_CERTIFICATE                    base64 of the .p12 (macOS)
+# 3. Secrets: set them with ~/keys/suchsoftware/set-gitea-desktop-secrets.sh
+#    (prints lengths + HTTP statuses only). Without them the Linux job still
+#    ships (no signing needed); the macOS job ships UNSIGNED/ad-hoc.
+#    macOS codesign (Developer ID Application cert):
+#      APPLE_CERTIFICATE            base64 of developer_id.p12
 #      APPLE_CERTIFICATE_PASSWORD
-#      APPLE_SIGNING_IDENTITY               e.g. "Developer ID Application: ... (TEAMID)"
-#      APPLE_ID  APPLE_PASSWORD  APPLE_TEAM_ID     (notarization)
+#      APPLE_SIGNING_IDENTITY       "Developer ID Application: Such Software LLC (D8PL9F7X33)"
+#      APPLE_TEAM_ID                D8PL9F7X33
+#    macOS notarization (App Store Connect API key — notarytool):
+#      APPLE_API_ISSUER             issuer UUID
+#      APPLE_API_KEY                key id (e.g. CHK6B69G58)
+#      APPLE_API_KEY_P8_BASE64      base64 of AuthKey_<id>.p8 (decoded to a file below)
+# NOTE: the Tauri auto-UPDATER is intentionally OFF for v0.3.0 (tauri.conf.json
+#   plugins.updater.active=false, no update server yet), so no TAURI_SIGNING_*
+#   key is needed. Artifact authenticity is provided by a detached PGP signature
+#   applied to the collected bundles out-of-band (jwinterm@wownero.org key).
 # ──────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -38,17 +45,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos
+          - runner: macos-latest
             args: '--target universal-apple-darwin'
             target: universal-apple-darwin
             os_label: macos
-          - runner: ubuntu-22.04
+          - runner: ubuntu-latest
             # Explicit --target so the bundle lands in target/<target>/release,
             # matching the macOS path (an empty target builds to target/release).
             args: '--target x86_64-unknown-linux-gnu'
             target: x86_64-unknown-linux-gnu
             os_label: linux
-          # Windows: uncomment when the runner is back.
+          # Windows: uncomment when hashbags-win-runner is back (label: windows).
           # - runner: windows
           #   args: ''
           #   target: x86_64-pc-windows-msvc
@@ -114,21 +121,41 @@ jobs:
           npm run build -w @smirk/ui
           npm run build -w @smirk/dapp-api
 
-      # tauri-action builds + (on macOS) imports the cert into a temp keychain and
-      # signs + notarizes when the APPLE_* secrets are present. No tagName is set,
-      # so it does NOT create a release: it just produces the signed bundles.
+      # notarytool authenticates with an App Store Connect API key (.p8). Secrets
+      # can't be file paths, so decode the base64'd .p8 to a temp file and export
+      # its path for tauri-action. macOS only; the Linux job skips this.
+      - name: Prepare Apple notarization API key (macOS)
+        if: matrix.os_label == 'macos'
+        shell: bash
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [ -z "${APPLE_API_KEY_P8_BASE64:-}" ]; then
+            echo "APPLE_API_KEY_P8_BASE64 not set — macOS build will be signed but NOT notarized."
+            exit 0
+          fi
+          key_path="$RUNNER_TEMP/apple_api_key_${APPLE_API_KEY:-key}.p8"
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | openssl base64 -d -A > "$key_path"
+          echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      # tauri-action builds + (on macOS) imports the Developer ID cert into a temp
+      # keychain, signs with hardened runtime, and notarizes via the API key when
+      # the APPLE_* secrets are present. No tagName is set, so it does NOT create a
+      # release: it just produces the signed + notarized bundles.
       - name: Build + sign Tauri bundles
         uses: tauri-apps/tauri-action@v0
         id: tauri
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS code signing (Developer ID Application)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # macOS notarization (App Store Connect API key → notarytool)
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         with:
           projectPath: packages/desktop
           args: ${{ matrix.args }}
