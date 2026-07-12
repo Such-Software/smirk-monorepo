@@ -80,7 +80,12 @@ uuid = { version = "1", default-features = false, features = ["v4", "js"] }
 # wasm or production builds — dev-only. See tests/README.md for the
 # methodology.
 [dev-dependencies]
-grin_wallet_libwallet = { path = "../../../grin-wallet/libwallet" }
+# Pinned PUBLIC git dep, not a `../../../grin-wallet` sibling path: the workspace
+# manifest must load from a clean clone (CI, and AMO reviewers building the
+# extension source zip), which has no sibling checkout. Same code as the local
+# fork (branch contracts-merge). Dev-only — cargo fetches it to resolve the
+# manifest but only compiles it when grin-ext's cross-validation tests run.
+grin_wallet_libwallet = { git = "https://github.com/jwinterm/grin-wallet", rev = "178deac700b0553b4ea5ba6c5646c9b3c4914e8c" }
 # grin_keychain is needed directly for the keychain-derivation cross-
 # validation test (`derive_blind` vs `ExtKeychain::derive_key`). Same
 # version libwallet pulls in transitively — we just want to type it

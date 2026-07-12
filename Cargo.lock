@@ -1749,6 +1749,7 @@ dependencies = [
 [[package]]
 name = "grin_wallet_config"
 version = "5.4.0-alpha.1"
+source = "git+https://github.com/jwinterm/grin-wallet?rev=178deac700b0553b4ea5ba6c5646c9b3c4914e8c#178deac700b0553b4ea5ba6c5646c9b3c4914e8c"
 dependencies = [
  "dirs",
  "grin_core 5.4.0 (git+https://github.com/mimblewimble/grin?rev=cf2ed3f3becd62b5e754ec964fd90e332b9a021f)",
@@ -1763,6 +1764,7 @@ dependencies = [
 [[package]]
 name = "grin_wallet_libwallet"
 version = "5.4.0-alpha.1"
+source = "git+https://github.com/jwinterm/grin-wallet?rev=178deac700b0553b4ea5ba6c5646c9b3c4914e8c#178deac700b0553b4ea5ba6c5646c9b3c4914e8c"
 dependencies = [
  "age 0.7.2",
  "base64 0.9.3",
@@ -1802,6 +1804,7 @@ dependencies = [
 [[package]]
 name = "grin_wallet_util"
 version = "5.4.0-alpha.1"
+source = "git+https://github.com/jwinterm/grin-wallet?rev=178deac700b0553b4ea5ba6c5646c9b3c4914e8c#178deac700b0553b4ea5ba6c5646c9b3c4914e8c"
 dependencies = [
  "data-encoding",
  "ed25519-dalek 1.0.1",
