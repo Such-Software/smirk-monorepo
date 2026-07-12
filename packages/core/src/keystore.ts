@@ -419,6 +419,11 @@ export function parseSessionCache(raw: unknown): SessionCachePayload | null {
     if (!keys[asset] || typeof keys[asset] !== 'object') return null;
     if (typeof addresses[asset] !== 'string') return null;
   }
+  // The cached nostr identity keypair (account 0) rides inside `keys` but has
+  // no `addresses` entry, so it is validated on its own: presence + object
+  // shape. A pre-nostr v2 cache (written before this field existed) is
+  // rejected here and self-heals with a single re-unlock.
+  if (!keys.nostr || typeof keys.nostr !== 'object') return null;
   return r as unknown as SessionCachePayload;
 }
 
@@ -698,4 +703,6 @@ function zeroKeysIfPossible(keys: DerivedKeys): void {
   tryFill(keys.wow.privateSpendKey);
   tryFill(keys.wow.privateViewKey);
   tryFill(keys.grin.privateKey);
+  tryFill(keys.nostr.privateKey);
+  tryFill(keys.nostr.publicKey);
 }

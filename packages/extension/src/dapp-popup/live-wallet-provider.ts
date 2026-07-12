@@ -80,10 +80,13 @@ export function createLiveWalletProvider(
 
     async getNostrPublicKey(): Promise<string | null> {
       const wallet = getWallet();
-      // Default (account 0) identity from the unlocked mnemonic. Session-cache
-      // restores carry no mnemonic → no npub available.
-      if (!wallet?.mnemonic) return null;
-      return deriveNostrIdentity(wallet.mnemonic, 0).pubkeyHex;
+      if (!wallet) return null;
+      // Prefer the cached account-0 nostr pubkey (survives a session-cache
+      // restore, which drops the mnemonic). Fall back to deriving from the
+      // mnemonic on a fresh unlock; null only if neither is available.
+      if (wallet.keys.nostr) return bytesToHex(wallet.keys.nostr.publicKey);
+      if (wallet.mnemonic) return deriveNostrIdentity(wallet.mnemonic, 0).pubkeyHex;
+      return null;
     },
 
     async getBackendUrl(): Promise<string> {

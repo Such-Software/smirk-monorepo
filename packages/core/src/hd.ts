@@ -42,6 +42,7 @@ import { hmac } from '@noble/hashes/hmac';
 import { sha512 } from '@noble/hashes/sha512';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { ed25519 } from '@noble/curves/ed25519';
+import { schnorr } from '@noble/curves/secp256k1';
 import { registry } from '@smirk/assets';
 
 /**
@@ -98,6 +99,11 @@ export interface CryptonoteKeys {
  *   {@link CryptonoteKeys}.
  * - **Mimblewimble** (Grin) — schnorr-on-secp256k1zkp plus the
  *   slatepack-address ed25519 keypair. See {@link GrinKeys}.
+ * - **Nostr** (NIP-06 identity): secp256k1 schnorr, one (privateKey,
+ *   x-only publicKey) pair at account 0. Cached here so a session-cache
+ *   restore (which drops the mnemonic + seed) can still sign nostr events
+ *   and answer getPublicKey without re-deriving from the now-absent phrase.
+ *   Version-independent: the same account-0 path in v1/v2/v3.
  *
  * Per-asset shapes deliberately don't share a base type — that would
  * paper over the asymmetry and force every consumer to narrow.
@@ -108,6 +114,8 @@ export interface DerivedKeys {
   xmr: CryptonoteKeys;
   wow: CryptonoteKeys;
   grin: GrinKeys;
+  /** NIP-06 nostr identity keypair, account 0. `publicKey` is x-only (schnorr). */
+  nostr: { privateKey: Uint8Array; publicKey: Uint8Array };
 }
 
 // ============================================================================
@@ -391,6 +399,42 @@ function deriveGrinKey(masterSeed: Uint8Array): GrinKeys {
 }
 
 // ============================================================================
+// Nostr identity (NIP-06): version-independent secp256k1 schnorr
+// ============================================================================
+
+/** SLIP-0044 coin type for Nostr keys (NIP-06). */
+const NOSTR_COIN_TYPE = 1237;
+
+/**
+ * Canonical low-level Nostr key derivation (NIP-06): BIP32 secp256k1 at
+ * `m/44'/1237'/<account>'/0/0`, returning the raw private key plus its
+ * x-only (schnorr) public key. This is the SINGLE source of truth shared
+ * by {@link deriveAllKeys} here and `nostr/identity.ts`'s
+ * `deriveNostrIdentity`, so the two can never drift.
+ *
+ * It lives in `hd.ts` (not `identity.ts`) to avoid an import cycle:
+ * `identity.ts` already imports `mnemonicToSeed` from this module, so the
+ * primitive belongs here and `identity.ts` builds the `NostrIdentity`
+ * (npub / pubkeyHex) on top of it.
+ *
+ * The nostr identity path is version-independent; all three derivation
+ * generations use this same account-0 derivation.
+ */
+export function deriveNostrKeyFromSeed(
+  masterSeed: Uint8Array,
+  account = 0,
+): { privateKey: Uint8Array; publicKey: Uint8Array } {
+  if (!Number.isInteger(account) || account < 0) {
+    throw new Error(`invalid nostr account index: ${account}`);
+  }
+  const node = HDKey.fromMasterSeed(masterSeed).derive(
+    `m/44'/${NOSTR_COIN_TYPE}'/${account}'/0/0`,
+  );
+  if (!node.privateKey) throw new Error('failed to derive nostr key');
+  return { privateKey: node.privateKey, publicKey: schnorr.getPublicKey(node.privateKey) };
+}
+
+// ============================================================================
 // Top-level derivation
 // ============================================================================
 
@@ -426,6 +470,7 @@ export function deriveAllKeys(
       xmr: deriveBip32MoneroKeys(masterSeed, COIN_TYPES.xmr),
       wow: deriveBip32MoneroKeys(masterSeed, COIN_TYPES.wow),
       grin: deriveGrinKey(masterSeed),
+      nostr: deriveNostrKeyFromSeed(masterSeed, 0),
     };
   }
 
@@ -438,6 +483,7 @@ export function deriveAllKeys(
       xmr: deriveBip44MoneroKeys(masterSeed, COIN_TYPES.xmr),
       wow: deriveBip44MoneroKeys(masterSeed, COIN_TYPES.wow),
       grin: deriveGrinKey(masterSeed),
+      nostr: deriveNostrKeyFromSeed(masterSeed, 0),
     };
   }
 
@@ -447,6 +493,7 @@ export function deriveAllKeys(
     xmr: deriveCryptonoteKeys(masterSeed, 'xmr'),
     wow: deriveCryptonoteKeys(masterSeed, 'wow'),
     grin: deriveGrinKey(masterSeed),
+    nostr: deriveNostrKeyFromSeed(masterSeed, 0),
   };
 }
 

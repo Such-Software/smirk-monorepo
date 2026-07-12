@@ -24,6 +24,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import {
   deriveAppEncryptionKey,
   deriveNostrIdentity,
+  nostrIdentityFromPrivkey,
   sealOpen,
   signBitcoinMessage,
   signEd25519WithScalar,
@@ -32,6 +33,7 @@ import {
   nip44Decrypt,
   nip04Encrypt,
   nip04Decrypt,
+  type NostrIdentity,
   type SignedNostrEvent,
   type UnlockedWallet,
   type UnsignedNostrEvent,
@@ -124,20 +126,39 @@ export function signMessageWithUnlocked(
 }
 
 /**
+ * Resolve the wallet's default (account 0) Nostr identity for signing.
+ *
+ * Prefers the cached derived keypair (`wallet.keys.nostr`), which survives a
+ * "stay unlocked for N hours" session-cache restore, so nostr/chat signing
+ * keeps working after the mnemonic + seed were dropped from the cache
+ * (2026-06-13 hardening). Falls back to deriving from the mnemonic on a fresh
+ * unlock, and returns `null` only when neither is available. The identity's
+ * `account` field is cosmetic for signing (`nostrIdentityFromPrivkey` recomputes
+ * npub/pubkey from the private key), so account-0 caching matches the
+ * hardcoded account-0 behaviour of the old mnemonic path.
+ */
+function resolveUnlockedNostrIdentity(wallet: UnlockedWallet): NostrIdentity | null {
+  if (wallet.keys.nostr) return nostrIdentityFromPrivkey(wallet.keys.nostr.privateKey);
+  if (wallet.mnemonic) return deriveNostrIdentity(wallet.mnemonic, 0);
+  return null;
+}
+
+/**
  * Schnorr-sign an arbitrary Nostr event with the wallet's default (account 0)
- * seed-derived identity — NIP-98 login, kind-1 notes, etc. Requires the
- * unlocked mnemonic (absent on a session-cache restore).
+ * identity (NIP-98 login, kind-1 notes, etc). Uses the cached nostr key when
+ * present (session-cache restore), else the unlocked mnemonic.
  */
 export function signNostrEventWithUnlocked(
   wallet: UnlockedWallet,
   event: UnsignedNostrEvent,
 ): SignedNostrEvent {
-  if (!wallet.mnemonic) {
+  const identity = resolveUnlockedNostrIdentity(wallet);
+  if (!identity) {
     throw new Error(
       'Nostr signing needs the unlocked mnemonic — re-unlock the wallet',
     );
   }
-  return signNostrEvent(event, deriveNostrIdentity(wallet.mnemonic, 0));
+  return signNostrEvent(event, identity);
 }
 
 /** Uint8Array → base64 (the dapp-api wire form for sealed/plaintext bytes). */
@@ -165,6 +186,10 @@ export function deriveAppEncKeyWithUnlocked(
   domainScope: string,
   context: string,
 ): string {
+  // NOTE: still mnemonic-gated on a session-cache restore. Unlike the nostr
+  // identity, the domain-scoped app-encryption key is not cached in
+  // DerivedKeys, so e2ee-on-restore needs its own fix (out of scope for the
+  // chat-signing bug).
   if (!wallet.mnemonic) {
     throw new Error(
       'App encryption needs the unlocked mnemonic — re-unlock the wallet',
@@ -184,6 +209,9 @@ export function openAppSealWithUnlocked(
   sealedBase64: string,
   context: string,
 ): string {
+  // NOTE: still mnemonic-gated on a session-cache restore (see
+  // deriveAppEncKeyWithUnlocked): the app-encryption key is not cached, so
+  // e2ee-on-restore needs a separate fix beyond the nostr-key caching here.
   if (!wallet.mnemonic) {
     throw new Error(
       'App decryption needs the unlocked mnemonic — re-unlock the wallet',
@@ -206,10 +234,10 @@ export function nostrCryptWithUnlocked(
   peer: string,
   data: string,
 ): string {
-  if (!wallet.mnemonic) {
+  const identity = resolveUnlockedNostrIdentity(wallet);
+  if (!identity) {
     throw new Error('Nostr encryption needs the unlocked mnemonic — re-unlock the wallet');
   }
-  const identity = deriveNostrIdentity(wallet.mnemonic, 0);
   if (scheme === 'nip04') {
     return op === 'encrypt'
       ? nip04Encrypt(identity, peer, data)

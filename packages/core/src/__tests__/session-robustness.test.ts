@@ -19,7 +19,9 @@ const validCache = () => ({
   version: 2,
   _noMnemonic: true,
   fingerprint: 'fp',
-  keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {} },
+  // nostr rides in `keys` (no address entry); parseSessionCache validates its
+  // presence separately, so a well-formed payload must carry it.
+  keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {}, nostr: {} },
   addresses: { btc: 'a', ltc: 'a', xmr: 'a', wow: 'a', grin: 'a' },
   expiresAtMs: 1_700_000_000_000,
 });

@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import {
   AUTO_LOCK_MAX_MINUTES,
   clampAutoLockMinutes,
+  deriveAddresses,
   parseSessionCache,
   restoreUnlockedFromCache,
   serializeForSessionCache,
@@ -24,6 +25,22 @@ import {
   type SessionCachePayload,
   type UnlockedWallet,
 } from '../keystore';
+import { deriveAllKeys } from '../hd';
+import {
+  deriveNostrIdentity,
+  nostrIdentityFromPrivkey,
+  signNostrEvent,
+  verifyNostrEventId,
+} from '../nostr/identity';
+
+const TEST_MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
+function toHex(b: Uint8Array): string {
+  return Array.from(b)
+    .map((x) => x.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 // --- session-cache Uint8Array round-trip (the auto-unlock sign-in bug) --------
 
@@ -116,7 +133,9 @@ function makePayload(): SessionCachePayload {
     version: 2,
     _noMnemonic: true,
     fingerprint: 'fp-abcd',
-    keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {} } as unknown as SessionCachePayload['keys'],
+    // nostr rides in `keys` (no address entry); parseSessionCache validates its
+    // presence separately, so the well-formed payload must include it.
+    keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {}, nostr: {} } as unknown as SessionCachePayload['keys'],
     addresses: { btc: 'b', ltc: 'l', xmr: 'x', wow: 'w', grin: 'g' } as SessionCachePayload['addresses'],
     expiresAtMs: 1_700_000_000_000,
   };
@@ -217,4 +236,78 @@ test('restoreUnlockedFromCache: any future field that would carry the seed is om
     ['addresses', 'fingerprint', 'keys'],
     'restoreUnlockedFromCache must NEVER set mnemonic or seed',
   );
+});
+
+// --- cached nostr key survives restore + signs (the chat-signing bug) --------
+
+test('parseSessionCache: REJECTS a v2 payload missing the cached nostr key', () => {
+  // A pre-nostr v2 cache must be rejected so it self-heals with one re-unlock;
+  // otherwise `wallet.keys.nostr` is absent and nostr signing throws on restore.
+  const noNostr: { keys: Record<string, unknown> } & Record<string, unknown> = {
+    ...makePayload(),
+    keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {} },
+  };
+  assert.equal(parseSessionCache(noNostr), null);
+});
+
+test('restoreUnlockedFromCache: cached nostr key survives the round-trip and signs a kind-1 event', () => {
+  // End-to-end: derive → session-cache serialize → storage-mangle → revive →
+  // parse → restore, then sign a kind-1 note with the restored (mnemonic-less)
+  // wallet, exactly as signNostrEventWithUnlocked does in the extension.
+  const keys = deriveAllKeys(TEST_MNEMONIC, '', 3);
+  const addresses = deriveAddresses(keys);
+  const payload: SessionCachePayload = {
+    version: 2,
+    _noMnemonic: true,
+    fingerprint: 'fp-roundtrip',
+    keys,
+    addresses,
+    expiresAtMs: Date.now() + 3_600_000,
+  };
+
+  const revived = reviveForSessionCache(throughStorage(serializeForSessionCache(payload)));
+  const parsed = parseSessionCache(revived);
+  assert.notEqual(parsed, null, 'payload carrying the nostr key must parse');
+
+  const wallet = restoreUnlockedFromCache({
+    keys: parsed!.keys,
+    addresses: parsed!.addresses,
+    fingerprint: parsed!.fingerprint,
+  });
+
+  // Audit invariant holds: NO mnemonic, NO seed on a cache restore.
+  assert.equal(wallet.mnemonic, undefined, 'mnemonic must stay undefined');
+  assert.equal(wallet.seed, undefined, 'seed must stay undefined');
+
+  // The nostr keypair rode through storage as real bytes.
+  assert.ok(wallet.keys.nostr.privateKey instanceof Uint8Array, 'nostr privkey revived');
+  assert.equal(wallet.keys.nostr.privateKey.length, 32);
+  assert.ok(wallet.keys.nostr.publicKey instanceof Uint8Array, 'nostr pubkey revived');
+  assert.equal(wallet.keys.nostr.publicKey.length, 32);
+
+  // Sign a kind-1 event from the cached key and verify the schnorr signature.
+  const identity = nostrIdentityFromPrivkey(wallet.keys.nostr.privateKey);
+  const signed = signNostrEvent(
+    { kind: 1, content: 'gm from a restored session', tags: [] },
+    identity,
+  );
+  assert.equal(signed.kind, 1);
+  assert.ok(verifyNostrEventId(signed.sig, signed.id, signed.pubkey), 'signature must verify');
+  // The restored identity is the wallet's real account-0 nostr identity.
+  assert.equal(signed.pubkey, deriveNostrIdentity(TEST_MNEMONIC, 0).pubkeyHex);
+});
+
+test('deriveAllKeys().nostr matches deriveNostrIdentity(mnemonic, 0) across all versions (no drift)', () => {
+  // The nostr path is version-independent and shares ONE derivation with
+  // deriveNostrIdentity; this guards against the two ever diverging.
+  const identity = deriveNostrIdentity(TEST_MNEMONIC, 0);
+  for (const version of [1, 2, 3] as const) {
+    const fromAll = deriveAllKeys(TEST_MNEMONIC, '', version).nostr;
+    assert.deepEqual(
+      Array.from(fromAll.privateKey),
+      Array.from(identity.privateKey),
+      `v${version} nostr privkey must equal deriveNostrIdentity`,
+    );
+    assert.equal(toHex(fromAll.publicKey), identity.pubkeyHex, `v${version} nostr pubkey`);
+  }
 });

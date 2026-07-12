@@ -13,20 +13,17 @@
  * layer the MessagingProvider (default: Nostr) and NIP-98 sign-in build on; the
  * per-coin signing keys are unaffected.
  */
-import { HDKey } from '@scure/bip32';
 import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bech32 } from '@scure/base';
 import { generateSecretKey } from 'nostr-tools/pure';
-import { mnemonicToSeed } from '../hd';
+import { deriveNostrKeyFromSeed, mnemonicToSeed } from '../hd';
 
 /** Sentinel `account` for a NON-seed-derived identity (imported nsec or a random
  *  burner). The identity store tracks the real source; this just flags "not
  *  rotation-derivable from the seed" on the NostrIdentity itself. */
 export const NON_DERIVED_ACCOUNT = -1;
 
-/** SLIP-0044 coin type for Nostr keys (NIP-06). */
-const NOSTR_COIN_TYPE = 1237;
 /** bech32 length cap; npub is ~63 chars, this is generous headroom. */
 const BECH32_LIMIT = 1000;
 
@@ -64,18 +61,16 @@ export function decodeNpub(npub: string): Uint8Array {
  * `deriveNostrIdentity(mnemonic, account + 1)`.
  */
 export function deriveNostrIdentity(mnemonic: string, account = 0, passphrase = ''): NostrIdentity {
-  if (!Number.isInteger(account) || account < 0) {
-    throw new Error(`invalid nostr account index: ${account}`);
-  }
+  // Single derivation path: `deriveNostrKeyFromSeed` (in ../hd) validates the
+  // account index and derives m/44'/1237'/<account>'/0/0. Keeping it there
+  // avoids an import cycle (hd.ts must not import identity.ts) and guarantees
+  // this identity and `deriveAllKeys().nostr` can never drift apart.
   const seed = mnemonicToSeed(mnemonic, passphrase);
-  const node = HDKey.fromMasterSeed(seed).derive(`m/44'/${NOSTR_COIN_TYPE}'/${account}'/0/0`);
-  if (!node.privateKey) throw new Error('failed to derive nostr key');
-  const privateKey = node.privateKey;
-  const pubkeyXOnly = schnorr.getPublicKey(privateKey);
+  const { privateKey, publicKey } = deriveNostrKeyFromSeed(seed, account);
   return {
     account,
-    npub: encodeNpub(pubkeyXOnly),
-    pubkeyHex: toHex(pubkeyXOnly),
+    npub: encodeNpub(publicKey),
+    pubkeyHex: toHex(publicKey),
     privateKey,
   };
 }
