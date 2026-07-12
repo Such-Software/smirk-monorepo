@@ -11,43 +11,66 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
-## [Unreleased]
+## [0.3.0] — 2026-07-12
 
-Pre-release polish for v0.3.0. Store submission upload is the only
-remaining gate; reproducible-build, Tauri desktop shell, and embedded
-dapp browser all shipped. See `docs/V0_3_PLAN.md` rev 9 (internal)
-for the running ship plan.
+The stable v0.3.0 release. It builds on the v0.3.0-rc1 feature drop with a round
+of cross-chain compatibility, balance and send reliability, real-money
+validation, and the self-hostable backend components that make Smirk federated
+end to end.
 
-- **Grin: wallets are now recoverable from your seed phrase alone.** Grin
-  outputs now use the standard deterministic (view-key) rewind-nonce scheme,
-  so a restored wallet rediscovers its outputs directly from the chain instead
-  of relying on server-side records — matching how Bitcoin/Litecoin and
+- **Reliable sends and balances on every backend.** Resolved a set of
+  client/backend contract mismatches that could disable Bitcoin/Litecoin fee
+  estimation (and with it sends and public-tip funding) and Monero/Wownero sends
+  against the modern self-hostable backend. Fee estimation now degrades to a safe
+  floored rate instead of blocking a send when an estimate is briefly
+  unavailable, and transaction-history amounts and identifiers read correctly
+  across backends.
+- **Seamless balances.** Home paints your last-known balance instantly, refreshes
+  it in the background and when you refocus the wallet, and shows a clear
+  freshness indicator: quiet when healthy, an amber "may be out of date" if
+  updates stall, and a plain "can't reach the server" message during a sustained
+  outage.
+- **Chat and Nostr work after a "stay unlocked" session.** Signing a Nostr event
+  (chat, sign-in, public-key requests) no longer fails on a wallet restored from
+  the keep-unlocked cache: the Nostr identity key is now cached like your payment
+  keys, without ever storing your seed phrase.
+- **Public tips, validated on-chain.** The full public social-tip lifecycle
+  (fund, verify, claim, sweep) was exercised end to end with real funds on
+  Bitcoin and Grin.
+- **grin-lws.** Grin scanning is served by a standalone, self-hostable Grin
+  light-wallet-server (public, MIT: github.com/Such-Software/grin-lws), so an
+  operator can run the full non-custodial Grin path without the main backend.
+- **Self-hosted BTC/LTC invoicing.** A small, non-custodial BTC/LTC payment
+  processor (`smirk-backend-minibtc-paymentprocessor`) exposes a BTCPay-style
+  invoice surface for self-hosters: funds go straight to operator-controlled
+  addresses and the service never holds keys.
+- **Grin: wallets are now recoverable from your seed phrase alone.** Grin outputs
+  now use the standard deterministic (view-key) rewind-nonce scheme, so a
+  restored wallet rediscovers its outputs directly from the chain instead of
+  relying on server-side records, matching how Bitcoin/Litecoin and
   Monero/Wownero already restore. Outputs created by earlier builds remain
-  spendable. See `docs/grin.md` → "Output recovery".
-- **Nostr / Goblin interop.** The wallet now exposes a NIP-07
-  `window.nostr` provider, so Nostr-native sites — including
-  Goblin / Magick Market dapps — can request your public key and have
-  events signed without a separate extension. A multi-identity vault
-  with an in-wallet identity switcher keeps distinct Nostr keypairs
-  apart, and payment-capable actions sit behind a short-lived
-  "money-tier" session so a signing grant can't silently move funds.
-  Grin payments can also travel as NIP-59 gift-wrapped direct
-  messages, so a slatepack exchange no longer needs a shared server.
-- **Federation — no single hard-coded backend.** Smirk is now
-  self-hostable end to end: the backend host (`homeDomain`) is
-  configurable and nothing assumes `api.smirk.cash`. You can pay by
-  NIP-05 address (`name@domain`), with a counterparty's key pinned on
-  first use (TOFU) so a later key swap is flagged rather than trusted
-  silently.
-- **Grin is now fully non-custodial.** The backend no longer holds
-  Grin balances, outputs, or transaction records — the old custodial
-  endpoints and the server-side wallets table are gone. The client
-  scans the chain with its own view key (building on the seed-only
-  recovery above) and tracks in-flight sends with a client-side
-  pending overlay; the backend keeps only stateless scan / height /
-  broadcast / relay helpers. See `docs/grin.md`.
+  spendable. See `docs/grin.md`, "Output recovery".
+- **Nostr / Goblin interop.** The wallet exposes a NIP-07 `window.nostr`
+  provider, so Nostr-native sites (including Goblin / Magick Market dapps) can
+  request your public key and have events signed without a separate extension. A
+  multi-identity vault with an in-wallet identity switcher keeps distinct Nostr
+  keypairs apart, and payment-capable actions sit behind a short-lived
+  "money-tier" session so a signing grant can't silently move funds. Grin
+  payments can also travel as NIP-59 gift-wrapped direct messages, so a slatepack
+  exchange no longer needs a shared server.
+- **Federation: no single hard-coded backend.** Smirk is self-hostable end to
+  end: the backend host (`homeDomain`) is configurable and nothing assumes
+  `api.smirk.cash`. You can pay by NIP-05 address (`name@domain`), with a
+  counterparty's key pinned on first use (TOFU) so a later key swap is flagged
+  rather than trusted silently.
+- **Grin is now fully non-custodial.** The backend no longer holds Grin balances,
+  outputs, or transaction records; the old custodial endpoints and the
+  server-side wallets table are gone. The client scans the chain with its own
+  view key (building on the seed-only recovery above) and tracks in-flight sends
+  with a client-side pending overlay, while the backend keeps only stateless
+  scan / height / broadcast / relay helpers. See `docs/grin.md`.
 
-## [0.3.0] — 2026-06-04
+## [0.3.0-rc1] — 2026-06-04
 
 First v0.3 release candidate. Ground-up rewrite of the wallet
 extension around a shared monorepo (`packages/core`, `packages/ui`,
