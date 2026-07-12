@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx src/components/browser/__tests__/BrowserUrlBar.test.tsx src/components/browser/__tests__/BrowserTabStrip.test.tsx src/components/browser/__tests__/BrowserShell.test.tsx",
+    "test": "node --test --import tsx src/components/__tests__/FreshnessCue.test.tsx src/components/browser/__tests__/BrowserUrlBar.test.tsx src/components/browser/__tests__/BrowserTabStrip.test.tsx src/components/browser/__tests__/BrowserShell.test.tsx",
     "clean": "rm -rf dist"
   },
   "dependencies": {
