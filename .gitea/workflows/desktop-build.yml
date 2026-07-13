@@ -60,11 +60,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
             os_label: linux
-          # Windows: uncomment when hashbags-win-runner is back (label: windows).
-          # - runner: windows
-          #   args: ''
-          #   target: x86_64-pc-windows-msvc
-          #   os_label: windows
+          - runner: windows
+            args: ''
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            os_label: windows
 
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.os_label }} build
@@ -99,6 +99,17 @@ jobs:
           LLVM="$(brew --prefix llvm)"
           echo "CC_wasm32_unknown_unknown=$LLVM/bin/clang" >> "$GITHUB_ENV"
           echo "AR_wasm32_unknown_unknown=$LLVM/bin/llvm-ar" >> "$GITHUB_ENV"
+
+      # MSVC's cl.exe can't target wasm32 either; use LLVM clang for the wasm C.
+      - name: Install wasm C toolchain (Windows LLVM)
+        if: matrix.os_label == 'windows'
+        shell: bash
+        run: |
+          choco install llvm -y || echo "llvm install skipped (may already be present)"
+          CLANG="$(command -v clang || echo '/c/Program Files/LLVM/bin/clang.exe')"
+          AR="$(command -v llvm-ar || echo '/c/Program Files/LLVM/bin/llvm-ar.exe')"
+          echo "CC_wasm32_unknown_unknown=$CLANG" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=$AR" >> "$GITHUB_ENV"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -192,3 +203,4 @@ jobs:
             packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi*
             packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis*
+            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*-setup.exe
