@@ -18,20 +18,22 @@ Tag the release commit `v0.X.Y` (no leading `v` prefix in
 
 ## Build environment
 
-Reproducibility is a real promise on this extension: the same git
-commit produces byte-identical build output (`packages/extension/dist`),
-verified for v0.3.0 including a from-scratch build of the source zip in a
-different directory. The JS/HTML/CSS is byte-identical given the same
-Node/npm. The compiled `wasm` is byte-identical given the same Rust
-toolchain (v0.3.0 shipped with rustc 1.95.0): `make wasm` passes
-`--remap-path-prefix` so the build directory and cargo home no longer leak
-into the binary (that path leakage previously made the wasm differ per
-build location). A different rustc version yields a functionally-equivalent
-but not byte-identical wasm. The zip archive's own bytes vary with file
-mtimes, so reviewers reproduce by comparing the built `dist` against the
-uploaded package's contents (see the AMO note below), not by matching zip
-checksums. The published `SHA256SUMS` identify the exact uploaded
-artifacts. Inputs:
+Reproducibility on this extension is strong, with one honest edge. Verified
+for v0.3.0 with a from-scratch build of the source zip in a different
+directory: the shared JS libraries, HTML, CSS, the compiled `wasm`, and the
+background/content/inject bundles are all byte-identical. The `wasm` is
+byte-identical given the same rustc (v0.3.0 shipped rustc 1.95.0) because
+`make wasm` passes `--remap-path-prefix`, so the build directory and cargo
+home no longer leak into the binary (that leakage previously made the wasm
+differ per build location); a different rustc yields functionally-equivalent
+but not byte-identical wasm. The one exception is `popup.js`, the largest
+entry bundle: Rollup names and orders its modules by absolute path, so a
+build at a different directory produces a functionally-identical but not
+byte-identical `popup.js` (deterministic for a given path). The zip
+archive's own bytes vary with file mtimes, so reviewers reproduce by
+comparing the built `dist` against the uploaded package's contents (see the
+AMO note below), not by matching zip checksums. The published `SHA256SUMS`
+identify the exact uploaded artifacts. Inputs:
 
 - **Node:** `>=20.0.0` (matches the workspace `engines` field)
 - **npm:** ships with the matched Node release
@@ -150,13 +152,16 @@ mandatory.
    # grin-ext crate; they are NOT compiled by the extension build. `make wasm`
    # builds `cargo -p smirk-wasm`, which resolves entirely from crates.io + the
    # vendored crates in this archive, so the build does not fetch them.
-   # Compare the freshly-built dist against the uploaded package by
-   # CONTENT. The build output is deterministic and byte-identical; the
-   # zip archive's own bytes differ only by file mtimes, so verify the
-   # files, not the archive:
+   # Compare the freshly-built dist against the uploaded package by CONTENT
+   # (the zip's own bytes vary by file mtime, so verify files, not the archive):
    mkdir _uploaded && ( cd _uploaded && unzip -q ../smirk-wallet-firefox-v0.3.0.zip )
-   diff -r _uploaded packages/extension/dist
-   # Empty output = the uploaded package was built from exactly this source.
+   diff -rq _uploaded packages/extension/dist
+   # Expected: the ONLY file that may differ is popup.js. The compiled wasm, every
+   # shared library, and the background/content/inject bundles are byte-identical.
+   # popup.js (the largest entry bundle) is minified slightly differently when
+   # built at a different absolute path, because Rollup names + orders modules by
+   # their absolute path: the behaviour is identical, only variable names/ordering
+   # change, and it is deterministic for a given build path.
    ```
 
 6. **Submit**. AMO review for a new version typically lands within
