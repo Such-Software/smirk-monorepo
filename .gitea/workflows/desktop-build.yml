@@ -225,6 +225,11 @@ jobs:
       - name: Upload bundle archive
         uses: actions/upload-artifact@v3
         continue-on-error: true
+        env:
+          # The runner uploads artifacts to https://git.such.software, which serves
+          # a self-signed cert, and upload-artifact's Node rejects it
+          # (DEPTH_ZERO_SELF_SIGNED_CERT). Trust it for this internal-only upload.
+          NODE_TLS_REJECT_UNAUTHORIZED: '0'
         with:
           name: smirk-desktop-${{ matrix.os_label }}-v0.3.0
           if-no-files-found: warn
