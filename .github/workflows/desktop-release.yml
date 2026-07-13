@@ -56,6 +56,11 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     name: ${{ matrix.os_label }} build
+    # Default every run step to bash (git-bash on Windows) — PowerShell's execution
+    # policy blocks the generated .ps1 (npm install), and our steps assume POSIX.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 

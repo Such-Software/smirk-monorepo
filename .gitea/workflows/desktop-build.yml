@@ -68,6 +68,12 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.os_label }} build
+    # Default every run step to bash (git-bash on Windows). Otherwise Windows runs
+    # steps in PowerShell, whose execution policy blocks the generated .ps1 (this
+    # killed `npm install`), and our make/clang steps assume a POSIX shell anyway.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
