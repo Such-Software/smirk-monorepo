@@ -71,7 +71,20 @@ jobs:
             libsoup-3.0-dev \
             libxdo-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            clang
+          # clang: vendored secp256k1zkp compiles C to wasm32 via cc-rs, which
+          # needs a clang carrying the WebAssembly LLVM target.
+
+      # Apple's Xcode clang lacks the wasm32 target; point cc-rs at Homebrew LLVM.
+      - name: Install wasm C toolchain (macOS LLVM)
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          brew install llvm
+          LLVM="$(brew --prefix llvm)"
+          echo "CC_wasm32_unknown_unknown=$LLVM/bin/clang" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=$LLVM/bin/llvm-ar" >> "$GITHUB_ENV"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
