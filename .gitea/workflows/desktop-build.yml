@@ -231,6 +231,21 @@ jobs:
           \) -exec cp -v {} "$dest/" \; 2>/dev/null || true
           # macOS: the notarized + stapled .app is a DIRECTORY, not a file.
           find "$base" -maxdepth 3 -type d -name '*.app' -exec cp -R {} "$dest/" \; 2>/dev/null || true
+          # macOS: build the .dmg from the notarized .app with hdiutil (pure CLI,
+          # no AppleScript/WindowServer — that's why Tauri's bundle_dmg.sh fails on
+          # the daemon runner). The .app is already signed+notarized+stapled, so it
+          # passes Gatekeeper; the DMG is just a drag-to-Applications container.
+          if [ "${{ matrix.os_label }}" = "macos" ]; then
+            app="$(ls -d "$dest"/*.app 2>/dev/null | head -1)"
+            if [ -n "$app" ]; then
+              dmgsrc="$(mktemp -d)"
+              cp -R "$app" "$dmgsrc/"
+              ln -s /Applications "$dmgsrc/Applications"
+              hdiutil create -volname "Smirk Wallet" -srcfolder "$dmgsrc" -ov -format UDZO \
+                "$dest/Smirk-Wallet-0.3.0.dmg" && rm -rf "$app" || echo "hdiutil dmg failed; keeping .app"
+              rm -rf "$dmgsrc"
+            fi
+          fi
           echo "staged installers to: $dest"; ls -la "$dest" || true
           mkdir -p artifacts-out
           tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz" -C "$dest" . \
