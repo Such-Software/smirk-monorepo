@@ -98,11 +98,17 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_ENV_HINTS: '1'
         run: |
-          # brew's dependency-upgrade confirmation ("Do you want to proceed? [y/n]")
-          # ignores NONINTERACTIVE in this act_runner env and reads stdin, which is
-          # EOF -> abort. Pipe 'yes' to auto-accept. Skip entirely if llvm is present.
-          # (Installing llvm also upgrades openssl/python/etc — harmless, one-time.)
-          brew list llvm >/dev/null 2>&1 || yes | brew install llvm
+          # llvm carries a wasm-capable clang. brew's dependency-upgrade prompt
+          # ignores NONINTERACTIVE here and aborts on stdin EOF, so pipe 'yes'. But
+          # under `set -o pipefail` a plain `yes | brew` FAILS the step: brew exits
+          # 0, then `yes` dies with SIGPIPE (141) and pipefail propagates it. Turn
+          # pipefail off for that line so the step's status is brew's. Skipped
+          # whenever llvm is already installed.
+          if ! brew list llvm >/dev/null 2>&1; then
+            set +o pipefail
+            yes | brew install llvm
+            set -o pipefail
+          fi
           LLVM="$(brew --prefix llvm)"
           echo "CC_wasm32_unknown_unknown=$LLVM/bin/clang" >> "$GITHUB_ENV"
           echo "AR_wasm32_unknown_unknown=$LLVM/bin/llvm-ar" >> "$GITHUB_ENV"

@@ -84,9 +84,14 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_ENV_HINTS: '1'
         run: |
-          # Pipe 'yes' to auto-accept brew's dependency-upgrade prompt (NONINTERACTIVE
-          # is ignored in this act_runner env and stdin EOF aborts). Skip if present.
-          brew list llvm >/dev/null 2>&1 || yes | brew install llvm
+          # Pipe 'yes' to auto-accept brew's dependency-upgrade prompt, with pipefail
+          # OFF for that line: brew exits 0 then `yes` dies with SIGPIPE(141) and
+          # pipefail would fail the step despite a successful install. Skip if present.
+          if ! brew list llvm >/dev/null 2>&1; then
+            set +o pipefail
+            yes | brew install llvm
+            set -o pipefail
+          fi
           LLVM="$(brew --prefix llvm)"
           echo "CC_wasm32_unknown_unknown=$LLVM/bin/clang" >> "$GITHUB_ENV"
           echo "AR_wasm32_unknown_unknown=$LLVM/bin/llvm-ar" >> "$GITHUB_ENV"
