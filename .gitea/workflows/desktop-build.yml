@@ -132,6 +132,23 @@ jobs:
           echo "CC_wasm32_unknown_unknown=$CLANG" >> "$GITHUB_ENV"
           echo "AR_wasm32_unknown_unknown=$AR" >> "$GITHUB_ENV"
 
+      # makensis fails 'Unable to start child process 0x2' (file not found) even
+      # right after a fresh NSIS extract -> Defender is almost certainly
+      # quarantining makensis.exe. Exclude the Tauri cache from Defender and wipe
+      # any half-eaten NSIS cache so Tauri re-downloads it clean.
+      - name: Defender exclusion for Tauri/NSIS cache (Windows)
+        if: matrix.os_label == 'windows'
+        shell: powershell
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\tauri" -ErrorAction Stop
+            Write-Host "Defender exclusion added: $env:LOCALAPPDATA\tauri"
+          } catch {
+            Write-Host "WARN: could not add Defender exclusion (runner may not be elevated): $($_.Exception.Message)"
+          }
+          Remove-Item -Recurse -Force "$env:LOCALAPPDATA\tauri\NSIS" -ErrorAction SilentlyContinue
+          Write-Host "cleared stale NSIS cache (forces a clean re-download)"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
