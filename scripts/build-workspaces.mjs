@@ -83,7 +83,10 @@ const libs = buildable.filter((n) => !NON_LIB.has(n));
 const target = process.argv[2] || 'order';
 function run(args) {
   console.log('>', 'npm', args.join(' '));
-  execFileSync('npm', args, { stdio: 'inherit', cwd: ROOT });
+  // shell: true so Windows resolves `npm` -> `npm.cmd` (execFileSync without a
+  // shell can't find the .cmd shim -> spawnSync npm ENOENT). Args are static
+  // (no spaces/user input), so shell word-splitting is safe here.
+  execFileSync('npm', args, { stdio: 'inherit', cwd: ROOT, shell: true });
 }
 
 if (target === 'order') {
