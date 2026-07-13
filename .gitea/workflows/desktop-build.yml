@@ -196,11 +196,15 @@ jobs:
           projectPath: packages/desktop
           args: ${{ matrix.args }}
 
-      # The Gitea artifact service can 500 on finalize (artifact storage may not be
-      # configured), failing the job even though the build succeeded. Stage the
-      # installers to a persistent path on the self-hosted runner so they're
-      # retrievable regardless; then attempt the artifact upload best-effort.
-      - name: Stage bundles to a persistent runner dir
+      # Collect the installers into a SINGLE space-free tar.gz, then upload that.
+      # Why: the Tauri bundles are named "Smirk Wallet_0.3.0_amd64.AppImage" (with
+      # a space). actions/upload-artifact@v3 aborts the chunk PUT on a filename
+      # with a space (uploads 0 bytes), so Gitea's finalize 500s with
+      # "Error merge chunks: lstat .../actions_artifacts/tmp<run>: no such file".
+      # One archive with no space in ITS name sidesteps the whole problem (the
+      # space-named files inside the tarball are fine). Also stage a copy to a
+      # persistent runner dir as a belt-and-suspenders fallback.
+      - name: Archive bundles (space-free) + stage to runner
         if: always()
         shell: bash
         run: |
@@ -211,22 +215,15 @@ jobs:
             -name '*.dmg' -o -name '*.app.tar.gz*' -o -name '*.AppImage*' \
             -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi*' -o -name '*-setup.exe' \
           \) -exec cp -v {} "$dest/" \; 2>/dev/null || true
-          echo "staged installers to: $dest"
-          ls -la "$dest" || echo "(nothing staged — build may have failed earlier)"
+          echo "staged installers to: $dest"; ls -la "$dest" || true
+          mkdir -p artifacts-out
+          tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz" -C "$dest" . \
+            && echo "archived $(ls -la artifacts-out/*.tar.gz)" || echo "nothing to archive"
 
-      # Collect the installers + the updater signatures (.sig) + latest.json.
-      - name: Upload bundles
+      - name: Upload bundle archive
         uses: actions/upload-artifact@v3
         continue-on-error: true
         with:
           name: smirk-desktop-${{ matrix.os_label }}-v0.3.0
           if-no-files-found: warn
-          path: |
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz*
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage*
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi*
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis*
-            packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*-setup.exe
+          path: artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz
