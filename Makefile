@@ -60,7 +60,14 @@ rust-clean:
 WASM_BINDGEN ?= $(shell command -v wasm-bindgen 2>/dev/null || echo $(HOME)/.cargo/bin/wasm-bindgen)
 
 wasm:
-	cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
+	@# Reproducible wasm: --remap-path-prefix normalizes the build directory and the
+	@# cargo home out of the binary. rustc otherwise hashes absolute paths into symbol
+	@# metadata, so the SAME source built in a different dir/user yields a different
+	@# .wasm (verified: an AMO-reviewer-style build in /tmp differed until remapped).
+	@# With this, any checkout on the same rustc produces byte-identical output, so
+	@# reviewers can content-match the wasm. Existing $$RUSTFLAGS are preserved.
+	RUSTFLAGS="--remap-path-prefix=$(CURDIR)=/smirk --remap-path-prefix=$(HOME)/.cargo=/cargo $${RUSTFLAGS:-}" \
+	  cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
 	$(WASM_BINDGEN) --target no-modules \
 	  --out-dir crates/smirk-wasm/pkg \
 	  target/wasm32-unknown-unknown/release/smirk_wasm.wasm

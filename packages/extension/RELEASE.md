@@ -19,15 +19,25 @@ Tag the release commit `v0.X.Y` (no leading `v` prefix in
 ## Build environment
 
 Reproducibility is a real promise on this extension: the same git
-commit on the same Node/npm versions produces byte-identical build
-output (`packages/extension/dist`), verified during the v0.3.0 prep.
-The zip archive's own bytes vary with file mtimes, so reviewers
-reproduce by comparing the built `dist` against the uploaded package's
-contents (see the AMO note below), not by matching zip checksums. The
-published `SHA256SUMS` identify the exact uploaded artifacts. Inputs:
+commit produces byte-identical build output (`packages/extension/dist`),
+verified for v0.3.0 including a from-scratch build of the source zip in a
+different directory. The JS/HTML/CSS is byte-identical given the same
+Node/npm. The compiled `wasm` is byte-identical given the same Rust
+toolchain (v0.3.0 shipped with rustc 1.95.0): `make wasm` passes
+`--remap-path-prefix` so the build directory and cargo home no longer leak
+into the binary (that path leakage previously made the wasm differ per
+build location). A different rustc version yields a functionally-equivalent
+but not byte-identical wasm. The zip archive's own bytes vary with file
+mtimes, so reviewers reproduce by comparing the built `dist` against the
+uploaded package's contents (see the AMO note below), not by matching zip
+checksums. The published `SHA256SUMS` identify the exact uploaded
+artifacts. Inputs:
 
 - **Node:** `>=20.0.0` (matches the workspace `engines` field)
 - **npm:** ships with the matched Node release
+- **Rust:** rustc 1.95.0 for v0.3.0. `make wasm` remaps build paths so a
+  clean checkout on the same rustc reproduces the wasm byte-for-byte no
+  matter where it is built
 - **OS:** Linux x86_64 (the original build matrix). macOS arm64
   reproduces today; Windows hasn't been re-checked since v0.2.x
 - **Lockfile:** the committed `package-lock.json` is the only source
