@@ -92,18 +92,22 @@ export function UnifiedBalance({
   freshness,
   class: className,
 }: UnifiedBalanceProps) {
+  // Show cached pending/locked/sending during a refresh too (don't blank on
+  // every background update). They're still gated on having an actual value.
   const showPending =
-    !hidden && !loading && pendingDisplay !== undefined && pendingDisplay !== null && pendingDisplay !== '';
+    !hidden && pendingDisplay !== undefined && pendingDisplay !== null && pendingDisplay !== '';
   const showLocked =
-    !hidden && !loading && lockedDisplay !== undefined && lockedDisplay !== null && lockedDisplay !== '';
+    !hidden && lockedDisplay !== undefined && lockedDisplay !== null && lockedDisplay !== '';
   const showSending =
-    !hidden && !loading && sendingDisplay !== undefined && sendingDisplay !== null && sendingDisplay !== '';
+    !hidden && sendingDisplay !== undefined && sendingDisplay !== null && sendingDisplay !== '';
 
+  // Seamless balances: once we have a total, KEEP showing it during a background
+  // refresh (the freshness cue below signals the update). Only fall back to the
+  // loading glyph when there is no cached total at all — never blank a known
+  // number to "…" just because a refresh is in flight.
   const total = hidden
     ? HIDDEN_PLACEHOLDER
-    : loading
-      ? '…'
-      : (totalDisplay ?? '—');
+    : (totalDisplay ?? (loading ? '…' : '—'));
 
   const TotalEl = onCycleDenomination ? 'button' : 'div';
 

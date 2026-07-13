@@ -725,7 +725,11 @@ function App() {
         lastRefreshFailed: false,
       });
     } else {
-      setSession((prev) => prev ?? ({} as WalletSession));
+      // No snapshot (first unlock ever, or chrome.storage.session was wiped by an
+      // extension reload / browser restart). Open in the refreshing state so the
+      // headline shows the loading glyph "…" rather than a blank "—" that reads as
+      // broken while the first fetch runs.
+      setSession((prev) => prev ?? ({ refreshing: true } as WalletSession));
     }
     try {
       // Prices are unauthenticated — kick them off in parallel with
