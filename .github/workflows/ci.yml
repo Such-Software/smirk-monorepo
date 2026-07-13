@@ -119,15 +119,9 @@ jobs:
       # When adding a new TS package, append it here in dep order.
       - name: Build workspace (topological)
         run: |
-          npm run build -w @smirk/wasm
-          npm run build -w @smirk/assets
-          npm run build -w @smirk/core
-          npm run build -w @smirk/ui
-          # dapp-api: transport-agnostic types + wallet-handler. No
-          # deps on the other packages; only @smirk/extension imports
-          # it. Must build before @smirk/extension so the workspace
-          # symlink has a populated dist/.
-          npm run build -w @smirk/dapp-api
+          # Derived topological order (scripts/build-workspaces.mjs) so the build
+          # list can't drift out of sync with the code; then the extension itself.
+          make libs
           npm run build -w @smirk/extension
 
       - name: Typecheck workspace

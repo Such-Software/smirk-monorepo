@@ -118,11 +118,9 @@ jobs:
       - name: Build TypeScript workspace
         shell: bash
         run: |
-          npm run build -w @smirk/wasm
-          npm run build -w @smirk/assets
-          npm run build -w @smirk/core
-          npm run build -w @smirk/ui
-          npm run build -w @smirk/dapp-api
+          # Derived topological order (scripts/build-workspaces.mjs) so the list
+          # can't drift; builds wasm + every shared lib the desktop frontend needs.
+          make libs
 
       # notarytool authenticates with an App Store Connect API key (.p8). Secrets
       # can't be file paths, so decode the base64'd .p8 to a temp file and export

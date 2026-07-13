@@ -115,11 +115,9 @@ jobs:
       # desktop's vite build can't resolve @smirk/* workspace imports.
       - name: Build TypeScript workspace
         run: |
-          npm run build -w @smirk/wasm
-          npm run build -w @smirk/assets
-          npm run build -w @smirk/core
-          npm run build -w @smirk/ui
-          npm run build -w @smirk/dapp-api
+          # Derived topological order (scripts/build-workspaces.mjs) so the list
+          # can't drift; builds wasm + every shared lib the desktop frontend needs.
+          make libs
         shell: bash
 
       # The Tauri action does the actual build + bundle. tagName /

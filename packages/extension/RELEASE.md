@@ -130,14 +130,16 @@ mandatory.
 
    unzip smirk-wallet-source-v0.3.0.zip -d smirk
    cd smirk
-   make wasm
    npm install
-   npm run build --workspace @smirk/wasm
-   npm run build --workspace @smirk/assets
-   npm run build --workspace @smirk/core
-   npm run build --workspace @such-software/smirk-dapp-api
-   npm run build --workspace @smirk/ui
-   npm run build:firefox --workspace @smirk/extension
+   # Builds wasm + every workspace lib in derived topological order
+   # (scripts/build-workspaces.mjs) + the firefox extension. No hand-maintained
+   # build list to fall out of sync.
+   make ext-firefox
+   # Note: Cargo.lock references two git sources (jwinterm/grin-wallet and
+   # mimblewimble/grin). These are DEV-ONLY cross-validation test deps of the
+   # grin-ext crate; they are NOT compiled by the extension build. `make wasm`
+   # builds `cargo -p smirk-wasm`, which resolves entirely from crates.io + the
+   # vendored crates in this archive, so the build does not fetch them.
    # Compare the freshly-built dist against the uploaded package by
    # CONTENT. The build output is deterministic and byte-identical; the
    # zip archive's own bytes differ only by file mtimes, so verify the

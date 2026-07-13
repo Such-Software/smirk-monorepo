@@ -4,7 +4,7 @@
 
 .PHONY: help build test check clean wasm wasm-node wasm-smoke rust-build \
         rust-test rust-check ts-build ts-test ts-typecheck ts-install \
-        wasm-clean rust-clean ts-clean ext-chrome ext-firefox
+        wasm-clean rust-clean ts-clean ext-chrome ext-firefox libs
 
 # Default target — show help
 help:
@@ -113,16 +113,18 @@ ts-clean:
 # Extension package — produces a loadable unpacked extension in
 # packages/extension/dist/. Depends on the WASM bundle (copied in by
 # the vite plugin) and on @smirk/core + @smirk/wasm being built.
+# Build order is DERIVED, never hand-maintained: scripts/build-workspaces.mjs
+# topologically sorts every workspace from its declared deps UNION its real
+# `import ... from '@scope/pkg'` statements, so the list can't drift out of sync
+# with the code again. (It did, twice: a missing @smirk/dapp-browser AND
+# @smirk/swap each broke clean-clone builds while "working" locally only because
+# stale dist/ was on disk.) `make libs` builds the shared libraries; ext-chrome /
+# ext-firefox add the extension. Dependency-free so AMO reviewers need no tooling.
+libs: wasm
+	node scripts/build-workspaces.mjs libs
+
 ext-chrome: wasm
-	npm run build --workspace @smirk/wasm
-	npm run build --workspace @smirk/core
-	npm run build --workspace @smirk/ui
-	npm run build --workspace @such-software/smirk-dapp-api
-	npm run build:chrome --workspace @smirk/extension
+	node scripts/build-workspaces.mjs chrome
 
 ext-firefox: wasm
-	npm run build --workspace @smirk/wasm
-	npm run build --workspace @smirk/core
-	npm run build --workspace @smirk/ui
-	npm run build --workspace @such-software/smirk-dapp-api
-	npm run build:firefox --workspace @smirk/extension
+	node scripts/build-workspaces.mjs firefox
