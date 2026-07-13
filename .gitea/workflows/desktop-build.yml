@@ -94,8 +94,13 @@ jobs:
       - name: Install wasm C toolchain (macOS LLVM)
         if: matrix.os_label == 'macos'
         shell: bash
+        env:
+          NONINTERACTIVE: '1'            # brew: never prompt (CI can't answer y/n)
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_UPGRADE: '1'  # don't drag in python@3.14 etc. upgrades
+          HOMEBREW_NO_ENV_HINTS: '1'
         run: |
-          brew install llvm
+          brew list llvm >/dev/null 2>&1 || brew install llvm
           LLVM="$(brew --prefix llvm)"
           echo "CC_wasm32_unknown_unknown=$LLVM/bin/clang" >> "$GITHUB_ENV"
           echo "AR_wasm32_unknown_unknown=$LLVM/bin/llvm-ar" >> "$GITHUB_ENV"
