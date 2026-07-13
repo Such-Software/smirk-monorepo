@@ -229,6 +229,8 @@ jobs:
             -name '*.dmg' -o -name '*.app.tar.gz*' -o -name '*.AppImage*' \
             -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi*' -o -name '*-setup.exe' \
           \) -exec cp -v {} "$dest/" \; 2>/dev/null || true
+          # macOS: the notarized + stapled .app is a DIRECTORY, not a file.
+          find "$base" -maxdepth 3 -type d -name '*.app' -exec cp -R {} "$dest/" \; 2>/dev/null || true
           echo "staged installers to: $dest"; ls -la "$dest" || true
           mkdir -p artifacts-out
           tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz" -C "$dest" . \
