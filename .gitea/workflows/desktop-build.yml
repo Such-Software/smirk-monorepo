@@ -105,12 +105,14 @@ jobs:
           echo "CC_wasm32_unknown_unknown=$LLVM/bin/clang" >> "$GITHUB_ENV"
           echo "AR_wasm32_unknown_unknown=$LLVM/bin/llvm-ar" >> "$GITHUB_ENV"
 
-      # MSVC's cl.exe can't target wasm32 either; use LLVM clang for the wasm C.
-      - name: Install wasm C toolchain (Windows LLVM)
+      # Windows has no GNU make (our build goes through `make wasm`/`make libs`),
+      # and MSVC's cl.exe can't target wasm32 (use LLVM clang for the wasm C).
+      - name: Install Windows build tools (LLVM + make)
         if: matrix.os_label == 'windows'
         shell: bash
         run: |
-          choco install llvm -y || echo "llvm install skipped (may already be present)"
+          choco install llvm make -y || echo "choco install skipped (may already be present)"
+          echo "/c/ProgramData/chocolatey/bin" >> "$GITHUB_PATH"
           CLANG="$(command -v clang || echo '/c/Program Files/LLVM/bin/clang.exe')"
           AR="$(command -v llvm-ar || echo '/c/Program Files/LLVM/bin/llvm-ar.exe')"
           echo "CC_wasm32_unknown_unknown=$CLANG" >> "$GITHUB_ENV"
@@ -194,12 +196,31 @@ jobs:
           projectPath: packages/desktop
           args: ${{ matrix.args }}
 
+      # The Gitea artifact service can 500 on finalize (artifact storage may not be
+      # configured), failing the job even though the build succeeded. Stage the
+      # installers to a persistent path on the self-hosted runner so they're
+      # retrievable regardless; then attempt the artifact upload best-effort.
+      - name: Stage bundles to a persistent runner dir
+        if: always()
+        shell: bash
+        run: |
+          dest="$HOME/smirk-desktop-v0.3.0/${{ matrix.os_label }}"
+          rm -rf "$dest"; mkdir -p "$dest"
+          base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          find "$base" -type f \( \
+            -name '*.dmg' -o -name '*.app.tar.gz*' -o -name '*.AppImage*' \
+            -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi*' -o -name '*-setup.exe' \
+          \) -exec cp -v {} "$dest/" \; 2>/dev/null || true
+          echo "staged installers to: $dest"
+          ls -la "$dest" || echo "(nothing staged — build may have failed earlier)"
+
       # Collect the installers + the updater signatures (.sig) + latest.json.
       - name: Upload bundles
         uses: actions/upload-artifact@v3
+        continue-on-error: true
         with:
           name: smirk-desktop-${{ matrix.os_label }}-v0.3.0
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
             packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
             packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz*
