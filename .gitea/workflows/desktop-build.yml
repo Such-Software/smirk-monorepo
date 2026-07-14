@@ -136,18 +136,17 @@ jobs:
       # right after a fresh NSIS extract -> Defender is almost certainly
       # quarantining makensis.exe. Exclude the Tauri cache from Defender and wipe
       # any half-eaten NSIS cache so Tauri re-downloads it clean.
+      # Best-effort Defender exclusion so makensis.exe isn't quarantined. Invoke
+      # PowerShell INLINE (-Command, not a .ps1 file) from bash so the runner's
+      # script-execution policy can't block it, and never fail the job (needs an
+      # elevated runner for Add-MpPreference; if not elevated, do it on the box).
       - name: Defender exclusion for Tauri/NSIS cache (Windows)
         if: matrix.os_label == 'windows'
-        shell: powershell
+        shell: bash
         run: |
-          try {
-            Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\tauri" -ErrorAction Stop
-            Write-Host "Defender exclusion added: $env:LOCALAPPDATA\tauri"
-          } catch {
-            Write-Host "WARN: could not add Defender exclusion (runner may not be elevated): $($_.Exception.Message)"
-          }
-          Remove-Item -Recurse -Force "$env:LOCALAPPDATA\tauri\NSIS" -ErrorAction SilentlyContinue
-          Write-Host "cleared stale NSIS cache (forces a clean re-download)"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command 'try { Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\tauri" -ErrorAction Stop; Write-Host "Defender exclusion added" } catch { Write-Host "WARN: Defender exclusion failed (runner not elevated?): $($_.Exception.Message)" }' || echo "defender step non-fatal"
+          rm -rf "$LOCALAPPDATA/tauri/NSIS" 2>/dev/null || true
+          echo "cleared stale NSIS cache"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
