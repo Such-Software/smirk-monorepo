@@ -216,8 +216,11 @@ jobs:
         id: tauri
         # Windows NSIS bundling is flaky on this runner (makensis "0x2"); the exe
         # itself always builds, so don't fail the Windows job on it — the staging
-        # step below ships the portable exe. macOS/Linux stay strict.
-        continue-on-error: ${{ matrix.os_label == 'windows' }}
+        # step below ships the portable exe. This MUST be a literal bool: Gitea's
+        # act_runner parses YAML before evaluating ${{ }}, so a templated value
+        # ("cannot unmarshal !!str into bool") breaks the whole workflow. We keep
+        # it literally true and re-assert strictness for macOS/Linux below.
+        continue-on-error: true
         env:
           # macOS code signing (Developer ID Application)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -231,6 +234,17 @@ jobs:
         with:
           projectPath: packages/desktop
           args: ${{ matrix.args }}
+
+      # Re-assert strictness for macOS/Linux: since continue-on-error is a literal
+      # `true` (Gitea can't template it), a genuine build failure on those two would
+      # otherwise be swallowed. Fail the job here if the tauri step didn't succeed.
+      # Windows is intentionally exempt (NSIS is allowed to fail; exe is staged).
+      - name: Enforce build success (macOS/Linux)
+        if: matrix.os_label != 'windows' && steps.tauri.outcome != 'success'
+        shell: bash
+        run: |
+          echo "tauri build failed on ${{ matrix.os_label }} (outcome=${{ steps.tauri.outcome }})"
+          exit 1
 
       # Collect the installers into a SINGLE space-free tar.gz, then upload that.
       # Why: the Tauri bundles are named "Smirk Wallet_0.3.0_amd64.AppImage" (with
