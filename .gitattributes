@@ -4,9 +4,11 @@
 # internal security docs, CI/ops details, the committed release binaries, and the
 # real-money smoke harness in a public source submission.
 
-# Internal security docs (past-vulnerability log + internal audit) — not public.
-docs/SECURITY_AUDIT.md export-ignore
-docs/SECURITY_LOG.md   export-ignore
+# Internal security docs now live in docs/private/ (git-ignored), so they are
+# neither tracked in this PUBLIC repo nor shipped in the archive — no export-ignore
+# entry is needed for them. NOTE: export-ignore is NOT a privacy control; it only
+# trims the AMO source zip. Anything that must stay private must be under a
+# git-ignored private/ directory, never merely export-ignored.
 
 # CI / ops internals (runner labels, hostnames, signing-secret names).
 .github export-ignore
