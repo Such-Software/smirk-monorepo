@@ -91,6 +91,7 @@ import {
   getActiveNostrIdentityFromWallet,
   clearCachedActiveNostrKey,
 } from './nostr-vault';
+import { HeaderIdentitySwitcher } from './identity-switcher';
 import { nip05Resolver, instanceHomeDomain } from './nip05';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
 import { readBalanceSnapshot, writeBalanceSnapshot, clearBalanceSnapshot } from './balance-snapshot';
@@ -1582,10 +1583,13 @@ function App() {
         tabBadges={{ inbox: grinInbox.items.length + tipInbox.tips.length }}
         headerActions={
           session && !session.error ? (
-            <RefreshIconButton
-              busy={session.refreshing}
-              onClick={() => void handleRefresh()}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <HeaderIdentitySwitcher wallet={walletState.wallet} />
+              <RefreshIconButton
+                busy={session.refreshing}
+                onClick={() => void handleRefresh()}
+              />
+            </div>
           ) : null
         }
         routes={{

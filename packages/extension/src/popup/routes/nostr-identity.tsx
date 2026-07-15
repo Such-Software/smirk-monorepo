@@ -8,11 +8,14 @@ import {
   setActiveIdentity,
   renameIdentity,
   removeIdentity,
+  resolveIdentity,
+  encodeNsec,
   shortNpub,
   type IdentityVault,
   type StoredIdentity,
   type UnlockedWallet,
 } from '@smirk/core';
+import { IdentityAvatar } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
 import { loadVault, saveVault, vaultCrypto, refreshActiveNostrKeyCache } from '../nostr-vault';
 
@@ -40,6 +43,7 @@ export function NostrIdentityRoute({
   const [error, setError] = useState<string | undefined>(undefined);
   const [nsec, setNsec] = useState('');
   const [renaming, setRenaming] = useState<{ pubkeyHex: string; label: string } | null>(null);
+  const [revealedNsec, setRevealedNsec] = useState<{ pubkeyHex: string; nsec: string } | null>(null);
 
   useEffect(() => {
     if (!mnemonic) {
@@ -141,6 +145,28 @@ export function NostrIdentityRoute({
     }
   };
 
+  // Reveal/export the nsec for backup (esp. burner/imported keys, which live ONLY in
+  // the encrypted vault). Gated behind an explicit confirm; toggles off on re-tap.
+  const onReveal = (id: StoredIdentity) => {
+    if (!vault || !mnemonic) return;
+    if (revealedNsec?.pubkeyHex === id.pubkeyHex) {
+      setRevealedNsec(null);
+      return;
+    }
+    const ok = window.confirm(
+      `Reveal the secret key (nsec) for "${id.label ?? shortNpub(id.npub)}"?\n\n` +
+        'Anyone with this nsec fully controls this identity. Only reveal it to back it ' +
+        'up somewhere safe — never paste it into a website.',
+    );
+    if (!ok) return;
+    try {
+      const resolved = resolveIdentity(vault, id.pubkeyHex, mnemonic, vaultCrypto(mnemonic).decrypt);
+      setRevealedNsec({ pubkeyHex: id.pubkeyHex, nsec: encodeNsec(resolved.privateKey) });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reveal the key');
+    }
+  };
+
   const sourceBadge: Record<StoredIdentity['source'], { text: string; color: string }> = {
     derived: { text: 'seed', color: '#6366f1' },
     burner: { text: 'burner', color: '#f59e0b' },
@@ -188,47 +214,86 @@ export function NostrIdentityRoute({
           const linked = linkedPubkey === id.pubkeyHex;
           const badge = sourceBadge[id.source];
           return (
-            <div
-              key={id.pubkeyHex}
-              data-testid={`nostr-identity-${id.pubkeyHex}`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 10px',
-                borderRadius: 8,
-                background: active ? 'rgba(99,102,241,0.12)' : 'rgba(255,255,255,0.04)',
-                border: `1px solid ${active ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.10)'}`,
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: active ? 600 : 400 }}>
-                    {id.label ?? shortNpub(id.npub)}
-                  </span>
-                  <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 4, background: `${badge.color}22`, color: badge.color }}>
-                    {badge.text}
-                  </span>
-                  {linked ? <span style={{ fontSize: 10, color: '#22c55e' }}>✓ linked</span> : null}
+            <div key={id.pubkeyHex} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div
+                data-testid={`nostr-identity-${id.pubkeyHex}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  background: active ? 'rgba(99,102,241,0.12)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${active ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.10)'}`,
+                }}
+              >
+                <IdentityAvatar pubkeyHex={id.pubkeyHex} size={30} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: active ? 600 : 400 }}>
+                      {id.label ?? shortNpub(id.npub)}
+                    </span>
+                    <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 4, background: `${badge.color}22`, color: badge.color }}>
+                      {badge.text}
+                    </span>
+                    {linked ? <span style={{ fontSize: 10, color: '#22c55e' }}>✓ linked</span> : null}
+                  </div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 10, opacity: 0.55, wordBreak: 'break-all' }}>
+                    {shortNpub(id.npub)}
+                  </div>
                 </div>
-                <div style={{ fontFamily: 'monospace', fontSize: 10, opacity: 0.55, wordBreak: 'break-all' }}>
-                  {shortNpub(id.npub)}
-                </div>
+                {active ? (
+                  <span style={{ fontSize: 11, color: '#6366f1' }}>active</span>
+                ) : (
+                  <button data-testid={`nostr-switch-${id.pubkeyHex}`} onClick={() => onSwitch(id.pubkeyHex)} disabled={!!busy} style={smallBtn}>
+                    Use
+                  </button>
+                )}
+                <button onClick={() => setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })} disabled={!!busy} style={smallBtn} title="Rename">
+                  ✎
+                </button>
+                <button
+                  data-testid={`nostr-reveal-${id.pubkeyHex}`}
+                  onClick={() => onReveal(id)}
+                  disabled={!!busy || !mnemonic}
+                  style={smallBtn}
+                  title="Reveal / export secret key (nsec)"
+                >
+                  🔑
+                </button>
+                {(vault?.identities.length ?? 0) > 1 ? (
+                  <button data-testid={`nostr-remove-${id.pubkeyHex}`} onClick={() => onRemove(id)} disabled={!!busy} style={{ ...smallBtn, color: '#ef4444' }} title="Remove">
+                    ✕
+                  </button>
+                ) : null}
               </div>
-              {active ? (
-                <span style={{ fontSize: 11, color: '#6366f1' }}>active</span>
-              ) : (
-                <button data-testid={`nostr-switch-${id.pubkeyHex}`} onClick={() => onSwitch(id.pubkeyHex)} disabled={!!busy} style={smallBtn}>
-                  Use
-                </button>
-              )}
-              <button onClick={() => setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })} disabled={!!busy} style={smallBtn} title="Rename">
-                ✎
-              </button>
-              {(vault?.identities.length ?? 0) > 1 ? (
-                <button data-testid={`nostr-remove-${id.pubkeyHex}`} onClick={() => onRemove(id)} disabled={!!busy} style={{ ...smallBtn, color: '#ef4444' }} title="Remove">
-                  ✕
-                </button>
+              {revealedNsec?.pubkeyHex === id.pubkeyHex ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.4)',
+                  }}
+                >
+                  <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600 }}>
+                    Secret key — back this up, never share it
+                  </span>
+                  <div
+                    data-testid={`nostr-nsec-${id.pubkeyHex}`}
+                    onClick={() => void navigator.clipboard.writeText(revealedNsec.nsec).catch(() => {})}
+                    title="Click to copy"
+                    style={{ fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all', cursor: 'pointer' }}
+                  >
+                    {revealedNsec.nsec}
+                  </div>
+                  <button onClick={() => setRevealedNsec(null)} style={{ ...smallBtn, alignSelf: 'flex-start' }}>
+                    Hide
+                  </button>
+                </div>
               ) : null}
             </div>
           );
