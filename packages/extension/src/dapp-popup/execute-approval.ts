@@ -32,11 +32,12 @@ import type {
 import type { ApprovalApproval } from '@smirk/ui';
 import {
   signMessageWithUnlocked,
-  signNostrEventWithUnlocked,
+  signNostrEventWith,
   deriveAppEncKeyWithUnlocked,
   openAppSealWithUnlocked,
-  nostrCryptWithUnlocked,
+  nostrCryptWith,
 } from './signers';
+import { resolveNostrIdentityForOrigin } from '../popup/nostr-vault';
 
 /**
  * The popup-side dependencies the executor needs. We pass these in
@@ -258,7 +259,14 @@ export async function executeApproval(
       if (request.kind !== 'signNostrEvent') {
         throw new Error('Pending request kind mismatch (expected signNostrEvent)');
       }
-      const result = signNostrEventWithUnlocked(deps.wallet, request.event);
+      // Resolve WHICH identity this origin signs as (its granted nostrPubkey, or
+      // the user's active identity when unset) — account-0 / per-origin / vault.
+      const identity = await resolveNostrIdentityForOrigin(
+        deps.wallet,
+        request.origin.origin,
+        request.identityPubkey,
+      );
+      const result = signNostrEventWith(identity, request.event);
       // Forward a "remember for this session" grant (money-tier kinds are filtered
       // out downstream by the wallet-handler's mergeNostrSession).
       return {
@@ -298,8 +306,13 @@ export async function executeApproval(
       if (request.kind !== 'nostrCrypt') {
         throw new Error('Pending request kind mismatch (expected nostrCrypt)');
       }
-      const data = nostrCryptWithUnlocked(
+      const cryptIdentity = await resolveNostrIdentityForOrigin(
         deps.wallet,
+        request.origin.origin,
+        request.identityPubkey,
+      );
+      const data = nostrCryptWith(
+        cryptIdentity,
         request.op,
         request.scheme,
         request.peer,

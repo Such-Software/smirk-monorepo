@@ -86,6 +86,10 @@ export type ApprovalRequest =
   | {
       kind: 'signNostrEvent';
       origin: OriginContext;
+      /** x-only pubkey (hex) of the identity this origin signs as — from its
+       *  OriginPermission.nostrPubkey. Absent = the user's active identity. The
+       *  executor resolves it (account-0 / per-origin / vault) via the wallet. */
+      identityPubkey?: string;
       /** The unsigned event the page wants signed. The wallet renders a human
        *  summary (NIP-98 login to <url>, a note, …) from kind + tags. */
       event: SmirkNostrUnsignedEvent;
@@ -124,6 +128,9 @@ export type ApprovalRequest =
   | {
       kind: 'nostrCrypt';
       origin: OriginContext;
+      /** x-only pubkey (hex) of the identity this origin encrypts/decrypts as —
+       *  from its OriginPermission.nostrPubkey. Absent = the user's active identity. */
+      identityPubkey?: string;
       /** encrypt plaintext → ciphertext, or decrypt ciphertext → plaintext. */
       op: 'encrypt' | 'decrypt';
       scheme: 'nip44' | 'nip04';

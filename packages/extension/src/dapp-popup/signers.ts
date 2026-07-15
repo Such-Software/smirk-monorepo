@@ -23,8 +23,6 @@
 import { bytesToHex } from '@noble/hashes/utils';
 import {
   deriveAppEncryptionKey,
-  deriveNostrIdentity,
-  nostrIdentityFromPrivkey,
   sealOpen,
   signBitcoinMessage,
   signEd25519WithScalar,
@@ -137,26 +135,20 @@ export function signMessageWithUnlocked(
  * npub/pubkey from the private key), so account-0 caching matches the
  * hardcoded account-0 behaviour of the old mnemonic path.
  */
-function resolveUnlockedNostrIdentity(wallet: UnlockedWallet): NostrIdentity | null {
-  if (wallet.keys.nostr) return nostrIdentityFromPrivkey(wallet.keys.nostr.privateKey);
-  if (wallet.mnemonic) return deriveNostrIdentity(wallet.mnemonic, 0);
-  return null;
-}
-
 /**
- * Schnorr-sign an arbitrary Nostr event with the wallet's default (account 0)
- * identity (NIP-98 login, kind-1 notes, etc). Uses the cached nostr key when
- * present (session-cache restore), else the unlocked mnemonic.
+ * Schnorr-sign an arbitrary Nostr event AS an already-resolved identity (NIP-98
+ * login, kind-1 notes, …). The caller (execute-approval) resolves WHICH identity
+ * the origin acts as — account-0, a per-origin compartmentalized identity, or a
+ * vault burner/imported — via `resolveNostrIdentityForOrigin`, keeping this a pure,
+ * storage-free signer. `null` means the identity couldn't be produced (e.g. a
+ * per-origin/vault key on a warm resume) → re-unlock.
  */
-export function signNostrEventWithUnlocked(
-  wallet: UnlockedWallet,
+export function signNostrEventWith(
+  identity: NostrIdentity | null,
   event: UnsignedNostrEvent,
 ): SignedNostrEvent {
-  const identity = resolveUnlockedNostrIdentity(wallet);
   if (!identity) {
-    throw new Error(
-      'Nostr signing needs the unlocked mnemonic — re-unlock the wallet',
-    );
+    throw new Error('Nostr signing needs the unlocked identity — re-unlock the wallet');
   }
   return signNostrEvent(event, identity);
 }
@@ -223,20 +215,19 @@ export function openAppSealWithUnlocked(
 }
 
 /**
- * NIP-07 DM crypto (NIP-44 v2 / legacy NIP-04) under the wallet's Nostr identity
- * (account 0). `op` selects encrypt/decrypt; `peer` is the counterparty x-only
- * hex pubkey. Requires the unlocked mnemonic (absent on a session-cache restore).
+ * NIP-07 DM crypto (NIP-44 v2 / legacy NIP-04) AS an already-resolved identity.
+ * `op` selects encrypt/decrypt; `peer` is the counterparty x-only hex pubkey. The
+ * caller resolves which identity the origin acts as (see {@link signNostrEventWith}).
  */
-export function nostrCryptWithUnlocked(
-  wallet: UnlockedWallet,
+export function nostrCryptWith(
+  identity: NostrIdentity | null,
   op: 'encrypt' | 'decrypt',
   scheme: 'nip44' | 'nip04',
   peer: string,
   data: string,
 ): string {
-  const identity = resolveUnlockedNostrIdentity(wallet);
   if (!identity) {
-    throw new Error('Nostr encryption needs the unlocked mnemonic — re-unlock the wallet');
+    throw new Error('Nostr encryption needs the unlocked identity — re-unlock the wallet');
   }
   if (scheme === 'nip04') {
     return op === 'encrypt'

@@ -11,11 +11,12 @@ import assert from 'node:assert/strict';
 import {
   deriveNostrIdentity,
   deriveNostrKeyFromSeed,
+  nostrIdentityFromPrivkey,
   mnemonicToSeed,
   verifyNostrEventId,
   type UnlockedWallet,
 } from '@smirk/core';
-import { signNostrEventWithUnlocked } from '../signers';
+import { signNostrEventWith } from '../signers';
 
 const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -32,11 +33,15 @@ function restoredWallet(): UnlockedWallet {
   };
 }
 
-test('signNostrEventWithUnlocked signs a kind-1 event on a restored (mnemonic-less) wallet', () => {
+test('signNostrEventWith signs a kind-1 event as the restored wallet cached identity', () => {
   const wallet = restoredWallet();
   assert.equal(wallet.mnemonic, undefined, 'restored wallet has no mnemonic');
 
-  const signed = signNostrEventWithUnlocked(wallet, {
+  // execute-approval resolves WHICH identity the origin signs as (here the cached
+  // account-0 key that survives a session-cache restore) and hands the pure signer
+  // the resolved identity.
+  const identity = nostrIdentityFromPrivkey(wallet.keys.nostr.privateKey);
+  const signed = signNostrEventWith(identity, {
     kind: 1,
     content: 'gm from a restored session',
     tags: [],
@@ -48,14 +53,9 @@ test('signNostrEventWithUnlocked signs a kind-1 event on a restored (mnemonic-le
   assert.equal(signed.pubkey, deriveNostrIdentity(TEST_MNEMONIC, 0).pubkeyHex);
 });
 
-test('signNostrEventWithUnlocked throws only when BOTH the cached key and the mnemonic are absent', () => {
-  const empty = {
-    keys: {} as UnlockedWallet['keys'],
-    addresses: {} as UnlockedWallet['addresses'],
-    fingerprint: 'fp-empty',
-  } as UnlockedWallet;
+test('signNostrEventWith throws when the identity could not be resolved (null)', () => {
   assert.throws(
-    () => signNostrEventWithUnlocked(empty, { kind: 1, content: 'x', tags: [] }),
+    () => signNostrEventWith(null, { kind: 1, content: 'x', tags: [] }),
     /re-unlock the wallet/,
   );
 });
