@@ -11,8 +11,13 @@ import {
   type PostingRequirement,
   type UnlockedWallet,
 } from '@smirk/core';
+import { IdentityPicker, type PickerIdentity } from '@smirk/ui';
 import { feedTimeAgo } from '../format';
-import { getActiveNostrIdentityFromWallet } from '../nostr-vault';
+import {
+  getActiveNostrIdentityFromWallet,
+  resolveNostrIdentityForOrigin,
+  listNostrIdentitiesForPicker,
+} from '../nostr-vault';
 
 /** Compact relative time for a unix-seconds timestamp ("3m", "5h", "2d"). */
 /** One note in the feed. Author npub is shown truncated; content is inert text. */
@@ -69,25 +74,46 @@ export function FeedRoute({
     return () => window.clearInterval(h);
   }, []);
 
-  // Resolve the ACTIVE identity (async — a non-default identity may need the vault).
-  // Works on a warm resume for the default identity via the cached account-0 key; a
-  // non-default active identity that isn't available warm sets identityLockedLabel so
-  // the composer asks for a precise re-unlock instead of posting as the main identity.
+  // Per-context posting identity: list the wallet's identities + default to the
+  // active one; the composer lets you post AS any of them (Phase 4). The chosen
+  // identity is resolved to a signer via resolveNostrIdentityForOrigin (works on a
+  // warm resume for the cached default; a non-cached one asks for a re-unlock).
+  const [identities, setIdentities] = useState<PickerIdentity[]>([]);
+  const [selectedPubkey, setSelectedPubkey] = useState<string>('');
   const [identity, setIdentity] = useState<NostrIdentity | null>(null);
   const [identityLockedLabel, setIdentityLockedLabel] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
-    void getActiveNostrIdentityFromWallet(wallet).then((res) => {
+    void (async () => {
+      const [list, active] = await Promise.all([
+        listNostrIdentitiesForPicker(wallet),
+        getActiveNostrIdentityFromWallet(wallet),
+      ]);
       if (cancelled) return;
-      setIdentity(res.identity);
-      setIdentityLockedLabel(
-        res.identity ? null : res.needsUnlock ? (res.activeLabel ?? 'your selected identity') : null,
-      );
-    });
+      setIdentities(list);
+      setSelectedPubkey((prev) => prev || active.identity?.pubkeyHex || list[0]?.pubkeyHex || '');
+      if (!active.identity && active.needsUnlock) {
+        setIdentityLockedLabel(active.activeLabel ?? 'your selected identity');
+      }
+    })();
     return () => {
       cancelled = true;
     };
   }, [wallet.mnemonic, wallet.fingerprint]);
+
+  useEffect(() => {
+    if (!selectedPubkey) return;
+    let cancelled = false;
+    void resolveNostrIdentityForOrigin(wallet, '', selectedPubkey).then((id) => {
+      if (cancelled) return;
+      setIdentity(id);
+      setIdentityLockedLabel(id ? null : 'this identity — re-unlock the wallet');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.mnemonic, wallet.fingerprint, selectedPubkey]);
 
   // The user's premium status gates posting on a `premium-post` relay. Fetched
   // once; failures read as non-premium (compose shows "needs premium").
@@ -187,6 +213,17 @@ export function FeedRoute({
 
       {posting.kind === 'allowed' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {identities.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <IdentityPicker
+                identities={identities}
+                selectedPubkey={selectedPubkey}
+                onSelect={setSelectedPubkey}
+                label="Posting as"
+                compact
+              />
+            </div>
+          )}
           <textarea
             data-testid="feed-compose"
             value={text}

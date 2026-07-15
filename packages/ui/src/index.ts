@@ -141,6 +141,8 @@ export { MigrationWizard } from './components/MigrationWizard';
 export type { MigrationWizardProps } from './components/MigrationWizard';
 export { BackendPicker } from './components/BackendPicker';
 export type { BackendPickerProps, BackendProbeInfo } from './components/BackendPicker';
+export { IdentityPicker, IdentityAvatar, shortNpubDisplay } from './components/IdentityPicker';
+export type { PickerIdentity, IdentitySource } from './components/IdentityPicker';
 
 export { LockScreen } from './components/LockScreen';
 export type { LockScreenProps } from './components/LockScreen';

@@ -11,8 +11,13 @@ import {
   type DmSubscription,
   type GiftWrapEvent,
 } from '@smirk/core';
+import { IdentityPicker, type PickerIdentity } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
-import { getActiveNostrIdentityFromWallet } from '../nostr-vault';
+import {
+  getActiveNostrIdentityFromWallet,
+  resolveNostrIdentityForOrigin,
+  listNostrIdentitiesForPicker,
+} from '../nostr-vault';
 
 /**
  * Settings → Messages (Identity/messaging plane). Basic NIP-17 encrypted DMs over
@@ -30,10 +35,31 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
   const [text, setText] = useState('');
   const [status, setStatus] = useState<'idle' | 'sending'>('idle');
   const [error, setError] = useState<string | undefined>(undefined);
+  // Per-conversation identity: which of the wallet's identities you send/receive as.
+  const [identities, setIdentities] = useState<PickerIdentity[]>([]);
+  const [selectedPubkey, setSelectedPubkey] = useState<string>('');
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [list, active] = await Promise.all([
+        listNostrIdentitiesForPicker(wallet),
+        getActiveNostrIdentityFromWallet(wallet),
+      ]);
+      if (cancelled) return;
+      setIdentities(list);
+      setSelectedPubkey((prev) => prev || active.identity?.pubkeyHex || list[0]?.pubkeyHex || '');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.mnemonic, wallet.fingerprint]);
+
+  useEffect(() => {
+    if (!selectedPubkey) return;
     let sub: DmSubscription | undefined;
     let cancelled = false;
+    setMessages([]);
     void (async () => {
       const caps = await api.getCapabilities();
       const relayUrl = caps.data?.messaging?.relay_url;
@@ -44,23 +70,16 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
       // Local-only for now: the Smirk relay is the inbox; public interop relays
       // are added when we resolve a recipient's kind-10050 (future).
       initSmirkMessaging({ relayUrl, publicRelays: [] });
-      // Resolve the ACTIVE identity. Works on a warm resume for the default
-      // identity via the cached account-0 key; a non-default active identity that
-      // isn't available warm prompts a precise re-unlock rather than silently
-      // messaging as the main identity.
-      const resolved = await getActiveNostrIdentityFromWallet(wallet);
-      if (!resolved.identity) {
+      // Resolve the SELECTED identity (message/receive AS it). Works on a warm
+      // resume for the cached default; a non-cached identity asks for a re-unlock.
+      const id = await resolveNostrIdentityForOrigin(wallet, '', selectedPubkey);
+      if (!id) {
         if (!cancelled) {
-          setError(
-            resolved.needsUnlock
-              ? `Re-unlock to message as ${resolved.activeLabel ?? 'your selected identity'}`
-              : 'Unlock the wallet to use messaging',
-          );
+          setError('Re-unlock the wallet to message as this identity');
           setReady('off');
         }
         return;
       }
-      const id = resolved.identity;
       if (cancelled) return;
       setIdentity(id);
 
@@ -104,7 +123,7 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
       cancelled = true;
       sub?.close();
     };
-  }, [wallet.mnemonic]);
+  }, [wallet.mnemonic, wallet.fingerprint, selectedPubkey]);
 
   const send = async () => {
     if (!identity || !recipient.trim() || !text.trim()) return;
@@ -148,6 +167,27 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
             below while this screen is open.
           </p>
 
+          {identities.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginTop: 10,
+                fontSize: 11,
+                color: 'var(--smirk-fg-muted)',
+              }}
+            >
+              <span>Messaging as</span>
+              <IdentityPicker
+                identities={identities}
+                selectedPubkey={selectedPubkey}
+                onSelect={setSelectedPubkey}
+                label="Messaging as"
+                compact
+              />
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
             <input
               data-testid="dm-recipient-input"
