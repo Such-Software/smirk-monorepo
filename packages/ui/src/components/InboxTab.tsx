@@ -125,6 +125,8 @@ export interface InboxTabProps {
    * Required entry point for slatepacks that didn't arrive via the
    * Smirk relay — i.e. external grin-wallet, Grim, or clipboard handoff.
    */
+  /** Open the encrypted-DM surface, now merged into Inbox. */
+  onOpenMessages?: () => void;
   onPasteSlatepack?: () => void;
   /**
    * "+ Paste tip link" affordance for public tips shared as a URL
@@ -165,6 +167,32 @@ export function InboxTab(props: InboxTabProps) {
         loading={props.loading ?? false}
         {...(props.onRefresh ? { onRefresh: props.onRefresh } : {})}
       />
+
+      {props.onOpenMessages && (
+        <button
+          data-testid="inbox-messages-btn"
+          onClick={props.onOpenMessages}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '12px 14px',
+            background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.04))',
+            color: 'inherit',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 10,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            textAlign: 'left',
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: 16 }}>💬</span>
+          <span style={{ flex: 1 }}>Messages</span>
+          <span aria-hidden="true" style={{ opacity: 0.5 }}>›</span>
+        </button>
+      )}
 
       {(props.onPasteSlatepack || props.onPasteTipLink) && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -17,7 +17,6 @@ import { isInjectDisabled, setInjectDisabled } from '../../background/dapp/injec
 import type { WalletSession } from '../types';
 import { SentTipsRoute } from './sent-tips';
 import { NostrIdentityRoute } from './nostr-identity';
-import { MessagesRoute } from './messages';
 import { BackendRoute } from './backend';
 
 /**
@@ -193,9 +192,6 @@ export function SettingsRouter({
   }
   if (route.current === 'settings/nostr') {
     return <NostrIdentityRoute wallet={wallet} onBack={() => void navigate('settings')} />;
-  }
-  if (route.current === 'settings/messages') {
-    return <MessagesRoute wallet={wallet} onBack={() => void navigate('settings')} />;
   }
   if (route.current === 'settings/backend') {
     return (
@@ -1089,14 +1085,6 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         testid="settings-nostr-nav"
       />
 
-      {/* Encrypted DMs over the backend's optional Nostr relay (self-disables
-          when the instance runs no relay). */}
-      <SettingsNavRow
-        label="Messages"
-        hint="Encrypted direct messages over your backend's Nostr relay"
-        onClick={() => void navigate('settings/messages')}
-        testid="settings-messages-nav"
-      />
 
       {/* Backend selection — point the wallet at a self-hosted smirk-backend or
           another operator's for max privacy (self-sovereign). */}

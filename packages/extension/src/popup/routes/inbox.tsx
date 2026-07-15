@@ -492,6 +492,7 @@ export function InboxRouter({
           })
           .then(() => navigate('home/inbox/paste'));
       }}
+      onOpenMessages={() => navigate('home/inbox/messages')}
       onPasteTipLink={() => navigate('home/inbox/paste-tip')}
       onOpenIncomingSign={(item) =>
         void handleOpenIncomingSign(item.slatepack, item.relayId)
