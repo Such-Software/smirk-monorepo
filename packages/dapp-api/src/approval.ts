@@ -169,6 +169,10 @@ export type ApprovalResult =
   | {
       kind: 'nostrGrant';
       approved: true;
+      /** x-only pubkey (hex) of the identity the user chose to share with this origin
+       *  — their main (account-0) identity, or a per-origin one. The handler persists
+       *  it on OriginPermission.nostrPubkey; getNostrPublicKey returns it thereafter. */
+      nostrPubkey?: string;
     }
   | {
       kind: 'signNostrEvent';

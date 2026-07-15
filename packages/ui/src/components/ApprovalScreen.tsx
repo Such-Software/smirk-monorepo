@@ -139,7 +139,7 @@ export type ApprovalApproval =
   | { kind: 'signMessage' }
   | { kind: 'requestPayment' }
   | { kind: 'claimPublicTip' }
-  | { kind: 'nostrGrant' }
+  | { kind: 'nostrGrant'; perOrigin?: boolean }
   | { kind: 'signNostrEvent'; grantSession?: { kinds: number[]; expiresAt: number } }
   | { kind: 'appEncKey' }
   | { kind: 'appSealOpen' }
@@ -173,6 +173,9 @@ export function ApprovalScreen({
   // Nostr signature. Ignored for every other kind (and for money-tier, which the
   // body never offers it for).
   const [grantForSession, setGrantForSession] = useState(false);
+  // Nostr identity-grant picker: false = share your main identity (default),
+  // true = a fresh compartmentalized identity just for this site.
+  const [nostrPerOrigin, setNostrPerOrigin] = useState(false);
 
   const handleApprove = async (approval: ApprovalApproval) => {
     setBusy(true);
@@ -223,6 +226,8 @@ export function ApprovalScreen({
         request={request}
         grantForSession={grantForSession}
         onToggleGrant={setGrantForSession}
+        nostrPerOrigin={nostrPerOrigin}
+        onToggleNostrPerOrigin={setNostrPerOrigin}
         {...(formatAmount ? { formatAmount } : {})}
       />
       {error && (
@@ -245,6 +250,7 @@ export function ApprovalScreen({
         onApprove={handleApprove}
         onDeny={onDeny}
         grantForSession={grantForSession}
+        nostrPerOrigin={nostrPerOrigin}
       />
     </div>
   );
@@ -308,11 +314,15 @@ function ApprovalBody({
   formatAmount,
   grantForSession,
   onToggleGrant,
+  nostrPerOrigin,
+  onToggleNostrPerOrigin,
 }: {
   request: ApprovalRequest;
   formatAmount?: (asset: string, atomic: string) => string;
   grantForSession: boolean;
   onToggleGrant: (v: boolean) => void;
+  nostrPerOrigin: boolean;
+  onToggleNostrPerOrigin: (v: boolean) => void;
 }) {
   switch (request.kind) {
     case 'connect':
@@ -332,7 +342,7 @@ function ApprovalBody({
     case 'claimPublicTip':
       return <ClaimTipBody />;
     case 'nostrGrant':
-      return <NostrGrantBody />;
+      return <NostrGrantBody perOrigin={nostrPerOrigin} onToggle={onToggleNostrPerOrigin} />;
     case 'signNostrEvent':
       return (
         <SignNostrEventBody
@@ -485,7 +495,27 @@ function ClaimTipBody() {
   );
 }
 
-function NostrGrantBody() {
+function NostrGrantBody({
+  perOrigin,
+  onToggle,
+}: {
+  perOrigin: boolean;
+  onToggle: (v: boolean) => void;
+}) {
+  const optStyle = (selected: boolean) =>
+    ({
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: 3,
+      textAlign: 'left' as const,
+      padding: '10px 12px',
+      borderRadius: 8,
+      cursor: 'pointer',
+      border: `1px solid ${selected ? 'var(--smirk-accent)' : 'var(--smirk-border)'}`,
+      background: selected ? 'var(--smirk-bg-elevated, rgba(255,255,255,0.04))' : 'transparent',
+      color: 'inherit',
+      font: 'inherit',
+    }) as const;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <h2 style={{ margin: 0, fontSize: 18, color: 'var(--smirk-fg)' }}>
@@ -493,8 +523,22 @@ function NostrGrantBody() {
       </h2>
       <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
         The site is requesting your public Nostr key (npub) so it can recognize
-        you. This reveals your identity to the site — it can never move funds.
+        you. This reveals an identity to the site — it can never move funds.
       </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <button type="button" style={optStyle(!perOrigin)} onClick={() => onToggle(false)}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Use my main identity</span>
+          <span style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
+            The site sees your primary npub — recognizable across sites.
+          </span>
+        </button>
+        <button type="button" style={optStyle(perOrigin)} onClick={() => onToggle(true)}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Use a private identity for this site</span>
+          <span style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
+            A fresh npub only this site sees — unlinkable to your main identity.
+          </span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -685,12 +729,14 @@ function ApprovalActions({
   onApprove,
   onDeny,
   grantForSession,
+  nostrPerOrigin,
 }: {
   request: ApprovalRequest;
   busy: boolean;
   onApprove: (a: ApprovalApproval) => void;
   onDeny: () => void;
   grantForSession: boolean;
+  nostrPerOrigin: boolean;
 }) {
   return (
     <div style={{ display: 'flex', gap: 8 }}>
@@ -715,7 +761,7 @@ function ApprovalActions({
             case 'claimPublicTip':
               return onApprove({ kind: 'claimPublicTip' });
             case 'nostrGrant':
-              return onApprove({ kind: 'nostrGrant' });
+              return onApprove({ kind: 'nostrGrant', perOrigin: nostrPerOrigin });
             case 'signNostrEvent':
               return onApprove({
                 kind: 'signNostrEvent',

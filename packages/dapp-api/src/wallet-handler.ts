@@ -291,6 +291,7 @@ async function dispatchInner<M extends SmirkMethod>(
       // stays passive (it just decides fast-path vs. prompt).
       const existing = await deps.permissions.get(origin.origin);
       const alreadyGranted = !!existing && hasNostrAuthorized(existing);
+      let perm: OriginPermission | null = existing;
       if (!alreadyGranted || !(await deps.provider.isUnlocked())) {
         const decision = await deps.approval({ kind: 'nostrGrant', origin });
         if (!decision.approved) {
@@ -299,25 +300,34 @@ async function dispatchInner<M extends SmirkMethod>(
         if (decision.kind !== 'nostrGrant') {
           throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
         }
-        // Upgrade an existing permission, or CREATE one (no chain assets needed
-        // for a pure-Nostr connection).
-        const next: OriginPermission = existing
-          ? { ...existing, nostr: true, lastUsedAt: Date.now() }
+        // Upgrade an existing permission, or CREATE one (no chain assets needed for a
+        // pure-Nostr connection). Persist the identity the user chose (their main or a
+        // per-origin one) so getNostrPublicKey + signing stay consistent.
+        perm = existing
+          ? {
+              ...existing,
+              nostr: true,
+              ...(decision.nostrPubkey ? { nostrPubkey: decision.nostrPubkey } : {}),
+              lastUsedAt: Date.now(),
+            }
           : {
               origin: origin.origin,
               assets: [],
               nostr: true,
+              ...(decision.nostrPubkey ? { nostrPubkey: decision.nostrPubkey } : {}),
               ...(origin.siteName ? { siteName: origin.siteName } : {}),
               ...(origin.favicon ? { favicon: origin.favicon } : {}),
               grantedAt: Date.now(),
               lastUsedAt: Date.now(),
             };
-        await deps.permissions.set(next);
+        await deps.permissions.set(perm);
       } else {
         // else ⇒ alreadyGranted && unlocked, so `existing` is non-null.
         await touch(deps.permissions, existing!);
       }
-      return await deps.provider.getNostrPublicKey();
+      // Prefer the identity the user chose for THIS origin; fall back to the SW
+      // public cache (account-0) for a legacy grant that predates the picker.
+      return perm?.nostrPubkey ?? (await deps.provider.getNostrPublicKey());
     }
 
     case 'signNostrEvent': {
@@ -344,6 +354,7 @@ async function dispatchInner<M extends SmirkMethod>(
       const decision = await deps.approval({
         kind: 'signNostrEvent',
         origin,
+        ...(perm.nostrPubkey ? { identityPubkey: perm.nostrPubkey } : {}),
         event: params.event,
         tier,
         sessionCovered,
@@ -455,6 +466,7 @@ async function dispatchInner<M extends SmirkMethod>(
       const decision = await deps.approval({
         kind: 'nostrCrypt',
         origin,
+        ...(perm.nostrPubkey ? { identityPubkey: perm.nostrPubkey } : {}),
         op,
         scheme: params.scheme ?? 'nip44',
         peer: params.peer,

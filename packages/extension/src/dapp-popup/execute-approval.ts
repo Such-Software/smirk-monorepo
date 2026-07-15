@@ -21,6 +21,7 @@ import {
   chainProviders,
   recentlySpentInputs,
   resolveFeeRateOrFallback,
+  deriveNostrIdentityForOrigin,
   type SessionState,
   type UnlockedWallet,
 } from '@smirk/core';
@@ -250,9 +251,24 @@ export async function executeApproval(
     }
 
     case 'nostrGrant': {
-      // The grant IS the approval — no signing. getNostrPublicKey then reads
-      // the (public) npub from the provider.
-      return { kind: 'nostrGrant', approved: true };
+      if (approval.kind !== 'nostrGrant') {
+        throw new Error('Pending approval kind mismatch (expected nostrGrant)');
+      }
+      // Resolve the identity the user chose to share with this origin: a per-origin
+      // compartmentalized one, or their main (account-0) identity. Returned so the
+      // handler persists it on OriginPermission.nostrPubkey — getNostrPublicKey +
+      // signing then all act as this same identity.
+      let nostrPubkey: string | undefined;
+      if (approval.perOrigin && deps.wallet.mnemonic) {
+        nostrPubkey = deriveNostrIdentityForOrigin(
+          deps.wallet.mnemonic,
+          request.origin.origin,
+        ).pubkeyHex;
+      } else {
+        const id = await resolveNostrIdentityForOrigin(deps.wallet, request.origin.origin, undefined);
+        nostrPubkey = id?.pubkeyHex;
+      }
+      return { kind: 'nostrGrant', approved: true, ...(nostrPubkey ? { nostrPubkey } : {}) };
     }
 
     case 'signNostrEvent': {
