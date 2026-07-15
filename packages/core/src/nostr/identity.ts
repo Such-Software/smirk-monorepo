@@ -16,6 +16,7 @@
 import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bech32 } from '@scure/base';
+import { HDKey } from '@scure/bip32';
 import { generateSecretKey } from 'nostr-tools/pure';
 import { deriveNostrKeyFromSeed, mnemonicToSeed } from '../hd';
 
@@ -89,6 +90,70 @@ export function nostrIdentityFromPrivkey(privateKey: Uint8Array): NostrIdentity 
     pubkeyHex: toHex(pubkeyXOnly),
     privateKey,
   };
+}
+
+// ── per-origin Nostr identity (opt-in dapp compartmentalization) ──────────────
+// BIP-85 purpose (83696') + a per-origin-Nostr segment (4') — disjoint from the
+// wallet chains (44'/84'), the NIP-06 identity (44'/1237'), app-enc (83696'/3'),
+// and the reserved storage(1')/login(2') segments. Deterministic + recoverable
+// from the seed (reinstall keeps the same per-site npub) and unlinkable across
+// origins (all hardened). A change to the formula bumps the tag to v2.
+const NOSTR_ORIGIN_PURPOSE = 83696;
+const NOSTR_ORIGIN_SEGMENT = 4;
+const NOSTR_ORIGIN_TAG = 'smirk:nostr-origin:v1';
+
+function u32be(n: number): Uint8Array {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n >>> 0, false);
+  return b;
+}
+
+function concatU8(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+
+/**
+ * Hardened path for a per-origin Nostr identity. Indices are the first three 32-bit
+ * big-endian words of `SHA256(tag ‖ len‖origin)`, each masked to a hardened index.
+ * Length-prefixing removes `a‖b` ambiguity; the tag namespaces the formula.
+ */
+export function nostrOriginPath(origin: string): string {
+  const enc = new TextEncoder();
+  const scope = enc.encode(origin.normalize('NFC'));
+  const h = sha256(concatU8(enc.encode(NOSTR_ORIGIN_TAG), u32be(scope.length), scope));
+  const view = new DataView(h.buffer, h.byteOffset, h.byteLength);
+  const i0 = view.getUint32(0, false) & 0x7fffffff;
+  const i1 = view.getUint32(4, false) & 0x7fffffff;
+  const i2 = view.getUint32(8, false) & 0x7fffffff;
+  return `m/${NOSTR_ORIGIN_PURPOSE}'/${NOSTR_ORIGIN_SEGMENT}'/${i0}'/${i1}'/${i2}'`;
+}
+
+/**
+ * Derive a deterministic, seed-recoverable Nostr identity SCOPED to a verified
+ * origin — for opt-in per-dapp compartmentalization. Unlike a random burner it
+ * survives reinstall (re-derived from the seed); unlike account-0 it is unlinkable
+ * to the user's main npub. `origin` MUST be the wallet-verified origin (the handler
+ * supplies it), never a page-supplied string. `account` is
+ * {@link NON_DERIVED_ACCOUNT} (it is not a NIP-06 rotation account).
+ */
+export function deriveNostrIdentityForOrigin(
+  mnemonic: string,
+  origin: string,
+  passphrase = '',
+): NostrIdentity {
+  if (!origin) throw new Error('nostr-origin: origin is required');
+  const node = HDKey.fromMasterSeed(mnemonicToSeed(mnemonic, passphrase)).derive(
+    nostrOriginPath(origin),
+  );
+  if (!node.privateKey) throw new Error('nostr-origin: failed to derive key');
+  return nostrIdentityFromPrivkey(node.privateKey.slice(0, 32));
 }
 
 /**

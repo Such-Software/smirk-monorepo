@@ -11,9 +11,12 @@ import assert from 'node:assert/strict';
 
 import {
   deriveNostrIdentity,
+  deriveNostrIdentityForOrigin,
+  nostrOriginPath,
   decodeNpub,
   signNostrEventId,
   verifyNostrEventId,
+  NON_DERIVED_ACCOUNT,
 } from '../identity';
 
 function hex(b: Uint8Array): string {
@@ -77,4 +80,34 @@ test('schnorr sign/verify round-trips over an event id', () => {
 
 test('invalid account index throws', () => {
   assert.throws(() => deriveNostrIdentity(NIP06[0].mnemonic, -1));
+});
+
+// ── per-origin identity (opt-in dapp compartmentalization) ────────────────────
+const M = NIP06[0].mnemonic;
+
+test('per-origin identity is deterministic + recoverable from the seed', () => {
+  const a = deriveNostrIdentityForOrigin(M, 'https://goblin.market');
+  const b = deriveNostrIdentityForOrigin(M, 'https://goblin.market');
+  assert.equal(a.pubkeyHex, b.pubkeyHex, 'same seed+origin -> same npub (survives reinstall)');
+  assert.equal(hex(a.privateKey), hex(b.privateKey));
+  assert.equal(a.account, NON_DERIVED_ACCOUNT, 'not a NIP-06 rotation account');
+});
+
+test('per-origin identities are unlinkable across origins + from account-0', () => {
+  const account0 = deriveNostrIdentity(M, 0);
+  const g = deriveNostrIdentityForOrigin(M, 'https://goblin.market');
+  const s = deriveNostrIdentityForOrigin(M, 'https://shop.example');
+  assert.notEqual(g.pubkeyHex, s.pubkeyHex, 'different origins -> different npubs');
+  assert.notEqual(g.pubkeyHex, account0.pubkeyHex, 'per-origin != main identity');
+  // round-trips as a valid npub + can sign.
+  assert.equal(decodeNpub(g.npub).length, 32);
+  const sig = signNostrEventId('a'.repeat(64), g.privateKey);
+  assert.ok(verifyNostrEventId(sig, 'a'.repeat(64), g.pubkeyHex));
+});
+
+test('per-origin path is a hardened BIP-85 path disjoint from identity/app-enc', () => {
+  const p = nostrOriginPath('https://goblin.market');
+  assert.match(p, /^m\/83696'\/4'\/\d+'\/\d+'\/\d+'$/, 'purpose 83696, segment 4, all hardened');
+  assert.notEqual(p, nostrOriginPath('https://shop.example'), 'origin drives the path');
+  assert.throws(() => deriveNostrIdentityForOrigin(M, ''), 'empty origin rejected');
 });
