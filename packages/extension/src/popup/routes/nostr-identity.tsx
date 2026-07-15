@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import {
   api,
-  resolveIdentity,
+  deriveNostrIdentity,
   addDerivedIdentity,
   addBurnerIdentity,
   importIdentity,
@@ -14,14 +14,15 @@ import {
   type UnlockedWallet,
 } from '@smirk/core';
 import { settingsInputStyle } from '../ui-shared';
-import { loadVault, saveVault, vaultCrypto } from '../nostr-vault';
+import { loadVault, saveVault, vaultCrypto, refreshActiveNostrKeyCache } from '../nostr-vault';
 
 /**
  * Settings → Nostr identities (P2 multi-identity switcher). One wallet, many
  * identities: seed-derived (recoverable), random "burner" (seed-independent
  * compartmentalization), and `nsec`-imported (carried in from Goblin/another
- * wallet). Switch the active one, rename, remove, and link the active one to the
- * backend for "Sign in with Nostr" (NIP-98). Burner/imported private keys are
+ * wallet). Switch the active one, rename, remove, and link your PRIMARY (account-0)
+ * identity to the backend for "Sign in with Nostr" (NIP-98) — the backend account is
+ * bound to the stable primary, not the switchable active identity. Burner/imported private keys are
  * encrypted at rest under a mnemonic-derived key; the plaintext never leaves an
  * unlocked context. See nostr-vault.ts + @smirk/core identity-store.
  */
@@ -67,6 +68,9 @@ export function NostrIdentityRoute({
     try {
       await saveVault(mnemonic!, next);
       setVault(next);
+      // Keep the session-cached active key in sync so a switched burner/imported
+      // identity survives a warm resume too (see nostr-vault.ts).
+      void refreshActiveNostrKeyCache(wallet);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save');
     } finally {
@@ -121,8 +125,11 @@ export function NostrIdentityRoute({
     setBusy('link');
     setError(undefined);
     try {
-      const active = resolveIdentity(vault, vault.active, mnemonic, vaultCrypto(mnemonic).decrypt);
-      const r = await api.linkNostr(active);
+      // Backend "Sign in with Nostr" binds the STABLE primary (account-0) — the same
+      // key the auth bootstrap signs with — NOT the switchable active identity, so
+      // compartmentalizing with a burner never changes or breaks your Smirk account.
+      const primary = deriveNostrIdentity(mnemonic, 0);
+      const r = await api.linkNostr(primary);
       if (r.data?.nostrPubkey) setLinkedPubkey(r.data.nostrPubkey);
       else if (r.status === 409) setError('This identity is already linked to a different Smirk account.');
       else if (r.status === 401) setError('Your session expired — unlock and try again.');

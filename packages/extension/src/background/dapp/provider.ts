@@ -54,9 +54,10 @@ export interface DappPublicCache {
   fingerprint: string;
   addresses: SmirkAddresses;
   publicKeys: SmirkPublicKeys;
-  /** Seed-derived Nostr public key (x-only hex) for the active identity. Public
-   *  material — lets the dapp bridge answer getNostrPublicKey() without the seed.
-   *  Optional for backward compat with pre-nostr cache entries. */
+  /** Seed-derived Nostr public key (x-only hex) — the wallet's account-0 identity
+   *  today (per-origin / active-identity selection lands with the per-service work).
+   *  Public material — lets the dapp bridge answer getNostrPublicKey() without the
+   *  seed. Optional for backward compat with pre-nostr cache entries. */
   nostrPublicKey?: string;
   /** Backend API base URL the wallet is pointed at, so a page can discover the
    *  user's chosen backend via getBackend(). Optional for backward compat. */

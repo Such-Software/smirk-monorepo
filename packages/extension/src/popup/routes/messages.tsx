@@ -2,7 +2,6 @@ import { useEffect, useState } from 'preact/hooks';
 import {
   api,
   initSmirkMessaging,
-  deriveNostrIdentity,
   decryptWrap,
   subscribeDms,
   sendDm,
@@ -13,6 +12,7 @@ import {
   type GiftWrapEvent,
 } from '@smirk/core';
 import { settingsInputStyle } from '../ui-shared';
+import { getActiveNostrIdentityFromWallet } from '../nostr-vault';
 
 /**
  * Settings → Messages (Identity/messaging plane). Basic NIP-17 encrypted DMs over
@@ -41,17 +41,26 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
         if (!cancelled) setReady('off');
         return;
       }
-      if (!wallet.mnemonic) {
+      // Local-only for now: the Smirk relay is the inbox; public interop relays
+      // are added when we resolve a recipient's kind-10050 (future).
+      initSmirkMessaging({ relayUrl, publicRelays: [] });
+      // Resolve the ACTIVE identity. Works on a warm resume for the default
+      // identity via the cached account-0 key; a non-default active identity that
+      // isn't available warm prompts a precise re-unlock rather than silently
+      // messaging as the main identity.
+      const resolved = await getActiveNostrIdentityFromWallet(wallet);
+      if (!resolved.identity) {
         if (!cancelled) {
-          setError('Unlock the wallet to use messaging');
+          setError(
+            resolved.needsUnlock
+              ? `Re-unlock to message as ${resolved.activeLabel ?? 'your selected identity'}`
+              : 'Unlock the wallet to use messaging',
+          );
           setReady('off');
         }
         return;
       }
-      // Local-only for now: the Smirk relay is the inbox; public interop relays
-      // are added when we resolve a recipient's kind-10050 (future).
-      initSmirkMessaging({ relayUrl, publicRelays: [] });
-      const id = deriveNostrIdentity(wallet.mnemonic, 0);
+      const id = resolved.identity;
       if (cancelled) return;
       setIdentity(id);
 

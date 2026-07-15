@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   api,
-  deriveNostrIdentity,
   postingRequirement,
   feedSourcesFromCapability,
   NostrClient,
   NostrNotes,
   type BackendCapabilities,
   type DisplayNote,
+  type NostrIdentity,
   type PostingRequirement,
   type UnlockedWallet,
 } from '@smirk/core';
 import { feedTimeAgo } from '../format';
+import { getActiveNostrIdentityFromWallet } from '../nostr-vault';
 
 /** Compact relative time for a unix-seconds timestamp ("3m", "5h", "2d"). */
 /** One note in the feed. Author npub is shown truncated; content is inert text. */
@@ -68,10 +69,25 @@ export function FeedRoute({
     return () => window.clearInterval(h);
   }, []);
 
-  const identity = useMemo(
-    () => (wallet.mnemonic ? deriveNostrIdentity(wallet.mnemonic, 0) : null),
-    [wallet.mnemonic],
-  );
+  // Resolve the ACTIVE identity (async — a non-default identity may need the vault).
+  // Works on a warm resume for the default identity via the cached account-0 key; a
+  // non-default active identity that isn't available warm sets identityLockedLabel so
+  // the composer asks for a precise re-unlock instead of posting as the main identity.
+  const [identity, setIdentity] = useState<NostrIdentity | null>(null);
+  const [identityLockedLabel, setIdentityLockedLabel] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getActiveNostrIdentityFromWallet(wallet).then((res) => {
+      if (cancelled) return;
+      setIdentity(res.identity);
+      setIdentityLockedLabel(
+        res.identity ? null : res.needsUnlock ? (res.activeLabel ?? 'your selected identity') : null,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.mnemonic, wallet.fingerprint]);
 
   // The user's premium status gates posting on a `premium-post` relay. Fetched
   // once; failures read as non-premium (compose shows "needs premium").
@@ -175,7 +191,13 @@ export function FeedRoute({
             data-testid="feed-compose"
             value={text}
             onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
-            placeholder={identity ? 'Share something…' : 'Unlock the wallet to post'}
+            placeholder={
+              identity
+                ? 'Share something…'
+                : identityLockedLabel
+                  ? `Re-unlock to post as ${identityLockedLabel}`
+                  : 'Unlock the wallet to post'
+            }
             disabled={!identity || sending}
             rows={3}
             style={{

@@ -12,6 +12,7 @@ import {
   type UnlockedWallet,
 } from '@smirk/core';
 import { storage, walletKeystore, sessionStorage } from './singletons';
+import { cacheActiveNostrKeyForSession, clearCachedActiveNostrKey } from './nostr-vault';
 
 /**
  * Try to restore a previously-cached unlocked wallet from
@@ -89,6 +90,7 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
   const clamped = clampAutoLockMinutes(minutes);
   if (clamped === 0) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
+    await clearCachedActiveNostrKey();
     return;
   }
   const expiresAtMs = Date.now() + clamped * 60_000;
@@ -104,6 +106,9 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
   // would otherwise flatten it to a numeric-keyed object that breaks signing on
   // restore ("private key must be hex string or Uint8Array").
   await sessionStorage.set(SESSION_CACHE_KEY, serializeForSessionCache(entry));
+  // Also cache a NON-default active Nostr identity's key on the same lifetime so it
+  // survives a warm resume (the default account-0 key already rides in wallet.keys).
+  await cacheActiveNostrKeyForSession(wallet, expiresAtMs);
 }
 
 /**

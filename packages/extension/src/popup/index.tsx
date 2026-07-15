@@ -86,7 +86,11 @@ import { formatUsd, parseAmount, bytesToHex, hexToBytes } from './format';
 import { validateSendRecipient, recipientNpubToHex, isNip05Name, resolveAddressForAsset } from './address';
 import { encodeNostrRelayRef } from './relay-ref';
 import { respondToInboxItem } from './inbox-actions';
-import { getActiveNostrIdentity } from './nostr-vault';
+import {
+  getActiveNostrIdentity,
+  getActiveNostrIdentityFromWallet,
+  clearCachedActiveNostrKey,
+} from './nostr-vault';
 import { nip05Resolver, instanceHomeDomain } from './nip05';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
 import { readBalanceSnapshot, writeBalanceSnapshot, clearBalanceSnapshot } from './balance-snapshot';
@@ -356,16 +360,19 @@ function inboundToInboxItem(s: InboundSlatepack): InboxItem {
  */
 async function fetchGrinInbox(
   userId: string,
-  mnemonic?: string | null,
+  wallet?: UnlockedWallet | null,
 ): Promise<{ items: InboxItem[]; loading: boolean; error: string | null }> {
-  if (mnemonic) {
+  if (wallet) {
     try {
       // The ACTIVE identity drives the inbox — a burner/imported identity sees
-      // gift-wraps addressed to IT, not always account 0.
-      const identity = await getActiveNostrIdentity(mnemonic);
-      const channels = buildSlatepackChannels({ grin: api, userId, identity });
-      const inbound = await readAllInbound(channels);
-      return { items: inbound.map(inboundToInboxItem), loading: false, error: null };
+      // gift-wraps addressed to IT, not always account 0. Works on a warm resume
+      // (no mnemonic) for the default identity via the cached account-0 key.
+      const resolved = await getActiveNostrIdentityFromWallet(wallet);
+      if (resolved.identity) {
+        const channels = buildSlatepackChannels({ grin: api, userId, identity: resolved.identity });
+        const inbound = await readAllInbound(channels);
+        return { items: inbound.map(inboundToInboxItem), loading: false, error: null };
+      }
     } catch (e) {
       // Fall through to the backend-only path on any channel-construction error.
       void e;
@@ -1104,7 +1111,7 @@ function App() {
       const [nextGrin, nextTips] = await Promise.all([
         grinOff
           ? Promise.resolve({ items: [], loading: false, error: null })
-          : fetchGrinInbox(userId, walletState.wallet.mnemonic ?? null),
+          : fetchGrinInbox(userId, walletState.wallet),
         tipsOff
           ? Promise.resolve({ tips: [], error: null })
           : fetchTipInbox().catch((e) => ({
@@ -1458,6 +1465,7 @@ function App() {
   // walletState.kind === 'unlocked'
   const lockHandler = async () => {
     await sessionStorage.remove(SESSION_CACHE_KEY);
+    await clearCachedActiveNostrKey();
     await clearBootstrapCache();
     await clearDappPublicCache();
     await walletKeystore.lock();
@@ -1482,11 +1490,10 @@ function App() {
     // slatepack relay round-trip but still refresh tips.
     const sess = await store.load();
     const grinHidden = (sess.ui.hiddenAssets ?? []).includes('grin');
-    const mnemonic = walletState.wallet.mnemonic;
     const [nextGrin, nextTips] = await Promise.all([
       grinHidden
         ? Promise.resolve({ items: [], loading: false, error: null })
-        : fetchGrinInbox(userId, mnemonic),
+        : fetchGrinInbox(userId, walletState.wallet),
       fetchTipInbox().catch((e) => ({
         tips: [],
         error: e instanceof Error ? e.message : 'Tip fetch failed',
@@ -1636,6 +1643,7 @@ function App() {
               onLock={lockHandler}
               onForgetComplete={async () => {
                 await sessionStorage.remove(SESSION_CACHE_KEY);
+                await clearCachedActiveNostrKey();
                 await clearBootstrapCache();
                 await clearDappPublicCache();
                 await walletKeystore.destroy();
