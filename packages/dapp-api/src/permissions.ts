@@ -25,6 +25,12 @@ export interface OriginPermission {
    *  Nostr-event signatures. Separate from chain `assets` because exposing the
    *  npub is a distinct, cross-site-correlatable grant. */
   nostr?: boolean;
+  /** The x-only pubkey (hex) of the Nostr identity this origin SEES, chosen by the
+   *  user at grant time: the wallet's active/main identity, or a per-origin
+   *  compartmentalized identity (`deriveNostrIdentityForOrigin`). Persisted so
+   *  `getNostrPublicKey` answers from the stored grant instead of the single-value
+   *  cache, and the signer resolves the right key. Absent = legacy grant → account-0. */
+  nostrPubkey?: string;
   /** Whether the origin may derive its app-scoped e2ee key(s) and ask the wallet
    *  to open boxes sealed to them. A one-time disclosure grant: the key is
    *  origin-bound and unlinkable to identity, so once granted, derive/open need
