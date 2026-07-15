@@ -49,21 +49,28 @@ export function bootBackendSelection(onChange?: () => void): void {
   initSmirkApi({ baseUrl: FALLBACK.url, walletApiStyle: FALLBACK.apiStyle });
   // (2)+(3) Durable override + cross-context re-apply, both storage-backed.
   // MV3 OFFSCREEN documents don't expose `chrome.storage` (restricted API
-  // surface), so `new ChromeLocalStorage()` throws there — which previously
-  // crashed the offscreen runner at module load, before it could register its
-  // message listener, surfacing to the popup as "Receiving end does not exist".
-  // Degrade gracefully: keep the synchronous default. The offscreen instead
-  // receives the resolved backend in each job request (see `applyBackendToApi`
-  // in the runner + the coordinator), so auth still targets the right backend.
+  // surface). That's expected here, not an error: the offscreen receives the
+  // resolved backend in each job request (see `applyBackendToApi` in the runner
+  // + the coordinator), so auth still targets the right backend. PROBE for the
+  // API and return quietly instead of constructing `ChromeLocalStorage` (which
+  // throws) and logging the caught exception — surfacing a caught error to the
+  // extension error console for a known-good path is just noise reviewers/users
+  // shouldn't see.
+  const chromeStorage = (
+    globalThis as { chrome?: { storage?: { local?: unknown } } }
+  ).chrome?.storage?.local;
+  if (!chromeStorage) {
+    // Storage-less context (offscreen): keep the synchronous build default.
+    return;
+  }
   let storage: ChromeLocalStorage;
   try {
     storage = new ChromeLocalStorage();
   } catch (e) {
-    console.warn(
-      '[backend-boot] chrome.storage unavailable in this context (offscreen?); ' +
-        'using the build default until a backend is supplied per-job',
-      e,
-    );
+    // Storage was advertised but construction still failed — genuinely
+    // unexpected. Keep the default; log at debug so it never hits the error
+    // console during normal operation.
+    console.debug('[backend-boot] storage init failed; using build default', e);
     return;
   }
   // (2) Durable override. Fire-and-forget: the first real request (auth

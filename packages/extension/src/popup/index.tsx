@@ -738,6 +738,18 @@ function App() {
       const pricesPromise = fetchPrices(api).catch(
         () => null as Prices | null,
       );
+      // Seed prices into the session the moment they resolve, decoupled from the
+      // balance fetch below. `fetchAllBalances` is bound to the SLOWEST chain
+      // (e.g. a firewalled-Fulcrum LTC can take ~10s), but prices land in ~500ms.
+      // Committing them early lets the USD total render from the balances already
+      // streamed in via onAssetBalance, instead of blanking to "…" (the
+      // totalDisplay gate needs both balances AND prices) until the whole
+      // Promise.all clears. Guarded on prev so we never resurrect a torn-down
+      // session; the final setSession below still commits the authoritative view.
+      void pricesPromise.then((p) => {
+        if (!p) return;
+        setSession((prev) => (prev ? { ...prev, prices: p } : prev));
+      });
 
       // Try the warm path first: if we have a cached bootstrap from
       // a recent popup open this browser session, reuse it and skip
