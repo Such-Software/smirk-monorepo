@@ -17,7 +17,9 @@ import {
 } from '@smirk/core';
 import { IdentityAvatar } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
-import { loadVault, saveVault, vaultCrypto, refreshActiveNostrKeyCache } from '../nostr-vault';
+import { loadVault, loadVaultByFingerprint, saveVault, vaultCrypto, refreshActiveNostrKeyCache } from '../nostr-vault';
+import { walletKeystore, store } from '../singletons';
+import { writeSessionCache } from '../session-cache';
 
 /**
  * Settings → Nostr identities (P2 multi-identity switcher). One wallet, many
@@ -36,7 +38,12 @@ export function NostrIdentityRoute({
   wallet: UnlockedWallet;
   onBack: () => void;
 }) {
-  const mnemonic = wallet.mnemonic;
+  // On a warm resume the seed isn't in memory (wallet.mnemonic is undefined). We
+  // keep the hub VIEWABLE read-only and let the user re-enter their password
+  // inline to unlock management; that fresh unlock lives here for the session.
+  const [reunlocked, setReunlocked] = useState<UnlockedWallet | null>(null);
+  const activeWallet = reunlocked ?? wallet;
+  const mnemonic = activeWallet.mnemonic;
   const [vault, setVault] = useState<IdentityVault | null>(null);
   const [linkedPubkey, setLinkedPubkey] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -44,14 +51,48 @@ export function NostrIdentityRoute({
   const [nsec, setNsec] = useState('');
   const [renaming, setRenaming] = useState<{ pubkeyHex: string; label: string } | null>(null);
   const [revealedNsec, setRevealedNsec] = useState<{ pubkeyHex: string; nsec: string } | null>(null);
+  const [showUnlock, setShowUnlock] = useState(false);
+  const [unlockPw, setUnlockPw] = useState('');
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockErr, setUnlockErr] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!mnemonic) {
-      setError('Wallet is locked — unlock to manage your Nostr identities');
+    if (mnemonic) {
+      void loadVault(mnemonic).then(setVault).catch((e) => setError(String(e)));
       return;
     }
-    void loadVault(mnemonic).then(setVault).catch((e) => setError(String(e)));
+    // Warm resume: no seed in memory, but the roster (labels + active pointer)
+    // is readable by fingerprint. Show it read-only instead of a "locked" wall;
+    // writes prompt for the password inline (doInlineUnlock).
+    setError(undefined);
+    void loadVaultByFingerprint(activeWallet.fingerprint)
+      .then((v) => {
+        if (v) setVault(v);
+      })
+      .catch(() => {});
   }, [mnemonic]);
+
+  // Re-derive the seed for this session by re-entering the password, without
+  // leaving the hub. Mirrors the whole-app unlock (index.tsx): keystore.unlock
+  // then re-warm the (mnemonic-less) session cache. Setting reunlocked flips
+  // `mnemonic` on, so the effect above reloads the full vault.
+  const doInlineUnlock = async () => {
+    if (!unlockPw) return;
+    setUnlocking(true);
+    setUnlockErr(undefined);
+    try {
+      const w = await walletKeystore.unlock(unlockPw);
+      const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
+      await writeSessionCache(w, minutes);
+      setReunlocked(w);
+      setUnlockPw('');
+      setShowUnlock(false);
+    } catch {
+      setUnlockErr('Incorrect password');
+    } finally {
+      setUnlocking(false);
+    }
+  };
 
   useEffect(() => {
     let stale = false;
@@ -67,14 +108,20 @@ export function NostrIdentityRoute({
   // Persist a mutated vault + reflect it in state. `op` labels the in-flight
   // action so buttons can show progress; errors surface, never throw.
   const commit = async (op: string, next: IdentityVault) => {
+    if (!mnemonic) {
+      // Warm resume: a write needs the seed — surface the inline unlock instead
+      // of throwing on the saveVault non-null assertion.
+      setShowUnlock(true);
+      return;
+    }
     setBusy(op);
     setError(undefined);
     try {
-      await saveVault(mnemonic!, next);
+      await saveVault(mnemonic, next);
       setVault(next);
       // Keep the session-cached active key in sync so a switched burner/imported
       // identity survives a warm resume too (see nostr-vault.ts).
-      void refreshActiveNostrKeyCache(wallet);
+      void refreshActiveNostrKeyCache(activeWallet);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save');
     } finally {
@@ -92,10 +139,27 @@ export function NostrIdentityRoute({
   };
   const onAddBurner = () => {
     if (!vault || !mnemonic) return;
+    // Burner keys are random, NOT seed-derived — restoring the seed on a new
+    // device will not bring them back. Make that explicit at creation time.
+    const ok = window.confirm(
+      'Create a new burner identity?\n\n' +
+        'A burner has a fresh random key that is NOT part of your seed phrase. ' +
+        'Restoring your seed on a new device will NOT recover it — back up its nsec ' +
+        '(🔑 Reveal) if you want to keep it.',
+    );
+    if (!ok) return;
     void commit('add-burner', addBurnerIdentity(vault, vaultCrypto(mnemonic).encrypt).vault);
   };
   const onImport = () => {
     if (!vault || !mnemonic || !nsec.trim()) return;
+    // Imported keys are external — stored encrypted here but outside your seed.
+    const ok = window.confirm(
+      'Import this nsec?\n\n' +
+        'Imported keys are stored encrypted in this wallet but are NOT part of your ' +
+        'seed phrase. Keep your own backup of the nsec — restoring your seed elsewhere ' +
+        'will not recover it.',
+    );
+    if (!ok) return;
     try {
       const next = importIdentity(vault, nsec.trim(), vaultCrypto(mnemonic).encrypt).vault;
       setNsec('');
@@ -185,6 +249,65 @@ export function NostrIdentityRoute({
         encrypted with your wallet — back up an nsec before removing it.
       </p>
 
+      {!mnemonic && (
+        <div
+          data-testid="nostr-locked-notice"
+          style={{
+            marginTop: 10,
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: 'rgba(245,158,11,0.10)',
+            border: '1px solid rgba(245,158,11,0.35)',
+            fontSize: 12,
+            lineHeight: 1.4,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+          }}
+        >
+          <span style={{ opacity: 0.9 }}>
+            🔓 You can view your identities. Enter your password to add, switch, rename,
+            reveal, or import.
+          </span>
+          {!showUnlock ? (
+            <button
+              data-testid="nostr-unlock-manage"
+              onClick={() => setShowUnlock(true)}
+              style={{ ...actionBtn, alignSelf: 'flex-start' }}
+            >
+              Unlock to manage
+            </button>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="password"
+                  autoFocus
+                  data-testid="nostr-unlock-input"
+                  value={unlockPw}
+                  placeholder="Password"
+                  disabled={unlocking}
+                  onInput={(e) => setUnlockPw((e.target as HTMLInputElement).value)}
+                  onKeyDown={(e) => {
+                    if ((e as KeyboardEvent).key === 'Enter') void doInlineUnlock();
+                  }}
+                  style={{ ...settingsInputStyle, flex: 1 }}
+                />
+                <button
+                  data-testid="nostr-unlock-submit"
+                  onClick={() => void doInlineUnlock()}
+                  disabled={unlocking || !unlockPw}
+                  style={actionBtn}
+                >
+                  {unlocking ? '…' : 'Unlock'}
+                </button>
+              </div>
+              {unlockErr && <span style={{ color: '#ef4444' }}>{unlockErr}</span>}
+            </div>
+          )}
+        </div>
+      )}
+
       {activeIdentity ? (
         <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 11, opacity: 0.6 }}>Active npub</span>
@@ -245,11 +368,11 @@ export function NostrIdentityRoute({
                 {active ? (
                   <span style={{ fontSize: 11, color: '#6366f1' }}>active</span>
                 ) : (
-                  <button data-testid={`nostr-switch-${id.pubkeyHex}`} onClick={() => onSwitch(id.pubkeyHex)} disabled={!!busy} style={smallBtn}>
+                  <button data-testid={`nostr-switch-${id.pubkeyHex}`} onClick={() => onSwitch(id.pubkeyHex)} disabled={!!busy || !mnemonic} style={smallBtn}>
                     Use
                   </button>
                 )}
-                <button onClick={() => setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })} disabled={!!busy} style={smallBtn} title="Rename">
+                <button onClick={() => setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })} disabled={!!busy || !mnemonic} style={smallBtn} title="Rename">
                   ✎
                 </button>
                 <button
@@ -315,10 +438,10 @@ export function NostrIdentityRoute({
       ) : null}
 
       <div style={{ marginTop: 14, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <button data-testid="nostr-add-derived" onClick={onAddDerived} disabled={!!busy} style={actionBtn}>
+        <button data-testid="nostr-add-derived" onClick={onAddDerived} disabled={!!busy || !mnemonic} style={actionBtn}>
           + Seed account
         </button>
-        <button data-testid="nostr-add-burner" onClick={onAddBurner} disabled={!!busy} style={actionBtn}>
+        <button data-testid="nostr-add-burner" onClick={onAddBurner} disabled={!!busy || !mnemonic} style={actionBtn}>
           + Burner
         </button>
       </div>
@@ -331,7 +454,7 @@ export function NostrIdentityRoute({
           onInput={(e) => setNsec((e.target as HTMLInputElement).value)}
           style={{ ...settingsInputStyle, flex: 1 }}
         />
-        <button data-testid="nostr-import-btn" onClick={onImport} disabled={!!busy || !nsec.trim()} style={actionBtn}>
+        <button data-testid="nostr-import-btn" onClick={onImport} disabled={!!busy || !nsec.trim() || !mnemonic} style={actionBtn}>
           Import
         </button>
       </div>
@@ -340,7 +463,7 @@ export function NostrIdentityRoute({
         {linkedPubkey && linkedPubkey === vault?.active ? (
           <div data-testid="nostr-linked-badge" style={linkedBadge}>✓ Active identity linked to this account</div>
         ) : (
-          <button data-testid="nostr-link-btn" onClick={() => void onLinkActive()} disabled={busy === 'link' || !vault} style={primaryBtn}>
+          <button data-testid="nostr-link-btn" onClick={() => void onLinkActive()} disabled={busy === 'link' || !vault || !mnemonic} style={primaryBtn}>
             {busy === 'link' ? 'Linking…' : 'Link active identity for sign-in'}
           </button>
         )}

@@ -9,6 +9,7 @@ import {
 } from '@smirk/ui';
 import { store } from '../singletons';
 import { cancelInboxItem } from '../inbox-actions';
+import { MessagesRoute } from './messages';
 
 /**
  * InboxPasteRouter — universal paste-and-dispatch screen.
@@ -399,7 +400,7 @@ export function InboxRouter({
   onRefresh: () => Promise<void>;
   onClaimTip: (item: InboxTipItem) => Promise<void>;
 }) {
-  const { navigate } = useRoute();
+  const { navigate, route } = useRoute();
   // Tapping a pending_to_sign row seeds the GrinPasteIncomingWizard
   // with the relay's slatepack + relayId so the user lands at the
   // auto-sign step instead of pasting manually. The wizard's sign
@@ -474,6 +475,14 @@ export function InboxRouter({
     }
     await onRefresh();
   };
+
+  // The Messages drill-down is hosted here (under the Inbox tab) so it keeps the
+  // Inbox nav highlighted. The paste family still lives in HomeRouter (they are
+  // complex sub-routers); those keep the `home/inbox/*` prefix.
+  if (route.current === 'inbox/messages') {
+    return <MessagesRoute wallet={wallet} onBack={() => navigate('inbox')} />;
+  }
+
   return (
     <InboxTab
       items={inbox.items}
@@ -492,7 +501,7 @@ export function InboxRouter({
           })
           .then(() => navigate('home/inbox/paste'));
       }}
-      onOpenMessages={() => navigate('home/inbox/messages')}
+      onOpenMessages={() => navigate('inbox/messages')}
       onPasteTipLink={() => navigate('home/inbox/paste-tip')}
       onOpenIncomingSign={(item) =>
         void handleOpenIncomingSign(item.slatepack, item.relayId)

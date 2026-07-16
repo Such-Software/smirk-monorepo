@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { setActiveIdentity, type UnlockedWallet } from '@smirk/core';
-import { IdentityPicker, type PickerIdentity } from '@smirk/ui';
+import { IdentityPicker, useRoute, type PickerIdentity } from '@smirk/ui';
 import {
   listNostrIdentitiesForPicker,
   getActiveNostrIdentityFromWallet,
@@ -18,6 +18,7 @@ import {
  * read-only indicator (the optimistic selection reverts on the next load).
  */
 export function HeaderIdentitySwitcher({ wallet }: { wallet: UnlockedWallet }) {
+  const { navigate } = useRoute();
   const [identities, setIdentities] = useState<PickerIdentity[]>([]);
   const [activePubkey, setActivePubkey] = useState<string>('');
 
@@ -54,6 +55,7 @@ export function HeaderIdentitySwitcher({ wallet }: { wallet: UnlockedWallet }) {
       identities={identities}
       selectedPubkey={activePubkey}
       onSelect={onSelect}
+      onManage={() => void navigate('settings/nostr')}
       label="Active identity"
       compact
       testid="header-identity-switcher"

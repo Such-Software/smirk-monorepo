@@ -173,7 +173,6 @@ import { ApprovalApp } from './routes/approval';
 import { AssetDetailRoute } from './routes/asset-detail';
 import { SwapRouter } from './routes/swap';
 import { InboxRouter, InboxPasteRouter, PasteTipLinkScreen } from './routes/inbox';
-import { MessagesRoute } from './routes/messages';
 import { RefreshIconButton, ScanProgressBanner } from './routes/misc';
 import { BootstrappingPlaceholder, BootstrapErrorScreen } from './routes/bootstrap-screens';
 import { BrowseTab } from './routes/browse';
@@ -2273,10 +2272,6 @@ function HomeRouter({
   // sta field and routes to the appropriate downstream wizard so the
   // user never has to know if they have an S1 / S2 / I1 / I2 in their
   // clipboard — they just paste once and we figure out what to do.
-  if (route.current === 'home/inbox/messages') {
-    return <MessagesRoute wallet={wallet} onBack={() => void navigate('inbox')} />;
-  }
-
   if (route.current === 'home/inbox/paste') {
     return (
       <InboxPasteRouter

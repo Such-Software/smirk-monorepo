@@ -127,6 +127,8 @@ export function IdentityPicker({
   compact = false,
   class: className,
   testid,
+  onManage,
+  manageLabel = 'Manage identities…',
 }: {
   identities: PickerIdentity[];
   selectedPubkey: string;
@@ -137,6 +139,13 @@ export function IdentityPicker({
   class?: string;
   /** Optional data-testid on the trigger button (for e2e). */
   testid?: string;
+  /**
+   * Optional footer action. When set, the dropdown gains a final
+   * "Manage identities…" option and the trigger stays interactive even with a
+   * single identity (so a fresh, one-identity wallet can still reach the hub).
+   */
+  onManage?: () => void;
+  manageLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -147,6 +156,12 @@ export function IdentityPicker({
   const selected =
     identities.find((i) => i.pubkeyHex === selectedPubkey) ?? identities[0];
   const selIdx = Math.max(0, identities.findIndex((i) => i.pubkeyHex === selectedPubkey));
+
+  // The Manage action (when present) is a virtual option at index === length,
+  // so it participates in keyboard nav / aria-activedescendant like any option.
+  const single = identities.length <= 1;
+  const interactive = !single || !!onManage;
+  const optCount = identities.length + (onManage ? 1 : 0);
 
   // Close on outside click / focus leaving.
   useEffect(() => {
@@ -171,6 +186,11 @@ export function IdentityPicker({
     if (returnFocus) triggerRef.current?.focus();
   };
   const choose = (idx: number) => {
+    if (onManage && idx === identities.length) {
+      close();
+      onManage();
+      return;
+    }
     const id = identities[idx];
     if (id) onSelect(id.pubkeyHex);
     close();
@@ -180,7 +200,7 @@ export function IdentityPicker({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
-        setActiveIdx((i) => Math.min(identities.length - 1, i + 1));
+        setActiveIdx((i) => Math.min(optCount - 1, i + 1));
         break;
       case 'ArrowUp':
         e.preventDefault();
@@ -192,7 +212,7 @@ export function IdentityPicker({
         break;
       case 'End':
         e.preventDefault();
-        setActiveIdx(identities.length - 1);
+        setActiveIdx(optCount - 1);
         break;
       case 'Enter':
       case ' ':
@@ -210,7 +230,6 @@ export function IdentityPicker({
   };
 
   if (!selected) return null;
-  const single = identities.length <= 1;
 
   return (
     <div ref={rootRef} class={className} style={{ position: 'relative', display: 'inline-block' }}>
@@ -220,11 +239,11 @@ export function IdentityPicker({
         {...(testid ? { 'data-testid': testid } : {})}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`${label} ${labelFor(selected)}${single ? '' : '. Activate to change identity.'}`}
-        disabled={single}
-        onClick={() => !single && setOpen((o) => !o)}
+        aria-label={`${label} ${labelFor(selected)}${interactive ? '. Activate to change or manage identities.' : ''}`}
+        disabled={!interactive}
+        onClick={() => interactive && setOpen((o) => !o)}
         onKeyDown={(e) => {
-          if (!single && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
+          if (interactive && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
             setOpen(true);
           }
@@ -238,7 +257,7 @@ export function IdentityPicker({
           border: '1px solid var(--smirk-border)',
           background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.04))',
           color: 'inherit',
-          cursor: single ? 'default' : 'pointer',
+          cursor: interactive ? 'pointer' : 'default',
           font: 'inherit',
           fontSize: compact ? 11 : 12,
           maxWidth: 200,
@@ -248,7 +267,7 @@ export function IdentityPicker({
         <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {labelFor(selected)}
         </span>
-        {!single && (
+        {interactive && (
           <span aria-hidden="true" style={{ opacity: 0.6, fontSize: 10 }}>
             ▾
           </span>
@@ -320,6 +339,37 @@ export function IdentityPicker({
               </li>
             );
           })}
+          {onManage && (
+            <li
+              id={`idpick-opt-${identities.length}`}
+              role="option"
+              aria-selected={false}
+              onMouseEnter={() => setActiveIdx(identities.length)}
+              onClick={() => choose(identities.length)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 10px',
+                marginTop: 4,
+                borderTop: '1px solid var(--smirk-border)',
+                borderRadius: 8,
+                cursor: 'pointer',
+                color: 'var(--smirk-accent)',
+                fontSize: 13,
+                fontWeight: 600,
+                background:
+                  activeIdx === identities.length
+                    ? 'var(--smirk-bg-elevated, rgba(255,255,255,0.06))'
+                    : 'transparent',
+              }}
+            >
+              <span aria-hidden="true" style={{ width: 26, textAlign: 'center', fontSize: 16 }}>
+                ⚙
+              </span>
+              <span>{manageLabel}</span>
+            </li>
+          )}
         </ul>
       )}
     </div>

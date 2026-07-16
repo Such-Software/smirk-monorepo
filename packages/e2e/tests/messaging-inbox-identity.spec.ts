@@ -9,7 +9,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *
  *   - Phase 6 (messaging → Inbox): the Inbox tab exposes a "Messages" entry
  *     (`inbox-messages-btn`) that opens the encrypted-DM surface
- *     (`messages-screen`) as an `home/inbox/messages` drill-down. Before the
+ *     (`messages-screen`) as an `inbox/messages` drill-down. Before the
  *     merge this surface lived under Settings; the entry + drill-down are the
  *     merge. The surface renders its `messages-screen` root unconditionally
  *     (past any wallet-lock) — this is also the regression guard for the
@@ -56,6 +56,31 @@ test('Inbox → Messages opens the DM surface (Phase 6 merge)', async ({
   await expect(page.getByTestId('messages-screen')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('heading', { name: 'Messages' })).toBeVisible();
   await expect(page.locator('#root')).not.toContainText('Unlock the wallet to use messaging');
+
+  // Nav-highlight regression: the inbox/messages drill-down keeps the Inbox tab
+  // active (it was mis-highlighting Home when the route was home/inbox/messages).
+  await expect(page.getByTestId('nav-tab-inbox')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('nav-tab-home')).toHaveAttribute('aria-selected', 'false');
+});
+
+test('Header identity chip → Manage identities opens the hub (single identity)', async ({
+  context,
+  extensionId,
+}) => {
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
+
+  const chip = page.getByTestId('header-identity-switcher');
+  await expect(chip).toBeVisible({ timeout: 30_000 });
+  // Interactive even with a single identity, because the Manage action is present.
+  await expect(chip).toBeEnabled();
+  await chip.click();
+
+  // The dropdown carries a "Manage identities…" listbox option that routes to
+  // the Nostr identities hub — the fix for the previously-dead single-identity chip.
+  await page.getByRole('option', { name: /Manage identities/ }).click();
+  await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({ timeout: 30_000 });
 });
 
 test('Settings → Messages nav row is retired (Phase 6)', async ({ context, extensionId }) => {
