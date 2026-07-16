@@ -185,6 +185,7 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
                 onSelect={setSelectedPubkey}
                 label="Messaging as"
                 compact
+                testid="messages-identity-picker"
               />
             </div>
           )}

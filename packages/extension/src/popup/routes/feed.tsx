@@ -221,6 +221,7 @@ export function FeedRoute({
                 onSelect={setSelectedPubkey}
                 label="Posting as"
                 compact
+                testid="feed-identity-picker"
               />
             </div>
           )}

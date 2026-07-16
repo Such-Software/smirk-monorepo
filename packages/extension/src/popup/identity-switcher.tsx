@@ -56,6 +56,7 @@ export function HeaderIdentitySwitcher({ wallet }: { wallet: UnlockedWallet }) {
       onSelect={onSelect}
       label="Active identity"
       compact
+      testid="header-identity-switcher"
     />
   );
 }

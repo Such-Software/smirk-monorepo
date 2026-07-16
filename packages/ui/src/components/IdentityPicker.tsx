@@ -126,6 +126,7 @@ export function IdentityPicker({
   label = 'Acting as',
   compact = false,
   class: className,
+  testid,
 }: {
   identities: PickerIdentity[];
   selectedPubkey: string;
@@ -134,6 +135,8 @@ export function IdentityPicker({
   label?: string;
   compact?: boolean;
   class?: string;
+  /** Optional data-testid on the trigger button (for e2e). */
+  testid?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -214,6 +217,7 @@ export function IdentityPicker({
       <button
         ref={triggerRef}
         type="button"
+        {...(testid ? { 'data-testid': testid } : {})}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`${label} ${labelFor(selected)}${single ? '' : '. Activate to change identity.'}`}
