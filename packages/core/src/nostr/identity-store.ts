@@ -17,6 +17,8 @@
  * active identity, so call sites don't change as identities multiply.
  */
 
+import { utf8ToBytes } from '@noble/hashes/utils';
+
 import {
   deriveNostrIdentity,
   generateBurnerIdentity,
@@ -216,4 +218,94 @@ export function removeIdentity(vault: IdentityVault, pubkeyHex: string): Identit
   delete secrets[pubkeyHex];
   const active = vault.active === pubkeyHex ? identities[0]!.pubkeyHex : vault.active;
   return { ...vault, active, identities, secrets };
+}
+
+// ── Encrypted vault backup / restore ────────────────────────────────────────
+// Burner + imported keys are NOT seed-derived, so they vanish on reinstall unless
+// backed up. These build a single portable, encrypted blob of the WHOLE vault so a
+// user can carry every identity (roster + labels + burner/imported secrets) across
+// devices. The whole JSON is sealed under the host's mnemonic-derived key — same
+// trust boundary as the seed — so the file never leaks the PRIVATE labels/roster in
+// the clear, and a wrong-seed restore fails cleanly on the Poly1305 tag.
+
+const BACKUP_KIND = 'smirk-nostr-vault-backup';
+
+/** Versioned envelope for an encrypted vault backup. `ct` is the sealed JSON of the
+ *  whole {@link IdentityVault}. `fp` is the PUBLIC seed fingerprint (cleartext) so a
+ *  restore can warn about a wrong-wallet file before attempting to decrypt. */
+export interface VaultBackupEnvelope {
+  kind: typeof BACKUP_KIND;
+  v: 1;
+  fp: string;
+  alg: 'xchacha20poly1305';
+  ct: string;
+}
+
+/** Serialize + seal the whole vault. `seal` is the host's mnemonic-derived blob
+ *  cipher (`vaultCrypto(mnemonic).encrypt`). Returns a pretty JSON envelope string. */
+export function buildVaultBackup(
+  vault: IdentityVault,
+  fingerprint: string,
+  seal: EncryptSecret,
+): string {
+  const ct = seal(utf8ToBytes(JSON.stringify(vault)));
+  const env: VaultBackupEnvelope = {
+    kind: BACKUP_KIND,
+    v: 1,
+    fp: fingerprint,
+    alg: 'xchacha20poly1305',
+    ct,
+  };
+  return JSON.stringify(env, null, 2);
+}
+
+/** Read the fingerprint stamped on a backup WITHOUT decrypting — lets a caller warn
+ *  "this backup is from a different wallet" before prompting for anything. Returns
+ *  null if the text isn't a recognizable backup envelope. */
+export function peekVaultBackupFingerprint(text: string): string | null {
+  try {
+    const env = JSON.parse(text) as VaultBackupEnvelope;
+    return env?.kind === BACKUP_KIND && typeof env.fp === 'string' ? env.fp : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse + open a backup. Throws on a bad envelope, tamper, or wrong seed (the
+ *  `open` cipher surfaces the Poly1305 failure). Returns the exact vault backed up. */
+export function parseVaultBackup(text: string, open: DecryptSecret): IdentityVault {
+  let env: VaultBackupEnvelope;
+  try {
+    env = JSON.parse(text) as VaultBackupEnvelope;
+  } catch {
+    throw new Error('Not a valid backup file');
+  }
+  if (env?.kind !== BACKUP_KIND || env.v !== 1 || typeof env.ct !== 'string') {
+    throw new Error('Not a Smirk identities backup');
+  }
+  const json = new TextDecoder().decode(open(env.ct)); // wrong seed → throws here
+  const vault = JSON.parse(json) as IdentityVault;
+  if (vault?.version !== 1 || !Array.isArray(vault.identities) || typeof vault.active !== 'string') {
+    throw new Error('Backup is corrupt');
+  }
+  return vault;
+}
+
+/** Merge an imported vault INTO a base (the reinstalled wallet's seeded vault).
+ *  Dedupe by pubkeyHex (base wins on conflict — keeps the live secret + label),
+ *  append the incoming's new identities + their (already-sealed) secrets, and adopt
+ *  the incoming `active` only if it survives the merge. Pure. */
+export function mergeVault(base: IdentityVault, incoming: IdentityVault): IdentityVault {
+  const have = new Set(base.identities.map((i) => i.pubkeyHex));
+  const added = incoming.identities.filter((i) => !have.has(i.pubkeyHex));
+  const identities = [...base.identities, ...added];
+  const secrets = { ...base.secrets };
+  for (const id of added) {
+    const ct = incoming.secrets[id.pubkeyHex];
+    if (ct) secrets[id.pubkeyHex] = ct; // already ciphertext under the SAME key
+  }
+  const active = identities.some((i) => i.pubkeyHex === incoming.active)
+    ? incoming.active
+    : base.active;
+  return { version: 1, active, identities, secrets };
 }

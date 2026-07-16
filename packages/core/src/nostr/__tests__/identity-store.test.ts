@@ -20,12 +20,61 @@ import {
   removeIdentity,
   resolveActiveIdentity,
   resolveIdentity,
+  buildVaultBackup,
+  parseVaultBackup,
+  peekVaultBackupFingerprint,
+  mergeVault,
 } from '../identity-store';
 
 const M = 'leader monkey parrot ring guide accident before fence cannon height naive bean';
 // Stand-in host crypto (real host binds these to the unlocked keystore).
 const encrypt = (b: Uint8Array) => bytesToHex(b);
 const decrypt = (s: string) => hexToBytes(s);
+
+test('vault backup: build → parse round-trips the whole vault (secrets + labels + active)', () => {
+  let v = initIdentityVault(M);
+  v = addDerivedIdentity(v, M).vault;
+  v = addBurnerIdentity(v, encrypt).vault;
+  v = importIdentity(v, encodeNsec(generateBurnerIdentity().privateKey), encrypt).vault;
+  v = renameIdentity(v, v.identities[1]!.pubkeyHex, 'market seller');
+  v = setActiveIdentity(v, v.identities[2]!.pubkeyHex);
+
+  const text = buildVaultBackup(v, 'fp-abc', encrypt);
+  assert.equal(peekVaultBackupFingerprint(text), 'fp-abc');
+  const restored = parseVaultBackup(text, decrypt);
+  assert.deepEqual(restored, v); // roster + labels + active + sealed secrets verbatim
+});
+
+test('vault backup: wrong seed (decrypt throws) surfaces an error, never a partial vault', () => {
+  const v = addBurnerIdentity(initIdentityVault(M), encrypt).vault;
+  const text = buildVaultBackup(v, 'fp', encrypt);
+  assert.throws(() =>
+    parseVaultBackup(text, () => {
+      throw new Error('Poly1305 auth failed');
+    }),
+  );
+});
+
+test('vault backup: rejects a non-backup / wrong-kind envelope', () => {
+  assert.throws(() => parseVaultBackup('{}', decrypt), /Smirk identities backup/);
+  assert.throws(() => parseVaultBackup('not json at all', decrypt), /valid backup file/);
+  assert.equal(peekVaultBackupFingerprint('{}'), null);
+});
+
+test('mergeVault: dedupes shared identities, appends new ones + secrets, guards active', () => {
+  const base = initIdentityVault(M); // account-0 only
+  let incoming = addBurnerIdentity(base, encrypt).vault;
+  incoming = setActiveIdentity(incoming, incoming.identities[1]!.pubkeyHex);
+
+  const merged = mergeVault(base, incoming);
+  assert.equal(merged.identities.length, 2); // account-0 deduped + burner appended
+  assert.equal(merged.active, incoming.active); // incoming active survives → adopted
+  assert.ok(merged.secrets[incoming.identities[1]!.pubkeyHex]); // burner secret carried
+
+  // An incoming active that isn't in the merged set must NOT be adopted.
+  const merged2 = mergeVault(base, { ...base, active: 'deadbeef' });
+  assert.equal(merged2.active, base.active);
+});
 
 test('init seeds the account-0 derived identity, active, no stored secret', () => {
   const v = initIdentityVault(M);

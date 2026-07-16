@@ -130,6 +130,46 @@ export function postingRequirement(caps: {
   return { kind: 'allowed' };
 }
 
+/** NIP-01 kind-0 profile metadata (replaceable — relays keep only the newest). */
+export const PROFILE_KIND = 0;
+
+/** kind-0 profile content. Only the fields we own are set; callers may extend
+ *  (about, picture, lud16…) without any signature-shape change. */
+export interface NostrProfile {
+  /** Short handle (usually the Smirk username). */
+  name?: string;
+  /** Human display name. */
+  display_name?: string;
+  /** `<username>@<homeDomain>` — the verifiable handle external clients check
+   *  against https://<homeDomain>/.well-known/nostr.json. */
+  nip05?: string;
+  about?: string;
+  picture?: string;
+  lud16?: string;
+}
+
+/**
+ * Build + sign a kind-0 profile (metadata) under the posting identity. Mirrors
+ * {@link buildNoteEvent}: `content` is the JSON-stringified profile, `tags` empty.
+ * kind-0 is REPLACEABLE, so publishing this overwrites the npub's prior profile —
+ * callers that want to preserve other clients' fields should merge first.
+ */
+export function buildProfileEvent(identity: NostrIdentity, profile: NostrProfile): NostrWireEvent {
+  const signer = resolvePostingIdentity(identity);
+  const clean = Object.fromEntries(
+    Object.entries(profile).filter(([, v]) => v != null && v !== ''),
+  );
+  return finalizeEvent(
+    {
+      kind: PROFILE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+      content: JSON.stringify(clean),
+    },
+    signer.privateKey,
+  ) as unknown as NostrWireEvent;
+}
+
 /** Build + sign a kind-1 note under the (seam-resolved) posting identity. */
 export function buildNoteEvent(
   text: string,

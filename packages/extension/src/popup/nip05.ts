@@ -35,3 +35,11 @@ export const nip05Resolver: Nip05Resolver = createNip05Resolver({ pins: pinStore
 export function instanceHomeDomain(): string {
   return homeDomainFromApiBase(api.getBaseUrl());
 }
+
+/** The domain to advertise in this instance's NIP-05 handles (`name@domain`). The
+ *  backend serves the verifying /.well-known/nostr.json at both the bare and `api.`
+ *  hosts, so we prefer the registrable/bare domain (strip a leading `api.`) to match
+ *  the handle users expect — `you@smirk.cash`, not `you@api.smirk.cash`. */
+export function nip05HomeDomain(): string {
+  return instanceHomeDomain().replace(/^api\./, '');
+}

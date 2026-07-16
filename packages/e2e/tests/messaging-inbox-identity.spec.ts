@@ -81,6 +81,11 @@ test('Header identity chip → Manage identities opens the hub (single identity)
   // the Nostr identities hub — the fix for the previously-dead single-identity chip.
   await page.getByRole('option', { name: /Manage identities/ }).click();
   await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({ timeout: 30_000 });
+
+  // The encrypted vault backup affordance (burner/imported recovery path) renders
+  // in the hub and is enabled on a fresh (seed-in-memory) unlock.
+  await expect(page.getByTestId('nostr-export-backup')).toBeVisible();
+  await expect(page.getByTestId('nostr-export-backup')).toBeEnabled();
 });
 
 test('Settings → Messages nav row is retired (Phase 6)', async ({ context, extensionId }) => {

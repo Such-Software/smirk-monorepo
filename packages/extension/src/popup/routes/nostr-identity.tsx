@@ -11,13 +11,30 @@ import {
   resolveIdentity,
   encodeNsec,
   shortNpub,
+  buildProfileEvent,
+  resolvePublishRelays,
+  loadCapabilities,
+  NostrClient,
+  PROFILE_KIND,
+  type NostrProfile,
+  type NostrIdentity,
   type IdentityVault,
   type StoredIdentity,
   type UnlockedWallet,
 } from '@smirk/core';
 import { IdentityAvatar } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
-import { loadVault, loadVaultByFingerprint, saveVault, vaultCrypto, refreshActiveNostrKeyCache } from '../nostr-vault';
+import {
+  loadVault,
+  loadVaultByFingerprint,
+  saveVault,
+  vaultCrypto,
+  refreshActiveNostrKeyCache,
+  exportVaultBackup,
+  restoreVaultBackup,
+  isForeignVaultBackup,
+} from '../nostr-vault';
+import { nip05HomeDomain } from '../nip05';
 import { walletKeystore, store } from '../singletons';
 import { writeSessionCache } from '../session-cache';
 
@@ -55,6 +72,9 @@ export function NostrIdentityRoute({
   const [unlockPw, setUnlockPw] = useState('');
   const [unlocking, setUnlocking] = useState(false);
   const [unlockErr, setUnlockErr] = useState<string | undefined>(undefined);
+  const [backupText, setBackupText] = useState('');
+  const [showRestore, setShowRestore] = useState(false);
+  const [publishingProfile, setPublishingProfile] = useState(false);
 
   useEffect(() => {
     if (mnemonic) {
@@ -198,7 +218,11 @@ export function NostrIdentityRoute({
       // compartmentalizing with a burner never changes or breaks your Smirk account.
       const primary = deriveNostrIdentity(mnemonic, 0);
       const r = await api.linkNostr(primary);
-      if (r.data?.nostrPubkey) setLinkedPubkey(r.data.nostrPubkey);
+      if (r.data?.nostrPubkey) {
+        setLinkedPubkey(r.data.nostrPubkey);
+        // Advertise the now-linked handle on Nostr so external clients verify it.
+        void publishNip05Profile(primary);
+      }
       else if (r.status === 409) setError('This identity is already linked to a different Smirk account.');
       else if (r.status === 401) setError('Your session expired — unlock and try again.');
       else setError(r.error ?? 'Link failed');
@@ -228,6 +252,110 @@ export function NostrIdentityRoute({
       setRevealedNsec({ pubkeyHex: id.pubkeyHex, nsec: encodeNsec(resolved.privateKey) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not reveal the key');
+    }
+  };
+
+  // Publish an account-0 kind-0 profile advertising nip05 = <username>@<homeDomain>
+  // so external Nostr clients render the linked npub as a verified handle. Merges
+  // with any existing kind-0 on our relays (never clobbers about/picture). Only the
+  // PRIMARY (account-0) identity carries the handle — never a burner/imported.
+  // Fire-and-forget: a failure here must never break linking.
+  const publishNip05Profile = async (identity: NostrIdentity) => {
+    try {
+      const username = (await api.getMySmirkUsername()).data;
+      if (!username) return; // no handle claimed → nothing to advertise
+      const caps = await loadCapabilities(api);
+      const relays = resolvePublishRelays(
+        caps?.messaging?.relay_url,
+        caps?.feed?.extra_relays ? { publicFallback: caps.feed.extra_relays } : {},
+      );
+      if (!relays.length) return;
+      const nip05 = `${username}@${nip05HomeDomain()}`;
+      const client = new NostrClient();
+      try {
+        let base: NostrProfile = {};
+        const existing = await client.querySync(relays, [
+          { kinds: [PROFILE_KIND], authors: [identity.pubkeyHex], limit: 1 },
+        ]);
+        const prev = existing[0];
+        if (prev?.content) {
+          try {
+            base = JSON.parse(prev.content) as NostrProfile;
+          } catch {
+            /* unparseable prior profile → start clean */
+          }
+        }
+        const event = buildProfileEvent(identity, { ...base, name: base.name ?? username, nip05 });
+        await client.publish(relays, event);
+      } finally {
+        client.close();
+      }
+    } catch {
+      /* fire-and-forget — never surface / block on a profile publish */
+    }
+  };
+
+  const onPublishProfile = () => {
+    if (!mnemonic) {
+      setShowUnlock(true);
+      return;
+    }
+    setPublishingProfile(true);
+    void publishNip05Profile(deriveNostrIdentity(mnemonic, 0)).finally(() =>
+      setPublishingProfile(false),
+    );
+  };
+
+  // Download an encrypted backup of the whole identity vault so burner/imported keys
+  // survive a reinstall. Sealed under the mnemonic-derived key (same trust boundary
+  // as the seed) — only THIS wallet's seed can restore it.
+  const onExportBackup = async () => {
+    if (!mnemonic) {
+      setShowUnlock(true);
+      return;
+    }
+    try {
+      const blob = await exportVaultBackup(mnemonic);
+      const url = URL.createObjectURL(new Blob([blob], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'smirk-identities-backup.json';
+      a.click();
+      URL.revokeObjectURL(url);
+      setError(undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed');
+    }
+  };
+
+  const onRestoreBackup = async () => {
+    if (!mnemonic) {
+      setShowUnlock(true);
+      return;
+    }
+    const text = backupText.trim();
+    if (!text) return;
+    if (
+      isForeignVaultBackup(mnemonic, text) &&
+      !window.confirm(
+        'This backup was made with a DIFFERENT wallet seed, so its keys cannot be ' +
+          'decrypted here. Continue anyway?',
+      )
+    ) {
+      return;
+    }
+    setBusy('restore');
+    setError(undefined);
+    try {
+      const merged = await restoreVaultBackup(mnemonic, text);
+      setVault(merged);
+      void refreshActiveNostrKeyCache(activeWallet);
+      setBackupText('');
+      setShowRestore(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Restore failed');
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -459,9 +587,47 @@ export function NostrIdentityRoute({
         </button>
       </div>
 
+      {/* Encrypted backup of the whole vault — the recovery path for burner +
+          imported keys, which are NOT re-derivable from the seed. */}
+      <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button data-testid="nostr-export-backup" onClick={() => void onExportBackup()} disabled={!!busy || !mnemonic} style={actionBtn}>
+            ⬇ Export identities backup
+          </button>
+          <button data-testid="nostr-restore-toggle" onClick={() => setShowRestore((s) => !s)} disabled={!!busy || !mnemonic} style={actionBtn}>
+            Restore…
+          </button>
+        </div>
+        <p style={{ fontSize: 11, opacity: 0.6, lineHeight: 1.4, margin: 0 }}>
+          Encrypted with your seed — only THIS wallet can restore it. It's how burner
+          and imported keys survive a reinstall.
+        </p>
+        {showRestore && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <textarea
+              data-testid="nostr-restore-input"
+              value={backupText}
+              placeholder="Paste an identities backup (JSON)…"
+              onInput={(e) => setBackupText((e.target as HTMLTextAreaElement).value)}
+              style={{ ...settingsInputStyle, minHeight: 60, resize: 'vertical', fontFamily: 'monospace', fontSize: 11 }}
+            />
+            <button data-testid="nostr-restore-btn" onClick={() => void onRestoreBackup()} disabled={busy === 'restore' || !backupText.trim()} style={{ ...actionBtn, alignSelf: 'flex-start' }}>
+              {busy === 'restore' ? 'Restoring…' : 'Restore identities'}
+            </button>
+          </div>
+        )}
+      </div>
+
       <div style={{ marginTop: 16 }}>
         {linkedPubkey && linkedPubkey === vault?.active ? (
-          <div data-testid="nostr-linked-badge" style={linkedBadge}>✓ Active identity linked to this account</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div data-testid="nostr-linked-badge" style={linkedBadge}>✓ Active identity linked to this account</div>
+            {mnemonic && (
+              <button data-testid="nostr-publish-profile" onClick={onPublishProfile} disabled={publishingProfile} style={{ ...smallBtn, alignSelf: 'flex-start' }}>
+                {publishingProfile ? 'Publishing…' : 'Publish handle to Nostr'}
+              </button>
+            )}
+          </div>
         ) : (
           <button data-testid="nostr-link-btn" onClick={() => void onLinkActive()} disabled={busy === 'link' || !vault || !mnemonic} style={primaryBtn}>
             {busy === 'link' ? 'Linking…' : 'Link active identity for sign-in'}

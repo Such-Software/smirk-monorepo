@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { npubEncode } from 'nostr-tools/nip19';
+import { verifyEvent } from 'nostr-tools/pure';
 
 import { deriveNostrIdentity } from '../identity';
 import {
@@ -18,12 +19,41 @@ import {
   resolvePublishRelays,
   feedFilters,
   feedSourcesFromCapability,
+  PROFILE_KIND,
+  buildProfileEvent,
 } from '../notes';
 
 const MNEMONIC =
   'leader monkey parrot ring guide accident before fence cannon height naive bean';
 const identity = deriveNostrIdentity(MNEMONIC, 0);
 const RELAY = 'wss://relay.smirk.cash';
+
+test('buildProfileEvent: signs a valid kind-0 carrying nip05 + name', () => {
+  const evt = buildProfileEvent(identity, { name: 'jwinterm', nip05: 'jwinterm@smirk.cash' });
+  assert.equal(evt.kind, PROFILE_KIND);
+  assert.equal(evt.kind, 0);
+  assert.equal(evt.pubkey, identity.pubkeyHex);
+  assert.ok(evt.id && evt.sig);
+  assert.deepEqual(evt.tags, []);
+  assert.equal(verifyEvent(evt as never), true);
+  const p = JSON.parse(evt.content);
+  assert.equal(p.nip05, 'jwinterm@smirk.cash');
+  assert.equal(p.name, 'jwinterm');
+});
+
+test('buildProfileEvent: drops empty/undefined fields from the content', () => {
+  const evt = buildProfileEvent(identity, {
+    name: 'x',
+    display_name: undefined,
+    about: '',
+    nip05: 'x@smirk.cash',
+  });
+  const p = JSON.parse(evt.content);
+  assert.ok(!('display_name' in p));
+  assert.ok(!('about' in p));
+  assert.equal(p.name, 'x');
+  assert.equal(p.nip05, 'x@smirk.cash');
+});
 
 test('feedSourcesFromCapability: decodes npubs to hex, honours show_owner, keeps relays', () => {
   const owner = deriveNostrIdentity(MNEMONIC, 1);
