@@ -11,13 +11,6 @@ import {
   resolveIdentity,
   encodeNsec,
   shortNpub,
-  buildProfileEvent,
-  resolvePublishRelays,
-  loadCapabilities,
-  NostrClient,
-  PROFILE_KIND,
-  type NostrProfile,
-  type NostrIdentity,
   type IdentityVault,
   type StoredIdentity,
   type UnlockedWallet,
@@ -34,7 +27,7 @@ import {
   restoreVaultBackup,
   isForeignVaultBackup,
 } from '../nostr-vault';
-import { nip05HomeDomain } from '../nip05';
+import { publishNip05Profile } from '../nostr-link';
 import { walletKeystore, store } from '../singletons';
 import { writeSessionCache } from '../session-cache';
 
@@ -252,46 +245,6 @@ export function NostrIdentityRoute({
       setRevealedNsec({ pubkeyHex: id.pubkeyHex, nsec: encodeNsec(resolved.privateKey) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not reveal the key');
-    }
-  };
-
-  // Publish an account-0 kind-0 profile advertising nip05 = <username>@<homeDomain>
-  // so external Nostr clients render the linked npub as a verified handle. Merges
-  // with any existing kind-0 on our relays (never clobbers about/picture). Only the
-  // PRIMARY (account-0) identity carries the handle — never a burner/imported.
-  // Fire-and-forget: a failure here must never break linking.
-  const publishNip05Profile = async (identity: NostrIdentity) => {
-    try {
-      const username = (await api.getMySmirkUsername()).data;
-      if (!username) return; // no handle claimed → nothing to advertise
-      const caps = await loadCapabilities(api);
-      const relays = resolvePublishRelays(
-        caps?.messaging?.relay_url,
-        caps?.feed?.extra_relays ? { publicFallback: caps.feed.extra_relays } : {},
-      );
-      if (!relays.length) return;
-      const nip05 = `${username}@${nip05HomeDomain()}`;
-      const client = new NostrClient();
-      try {
-        let base: NostrProfile = {};
-        const existing = await client.querySync(relays, [
-          { kinds: [PROFILE_KIND], authors: [identity.pubkeyHex], limit: 1 },
-        ]);
-        const prev = existing[0];
-        if (prev?.content) {
-          try {
-            base = JSON.parse(prev.content) as NostrProfile;
-          } catch {
-            /* unparseable prior profile → start clean */
-          }
-        }
-        const event = buildProfileEvent(identity, { ...base, name: base.name ?? username, nip05 });
-        await client.publish(relays, event);
-      } finally {
-        client.close();
-      }
-    } catch {
-      /* fire-and-forget — never surface / block on a profile publish */
     }
   };
 

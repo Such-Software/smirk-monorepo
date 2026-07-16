@@ -173,6 +173,7 @@ import { ApprovalApp } from './routes/approval';
 import { AssetDetailRoute } from './routes/asset-detail';
 import { SwapRouter } from './routes/swap';
 import { InboxRouter, InboxPasteRouter, PasteTipLinkScreen } from './routes/inbox';
+import { linkPrimaryNostrIdentity } from './nostr-link';
 import { RefreshIconButton, ScanProgressBanner } from './routes/misc';
 import { BootstrappingPlaceholder, BootstrapErrorScreen } from './routes/bootstrap-screens';
 import { BrowseTab } from './routes/browse';
@@ -1051,6 +1052,29 @@ function App() {
         }
       } catch (e) {
         console.warn('[smirk-popup] register canonical grin key threw:', e);
+      }
+    })();
+  }, [walletState, session?.bootstrap?.userId]);
+
+  // Auto-link the PRIMARY (account-0) Nostr identity once the user has claimed a
+  // handle but hasn't linked yet — so `<handle>@<domain>` resolves and the verified
+  // kind-0 profile publishes without a manual Settings step. This is the "claiming a
+  // name should just work on Nostr" path, and it also back-fills existing users who
+  // claimed a handle before linking existed. Gated on a fresh unlock (the NIP-98 link
+  // must be signed with the seed) + auth; idempotent — a no-op once `nostrPubkey` is
+  // set. linkPrimaryNostrIdentity both links and publishes the profile.
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked' || !walletState.wallet.mnemonic) return;
+    if (!session?.bootstrap?.userId || !api.getAccessToken()) return;
+    const mnemonic = walletState.wallet.mnemonic;
+    void (async () => {
+      try {
+        const me = await api.getMe();
+        if (me.data?.username && !me.data.nostrPubkey) {
+          await linkPrimaryNostrIdentity(mnemonic);
+        }
+      } catch {
+        /* non-fatal — the user can always Link in Settings → Nostr identities */
       }
     })();
   }, [walletState, session?.bootstrap?.userId]);
