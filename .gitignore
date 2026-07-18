@@ -74,3 +74,6 @@ packages/smoke-tests/
 # (heavy deps: own node_modules, kept out of the workspace lockfile).
 /smoke-e2e/
 builds/
+
+# Build artifacts: store/release zips are generated (make ext-*, git archive), never committed.
+packages/extension/releases/*.zip
