@@ -77,3 +77,6 @@ builds/
 
 # Build artifacts: store/release zips are generated (make ext-*, git archive), never committed.
 packages/extension/releases/*.zip
+
+# e2e demo-video captures (CAPTURE_VIDEO=1) — regenerable, feed the such-graphics pipeline.
+packages/e2e/videos/

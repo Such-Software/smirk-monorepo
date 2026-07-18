@@ -10,6 +10,31 @@ const EXTENSION_DIST =
   process.env.EXTENSION_DIST ?? join(__dirname, '..', '..', 'extension', 'dist');
 
 /**
+ * `CAPTURE_VIDEO=1` records EVERY page in the context (popup, approval window, dapp
+ * page) to `CAPTURE_VIDEO_DIR` (default `packages/e2e/videos/`), not just on failure —
+ * so an e2e run doubles as raw demo-video capture of real flows (payment popup, connect,
+ * operator console) that feeds the such-graphics branding pipeline. Default off: normal
+ * runs keep only the config's on-failure video. Video needs a headed/new-headless
+ * Chromium, which the extension context already uses.
+ */
+export const CAPTURE_VIDEO = ['1', 'on', 'true', 'yes'].includes(
+  (process.env.CAPTURE_VIDEO ?? '').toLowerCase(),
+);
+const VIDEO_DIR = process.env.CAPTURE_VIDEO_DIR ?? join(__dirname, '..', 'videos');
+
+/**
+ * Capture at a MOBILE-PORTRAIT size by default. The wallet popup + the dapp approval
+ * window are already phone-shaped, so a portrait viewport yields clean vertical clips
+ * ideal for mobile / short-form content (App Store previews, Reels/TikTok) — feeding
+ * the such-graphics pipeline (which upscales to the canonical 1920x1080@60 with brand
+ * framing). Override with CAPTURE_VIDEO_W / CAPTURE_VIDEO_H for a different aspect.
+ */
+const VIDEO_SIZE = {
+  width: Number(process.env.CAPTURE_VIDEO_W ?? 420),
+  height: Number(process.env.CAPTURE_VIDEO_H ?? 900),
+};
+
+/**
  * Load the built extension into a persistent Chromium context and expose its id.
  *
  * MV3 background is a service worker, which Chromium only runs when extensions
@@ -36,6 +61,11 @@ export const test = base.extend<{
         `--load-extension=${EXTENSION_DIST}`,
         '--no-sandbox',
       ],
+      // Demo capture: record every page (popup, approval window, dapp) at a
+      // mobile-portrait viewport so the clips are phone-shaped. Off by default.
+      ...(CAPTURE_VIDEO
+        ? { recordVideo: { dir: VIDEO_DIR, size: VIDEO_SIZE }, viewport: VIDEO_SIZE }
+        : {}),
     });
     await use(context);
     await context.close();
