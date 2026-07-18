@@ -63,8 +63,11 @@ export interface SmirkSignResult {
 
 export interface SmirkPaymentRequest {
   asset: 'btc' | 'ltc' | 'xmr' | 'wow';
-  /** Atomic-units string. Float would be a foot-gun across decimals
-   *  ranging from 8 (BTC) to 12 (WOW). */
+  /** Human decimal amount in whole coins, e.g. "9" or "9.5". The wallet converts to
+   *  atomic units using the asset's decimals — website operators should NOT compute
+   *  atomic units (they range 8 (BTC) to 12 (XMR) across chains, a foot-gun). Plain
+   *  decimal only (no exponent); more fractional digits than the asset supports is
+   *  rejected and the payment is refused. */
   amount: string;
   address: string;
   memo?: string;

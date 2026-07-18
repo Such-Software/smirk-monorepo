@@ -5,6 +5,7 @@ import {
   BrowserShell,
   IframeBrowserContent,
   ApprovalScreen,
+  formatAmountWithTicker,
   type ApprovalApproval,
   type ApprovalRequest as UiApprovalRequest,
 } from '@smirk/ui';
@@ -13,6 +14,7 @@ import {
   type ApprovalRequest as DappApprovalRequest,
 } from '@such-software/smirk-dapp-api';
 import { store } from '../singletons';
+import { normalizePaymentAmount } from '../format';
 import { ensureWasmInit } from '../wasm-init';
 import { send } from '../send-handler';
 import { claimPublicTip } from '../tip-claim-handler';
@@ -157,6 +159,10 @@ export function BrowseTab({
 
   const handleApprove = async (approval: ApprovalApproval) => {
     if (!pending) return;
+    // Convert the dapp's human decimal amount to atomic units once (wallet owns the
+    // per-asset decimals). A malformed amount surfaces on the ApprovalScreen.
+    const { request, amountError } = normalizePaymentAmount(pending);
+    if (amountError) throw new Error(amountError);
     const ws = walletStateRef.current;
     if (!ws || ws.kind !== 'unlocked') {
       // Wallet locked between request arrival and approve click.
@@ -166,7 +172,7 @@ export function BrowseTab({
       return;
     }
     try {
-      const result = await executeApproval(pending, approval, {
+      const result = await executeApproval(request, approval, {
         wallet: ws.wallet,
         ensureWasmInit,
         send,
@@ -250,9 +256,16 @@ export function BrowseTab({
             }}
           >
             <ApprovalScreen
-              request={pending as unknown as UiApprovalRequest}
+              request={normalizePaymentAmount(pending).request as unknown as UiApprovalRequest}
               onApprove={handleApprove}
               onDeny={handleDeny}
+              formatAmount={(asset, atomic) => {
+                try {
+                  return formatAmountWithTicker(BigInt(atomic), asset);
+                } catch {
+                  return atomic;
+                }
+              }}
             />
           </div>
         </div>

@@ -6,7 +6,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { formatUsd, parseAmount, atomicToText, feedTimeAgo, bytesToHex, hexToBytes, randomToken } from '../format';
+import { formatUsd, parseAmount, normalizePaymentAmount, atomicToText, feedTimeAgo, bytesToHex, hexToBytes, randomToken } from '../format';
+
+test('normalizePaymentAmount: dapp decimal amount -> atomic (the BigInt("9.0000") bug)', () => {
+  // wow = 11 decimals. A dapp quotes "9.0000" WOW; the wallet converts to atomic and
+  // never feeds the decimal to BigInt() (which threw "Cannot convert 9.0000 to a BigInt").
+  const req = { kind: 'requestPayment', asset: 'wow', amount: '9.0000', address: 'WW454' };
+  const { request, amountError } = normalizePaymentAmount(req);
+  assert.equal(amountError, undefined);
+  assert.equal((request as { amount: string }).amount, '900000000000');
+  assert.equal(BigInt((request as { amount: string }).amount), 900_000_000_000n);
+});
+
+test('normalizePaymentAmount: non-payment request passes through unchanged', () => {
+  const req = { kind: 'signMessage', message: 'hi' };
+  const { request, amountError } = normalizePaymentAmount(req);
+  assert.equal(amountError, undefined);
+  assert.equal(request, req);
+});
+
+test('normalizePaymentAmount: malformed amount -> amountError, request untouched', () => {
+  const { request, amountError } = normalizePaymentAmount({
+    kind: 'requestPayment',
+    asset: 'wow',
+    amount: 'not-a-number',
+    address: 'WW454',
+  });
+  assert.ok(amountError);
+  assert.equal((request as { amount: string }).amount, 'not-a-number');
+});
 
 test('formatUsd: currency format + em dash for non-finite', () => {
   assert.equal(formatUsd(1234.5), '$1,234.50');

@@ -50,6 +50,27 @@ export function parseAmount(assetId: string, text: string): bigint | null {
   }
 }
 
+/**
+ * Normalize a dapp payment-approval request's amount to atomic units. Dapps quote a
+ * HUMAN decimal amount (e.g. "9" WOW) — website operators should not have to compute
+ * per-asset atomic units (8-12 decimals across chains), which is a foot-gun. The
+ * wallet owns each asset's decimals and converts here, ONCE, so the confirmation
+ * display and the executed transaction agree and `BigInt()` downstream never sees a
+ * decimal. Non-payment requests pass through unchanged; a malformed amount returns an
+ * `amountError` so the caller blocks the approval instead of crashing.
+ */
+export function normalizePaymentAmount<T>(request: T): { request: T; amountError?: string } {
+  const r = request as { kind?: string; asset?: string; amount?: string };
+  if (r.kind !== 'requestPayment' || typeof r.asset !== 'string' || typeof r.amount !== 'string') {
+    return { request };
+  }
+  const atomic = parseAmount(r.asset, r.amount);
+  if (atomic === null) {
+    return { request, amountError: `This site requested an invalid amount ("${r.amount}").` };
+  }
+  return { request: { ...(request as object), amount: atomic.toString() } as T };
+}
+
 /** Inverse of {@link parseAmount}: atomic-unit string → trimmed decimal text. */
 export function atomicToText(atomic: string, assetId: string): string {
   const asset = mustGetAsset(assetId);

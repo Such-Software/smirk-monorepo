@@ -4,6 +4,7 @@ import {
   applyTheme,
   defaultTheme,
   getTheme,
+  formatAmountWithTicker,
   LockScreen,
   ApprovalScreen,
   type ApprovalApproval,
@@ -11,6 +12,7 @@ import {
 } from '@smirk/ui';
 import type { ApprovalResult as DappApprovalResult } from '@such-software/smirk-dapp-api';
 import { store, walletKeystore } from '../singletons';
+import { normalizePaymentAmount } from '../format';
 import { tryRestoreSessionCache, writeSessionCache, convergeLegacySweep } from '../session-cache';
 import { dappPublicCacheFor } from '../dapp-public-cache';
 import { readBootstrapCache } from '../bootstrap-cache';
@@ -129,6 +131,20 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
 
   const wallet = walletState.wallet;
 
+  // Dapps quote a human decimal amount (e.g. "9" WOW); the wallet converts it to
+  // atomic units ONCE here (it owns each asset's decimals), so the confirmation
+  // display and the executed tx agree and `BigInt()` never chokes on a decimal.
+  const { request, amountError } = normalizePaymentAmount(pending.request);
+
+  // atomic units -> "9 WOW" for the confirmation; robust if a value is malformed.
+  const formatAmount = (asset: string, atomic: string): string => {
+    try {
+      return formatAmountWithTicker(BigInt(atomic), asset);
+    } catch {
+      return atomic;
+    }
+  };
+
   const finish = async (result: DappApprovalResult) => {
     await approvalPopupBridge.writeResult(approvalId, result);
     // Give the SW a tick to pick up the storage change before the
@@ -137,13 +153,16 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
   };
 
   const handleApprove = async (approval: ApprovalApproval) => {
+    // A malformed dapp amount is surfaced here (ApprovalScreen shows the error and
+    // stays open) instead of proceeding with a bad payment.
+    if (amountError) throw new Error(amountError);
     // Delegate to the shared executor used by every wallet-foreground
     // approval surface (extension popup window AND Tauri desktop's
     // BrowseTab modal). The executor calls `ensureWasmInit()` itself,
     // computes signatures with the unlocked wallet, performs payments
     // / claims, and returns the result envelope to pass back to the
     // SW via `approvalPopupBridge.writeResult`.
-    const result = await executeApproval(pending.request, approval, {
+    const result = await executeApproval(request, approval, {
       wallet,
       ensureWasmInit,
       send,
@@ -159,13 +178,14 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
   // Translate the dapp-api ApprovalRequest into the UI's shape. They
   // line up 1:1 by design — this is just a name-spaced cast that
   // keeps the UI package decoupled from the protocol package.
-  const uiRequest = pending.request as unknown as UiApprovalRequest;
+  const uiRequest = request as unknown as UiApprovalRequest;
 
   return (
     <ApprovalScreen
       request={uiRequest}
       onApprove={handleApprove}
       onDeny={() => void finish({ approved: false })}
+      formatAmount={formatAmount}
     />
   );
 }
