@@ -80,3 +80,6 @@ packages/extension/releases/*.zip
 
 # e2e demo-video captures (CAPTURE_VIDEO=1) — regenerable, feed the such-graphics pipeline.
 packages/e2e/videos/
+
+# Project-specific literals for scripts/secret-scan.sh (never public)
+scripts/secret-scan.local.txt

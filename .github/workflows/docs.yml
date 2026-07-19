@@ -25,6 +25,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The project-specific known-bad literals (infra IPs, funded test-wallet
+      # seed/address) are NOT in the repo — the scanner loads them from a
+      # git-ignored file. CI reconstitutes that file from a repository secret so
+      # the full scan runs here too. If the secret is unset (e.g. a fork), the
+      # file is not written and the scanner runs generic-only and still passes.
+      - name: Reconstitute project-literal patterns (if provided)
+        env:
+          SECRET_SCAN_PATTERNS: ${{ secrets.SECRET_SCAN_PATTERNS }}
+        run: |
+          if [ -n "$SECRET_SCAN_PATTERNS" ]; then
+            printf '%s\n' "$SECRET_SCAN_PATTERNS" > scripts/secret-scan.local.txt
+          fi
       - run: bash scripts/secret-scan.sh
 
   doc-links:
