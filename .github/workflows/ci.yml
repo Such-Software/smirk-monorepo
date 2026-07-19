@@ -135,3 +135,30 @@ jobs:
 
       - name: Test workspace
         run: npm test --workspaces --if-present
+
+  supply-chain:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        run: npm ci
+      # ENFORCED: the wallet's SHIPPED runtime dependencies (crypto, signing,
+      # nostr) must carry no high/critical advisory. Dev-only tooling is excluded
+      # here and covered by the informational pass below.
+      - name: npm audit (production deps)
+        run: npm audit --omit=dev --audit-level=high
+      # INFORMATIONAL: surfaces dev-tooling + moderate advisories without blocking.
+      - name: npm audit (full, advisory)
+        run: npm audit || true
+      # INFORMATIONAL: RustSec advisories for the Smirk + vendored crates. Advisory
+      # for now (the vendored monero-oxide/secp256k1zkp subtrees pin older deps).
+      # TODO: promote to a tuned cargo-deny (root deny.toml with subtree exceptions).
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo audit (advisory)
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo audit || true
