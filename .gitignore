@@ -38,10 +38,14 @@ ios/DerivedData/
 .DS_Store
 Thumbs.db
 
-# Env / secrets
+# Env / secrets. Ignore every .env variant (.env.production, .env.backup, ...)
+# but keep the committed .env.example templates (at any depth).
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+
+# Local agent/editor settings (never shared).
+.claude/
 
 # Test artifacts
 coverage/
