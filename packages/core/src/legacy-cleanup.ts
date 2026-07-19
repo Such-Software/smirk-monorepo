@@ -299,11 +299,11 @@ export async function assessLegacyCleanupSafety(
           continue;
         }
         const spent = (bal.data.spent_outputs ?? []).reduce(
-          (s, o) => s + o.amount,
-          0,
+          (s, o) => s + BigInt(o.amount),
+          0n,
         );
-        const unspent = bal.data.total_received - spent;
-        if (unspent > 0) {
+        const unspent = BigInt(bal.data.total_received) - spent;
+        if (unspent > 0n) {
           blockers.push({
             kind: 'xmrwow-stranded',
             severity: 'hard',

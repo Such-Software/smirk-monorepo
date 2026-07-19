@@ -35,6 +35,36 @@ use monero_wallet::{
 use crate::output::{derive_key_offset, derive_commitment_mask};
 use crate::result::WasmResult;
 
+/// Deserialize a `u64` from either a JSON number or a decimal string. The backend
+/// sends atomic amounts as strings so a value above 2^53 is not mangled by a
+/// JavaScript number before it reaches the signer; older callers that still send a
+/// JSON number keep working. Signing math is unchanged: the result is the same
+/// `u64` either way.
+fn de_u64_flex<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    struct FlexU64;
+    impl Visitor<'_> for FlexU64 {
+        type Value = u64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a u64 as a JSON number or a decimal string")
+        }
+        fn visit_u64<E>(self, v: u64) -> Result<u64, E> {
+            Ok(v)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<u64, E> {
+            u64::try_from(v).map_err(|_| E::custom("amount must be a non-negative integer"))
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<u64, E> {
+            v.parse::<u64>()
+                .map_err(|_| E::custom("amount string is not a valid u64"))
+        }
+    }
+    deserializer.deserialize_any(FlexU64)
+}
+
 /// Generate a fresh per-transaction `outgoing_view_key` from OS randomness.
 ///
 /// SECURITY: `outgoing_view_key` is treated as a private key by monero-oxide
@@ -71,7 +101,8 @@ pub(crate) fn fresh_outgoing_view_key() -> Zeroizing<[u8; 32]> {
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct LwsOutput {
-    /// Amount in atomic units
+    /// Amount in atomic units (JSON number or decimal string)
+    #[serde(deserialize_with = "de_u64_flex")]
     pub amount: u64,
     /// Output public key (hex)
     pub public_key: String,
@@ -113,7 +144,8 @@ pub struct TxInput {
 pub struct TxDestination {
     /// Recipient address
     pub address: String,
-    /// Amount in atomic units
+    /// Amount in atomic units (JSON number or decimal string)
+    #[serde(deserialize_with = "de_u64_flex")]
     pub amount: u64,
 }
 
@@ -713,4 +745,43 @@ fn compute_key_image_inner(
     let key_image_compressed = key_image.compress();
 
     Ok(hex::encode(key_image_compressed.to_bytes()))
+}
+
+#[cfg(test)]
+mod amount_deser_tests {
+    use super::{LwsOutput, TxDestination};
+
+    // Above 2^53: JSON-number precision would be lost in JavaScript, so the wallet
+    // sends the amount as a decimal string. The signer must parse it exactly.
+    const BIG: u64 = 9_007_199_254_740_993; // 2^53 + 1
+
+    #[test]
+    fn lws_output_amount_from_string_is_exact() {
+        let json = format!(
+            r#"{{"amount":"{BIG}","public_key":"aa","tx_pub_key":"bb","index":0,"global_index":1,"height":2,"rct":""}}"#
+        );
+        let out: LwsOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(out.amount, BIG);
+    }
+
+    #[test]
+    fn lws_output_amount_from_number_still_works() {
+        // Backward compatibility: a JSON number (small, exact) must still deserialize.
+        let json = r#"{"amount":12345,"public_key":"aa","tx_pub_key":"bb","index":0,"global_index":1,"height":2,"rct":""}"#;
+        let out: LwsOutput = serde_json::from_str(json).unwrap();
+        assert_eq!(out.amount, 12345);
+    }
+
+    #[test]
+    fn destination_amount_from_string_is_exact() {
+        let json = format!(r#"{{"address":"x","amount":"{BIG}"}}"#);
+        let dest: TxDestination = serde_json::from_str(&json).unwrap();
+        assert_eq!(dest.amount, BIG);
+    }
+
+    #[test]
+    fn negative_or_garbage_amount_is_rejected() {
+        assert!(serde_json::from_str::<TxDestination>(r#"{"address":"x","amount":"-1"}"#).is_err());
+        assert!(serde_json::from_str::<TxDestination>(r#"{"address":"x","amount":"nope"}"#).is_err());
+    }
 }

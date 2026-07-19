@@ -1834,14 +1834,12 @@ export interface components {
             asset: string;
             /** Format: int64 */
             blockchain_height: number;
-            /** Format: int64 */
-            locked_balance: number;
+            locked_balance: string;
             /**
-             * Format: int64
              * @description Unconfirmed (mempool) received — 0-conf. `0` until the LWS reports mempool
              *     rows (the monero-lws mempool feature); never negative.
              */
-            pending_balance: number;
+            pending_balance: string;
             /** Format: int64 */
             scanned_height: number;
             /**
@@ -1851,8 +1849,8 @@ export interface components {
             spent_outputs: components["schemas"]["SpentOutputDto"][];
             /** Format: int64 */
             start_height: number;
-            /** Format: int64 */
-            total_received: number;
+            /** @example 12345000000000 */
+            total_received: string;
             /** Format: int64 */
             transaction_count: number;
         };
@@ -2196,8 +2194,7 @@ export interface components {
         };
         /** @description A candidate spent output (verify with the spend key before trusting). */
         SpentOutputDto: {
-            /** Format: int64 */
-            amount: number;
+            amount: string;
             key_image: string;
             /** Format: int64 */
             mixin: number;
@@ -2234,20 +2231,15 @@ export interface components {
             payment_id?: string | null;
             spent_outputs: components["schemas"]["SpentOutputDto"][];
             timestamp: string;
-            /** Format: int64 */
-            total_received: number;
-            /**
-             * Format: int64
-             * @description "Possible" sent — candidate spends, not authoritative.
-             */
-            total_sent: number;
+            total_received: string;
+            /** @description "Possible" sent — candidate spends, not authoritative. */
+            total_sent: string;
             /** Format: int64 */
             unlock_time: number;
         };
         /** @description An unspent output for spend construction. */
         UnspentOutputDto: {
-            /** Format: int64 */
-            amount: number;
+            amount: string;
             /** Format: int64 */
             global_index: number;
             /** Format: int64 */

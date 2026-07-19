@@ -502,7 +502,11 @@ async function sendXmrWow(
   //   change output to fromAddress — protocol-mandated padding, not
   //   "real" change. Any tiny residual (estimated_fee − actual_fee,
   //   rounded down to fee_mask granularity) stays with the user.
-  const sortedOutputs = [...spendableOutputs].sort((a, b) => b.amount - a.amount);
+  // Atomic amounts are strings (may exceed 2^53); sort by BigInt, largest-first.
+  const sortedOutputs = [...spendableOutputs].sort((a, b) => {
+    const d = BigInt(b.amount) - BigInt(a.amount);
+    return d > 0n ? 1 : d < 0n ? -1 : 0;
+  });
   const feePerByteBig = BigInt(per_byte_fee);
   const feeMaskBig = BigInt(fee_mask);
 

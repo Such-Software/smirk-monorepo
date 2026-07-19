@@ -50,16 +50,20 @@ export interface UtxoHistory {
 }
 
 // ---- Ring-CT light-wallet-server chains (xmr, wow) ----
+// Atomic amounts are STRINGS: XMR/WOW values can exceed 2^53, which a JS `number`
+// cannot hold exactly, so the backend serializes them as decimal strings and every
+// consumer BigInt-parses them. Never Number() an atomic amount. Heights, counts,
+// and indices stay numbers (always well under 2^53).
 export interface LwsSpentOutput {
-  amount: number;
+  amount: string;
   key_image: string;
   tx_pub_key: string;
   out_index: number;
 }
 export interface LwsBalance {
-  total_received: number;
-  locked_balance: number;
-  pending_balance: number;
+  total_received: string;
+  locked_balance: string;
+  pending_balance: string;
   transaction_count: number;
   blockchain_height: number;
   start_height: number;
@@ -67,13 +71,7 @@ export interface LwsBalance {
   spent_outputs: LwsSpentOutput[];
 }
 export interface LwsUnspentOutput {
-  // KNOWN LIMITATION: the backend sends this u64 as a JSON number, so a single
-  // output above 2^53 atomic units (~9,007 XMR / ~90,072 WOW) loses precision at
-  // JSON.parse before we BigInt() it. No realistic single output is that large, so
-  // this is deferred rather than rushed: the proper fix (serialize as a string
-  // backend-side, retype to string, and convert the numeric output sorts/selection
-  // to BigInt) is a money-critical cross-repo change that needs its own tested PR.
-  amount: number;
+  amount: string;
   public_key: string;
   tx_pub_key: string;
   index: number;
@@ -105,7 +103,7 @@ export interface LwsHistoryEntry {
   height: number;
   timestamp: string;
   is_pending: boolean;
-  total_received: number;
+  total_received: string;
   spent_outputs: LwsSpentOutput[];
   payment_id?: string;
 }

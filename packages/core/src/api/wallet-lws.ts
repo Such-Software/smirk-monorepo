@@ -11,15 +11,15 @@ export interface WalletLwsMethods {
     viewKey: string,
   ): Promise<
     ApiResponse<{
-      total_received: number;
-      locked_balance: number;
-      pending_balance: number;
+      total_received: string;
+      locked_balance: string;
+      pending_balance: string;
       transaction_count: number;
       blockchain_height: number;
       start_height: number;
       scanned_height: number;
       spent_outputs: Array<{
-        amount: number;
+        amount: string;
         key_image: string;
         tx_pub_key: string;
         out_index: number;
@@ -34,7 +34,7 @@ export interface WalletLwsMethods {
   ): Promise<
     ApiResponse<{
       outputs: Array<{
-        amount: number;
+        amount: string;
         public_key: string;
         tx_pub_key: string;
         index: number;
@@ -78,9 +78,9 @@ export interface WalletLwsMethods {
         height: number;
         timestamp: string;
         is_pending: boolean;
-        total_received: number;
+        total_received: string;
         spent_outputs: Array<{
-          amount: number;
+          amount: string;
           key_image: string;
           tx_pub_key: string;
           out_index: number;
@@ -219,9 +219,9 @@ export function createWalletLwsMethods(client: ApiClient): WalletLwsMethods {
           timestamp: string;
           is_pending?: boolean;
           mempool?: boolean;
-          total_received: number;
+          total_received: string;
           spent_outputs?: Array<{
-            amount: number;
+            amount: string;
             key_image: string;
             tx_pub_key: string;
             out_index: number;
