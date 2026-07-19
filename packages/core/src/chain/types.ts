@@ -67,6 +67,12 @@ export interface LwsBalance {
   spent_outputs: LwsSpentOutput[];
 }
 export interface LwsUnspentOutput {
+  // KNOWN LIMITATION: the backend sends this u64 as a JSON number, so a single
+  // output above 2^53 atomic units (~9,007 XMR / ~90,072 WOW) loses precision at
+  // JSON.parse before we BigInt() it. No realistic single output is that large, so
+  // this is deferred rather than rushed: the proper fix (serialize as a string
+  // backend-side, retype to string, and convert the numeric output sorts/selection
+  // to BigInt) is a money-critical cross-repo change that needs its own tested PR.
   amount: number;
   public_key: string;
   tx_pub_key: string;
