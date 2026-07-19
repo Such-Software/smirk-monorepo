@@ -65,7 +65,9 @@ export function normalizePaymentAmount<T>(request: T): { request: T; amountError
     return { request };
   }
   const atomic = parseAmount(r.asset, r.amount);
-  if (atomic === null) {
+  // Reject zero as well as malformed/negative: a 0-value "payment" is not a real
+  // request and would drive a confusing fee-only "Send 0" approval.
+  if (atomic === null || atomic <= 0n) {
     return { request, amountError: `This site requested an invalid amount ("${r.amount}").` };
   }
   return { request: { ...(request as object), amount: atomic.toString() } as T };

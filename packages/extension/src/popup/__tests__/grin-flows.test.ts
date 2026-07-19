@@ -33,9 +33,50 @@ import {
   startGrinSend,
   startGrinInvoice,
   resolveGrinSpendable,
+  calcGrinFee,
+  resolveGrinFee,
 } from '../grin-flows';
 
 type AnyFn = (...args: unknown[]) => unknown;
+
+// resolveGrinFee: the fee/change decision the builder must agree with. The builder
+// emits change iff total-(amount+fee) > 0, so these lock the two windows that used
+// to produce node-rejected or spuriously-failed sends near an exact-balance spend.
+test('resolveGrinFee: comfortable surplus keeps a change output at the 2-output fee', () => {
+  const inputs = 2;
+  const fee2 = calcGrinFee(inputs, 2, 1);
+  const amount = 1_000_000_000;
+  const total = amount + fee2 + 5_000_000_000; // clearly worth a change output
+  const r = resolveGrinFee(total, amount, inputs);
+  assert.equal(r.hasChange, true);
+  assert.equal(r.fee, fee2);
+  assert.ok(total - amount - r.fee > 0, 'builder will emit a change output');
+});
+
+test('resolveGrinFee: exact 2-output match folds into the fee (no change, fee >= 1-output min)', () => {
+  const inputs = 2;
+  const fee1 = calcGrinFee(inputs, 1, 1);
+  const fee2 = calcGrinFee(inputs, 2, 1);
+  const amount = 1_000_000_000;
+  const total = amount + fee2; // the exact-match window
+  const r = resolveGrinFee(total, amount, inputs);
+  assert.equal(r.hasChange, false);
+  assert.equal(total - amount - r.fee, 0, 'builder emits NO change output');
+  assert.ok(r.fee >= fee1, 'fee never dips below the 1-output minimum (no low-fee reject)');
+});
+
+test('resolveGrinFee: sub-change-cost surplus folds into the fee, never underfunds inputs', () => {
+  const inputs = 2;
+  const fee1 = calcGrinFee(inputs, 1, 1);
+  const fee2 = calcGrinFee(inputs, 2, 1);
+  const amount = 1_000_000_000;
+  // surplus sits strictly between the 1- and 2-output fees: too small for change.
+  const total = amount + fee1 + Math.floor((fee2 - fee1) / 2);
+  const r = resolveGrinFee(total, amount, inputs);
+  assert.equal(r.hasChange, false);
+  assert.equal(total - amount - r.fee, 0, 'no change output; inputs exactly cover amount+fee');
+  assert.ok(r.fee >= fee1 && r.fee <= fee2, 'fee stays within [1-output, 2-output] bounds');
+});
 
 const COMMIT_A = '09'.repeat(33);
 const CHANGE_COMMIT = '08'.repeat(33);

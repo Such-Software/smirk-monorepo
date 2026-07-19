@@ -512,6 +512,33 @@ export function calcGrinFee(numInputs: number, numOutputs: number, numKernels: n
   return weight * GRIN_FEE_BASE;
 }
 
+/**
+ * Decide the Grin fee and whether a change output is produced, for a send of
+ * `amount` from selected inputs totalling `total` (`numInputs` of them).
+ *
+ * The builder derives `change = total - (amount + fee)` and emits a change output
+ * iff that is > 0, so the fee we pick MUST be consistent with the output count we
+ * intend, or the built tx carries the wrong fee for its weight:
+ *   - surplus above the 2-output fee is positive  -> change output; fee = fee(2 out)
+ *   - otherwise -> NO change output; fee = total - amount, which folds a
+ *     sub-change-cost surplus (or an exact match) into the fee. That is always
+ *     >= the 1-output minimum, so the node never rejects it as a low fee, and it
+ *     never underfunds the inputs the way bumping back to the 2-output fee did.
+ *
+ * Caller must guarantee `total >= amount + calcGrinFee(numInputs, 1, 1)`.
+ */
+export function resolveGrinFee(
+  total: number,
+  amount: number,
+  numInputs: number,
+): { fee: number; hasChange: boolean } {
+  const fee2 = calcGrinFee(numInputs, 2, 1);
+  if (total - amount - fee2 > 0) {
+    return { fee: fee2, hasChange: true };
+  }
+  return { fee: total - amount, hasChange: false };
+}
+
 // ============================================================================
 // Send flow (sender-initiated S1 → S2 → S3)
 // ============================================================================
@@ -624,13 +651,12 @@ export async function startGrinSend(args: {
     estimatedInputs = selected.length;
   }
 
-  const hasChange = total - args.amount - fee > 0;
-  if (hasChange) {
-    // Recompute fee with actual output count.
-    fee = calcGrinFee(selected.length, 2, 1);
-  } else {
-    fee = calcGrinFee(selected.length, 1, 1);
-  }
+  // Pick a fee consistent with what the builder will actually emit: a change output
+  // only when the surplus exceeds the 2-output fee, otherwise fold the surplus into
+  // the fee (single output). Toggling change on/off with a mismatched fee used to
+  // produce node-rejected "Low fee" or spurious "insufficient inputs" sends within a
+  // ~0.0105-GRIN window near an exact-balance spend.
+  fee = resolveGrinFee(total, args.amount, selected.length).fee;
 
   // 3. Inputs already carry their identified path (from the scan resolver).
   const inputs: GrinUnspentOutput[] = selected;
