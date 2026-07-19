@@ -620,12 +620,12 @@ async function sendXmrWow(
     return { ok: false, error: `Sign tx failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 
-  // 6. Submit. Passing recipient + amount + tx_hash lets the backend
-  //    insert a pending_transactions row when the recipient is also a
-  //    Smirk user (per legacy commit `3afce50`). For external sends the
-  //    backend silently skips the insert. The recipient sees pending
-  //    balance immediately; sender's own pending tracking is Phase 2.
-  const submit = await chainProviders.lws(asset).broadcast(signed.tx_hex, toAddress, amountNum, signed.tx_hash);
+  // 6. Submit. Only the signed tx is sent: the recipient address + amount are NOT
+  //    transmitted (the backend broadcasts from the raw tx and no longer uses that
+  //    metadata; sending it would leak a sender<->recipient<->amount link to the
+  //    operator on every send, including external ones). If the pending-transfer
+  //    "you have incoming funds" hint returns, deliver it over the E2EE channel.
+  const submit = await chainProviders.lws(asset).broadcast(signed.tx_hex);
   if (submit.error || !submit.data) {
     console.error('[smirk send xmr/wow] submit failed', {
       asset,

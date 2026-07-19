@@ -808,12 +808,7 @@ async function sweepXmrWow(
     };
   }
 
-  const submit = await chainProviders.lws(asset).broadcast(
-    signed.tx_hex,
-    recipientAddress,
-    sweepAmountNum,
-    signed.tx_hash,
-  );
+  const submit = await chainProviders.lws(asset).broadcast(signed.tx_hex);
   if (submit.error || !submit.data) {
     return {
       ok: false,

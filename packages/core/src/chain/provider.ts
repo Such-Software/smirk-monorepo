@@ -84,12 +84,10 @@ export interface LwsChainProvider extends BaseChainProvider {
   readonly asset: LwsAsset;
   getBalance(address: string, viewKey: string): Promise<ApiResponse<LwsBalance>>;
   listOutputs(address: string, viewKey: string): Promise<ApiResponse<LwsUnspent>>;
-  broadcast(
-    txHex: string,
-    recipientAddress?: string,
-    amount?: number,
-    txHash?: string,
-  ): Promise<ApiResponse<LwsSubmitResult>>;
+  // Only the signed tx is sent. The recipient address + amount are deliberately
+  // NOT transmitted: the LWS needs just the raw tx to broadcast, and sending them
+  // would hand the operator a sender<->recipient<->amount link on every send.
+  broadcast(txHex: string): Promise<ApiResponse<LwsSubmitResult>>;
   getHistory(address: string, viewKey: string): Promise<ApiResponse<LwsHistory>>;
   getRandomOutputs(count: number): Promise<ApiResponse<LwsRandomOuts>>;
   registerAccount(

@@ -117,8 +117,8 @@ export class SmirkLwsProvider implements LwsChainProvider {
   listOutputs(address: string, viewKey: string) {
     return this.api.getUnspentOuts(this.asset, address, viewKey);
   }
-  broadcast(txHex: string, recipientAddress?: string, amount?: number, txHash?: string) {
-    return this.api.submitLwsTx(this.asset, txHex, recipientAddress, amount, txHash);
+  broadcast(txHex: string) {
+    return this.api.submitLwsTx(this.asset, txHex);
   }
   getHistory(address: string, viewKey: string) {
     return this.api.getLwsHistory(this.asset, address, viewKey);

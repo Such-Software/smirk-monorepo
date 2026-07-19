@@ -259,7 +259,17 @@ export async function executeApproval(
       // handler persists it on OriginPermission.nostrPubkey — getNostrPublicKey +
       // signing then all act as this same identity.
       let nostrPubkey: string | undefined;
-      if (approval.perOrigin && deps.wallet.mnemonic) {
+      if (approval.perOrigin) {
+        // A per-origin (compartmentalized) identity is HD-derived from the seed, so
+        // it needs a full unlock. On a warm resume the mnemonic is intentionally
+        // absent — falling back to the active identity here would silently persist
+        // the user's MAIN npub onto the very site they asked to compartmentalize away
+        // from (an irreversible deanonymization). Refuse instead of leaking.
+        if (!deps.wallet.mnemonic) {
+          throw new Error(
+            'Connecting with a separate per-site identity needs a full unlock. Lock the wallet, reopen and enter your password, then connect again.',
+          );
+        }
         nostrPubkey = deriveNostrIdentityForOrigin(
           deps.wallet.mnemonic,
           request.origin.origin,

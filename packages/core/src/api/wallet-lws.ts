@@ -64,9 +64,6 @@ export interface WalletLwsMethods {
   submitLwsTx(
     asset: 'xmr' | 'wow',
     txHex: string,
-    recipientAddress?: string,
-    amount?: number,
-    txHash?: string,
   ): Promise<ApiResponse<{ success: boolean; status: string }>>;
 
   getLwsHistory(
@@ -196,16 +193,13 @@ export function createWalletLwsMethods(client: ApiClient): WalletLwsMethods {
       };
     },
 
-    async submitLwsTx(asset, txHex, recipientAddress, amount, txHash) {
+    async submitLwsTx(asset, txHex) {
+      // Only asset + tx_hex. The recipient address, amount, and tx_hash are NOT
+      // sent: the LWS broadcasts from the raw tx alone, and transmitting them would
+      // expose a sender<->recipient<->amount graph to the operator on every send.
       return client.request(lwsPath(client, 'submit'), {
         method: 'POST',
-        body: JSON.stringify({
-          asset,
-          tx_hex: txHex,
-          recipient_address: recipientAddress,
-          amount,
-          tx_hash: txHash,
-        }),
+        body: JSON.stringify({ asset, tx_hex: txHex }),
       });
     },
 
