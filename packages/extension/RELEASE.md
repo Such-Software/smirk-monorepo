@@ -81,10 +81,20 @@ git archive --format=zip --output=packages/extension/releases/smirk-wallet-sourc
             smirk-wallet-source-v0.3.0.zip \
     > SHA256SUMS-v0.3.0.txt )
 
-# 6. Tag + push
+# 6. Tag + push: tag the EXACT commit the uploaded zips were built from
 git tag v0.3.0
 git push origin main v0.3.0
 ```
+
+> **Tag at the built commit, and re-tag if you re-ship.** A reviewer
+> reproduces by rebuilding the tagged source and content-matching the
+> upload, so the tag must point at the commit the shipped zips were built
+> from. If you regenerate the store zips after tagging (a late fix, a
+> rebuild), move the tag to the commit you actually built and uploaded.
+> Watch for this: the shipped v0.3.0 store zips were regenerated several
+> times (auto-link, then the dapp decimal-amount fix) after the original
+> `v0.3.0` tag was placed, so the tag ended up well behind the artifacts
+> that actually shipped. Treat that as the anti-pattern.
 
 ## Verify reproducibility
 
@@ -170,8 +180,18 @@ mandatory.
 ## What changes in v0.3.0
 
 User-facing recap for the store-listing notes (mirror the monorepo
-CHANGELOG.md):
+CHANGELOG.md, which is the source of truth):
 
+- Switchable Nostr identities: hold several identities and choose which
+  one a site, Feed post, or message uses, with "Sign in with Nostr" on
+  sites that support it. Messaging moved into the Inbox tab.
+- Publish a NIP-05 handle (`name@domain`) when you claim a Smirk handle;
+  back up and restore your Nostr identities as an encrypted blob.
+- Grin is fully non-custodial and recoverable from your seed phrase alone.
+- Self-hostable, federated backend: point the wallet at any Smirk backend
+  and pay by NIP-05 address.
+- Dapp payments quote plain decimal amounts; a `9` WOW request no longer
+  crashes the approval.
 - New onboarding: on import, the wallet detects an existing Smirk
   handle and any linked Telegram/Discord identities and surfaces them
   instead of prompting to reserve a new handle.
@@ -179,7 +199,7 @@ CHANGELOG.md):
   some Linux + Windows configs.
 - "Import wallet" vs "Create wallet" button now reads correctly on
   the password screen depending on flow.
-- Permission cleanup — `scripting` and `activeTab` removed from the
+- Permission cleanup: `scripting` and `activeTab` removed from the
   manifest (they were never used).
 - AMO listing now correctly declares `"required": ["none"]` for the
   Firefox data-collection-permissions screen.
@@ -198,7 +218,14 @@ runs without a real upload, so users don't get downgraded silently.
 
 ## Artifact retention
 
-The committed `releases/` directory ships every prior released zip
-plus its SHA256. Don't prune historical zips — they're the audit
-trail users / auditors / Mozilla reviewers can cross-check against
-to confirm what was shipped at each tagged version.
+Release zips are **build artifacts and are not committed** to the repo:
+they were removed from tracking and git-ignored, so a fresh clone has an
+empty (or absent) `releases/` working directory. Never assume the zips
+are present in the tree.
+
+The audit trail is therefore the **published `SHA256SUMS`** (in the
+GitHub release notes), not the zips themselves. Anyone rebuilds from the
+tagged source and content-compares against the checksummed upload (see
+"Verify reproducibility" above); the checksums pin exactly what was
+shipped at each tagged version. Keep old `SHA256SUMS-vX.Y.Z.txt` in the
+release notes indefinitely.

@@ -139,13 +139,18 @@ This is a hard architectural commitment, not a setting. We don't run a `cdn.smir
 
 ## Compatibility matrix
 
-| Dapp behaviour                                                                                       | v0.2.x browser extension | v0.3.0 desktop embedded browser | v0.4 mobile embedded browser |
-| ---------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------- | ---------------------------- |
-| Dapp ships `installSmirkPageApi()` + uses `window.smirk`                                             | works                    | works                           | works                        |
-| Legacy dapp uses `window.smirk` only (no `installSmirkPageApi()` call)                               | works                    | shows "wallet not found"        | shows "wallet not found"     |
-| Dapp uses `installSmirkPageApi({ mode: 'never' })`                                                   | works (extension wins)   | shows "wallet not found"        | shows "wallet not found"     |
-| Dapp uses `installSmirkPageApi({ mode: 'force' })` (testing — install even when not in Smirk iframe) | works (extension wins)   | works                           | works                        |
-| Dapp uses `getNostrPublicKey()` / `signNostrEvent()` (Sign in with Nostr, dapp-api ≥ 0.4.0)          | not available (no npub)  | works                           | works                        |
+The **v0.3.0 browser extension** (the monorepo build now shipping to the stores)
+injects `window.smirk` from its content script exactly like v0.2.x, so the
+already-injected path covers it. Unlike v0.2.x it carries a seed-derived Nostr
+identity, so `getNostrPublicKey()` / `signNostrEvent()` work there too.
+
+| Dapp behaviour                                                                                       | v0.2.x browser extension | v0.3.0 browser extension | v0.3.0 desktop embedded browser | v0.4 mobile embedded browser |
+| ---------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------ | ------------------------------- | ---------------------------- |
+| Dapp ships `installSmirkPageApi()` + uses `window.smirk`                                             | works                    | works                    | works                           | works                        |
+| Legacy dapp uses `window.smirk` only (no `installSmirkPageApi()` call)                               | works                    | works                    | shows "wallet not found"        | shows "wallet not found"     |
+| Dapp uses `installSmirkPageApi({ mode: 'never' })`                                                   | works (extension wins)   | works (extension wins)   | shows "wallet not found"        | shows "wallet not found"     |
+| Dapp uses `installSmirkPageApi({ mode: 'force' })` (testing: install even when not in Smirk iframe) | works (extension wins)   | works (extension wins)   | works                           | works                        |
+| Dapp uses `getNostrPublicKey()` / `signNostrEvent()` (Sign in with Nostr, dapp-api ≥ 0.4.0)          | not available (no npub)  | works                    | works                           | works                        |
 
 ## Where to file issues
 

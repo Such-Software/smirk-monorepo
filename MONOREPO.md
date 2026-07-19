@@ -200,7 +200,7 @@ make wasm        # just the WASM bundle
 make clean       # wipe target/, pkg/, node_modules/
 ```
 
-`make wasm` calls `cargo build --target wasm32-unknown-unknown --release` then `wasm-bindgen --target web` against the output. The wasm-bindgen lib version in `Cargo.lock` and the installed `wasm-bindgen-cli` version must match exactly — CI installs the matching CLI version automatically; locally use `cargo install -f wasm-bindgen-cli --version <version-from-Cargo.lock>` if you hit a version-skew error.
+`make wasm` runs `cargo build -p smirk-wasm --target wasm32-unknown-unknown --release` (with `--remap-path-prefix` so the build is byte-reproducible across checkouts), then `wasm-bindgen --target no-modules` against the output, then a `crates/smirk-wasm/postprocess.mjs` pass. `no-modules` emits a self-contained IIFE that loads in any WebView (extension, Capacitor, Tauri) without bundler-specific plugins; `--target web` was dropped because wasm-bindgen emits unresolved `env` placeholder imports that no bundler resolves out of the box (see `docs/ARCHITECTURE.md` "Build-pipeline gotchas"). The postprocess step stubs those C `env` imports and appends an ESM re-export so `@smirk/wasm` can import the IIFE-bound symbol. The wasm-bindgen lib version in `Cargo.lock` and the installed `wasm-bindgen-cli` version must match exactly; CI installs the matching CLI version automatically, and locally you can run `cargo install -f wasm-bindgen-cli --version <version-from-Cargo.lock>` if you hit a version-skew error.
 
 ## Adding a new Rust crate
 

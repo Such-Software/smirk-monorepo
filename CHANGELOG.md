@@ -11,12 +11,13 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
-## [0.3.0] - 2026-07-12
+## [0.3.0] - 2026-07-18
 
 The stable v0.3.0 release. It builds on the v0.3.0-rc1 feature drop with a round
 of cross-chain compatibility, balance and send reliability, real-money
-validation, and the self-hostable backend components that make Smirk federated
-end to end.
+validation, the self-hostable backend components that make Smirk federated
+end to end, and a Nostr-identity overhaul finished during the release window
+(the store builds were regenerated as these landed).
 
 - **Reliable sends and balances on every backend.** Resolved a set of
   client/backend contract mismatches that could disable Bitcoin/Litecoin fee
@@ -69,6 +70,31 @@ end to end.
   view key (building on the seed-only recovery above) and tracks in-flight sends
   with a client-side pending overlay, while the backend keeps only stateless
   scan / height / broadcast / relay helpers. See `docs/grin.md`.
+- **Nostr identity, reworked around per-service identities.** The single-npub
+  model became a switchable vault: you can hold distinct Nostr identities and
+  choose which one a given site, Feed post, or message uses, with a per-origin
+  picker the first time a dapp asks and a header switcher to change your active
+  identity. Messaging moved into the Inbox tab and the separate Settings ->
+  Messages screen was retired, so direct messages and tips share one surface.
+- **Publish a NIP-05 handle.** Claiming a Smirk handle can publish a NIP-05
+  (`name@domain`) record, so others can find and verify your Nostr identity by
+  its human-readable name.
+- **Encrypted identity-vault backup and restore.** Your Nostr identities can be
+  backed up as an encrypted blob and restored later, so a switchable-identity
+  vault survives a reinstall without exposing keys at rest.
+- **Primary identity auto-links on handle claim.** Claiming a handle now links
+  your primary Nostr identity automatically, instead of leaving you to wire the
+  two together by hand.
+- **Dapp payments quote human amounts.** A site now passes `requestPayment` a
+  plain decimal amount (`"9"`, `"9.5"`); the wallet converts to atomic units
+  using the asset's own decimals. Website operators no longer compute per-asset
+  atomic units themselves, and a payment for `9` WOW no longer crashes the
+  approval; a malformed amount is refused with a clear error instead. The
+  confirmation reads `9 WOW`, matching what actually gets sent.
+- **Payment approval covered end to end.** A Playwright spec now drives the real
+  dapp payment popup (the surface the decimal-amount bug slipped through).
+  Setting `CAPTURE_VIDEO=1` records the popup and approval window at a
+  mobile-portrait size so an e2e run doubles as demo-clip capture.
 
 ## [0.3.0-rc1] - 2026-06-04
 

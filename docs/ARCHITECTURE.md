@@ -335,13 +335,10 @@ WebKitGTK with no workaround).
 ## Audit posture cross-references
 
 The 2026-05-10 OVK + LWS migration era surfaced several patterns
-worth not re-introducing. They're documented in:
+worth not re-introducing. The public, actionable one lives in this
+doc under "Build-pipeline gotchas": WASM env imports and MV3 CSP.
 
-- `docs/SECURITY_LOG.md` — OVK ZERO incident (2026-05-10)
-- `docs/SECURITY_AUDIT.md` — internal audit (2026-05-10), do-not-inherit list
-- This doc → "Build-pipeline gotchas" — WASM env imports, MV3 CSP
-
-When porting code from `~/src/smirk-extension/` (legacy) into a
-monorepo package, the `feedback_legacy_patterns_donotport.md` memory
-entry lists nine specific patterns that must be re-architected, not
-copy-pasted.
+When porting code from the legacy `smirk-extension` v0.2.x codebase
+into a monorepo package, treat it as a rewrite target rather than a
+copy-paste source. Several patterns (fresh per-tx OVK, MV3 CSP,
+derived build ordering) have to be re-architected to fit this repo.

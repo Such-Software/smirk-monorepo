@@ -7,7 +7,20 @@ separate `smirk-backend-core` repo and is not built here.
 ## Prerequisites
 
 - **Node.js 20+** and npm.
-- **Rust** (stable) — only for the desktop app. Install via [rustup](https://rustup.rs).
+- **Rust** (stable), required for **both** clients. The browser extension does
+  not just need Rust for the desktop app: the wallet's cryptography ships as a
+  WebAssembly bundle built from the `crates/` Rust workspace, and the extension
+  build copies that bundle in. Install the toolchain via [rustup](https://rustup.rs),
+  then add the WebAssembly target and `wasm-bindgen`:
+
+  ```bash
+  rustup target add wasm32-unknown-unknown
+  # Install the wasm-bindgen CLI at the version pinned in Cargo.lock (a version
+  # mismatch fails the build). Find it with:
+  #   grep -A1 'name = "wasm-bindgen"' Cargo.lock | grep version
+  cargo install wasm-bindgen-cli --version <version-from-Cargo.lock>
+  ```
+
 - **Desktop only — Linux system libraries** (Tauri v2 webview stack). On
   Debian/Ubuntu:
 
@@ -27,6 +40,19 @@ Install workspace dependencies once from the repo root:
 npm install
 ```
 
+## Build the WASM bundle first
+
+The wallet's chain cryptography is a WebAssembly bundle produced from the Rust
+workspace. It is git-ignored (not checked in), so a fresh clone has to build it
+before anything that imports `@smirk/wasm`, which includes the extension:
+
+```bash
+make wasm                # -> crates/smirk-wasm/pkg/  (needs Rust + wasm32 target)
+```
+
+Skipping this is the most common fresh-clone failure: `@smirk/wasm` resolves to
+an empty `pkg/` and the extension loads without working crypto.
+
 ## Shared libraries build first
 
 The apps import the workspace libraries (`@smirk/core`, `@smirk/ui`,
@@ -39,10 +65,25 @@ npm run build            # builds all @smirk/* library dists (repo root)
 
 ## Browser extension
 
+The `make` targets are the reliable path: they build the WASM bundle, then every
+workspace library in derived dependency order, then the extension. Nothing to
+sequence by hand:
+
 ```bash
-npm run build:chrome  -w @smirk/extension   # dist/ with the Chrome MV3 manifest
+make ext-chrome    # dist/ with the Chrome MV3 manifest
 # or
-npm run build:firefox -w @smirk/extension   # dist/ with the Firefox manifest
+make ext-firefox   # dist/ with the Firefox manifest
+```
+
+The npm scripts build only the extension itself and assume the WASM bundle and
+the workspace `dist/`s are already built, so run `make wasm` (and `npm run
+build`) first if you use them directly:
+
+```bash
+make wasm                                     # once, if not already built
+npm run build:chrome  -w @smirk/extension     # dist/ with the Chrome MV3 manifest
+# or
+npm run build:firefox -w @smirk/extension     # dist/ with the Firefox manifest
 ```
 
 Output: `packages/extension/dist/` — a loadable **unpacked** extension.

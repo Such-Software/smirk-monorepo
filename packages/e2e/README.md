@@ -39,6 +39,9 @@ you rebuild** — the extension bundles ui's `dist/`, not its source.
 | `VITE_SMIRK_API_STYLE` | `namespaced` | wallet dialect; smirk-backend-core is `namespaced`, legacy is `flat` |
 | `EXTENSION_DIST` | `packages/extension/dist` | override to load a different build |
 | `HEADED` | _(unset)_ | `1` → visible browser |
+| `CAPTURE_VIDEO` | _(unset)_ | `1`/`on` records EVERY test (not just failures) for demo capture; see below |
+| `CAPTURE_VIDEO_DIR` | `packages/e2e/videos/` | where recordings land |
+| `CAPTURE_VIDEO_W` / `CAPTURE_VIDEO_H` | `420` / `900` | capture viewport (mobile-portrait default) |
 
 ## Two hard rules (learned the hard way)
 
@@ -89,6 +92,25 @@ on vs off), so at most one runs per config; the other skips cleanly.
 | `goblin-paylink` | pasting a `goblin:` checkout URI pre-fills the Grin Send flow (npub → pubkey, amount from the link) | alice seed, grin on |
 | `session-cache-restore` | reopening the popup restores from the session cache — no re-onboard, no key/offscreen sign-in error | alice seed |
 | `feed` | Feed tab is present + renders **iff** the backend advertises `features.feed` (absent otherwise) | alice seed |
+| `balance-freshness-cue` | the freshness affordance escalates on **sustained** refresh failure (quiet, then amber >30s, then red >60s) and clears once a refresh succeeds | alice seed |
+| `send-fee-btc` | regression guard: against a **namespaced** backend the BTC/LTC fee estimate populates the Compose fee tiers so "Continue to review" enables | alice seed |
+| `dapp-payment` | drives the **real** dapp payment popup: a shop calls `requestPayment` with a human decimal (`"9"` WOW); approval shows `9 WOW`, never "atomic units" | alice seed |
+| `messaging-inbox-identity` | Nostr identity overhaul nav smoke (daemon-free): the identity switcher + messaging→Inbox merge (Phases 4-6) | alice seed |
+| `tip-claim` | claim a **public** (URL-shared) tip end to end via the real Inbox → "+ Paste tip link" entry point | alice seed |
+| `tip-grin-share` | create a **public Grin voucher** tip and land on the success screen in its `shareUrlPending` state | alice seed, grin on |
+
+## Demo capture (`CAPTURE_VIDEO`)
+
+`CAPTURE_VIDEO=1` (or `on`/`true`/`yes`) records **every** test's popup,
+approval window, and dapp page, not just failures, so an e2e run doubles as
+demo-clip capture. Recordings land in `CAPTURE_VIDEO_DIR` (default
+`packages/e2e/videos/`) at a **mobile-portrait** viewport (420×900, override with
+`CAPTURE_VIDEO_W` / `CAPTURE_VIDEO_H`). Default runs stay lean: on-failure only.
+
+```bash
+CAPTURE_VIDEO=1 npm run test -w @smirk/e2e            # capture all specs
+CAPTURE_VIDEO=1 npm run test -w @smirk/e2e -- dapp-payment   # just the payment popup clip
+```
 
 ## Not yet covered (needs infra)
 

@@ -219,8 +219,8 @@ under each of:
 Plus keyboard-only navigation (no mouse / no touch) on extension +
 desktop builds.
 
-Findings get recorded in `docs/ACCESSIBILITY_LOG.md` (parallel to
-`docs/SECURITY_LOG.md`) — public, transparent, dated.
+Findings get recorded in `docs/ACCESSIBILITY_LOG.md`: public,
+transparent, dated.
 
 ## Contribution checklist
 

@@ -234,8 +234,7 @@ bf3ad28 (handler + fee preview + spent-output filter) and b2ec790
   in `@smirk/core/api`.
 - `packages/extension/src/popup/send-handler.ts::sendXmrWow` glues
   prepare → sign → broadcast.
-- Fresh OVK per tx via `fresh_outgoing_view_key()` (never hardcoded;
-  see `feedback_signing_outgoing_view_key.md` memory).
+- Fresh OVK per tx via `fresh_outgoing_view_key()` (never hardcoded).
 - Key-image filter pre-sign to weed out outputs the wallet has already
   spent (catches LWS lag after a tx hits mempool but before LWS rescans).
 

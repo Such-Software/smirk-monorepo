@@ -9,7 +9,7 @@ Smirk supports both Monero (XMR) and Wownero (WOW) through a single Rust + WASM 
 
 ## Status
 
-**Working in production.** The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships this stack today; the v0.3 monorepo (`packages/extension`) consumes the same `crates/smirk-wasm` bundle (now `--target no-modules` per `ARCHITECTURE.md`). Wallet creation, balance display, key image computation, transaction signing, and broadcast are all live. 2026-05-10 OVK privacy fix (fresh per-tx `outgoing_view_key`) lives in `crates/smirk-wasm/src/signing.rs` — see `SECURITY_LOG.md`.
+**Working in production.** The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships this stack today; the v0.3 monorepo (`packages/extension`) consumes the same `crates/smirk-wasm` bundle (now `--target no-modules` per `ARCHITECTURE.md`). Wallet creation, balance display, key image computation, transaction signing, and broadcast are all live. 2026-05-10 OVK privacy fix (fresh per-tx `outgoing_view_key`) lives in `crates/smirk-wasm/src/signing.rs`.
 
 ## Wownero differences from Monero
 
