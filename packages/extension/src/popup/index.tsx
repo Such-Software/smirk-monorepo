@@ -473,6 +473,9 @@ function openPopOut() {
 
 /** How long balances may stay stale before we warn the user in-app. */
 const BALANCE_STALE_WARN_MS = 15 * 60 * 1000;
+// chrome.storage.local flag: the user declined linking their Nostr identity to
+// their handle, so don't re-prompt on every unlock (Settings still offers Link).
+const NOSTR_LINK_DECLINED_KEY = 'smirk:nostrLinkDeclined';
 
 /** Steady-state background balance refresh cadence while the popup is open AND
  *  visible. Keeps the number live without hammering (XMR/WOW chains advance
@@ -569,6 +572,10 @@ function App() {
   // The wizard fails closed while this is false rather than defaulting to the
   // free path on a gated backend.
   const [regResolved, setRegResolved] = useState(false);
+  // Username pending a Nostr-identity link with the user's CONSENT (never auto).
+  // Set when an unlocked account has a handle but no linked npub; a top banner asks
+  // before publishing the username->npub mapping. Null = no prompt.
+  const [nostrLinkPrompt, setNostrLinkPrompt] = useState<string | null>(null);
   // Shared state for the interactive pay-to-register flow: the wallet created at
   // `payment.begin` and the invoice minted for it, read back by `payment.poll`.
   const paymentWalletRef = useRef<UnlockedWallet | null>(null);
@@ -1066,18 +1073,38 @@ function App() {
   useEffect(() => {
     if (walletState?.kind !== 'unlocked' || !walletState.wallet.mnemonic) return;
     if (!session?.bootstrap?.userId || !api.getAccessToken()) return;
-    const mnemonic = walletState.wallet.mnemonic;
     void (async () => {
       try {
         const me = await api.getMe();
-        if (me.data?.username && !me.data.nostrPubkey) {
-          await linkPrimaryNostrIdentity(mnemonic);
-        }
+        if (!me.data?.username || me.data.nostrPubkey) return;
+        // ASK before linking: publishing the username->npub mapping is public and
+        // binds this account's main identity to the handle, so it must be the user's
+        // choice, not a silent back-fill on upgrade. Respect a prior "Not now".
+        const declined = await chrome.storage.local.get(NOSTR_LINK_DECLINED_KEY);
+        if (declined[NOSTR_LINK_DECLINED_KEY]) return;
+        setNostrLinkPrompt(me.data.username);
       } catch {
         /* non-fatal — the user can always Link in Settings → Nostr identities */
       }
     })();
   }, [walletState, session?.bootstrap?.userId]);
+
+  // Consent handlers for the Nostr-link banner.
+  const confirmNostrLink = async () => {
+    const mnemonic =
+      walletState?.kind === 'unlocked' ? walletState.wallet.mnemonic : undefined;
+    setNostrLinkPrompt(null);
+    if (!mnemonic) return;
+    try {
+      await linkPrimaryNostrIdentity(mnemonic);
+    } catch {
+      /* non-fatal — Settings → Nostr identities still offers Link */
+    }
+  };
+  const declineNostrLink = () => {
+    setNostrLinkPrompt(null);
+    void chrome.storage.local.set({ [NOSTR_LINK_DECLINED_KEY]: true });
+  };
 
   // Apply persisted theme on boot and whenever it changes. Subscribing
   // here (not inside a deep child) means the theme swaps cleanly even
@@ -1624,6 +1651,9 @@ function App() {
               caps={caps}
               tips={tipInbox.tips}
               onRefresh={handleRefresh}
+              nostrLinkPrompt={nostrLinkPrompt}
+              confirmNostrLink={confirmNostrLink}
+              declineNostrLink={declineNostrLink}
               onTipClaim={async (tipId, assetId) => {
                 try {
                   await onClaimTipHandler({
@@ -1725,9 +1755,16 @@ function HomeRouter({
   tips,
   onRefresh,
   onTipClaim,
+  nostrLinkPrompt,
+  confirmNostrLink,
+  declineNostrLink,
 }: {
   wallet: UnlockedWallet;
   session: WalletSession | null;
+  /** Handle awaiting a consented Nostr-identity link, or null. Owned by App. */
+  nostrLinkPrompt: string | null;
+  confirmNostrLink: () => Promise<void>;
+  declineNostrLink: () => void;
   /** All received tips, pending + claimable. Home only renders a
    *  claim banner for the subset where funding has matured; Inbox
    *  owns the full list + per-tip rows. */
@@ -2798,6 +2835,59 @@ function HomeRouter({
       resolveIcon={resolveIcon}
       topNotice={
         <>
+          {nostrLinkPrompt && (
+            <div
+              data-testid="nostr-link-consent"
+              style={{
+                fontSize: 12,
+                lineHeight: 1.4,
+                padding: '10px 12px',
+                borderRadius: 8,
+                marginBottom: 8,
+                background: 'var(--smirk-bg-sunken)',
+                border: '1px solid var(--smirk-border)',
+                color: 'var(--smirk-fg-muted)',
+              }}
+            >
+              <div>
+                Link your Nostr identity to <b>@{nostrLinkPrompt}</b>? This publishes{' '}
+                <b>
+                  {nostrLinkPrompt}@{instanceHomeDomain()}
+                </b>{' '}
+                so people can find and message you. Your npub is public; your keys stay
+                on your device.
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button
+                  onClick={() => void confirmNostrLink()}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 8,
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: 'var(--smirk-accent)',
+                    color: 'var(--smirk-accent-fg, #1a1a1a)',
+                  }}
+                >
+                  Link
+                </button>
+                <button
+                  onClick={declineNostrLink}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    background: 'transparent',
+                    color: 'var(--smirk-fg-muted)',
+                    border: '1px solid var(--smirk-border)',
+                  }}
+                >
+                  Not now
+                </button>
+              </div>
+            </div>
+          )}
           {(() => {
             // Sustained-failure warning: balances stayed stale past the threshold,
             // so the numbers on screen are last-known, not live. See
