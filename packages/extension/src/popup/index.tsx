@@ -576,6 +576,10 @@ function App() {
   // Set when an unlocked account has a handle but no linked npub; a top banner asks
   // before publishing the username->npub mapping. Null = no prompt.
   const [nostrLinkPrompt, setNostrLinkPrompt] = useState<string | null>(null);
+  // The account's Smirk handle (`name@domain`) for surfacing it as the primary
+  // identity (Receive screen). Fetched independently of the seed so it survives a
+  // warm resume; null until a username is claimed.
+  const [smirkHandle, setSmirkHandle] = useState<string | null>(null);
   // Shared state for the interactive pay-to-register flow: the wallet created at
   // `payment.begin` and the invoice minted for it, read back by `payment.poll`.
   const paymentWalletRef = useRef<UnlockedWallet | null>(null);
@@ -1087,6 +1091,22 @@ function App() {
         /* non-fatal — the user can always Link in Settings → Nostr identities */
       }
     })();
+  }, [walletState, session?.bootstrap?.userId]);
+
+  // Fetch the claimed handle to surface as the primary identity. Independent of the
+  // seed (no mnemonic needed), so it populates on a warm resume too.
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked' || !session?.bootstrap?.userId || !api.getAccessToken()) {
+      setSmirkHandle(null);
+      return;
+    }
+    let stale = false;
+    void api.getMe().then((me) => {
+      if (!stale && me.data?.username) setSmirkHandle(`${me.data.username}@${instanceHomeDomain()}`);
+    });
+    return () => {
+      stale = true;
+    };
   }, [walletState, session?.bootstrap?.userId]);
 
   // Consent handlers for the Nostr-link banner.
@@ -1654,6 +1674,7 @@ function App() {
               nostrLinkPrompt={nostrLinkPrompt}
               confirmNostrLink={confirmNostrLink}
               declineNostrLink={declineNostrLink}
+              smirkHandle={smirkHandle}
               onTipClaim={async (tipId, assetId) => {
                 try {
                   await onClaimTipHandler({
@@ -1758,6 +1779,7 @@ function HomeRouter({
   nostrLinkPrompt,
   confirmNostrLink,
   declineNostrLink,
+  smirkHandle,
 }: {
   wallet: UnlockedWallet;
   session: WalletSession | null;
@@ -1765,6 +1787,8 @@ function HomeRouter({
   nostrLinkPrompt: string | null;
   confirmNostrLink: () => Promise<void>;
   declineNostrLink: () => void;
+  /** The account's Smirk handle (name@domain) to surface on Receive, or null. */
+  smirkHandle: string | null;
   /** All received tips, pending + claimable. Home only renders a
    *  claim banner for the subset where funding has matured; Inbox
    *  owns the full list + per-tip rows. */
@@ -2153,6 +2177,7 @@ function HomeRouter({
         onCopy={(text) => void navigator.clipboard.writeText(text)}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
+        {...(smirkHandle ? { handle: smirkHandle } : {})}
         onRequestInvoice={(assetId) => {
           // Only Grin has an interactive-invoice flow today. ReceiveScreen
           // calls this for every asset that has the callback set, so guard

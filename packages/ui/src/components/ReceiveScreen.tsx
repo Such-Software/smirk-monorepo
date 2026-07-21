@@ -50,6 +50,12 @@ export interface ReceiveScreenProps {
   /** Icon resolver passed through to AssetIcon. */
   resolveIcon?: (iconKey: string) => string | undefined;
   /**
+   * The account's Smirk handle (`name@domain`), when a username is claimed.
+   * Shown as the human identity above the raw per-asset address. Send-by-handle
+   * across chains lands once the resolver ships (see FIRST_CLASS_HANDLE plan).
+   */
+  handle?: string;
+  /**
    * Optional: surface a "Request specific amount" affordance below the
    * address for assets that support it. Currently only Grin's
    * interactive invoice flow uses this — the shell routes to a
@@ -77,6 +83,28 @@ export function ReceiveScreen(props: ReceiveScreenProps) {
         <span style={{ opacity: 0.5 }}>{pickedAssetId ? 'Receive' : 'Choose asset'}</span>
         <span style={{ width: 60 }} />
       </header>
+
+      {props.handle && (
+        <button
+          data-testid="receive-handle"
+          onClick={props.onCopy ? () => props.onCopy?.(props.handle as string) : undefined}
+          style={{
+            textAlign: 'left',
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: 'rgba(245,197,66,0.10)',
+            border: '1px solid rgba(245,197,66,0.35)',
+            color: 'inherit',
+            cursor: props.onCopy ? 'pointer' : 'default',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <span style={{ fontSize: 11, opacity: 0.6 }}>Your Smirk handle{props.onCopy ? ' (tap to copy)' : ''}</span>
+          <span style={{ fontSize: 15, fontWeight: 700, wordBreak: 'break-all' }}>{props.handle}</span>
+        </button>
+      )}
 
       {!pickedAssetId ? (
         <PickAsset

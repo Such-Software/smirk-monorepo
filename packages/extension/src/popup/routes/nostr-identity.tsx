@@ -604,9 +604,15 @@ export function NostrIdentityRoute({
       </div>
 
       <div style={{ marginTop: 16 }}>
-        {linkedPubkey && linkedPubkey === vault?.active ? (
+        {/* The link binds your STABLE primary (account-0) identity to this account —
+            NOT the switchable active/burner. So "linked" is a property of the account,
+            independent of which identity is currently active (a burner being active must
+            not read as "not linked"). */}
+        {linkedPubkey ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div data-testid="nostr-linked-badge" style={linkedBadge}>✓ Active identity linked to this account</div>
+            <div data-testid="nostr-linked-badge" style={linkedBadge}>
+              ✓ Your account is linked to your primary Nostr identity
+            </div>
             {mnemonic && (
               <button data-testid="nostr-publish-profile" onClick={onPublishProfile} disabled={publishingProfile} style={{ ...smallBtn, alignSelf: 'flex-start' }}>
                 {publishingProfile ? 'Publishing…' : 'Publish handle to Nostr'}
@@ -615,7 +621,7 @@ export function NostrIdentityRoute({
           </div>
         ) : (
           <button data-testid="nostr-link-btn" onClick={() => void onLinkActive()} disabled={busy === 'link' || !vault || !mnemonic} style={primaryBtn}>
-            {busy === 'link' ? 'Linking…' : 'Link active identity for sign-in'}
+            {busy === 'link' ? 'Linking…' : 'Link your identity to activate your handle'}
           </button>
         )}
       </div>
