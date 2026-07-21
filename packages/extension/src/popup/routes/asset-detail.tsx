@@ -384,23 +384,22 @@ async function loadAssetHistory(
     if (!addr) return [];
     const r = await chainProviders.lws(assetId).getHistory(addr, viewKeyHex);
     if (r.error || !r.data) return [];
-    return r.data.transactions.map(
-      (t): AssetDetailTxRow => ({
+    return r.data.transactions.map((t): AssetDetailTxRow => {
+      // Atomic amounts are strings (may exceed 2^53) — compare + sum as BigInt.
+      // total_received > 0 means we received; spent_outputs presence means we sent.
+      // LWS rows can be both (change): direction = 'in' if net positive, else 'out'.
+      const received = BigInt(t.total_received) > 0n;
+      return {
         kind: 'cryptonote',
-        // total_received > 0 means we received; spent_outputs presence
-        // means we sent. LWS rows can be both (change), in which case
-        // direction = 'in' if net is positive, else 'out'.
-        direction: t.total_received > 0 ? 'in' : 'out',
-        amountAtomic: BigInt(
-          t.total_received > 0
-            ? t.total_received
-            : t.spent_outputs.reduce((s, o) => s + o.amount, 0),
-        ),
+        direction: received ? 'in' : 'out',
+        amountAtomic: received
+          ? BigInt(t.total_received)
+          : t.spent_outputs.reduce((s, o) => s + BigInt(o.amount), 0n),
         txid: t.txid,
         heightOrPending: t.is_pending ? 'pending' : t.height,
         timestamp: t.timestamp,
-      }),
-    );
+      };
+    });
   }
   if (assetId === 'grin') {
     // Grin on v3 is non-custodial: `POST /wallet/grin/scan` returns the current
