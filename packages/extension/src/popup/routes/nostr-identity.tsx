@@ -28,6 +28,7 @@ import {
   isForeignVaultBackup,
 } from '../nostr-vault';
 import { publishNip05Profile } from '../nostr-link';
+import { nip05HomeDomain } from '../nip05';
 import { walletKeystore, store } from '../singletons';
 import { writeSessionCache } from '../session-cache';
 
@@ -56,6 +57,9 @@ export function NostrIdentityRoute({
   const mnemonic = activeWallet.mnemonic;
   const [vault, setVault] = useState<IdentityVault | null>(null);
   const [linkedPubkey, setLinkedPubkey] = useState<string | null>(null);
+  // The account's claimed Smirk username, so we can lead with the human handle
+  // (`<username>@<domain>`) instead of a raw npub. Null = no handle claimed.
+  const [handle, setHandle] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | undefined>(undefined);
   const [nsec, setNsec] = useState('');
@@ -110,8 +114,10 @@ export function NostrIdentityRoute({
   useEffect(() => {
     let stale = false;
     void api.getMe().then((r) => {
+      if (stale) return;
       const pk = r.data?.nostrPubkey;
-      if (!stale && pk) setLinkedPubkey((prev) => prev ?? pk);
+      if (pk) setLinkedPubkey((prev) => prev ?? pk);
+      if (r.data?.username) setHandle(r.data.username);
     });
     return () => {
       stale = true;
@@ -386,6 +392,32 @@ export function NostrIdentityRoute({
               {unlockErr && <span style={{ color: '#ef4444' }}>{unlockErr}</span>}
             </div>
           )}
+        </div>
+      )}
+
+      {handle && (
+        <div
+          data-testid="nostr-handle"
+          style={{
+            marginTop: 10,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: 'rgba(245,197,66,0.10)',
+            border: '1px solid rgba(245,197,66,0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <span style={{ fontSize: 11, opacity: 0.6 }}>Your Smirk handle</span>
+          <span style={{ fontSize: 15, fontWeight: 700, wordBreak: 'break-all' }}>
+            {handle}@{nip05HomeDomain()}
+          </span>
+          <span style={{ fontSize: 11, opacity: 0.75 }}>
+            {linkedPubkey
+              ? '✓ verified — people can find and pay you by this name'
+              : 'Reserved. Link your identity below to activate it.'}
+          </span>
         </div>
       )}
 
