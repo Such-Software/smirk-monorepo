@@ -37,7 +37,8 @@ import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
 import { loadCapabilities, capAllowsPrices } from './api';
-import { chainProviders, type ChainProviderRegistry } from './chain';
+import { chainProviders, type ChainProviderRegistry, type UtxoAddressRef } from './chain';
+import { btcLtcFreshAddrsEnabled } from './utxo-addressbook';
 import { solvePowChallenge, type AltchaPayload } from './pow';
 import type { GrinPendingOverlay } from './payments/grin-pending-overlay';
 
@@ -322,6 +323,20 @@ export type KeyImageVerifier = (params: {
   privateSpendKeyHex: string;
   txPubKeyHex: string;
   outputIndex: number;
+  /**
+   * Subaddress index the output being verified was RECEIVED at. Both omitted
+   * (or `(0, 0)`) means the primary address, which is the pre-subaddress call
+   * and stays byte-identical. For a subaddress output both MUST be supplied:
+   * the subaddress secret is folded into the key offset, so the key image of a
+   * subaddress output cannot be reproduced from the primary index.
+   *
+   * An implementation that cannot honour a non-primary index must THROW rather
+   * than fall back to the primary one. A silently-primary answer looks exactly
+   * like a decoy mismatch, and the caller would leave a real spend
+   * unsubtracted.
+   */
+  subaddrMajor?: number;
+  subaddrMinor?: number;
 }) => Promise<string>;
 
 export interface ScanProgress {
@@ -449,6 +464,49 @@ export interface FetchBalancesOptions {
    * back to `''`, preserving the pre-federation single-backend behavior.
    */
   backendUrl?: string;
+
+  /**
+   * BTC/LTC multi-address scan refs (Lane 5, `ENABLE_BTCLTC_FRESH_ADDRS`).
+   * When the flag is ON, the host builds these from the wallet's address
+   * book ({@link buildUtxoScanRefs}) and passes the full receive+change scan
+   * set per asset; the balance for that asset is then aggregated across all
+   * of them in a single `balance_multi` round-trip. When absent (the default,
+   * and always when the flag is off), each asset reads its single primary
+   * address exactly as before. Index 0 is always in the ref set, so primary
+   * funds stay visible either way.
+   */
+  utxoAddressRefs?: { btc?: UtxoAddressRef[]; ltc?: UtxoAddressRef[] };
+
+  /**
+   * Report which of the supplied {@link utxoAddressRefs} were observed holding
+   * on-chain activity, per asset. The host folds these back into its address
+   * book (`recordUtxoActivity`) so both gap windows slide forward: receive
+   * indices unlock further fresh addresses, and change indices are discovered
+   * on a wallet whose local `changeNext` is 0 (a from-seed restore, a cleared
+   * profile, or change created on another device).
+   *
+   * Supplying it costs one extra multi-address round-trip per UTXO asset,
+   * issued in parallel with the balance read, and only when
+   * `utxoAddressRefs` is present (so never on the default flag-off path).
+   * Best-effort: a failure here never affects the balance.
+   */
+  onUtxoActivity?: (asset: 'btc' | 'ltc', activeAddresses: string[]) => void | Promise<void>;
+
+  /**
+   * Treat a spend record with NO reported subaddress index as SPENT rather than
+   * as an unverifiable candidate to skip (XMR/WOW).
+   *
+   * The host sets this when subaddress receive is enabled, because from that
+   * point on the wallet can hold outputs whose key image cannot be reproduced
+   * from the primary index. Skipping those leaves already-spent money on the
+   * balance permanently; counting them can only under-report, which is the
+   * survivable direction.
+   *
+   * Default OFF, which is exactly today's behavior: an unindexed candidate is
+   * verified against the primary index and skipped on mismatch, so ring decoys
+   * are not subtracted.
+   */
+  strictSpentSubaddrIndex?: boolean;
 }
 
 export async function fetchAllBalances(
@@ -502,13 +560,25 @@ export async function fetchAllBalances(
     tap(
       'btc',
       visible('btc')
-        ? fetchUtxoBalance(providers, 'btc', wallet.addresses.btc)
+        ? fetchUtxoBalance(
+            providers,
+            'btc',
+            wallet.addresses.btc,
+            options.utxoAddressRefs?.btc,
+            options.onUtxoActivity,
+          )
         : Promise.resolve(zero),
     ),
     tap(
       'ltc',
       visible('ltc')
-        ? fetchUtxoBalance(providers, 'ltc', wallet.addresses.ltc)
+        ? fetchUtxoBalance(
+            providers,
+            'ltc',
+            wallet.addresses.ltc,
+            options.utxoAddressRefs?.ltc,
+            options.onUtxoActivity,
+          )
         : Promise.resolve(zero),
     ),
     tap(
@@ -524,6 +594,7 @@ export async function fetchAllBalances(
             xmrSpendKeyHex,
             bootstrap.xmrStartHeight,
             options.verifyKeyImage,
+            options.strictSpentSubaddrIndex === true,
           )
         : Promise.resolve(zero),
     ),
@@ -540,6 +611,7 @@ export async function fetchAllBalances(
             wowSpendKeyHex,
             bootstrap.wowStartHeight,
             options.verifyKeyImage,
+            options.strictSpentSubaddrIndex === true,
           )
         : Promise.resolve(zero),
     ),
@@ -558,10 +630,56 @@ async function fetchUtxoBalance(
   providers: ChainProviderRegistry,
   asset: 'btc' | 'ltc',
   address: string,
+  refs?: UtxoAddressRef[],
+  onUtxoActivity?: (asset: 'btc' | 'ltc', activeAddresses: string[]) => void | Promise<void>,
 ): Promise<AssetBalance> {
-  const result = await providers.utxo(asset).getBalance(address);
+  // Multi-address aggregation only when the fresh-address flag is ON and the
+  // host actually supplied a ref set. Otherwise (default, and always flag-off)
+  // read the single primary address exactly as before — index 0's funds are
+  // in the ref set too, so nothing is hidden either way.
+  const useMulti = btcLtcFreshAddrsEnabled() && refs !== undefined && refs.length > 0;
+  if (!useMulti) {
+    const single = await providers.utxo(asset).getBalance(address);
+    if (single.error || !single.data) {
+      return { confirmed: 0n, pending: 0n, error: single.error ?? 'Network error' };
+    }
+    return {
+      confirmed: BigInt(single.data.confirmed),
+      pending: BigInt(single.data.unconfirmed),
+    };
+  }
+
+  // The aggregate balance is the authoritative number and comes from the
+  // balance route; it reports no per-address breakdown, so gap discovery needs
+  // the tagged UTXO listing. Issued in parallel so it adds no latency, and it
+  // is only requested when the host asked for activity reporting.
+  const provider = providers.utxo(asset);
+  const addresses = refs!.map((r) => r.address);
+  const [result, listing] = await Promise.all([
+    provider.getBalanceMulti(addresses),
+    onUtxoActivity
+      ? // `.then` off a resolved promise so a provider that throws synchronously
+        // (or has no batch listing at all) degrades to "no discovery this pass"
+        // instead of failing the balance read.
+        Promise.resolve()
+          .then(() => provider.listOutputsMulti(refs!))
+          .catch(() => null)
+      : Promise.resolve(null),
+  ]);
   if (result.error || !result.data) {
     return { confirmed: 0n, pending: 0n, error: result.error ?? 'Network error' };
+  }
+  if (onUtxoActivity && listing && !listing.error && listing.data) {
+    // Addresses currently holding an output. Best-effort and non-blocking: a
+    // failure to widen the gap window must never fail a balance read.
+    const active = [...new Set(listing.data.utxos.map((u) => u.address).filter((a): a is string => !!a))];
+    if (active.length > 0) {
+      try {
+        await onUtxoActivity(asset, active);
+      } catch (e) {
+        console.warn('[smirk] utxo activity report failed', e);
+      }
+    }
   }
   return {
     confirmed: BigInt(result.data.confirmed),
@@ -598,6 +716,7 @@ async function fetchLwsBalance(
   spendKeyHex: string,
   startHeight: number | undefined,
   verifyKeyImage: KeyImageVerifier | undefined,
+  strictSpentIndex: boolean,
 ): Promise<AssetBalance> {
   // Best-effort registration, at most ONCE per account per session (see
   // `registeredLwsAccounts` for why repeating it corrupts the balance).
@@ -648,23 +767,46 @@ async function fetchLwsBalance(
   const verifiedSpentInputs: string[] = [];
   if (verifyKeyImage && result.data.spent_outputs.length > 0) {
     for (const out of result.data.spent_outputs) {
+      // The index the output being spent was RECEIVED at. It comes off the
+      // spend record, never off the enclosing transaction (that one is the
+      // change index). Absent means the backend does not report it at all.
+      const sub = out.subaddr_index;
+      if (sub === undefined && strictSpentIndex) {
+        // FAIL CLOSED. In subaddress mode an unindexed spend record cannot be
+        // verified: recomputing against the primary index is guaranteed to
+        // mismatch for a subaddress output, and treating that as a decoy is
+        // what leaves already-spent money on screen forever (and makes later
+        // sends fail for insufficient funds while the balance insists
+        // otherwise). Subtracting an unverifiable candidate can only
+        // UNDER-report, which is the survivable direction.
+        spent += BigInt(out.amount);
+        continue;
+      }
       try {
         const computed = await verifyKeyImage({
           privateViewKeyHex: viewKeyHex,
           privateSpendKeyHex: spendKeyHex,
           txPubKeyHex: out.tx_pub_key,
           outputIndex: out.out_index,
+          // Threaded ONLY when the backend actually reported an index. Omitted
+          // otherwise, so a legacy backend's payload produces the exact
+          // pre-subaddress call and the flag-off path is unchanged.
+          ...(sub ? { subaddrMajor: sub.major, subaddrMinor: sub.minor } : {}),
         });
         if (computed.toLowerCase() === out.key_image.toLowerCase()) {
           spent += BigInt(out.amount);
           verifiedSpentInputs.push(computed.toLowerCase());
         }
-        // else: false positive (decoy match). Skip.
+        // else: false positive (decoy match). Skip. With the index supplied
+        // this is a true decoy: a real spend of a subaddress output recomputes
+        // to the reported key image.
       } catch (e) {
-        // Failure to verify a single output shouldn't block the whole
-        // balance; log and treat as unverified (i.e. don't subtract).
-        // The downside is a single broken output silently hides a real
-        // spend — but we'd rather over-report than crash the popup.
+        // Failure to verify a single output shouldn't block the whole balance.
+        // In strict (subaddress) mode a verifier that cannot compute this
+        // output's key image is exactly the case that must not under-subtract,
+        // so count it as spent; otherwise keep the historical behavior of
+        // leaving it unsubtracted rather than over-subtracting decoys.
+        if (strictSpentIndex) spent += BigInt(out.amount);
         console.warn('[smirk] key-image verify failed for one output', e);
       }
     }

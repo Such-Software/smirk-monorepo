@@ -135,7 +135,17 @@ function makePayload(): SessionCachePayload {
     fingerprint: 'fp-abcd',
     // nostr rides in `keys` (no address entry); parseSessionCache validates its
     // presence separately, so the well-formed payload must include it.
-    keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {}, nostr: {} } as unknown as SessionCachePayload['keys'],
+    // btc/ltc carry `accountXpub` (money gate G10): a v3 unlock always
+    // populates it, and parseSessionCache now rejects a pre-xpub cache so it
+    // self-heals to a single re-unlock.
+    keys: {
+      btc: { accountXpub: 'xpub-btc' },
+      ltc: { accountXpub: 'xpub-ltc' },
+      xmr: {},
+      wow: {},
+      grin: {},
+      nostr: {},
+    } as unknown as SessionCachePayload['keys'],
     addresses: { btc: 'b', ltc: 'l', xmr: 'x', wow: 'w', grin: 'g' } as SessionCachePayload['addresses'],
     expiresAtMs: 1_700_000_000_000,
   };

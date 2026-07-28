@@ -47,6 +47,20 @@ pub enum BuildError {
     DustChange,
     InvalidPsbt,
     NotFinalized,
+    /// Fail-closed money gate G9: the P2WPKH script derived from an input's
+    /// `master_path` did not match the `owner_address` the caller tagged that
+    /// UTXO with. Signing anyway would build against the wrong key/path and
+    /// broadcast a wrong-sighash (or wrong-owner) transaction. We refuse at
+    /// build time instead, turning a would-be bad broadcast into an error.
+    InputScriptMismatch {
+        input_index: usize,
+    },
+    /// The `owner_address` tag on an input could not be decoded for the
+    /// selected network (bad bech32 / wrong HRP). Fail closed rather than skip
+    /// the G9 check.
+    InvalidOwnerAddress {
+        input_index: usize,
+    },
 }
 
 impl core::fmt::Display for BuildError {
@@ -70,6 +84,13 @@ impl core::fmt::Display for BuildError {
             BuildError::DustChange => write!(f, "change output below dust limit"),
             BuildError::InvalidPsbt => write!(f, "invalid PSBT"),
             BuildError::NotFinalized => write!(f, "PSBT is not fully signed/finalized"),
+            BuildError::InputScriptMismatch { input_index } => write!(
+                f,
+                "input {input_index}: derived script_pubkey does not match the tagged owner address (path/address mismatch)"
+            ),
+            BuildError::InvalidOwnerAddress { input_index } => {
+                write!(f, "input {input_index}: owner address could not be decoded for this network")
+            }
         }
     }
 }
@@ -89,6 +110,13 @@ pub struct UnsignedInput {
     pub vout: u32,
     pub value_sat: u64,
     pub master_path: String,
+    /// Optional bech32 address this UTXO belongs to (the wallet's own tag for
+    /// which receive/change address owns it). When present, `build_psbt`
+    /// asserts the P2WPKH script derived from `master_path` equals this
+    /// address's script — money gate G9. `None` preserves the pre-fresh-address
+    /// single-path behavior (no cross-check), so flag-off callers are
+    /// byte-for-byte unchanged.
+    pub owner_address: Option<String>,
 }
 
 /// Parameters for `build_psbt`.
@@ -224,6 +252,21 @@ pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
         // P2WPKH script_pubkey from the child pubkey's hash160.
         let script_pubkey = ScriptBuf::new_p2wpkh(&child_pubkey.wpubkey_hash());
 
+        // Money gate G9 (fail-closed): if the caller tagged this UTXO with the
+        // address it believes owns it, the script we just derived from
+        // `master_path` MUST match that address's script. A mismatch means the
+        // path and the on-chain output disagree — signing would produce a
+        // wrong-sighash / wrong-owner spend. Refuse to build instead. When
+        // `owner_address` is None (single-address / flag-off path) this check
+        // is skipped and behavior is unchanged.
+        if let Some(owner) = input_meta.owner_address.as_deref() {
+            let owner_script = decode_recipient_script(owner, params.network)
+                .map_err(|_| BuildError::InvalidOwnerAddress { input_index: idx })?;
+            if owner_script != script_pubkey {
+                return Err(BuildError::InputScriptMismatch { input_index: idx });
+            }
+        }
+
         // bip32_derivation map entry — `sign_psbt` walks this to know
         // which child key signs which input.
         let mut bip32_derivation = BTreeMap::new();
@@ -275,6 +318,7 @@ mod tests {
             vout: 0,
             value_sat: 100_000_000,
             master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: None,
         }];
 
         let psbt_b64 = build_psbt(&BuildParams {
@@ -308,6 +352,7 @@ mod tests {
             vout: 0,
             value_sat: 1_000_000,
             master_path: "m/84'/2'/0'/0/0".to_string(),
+            owner_address: None,
         }];
 
         let psbt_b64 = build_psbt(&BuildParams {
@@ -336,6 +381,7 @@ mod tests {
             vout: 0,
             value_sat: 1_000_000,
             master_path: "m/84'/2'/0'/0/0".to_string(),
+            owner_address: None,
         }];
 
         let err = build_psbt(&BuildParams {
@@ -359,6 +405,7 @@ mod tests {
             vout: 0,
             value_sat: 100_000_000,
             master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: None,
         }];
 
         let psbt_b64 = build_psbt(&BuildParams {
@@ -385,6 +432,7 @@ mod tests {
             vout: 0,
             value_sat: 1000,
             master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: None,
         }];
 
         let err = build_psbt(&BuildParams {
@@ -408,6 +456,7 @@ mod tests {
             vout: 0,
             value_sat: 100_000,
             master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: None,
         }];
 
         let err = build_psbt(&BuildParams {
@@ -421,6 +470,70 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, BuildError::DustChange));
+    }
+
+    #[test]
+    fn owner_address_match_builds_ok() {
+        // Money gate G9 (happy path): an input tagged with the address its own
+        // `master_path` derives to must build cleanly. We derive the expected
+        // address from the same path via the crate's own helpers so the test is
+        // self-consistent (no hardcoded vector to drift).
+        use crate::address::AddressKind;
+        use crate::{derive_address, derive_xpriv};
+        let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::BtcMainnet).unwrap();
+        let child = derive_xpriv(&master, "m/84'/0'/0'/0/0").unwrap();
+        let owner = derive_address(&child, AddressKind::P2wpkh, Network::BtcMainnet).unwrap();
+
+        let inputs = vec![UnsignedInput {
+            txid: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            vout: 0,
+            value_sat: 100_000_000,
+            master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: Some(owner),
+        }];
+        build_psbt(&BuildParams {
+            network: Network::BtcMainnet,
+            inputs: &inputs,
+            recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            recipient_sat: 99_000_000,
+            change_address: None,
+            change_sat: 0,
+            master_xpriv: &master,
+        })
+        .expect("matching owner address should build");
+    }
+
+    #[test]
+    fn owner_address_mismatch_fails_closed() {
+        // Money gate G9 (fail-closed): tag an input at path `.../0/0` with the
+        // address of a DIFFERENT path (`.../0/1`). The script derived from the
+        // build path won't match the tag, so build_psbt must refuse rather than
+        // sign a wrong-owner/wrong-sighash spend.
+        use crate::address::AddressKind;
+        use crate::{derive_address, derive_xpriv};
+        let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::BtcMainnet).unwrap();
+        let other_child = derive_xpriv(&master, "m/84'/0'/0'/0/1").unwrap();
+        let wrong_owner =
+            derive_address(&other_child, AddressKind::P2wpkh, Network::BtcMainnet).unwrap();
+
+        let inputs = vec![UnsignedInput {
+            txid: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            vout: 0,
+            value_sat: 100_000_000,
+            master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: Some(wrong_owner),
+        }];
+        let err = build_psbt(&BuildParams {
+            network: Network::BtcMainnet,
+            inputs: &inputs,
+            recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            recipient_sat: 99_000_000,
+            change_address: None,
+            change_sat: 0,
+            master_xpriv: &master,
+        })
+        .unwrap_err();
+        assert!(matches!(err, BuildError::InputScriptMismatch { input_index: 0 }));
     }
 
     #[test]
@@ -438,6 +551,7 @@ mod tests {
             vout: 0,
             value_sat: 100_000_000,
             master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: None,
         }];
         let unsigned = build_psbt(&BuildParams {
             network: Network::BtcMainnet,

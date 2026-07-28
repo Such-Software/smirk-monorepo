@@ -1163,6 +1163,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/utxo/balance_multi": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirmed/unconfirmed balance summed across a batch of BTC/LTC addresses. */
+        post: operations["balance_multi"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/utxo/broadcast": {
         parameters: {
             query?: never;
@@ -1214,6 +1231,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/utxo/history_multi": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirmed + mempool history across a batch of BTC/LTC addresses, each entry
+         *     tagged with its owning address.
+         */
+        post: operations["history_multi"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/utxo/tip": {
         parameters: {
             query?: never;
@@ -1242,6 +1279,26 @@ export interface paths {
         put?: never;
         /** Unspent outputs for a BTC/LTC address. */
         post: operations["utxos"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallet/utxo/utxos_multi": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unspent outputs across a batch of BTC/LTC addresses, each tagged with its
+         *     owning address (the wallet never re-guesses UTXO ownership).
+         */
+        post: operations["utxos_multi"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1876,6 +1933,36 @@ export interface components {
             /** @description Write policy: `inbox-outbox` | `author-allowlist` | `open` | `premium-post`. */
             write_policy: string;
         };
+        /**
+         * @description A batch query for several addresses of one UTXO asset. The list is bounded
+         *     server-side (see [`MAX_MULTI_ADDRESSES`]).
+         */
+        MultiAddressRequest: {
+            /** @description The addresses to query (each validated by the Electrum client). */
+            addresses: string[];
+            /** @description `btc` or `ltc`. */
+            asset: string;
+        };
+        /**
+         * @description Confirmed/unconfirmed balance summed across the requested addresses. Summed
+         *     with checked arithmetic server-side (a hostile value errors, never wraps);
+         *     the wallet computes any grand total from these integer fields.
+         */
+        MultiBalanceResponse: {
+            asset: string;
+            /** Format: int64 */
+            confirmed: number;
+            /** Format: int64 */
+            unconfirmed: number;
+        };
+        MultiHistoryResponse: {
+            asset: string;
+            transactions: components["schemas"]["TaggedHistoryEntry"][];
+        };
+        MultiUtxosResponse: {
+            asset: string;
+            utxos: components["schemas"]["TaggedUtxo"][];
+        };
         MyUsernameResponse: {
             /** @description The caller's username, or `null` if they have not claimed one. */
             username?: string | null;
@@ -2208,11 +2295,54 @@ export interface components {
             /** @description Premium expiry (RFC3339), or null if never premium / lapsed. */
             premium_until?: string | null;
         };
+        /**
+         * @description A subaddress index `(major, minor)` an output/tx was received at. Nested to
+         *     match the wallet's wasm `LwsOutput` shape (`subaddr_index: {major, minor}`);
+         *     mapped from the LWS `recipient` field. `(0, 0)` is the primary address.
+         */
+        SubaddrIndexDto: {
+            /** Format: int32 */
+            major: number;
+            /** Format: int32 */
+            minor: number;
+        };
         /** @description Submit a finalized, signed transaction. */
         SubmitRequest: {
             asset: string;
             /** @description Hex-encoded signed transaction blob. */
             tx_hex: string;
+        };
+        /** @description A transaction-history entry TAGGED with its owning address. */
+        TaggedHistoryEntry: {
+            address: string;
+            /**
+             * Format: int64
+             * @description Fee in satoshis (mempool entries only).
+             */
+            fee?: number | null;
+            /**
+             * Format: int64
+             * @description Block height (`0`/negative for unconfirmed).
+             */
+            height: number;
+            txid: string;
+        };
+        /**
+         * @description A single unspent output TAGGED with the address it belongs to. The tag is
+         *     load-bearing: the wallet never re-derives which address owns a UTXO.
+         */
+        TaggedUtxo: {
+            address: string;
+            /**
+             * Format: int64
+             * @description Block height; `0` if unconfirmed.
+             */
+            height: number;
+            txid: string;
+            /** Format: int64 */
+            value: number;
+            /** Format: int64 */
+            vout: number;
         };
         TipResponse: {
             asset: string;
@@ -2230,6 +2360,8 @@ export interface components {
             mempool: boolean;
             payment_id?: string | null;
             spent_outputs: components["schemas"]["SpentOutputDto"][];
+            /** @description Subaddress index this tx was received at (`(0, 0)` = primary address). */
+            subaddr_index: components["schemas"]["SubaddrIndexDto"];
             timestamp: string;
             total_received: string;
             /** @description "Possible" sent — candidate spends, not authoritative. */
@@ -2250,6 +2382,8 @@ export interface components {
             rct: string;
             /** @description Key images seen on-chain that may correspond to this output being spent. */
             spend_key_images: string[];
+            /** @description Subaddress index this output was received at (`(0, 0)` = primary address). */
+            subaddr_index: components["schemas"]["SubaddrIndexDto"];
             timestamp: string;
             tx_hash: string;
             tx_pub_key: string;
@@ -4390,6 +4524,51 @@ export interface operations {
             };
         };
     };
+    balance_multi: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MultiAddressRequest"];
+            };
+        };
+        responses: {
+            /** @description Summed balance in satoshis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MultiBalanceResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset, address, or oversized batch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     broadcast: {
         parameters: {
             query?: never;
@@ -4525,6 +4704,51 @@ export interface operations {
             };
         };
     };
+    history_multi: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MultiAddressRequest"];
+            };
+        };
+        responses: {
+            /** @description Address-tagged transaction history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MultiHistoryResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset, address, or oversized batch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     tip: {
         parameters: {
             query?: never;
@@ -4593,6 +4817,51 @@ export interface operations {
                 };
             };
             /** @description Invalid/disabled asset or address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    utxos_multi: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MultiAddressRequest"];
+            };
+        };
+        responses: {
+            /** @description Address-tagged unspent outputs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MultiUtxosResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset, address, or oversized batch */
             400: {
                 headers: {
                     [name: string]: unknown;

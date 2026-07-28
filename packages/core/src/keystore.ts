@@ -424,6 +424,20 @@ export function parseSessionCache(raw: unknown): SessionCachePayload | null {
   // shape. A pre-nostr v2 cache (written before this field existed) is
   // rejected here and self-heals with a single re-unlock.
   if (!keys.nostr || typeof keys.nostr !== 'object') return null;
+  // Money gate G10: the BTC/LTC gap-limit fresh-address feature derives
+  // receive/change addresses on a warm session from the account xpub
+  // (`keys.btc.accountXpub` / `keys.ltc.accountXpub`). A pre-xpub cache
+  // (written before this field existed) lacks it; rather than crash later
+  // when the address book asks for the xpub, reject the whole cache here so
+  // the wallet re-derives everything from a single fresh password unlock.
+  // The unlock path (`unlockKeystore` → `deriveAllKeys(_, _, 3)`) always
+  // populates the xpub, so a freshly-written cache always passes.
+  for (const asset of ['btc', 'ltc'] as const) {
+    const k = keys[asset] as Record<string, unknown> | undefined;
+    if (!k || typeof k.accountXpub !== 'string' || k.accountXpub.length === 0) {
+      return null;
+    }
+  }
   return r as unknown as SessionCachePayload;
 }
 

@@ -20,10 +20,12 @@ import type {
   LwsBalance,
   LwsDeactivateResult,
   LwsHistory,
+  LwsProvisionResult,
   LwsRandomOuts,
   LwsRegisterResult,
   LwsSubmitResult,
   LwsUnspent,
+  UtxoAddressRef,
   UtxoBalance,
   UtxoBroadcastResult,
   UtxoHistory,
@@ -77,6 +79,23 @@ export interface UtxoChainProvider extends BaseChainProvider {
   listOutputs(address: string): Promise<ApiResponse<UtxoListing>>;
   broadcast(txHex: string): Promise<ApiResponse<UtxoBroadcastResult>>;
   getHistory(address: string): Promise<ApiResponse<UtxoHistory>>;
+
+  // --- Multi-address (BIP84 gap-limit fresh addresses; gated OFF by default) ---
+  // These target the backend's FEATURE_UTXO_MULTI_ADDRESS routes, which 404
+  // when the backend feature is off. Callers only use them when the client
+  // flag ENABLE_BTCLTC_FRESH_ADDRS is on; with it off the single-address
+  // methods above are the only ones invoked, so behavior is unchanged.
+
+  /** Aggregate balance across several owned addresses (one round-trip). */
+  getBalanceMulti(addresses: string[]): Promise<ApiResponse<UtxoBalance>>;
+  /**
+   * UTXOs across several owned addresses. Each returned {@link UtxoEntry} is
+   * TAGGED with its owning `address` + `masterPath` (the path re-attached
+   * client-side from `refs`, never server-derived — money gate G9).
+   */
+  listOutputsMulti(refs: UtxoAddressRef[]): Promise<ApiResponse<UtxoListing>>;
+  /** Aggregate history across several owned addresses. */
+  getHistoryMulti(addresses: string[]): Promise<ApiResponse<UtxoHistory>>;
 }
 
 /** Ring-CT chains (xmr, wow): a view key + per-output cryptographic scanning. */
@@ -95,8 +114,31 @@ export interface LwsChainProvider extends BaseChainProvider {
     address: string,
     viewKey: string,
     startHeight?: number,
+    /**
+     * Account-0 minor subaddress indices to provision alongside registration.
+     * Omitted by every caller unless the ENABLE_SUBADDRESS_RECEIVE client flag
+     * is on, so registration is unchanged by default.
+     */
+    subaddrCount?: number,
   ): Promise<ApiResponse<LwsRegisterResult>>;
   deactivateAccount(address: string): Promise<ApiResponse<LwsDeactivateResult>>;
+
+  /**
+   * Provision account-0 minor subaddress indices `[0 .. maxMinor]` at the
+   * server, and report back the ceiling it actually provisioned.
+   *
+   * OPTIONAL on purpose: a direct / self-hosted provider may not implement
+   * provisioning at all. Callers MUST treat its absence as "cannot raise the
+   * ceiling" and refuse to issue a new subaddress (money gate G4) rather than
+   * assume a default. An unprovisioned subaddress is not scanned by the LWS,
+   * so funds sent to it never appear.
+   */
+  provisionSubaddrs?(
+    userId: string,
+    address: string,
+    viewKey: string,
+    maxMinor: number,
+  ): Promise<ApiResponse<LwsProvisionResult>>;
 }
 
 /** Mimblewimble (grin): no addresses, no amounts, no server-side store. Balance

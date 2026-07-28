@@ -23,7 +23,14 @@ import type {
   UtxoAsset,
   UtxoChainProvider,
 } from './provider';
-import type { FeeEstimate } from './types';
+import type {
+  FeeEstimate,
+  LwsProvisionResult,
+  UtxoAddressRef,
+  UtxoBalance,
+  UtxoHistory,
+  UtxoListing,
+} from './types';
 
 const UTXO_CAPS: ChainCapabilities = {
   model: 'utxo',
@@ -93,6 +100,53 @@ export class SmirkUtxoProvider implements UtxoChainProvider {
   getHistory(address: string) {
     return this.api.getHistory(this.asset, address);
   }
+
+  // Multi-address delegators. Each forwards to the api's `*_multi` method
+  // (FEATURE_UTXO_MULTI_ADDRESS backend routes) and re-maps the envelope into
+  // the chain `Utxo*` shape. Only invoked under the ENABLE_BTCLTC_FRESH_ADDRS
+  // client flag; unused (and the routes 404) otherwise.
+  async getBalanceMulti(addresses: string[]) {
+    const asset = this.asset;
+    return mapData(
+      await this.api.getUtxoBalanceMulti(asset, addresses),
+      (d): UtxoBalance => ({
+        asset: d.asset,
+        // No single canonical address in aggregate mode; expose the empty
+        // string so the field stays present (UtxoBalance.address is required).
+        address: '',
+        confirmed: d.confirmed,
+        unconfirmed: d.unconfirmed,
+        total: d.total,
+      }),
+    );
+  }
+  async listOutputsMulti(refs: UtxoAddressRef[]) {
+    const asset = this.asset;
+    return mapData(
+      await this.api.getUtxosMulti(asset, refs),
+      (d): UtxoListing => ({
+        asset: d.asset,
+        address: '',
+        // The api layer already re-attached each UTXO's client-side masterPath
+        // from `refs`; carry both tags through unchanged (money gate G9).
+        utxos: d.utxos.map((u) => ({
+          txid: u.txid,
+          vout: u.vout,
+          value: u.value,
+          height: u.height,
+          address: u.address,
+          masterPath: u.masterPath,
+        })),
+      }),
+    );
+  }
+  async getHistoryMulti(addresses: string[]) {
+    const asset = this.asset;
+    return mapData(
+      await this.api.getHistoryMulti(asset, addresses),
+      (d): UtxoHistory => ({ asset: d.asset, address: '', transactions: d.transactions }),
+    );
+  }
   getHeight() {
     return heightFromBackend(this.api, this.asset);
   }
@@ -126,11 +180,37 @@ export class SmirkLwsProvider implements LwsChainProvider {
   getRandomOutputs(count: number) {
     return this.api.getRandomOuts(this.asset, count);
   }
-  registerAccount(userId: string, address: string, viewKey: string, startHeight?: number) {
-    return this.api.registerLws(userId, this.asset, address, viewKey, startHeight);
+  registerAccount(
+    userId: string,
+    address: string,
+    viewKey: string,
+    startHeight?: number,
+    subaddrCount?: number,
+  ) {
+    // Call ARITY is preserved when no batch was asked for: this file's contract
+    // is that a provider call and the old direct `api` call are identical, and
+    // an extra trailing `undefined` is an observable difference to anything
+    // inspecting arguments.
+    return subaddrCount === undefined
+      ? this.api.registerLws(userId, this.asset, address, viewKey, startHeight)
+      : this.api.registerLws(userId, this.asset, address, viewKey, startHeight, subaddrCount);
   }
   deactivateAccount(address: string) {
     return this.api.deactivateLws(this.asset, address);
+  }
+  // Only reached under the ENABLE_SUBADDRESS_RECEIVE client flag; the backend
+  // route is itself gated (and 404s when the backend feature is off), which the
+  // caller must treat as "ceiling not raised" and refuse to issue.
+  async provisionSubaddrs(
+    userId: string,
+    address: string,
+    viewKey: string,
+    maxMinor: number,
+  ): Promise<ApiResponse<LwsProvisionResult>> {
+    return mapData(
+      await this.api.provisionSubaddrs(userId, this.asset, address, viewKey, maxMinor),
+      (d): LwsProvisionResult => ({ provisionedMinorMax: d.provisioned_minor_max }),
+    );
   }
   getHeight() {
     return heightFromBackend(this.api, this.asset);

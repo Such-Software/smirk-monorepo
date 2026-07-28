@@ -26,11 +26,36 @@ export interface UtxoEntry {
   vout: number;
   value: number;
   height: number;
+  /**
+   * Owning receive/change address, in multi-address (fresh-address) mode.
+   * Undefined in single-address mode (the whole listing is one address).
+   */
+  address?: string;
+  /**
+   * BIP84 master path of the owning address (`m/84'/coin'/0'/change/index`).
+   * Money gate G9: this is CLIENT-sourced (from the wallet's own address book,
+   * keyed by address), never derived from anything the server returns, so the
+   * signer never has to re-guess which key owns a UTXO. Undefined in
+   * single-address mode (the caller supplies the fixed `/0/0` path).
+   */
+  masterPath?: string;
 }
 export interface UtxoListing {
   asset: string;
   address: string;
   utxos: UtxoEntry[];
+}
+
+/**
+ * An address the wallet owns, paired with its BIP84 master path. Passed to the
+ * multi-address chain calls; the path is what lets the signer resolve the
+ * owning key without re-deriving/guessing (money gate G9). Only the `address`
+ * is ever sent to the server; the `masterPath` stays client-side and is
+ * re-attached to each returned UTXO locally.
+ */
+export interface UtxoAddressRef {
+  address: string;
+  masterPath: string;
 }
 export interface UtxoBroadcastResult {
   asset: string;
@@ -59,6 +84,19 @@ export interface LwsSpentOutput {
   key_image: string;
   tx_pub_key: string;
   out_index: number;
+  /**
+   * Subaddress index of the output BEING SPENT (`(0, 0)` = primary address),
+   * read off the spend record itself, deliberately not the enclosing tx's
+   * index, which is the change index.
+   *
+   * MONEY-CRITICAL on the balance path. The key image folds in the subaddress
+   * secret, so a subaddress spend recomputed against the primary index never
+   * matches, reads as a ring decoy, and is never subtracted: the wallet keeps
+   * displaying money it has already spent. Optional because a legacy flat
+   * backend omits it; `fetchAllBalances` fails closed rather than assuming
+   * primary when it is absent and subaddress receive is in use.
+   */
+  subaddr_index?: LwsSubaddrIndex;
 }
 export interface LwsBalance {
   total_received: string;
@@ -70,6 +108,15 @@ export interface LwsBalance {
   scanned_height: number;
   spent_outputs: LwsSpentOutput[];
 }
+/**
+ * The `(major, minor)` subaddress an output or tx was received at. `(0, 0)` is
+ * the primary address. Nested to match the wasm `LwsOutput` shape, so the value
+ * can be handed to the signer unchanged.
+ */
+export interface LwsSubaddrIndex {
+  major: number;
+  minor: number;
+}
 export interface LwsUnspentOutput {
   amount: string;
   public_key: string;
@@ -79,6 +126,16 @@ export interface LwsUnspentOutput {
   height: number;
   rct: string;
   spend_key_images: string[];
+  /**
+   * Subaddress this output was received at. Optional: a legacy flat backend
+   * omits it, and absent is read as the primary address.
+   *
+   * MONEY-CRITICAL on the spend path. A subaddress output's key image folds the
+   * subaddress secret into the key offset, so spending it with the primary
+   * index produces a key image the network rejects and the output is stranded.
+   * The signer must thread this through verbatim, never re-derive or guess it.
+   */
+  subaddr_index?: LwsSubaddrIndex;
 }
 export interface LwsUnspent {
   outputs: LwsUnspentOutput[];
@@ -106,6 +163,8 @@ export interface LwsHistoryEntry {
   total_received: string;
   spent_outputs: LwsSpentOutput[];
   payment_id?: string;
+  /** Subaddress the receipt landed on. Display only; absent on legacy backends. */
+  subaddr_index?: LwsSubaddrIndex;
 }
 export interface LwsHistory {
   asset: string;
@@ -121,6 +180,19 @@ export interface LwsRegisterResult {
 export interface LwsDeactivateResult {
   success: boolean;
   message: string;
+}
+/**
+ * Result of asking the server to provision account-0 minor subaddress indices.
+ *
+ * `provisionedMinorMax` is the highest minor index the SERVER confirms is
+ * provisioned, and is the only admissible source for the client's issuance
+ * ceiling (money gate G4). It can legitimately come back lower than requested
+ * (the LWS caps the batch at its own `--max-subaddresses`), which is precisely
+ * why the client may not assume a ceiling from a local constant: handing out a
+ * subaddress the LWS does not scan makes funds sent to it invisible.
+ */
+export interface LwsProvisionResult {
+  provisionedMinorMax: number;
 }
 
 // ---- Mimblewimble (grin) ----

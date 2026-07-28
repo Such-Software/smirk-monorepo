@@ -60,6 +60,9 @@ export * from './fees';
 // HD wallet derivation
 export * from './hd';
 
+// BTC/LTC HD gap-limit address book (Lane 5, gated behind ENABLE_BTCLTC_FRESH_ADDRS)
+export * from './utxo-addressbook';
+
 // Wallet keystore — encrypted-at-rest seed + unlock state machine
 export * from './keystore';
 

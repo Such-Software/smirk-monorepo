@@ -62,6 +62,31 @@ export interface ReceiveScreenProps {
    * dedicated request wizard when invoked.
    */
   onRequestInvoice?: (assetId: string) => void;
+  /**
+   * Whether the "New address" affordance applies to this asset. Per-asset
+   * because the picker choice is made inside this component, so the shell
+   * cannot decide up front. Only XMR/WOW answer true today, and only with the
+   * `ENABLE_SUBADDRESS_RECEIVE` client flag on; every other asset (and the
+   * default flag-off build) never renders the button.
+   */
+  canIssueNewAddress?: (assetId: string) => boolean;
+  /**
+   * Issue a FRESH receive address and return it. This is the only path that
+   * advances the wallet's issuance counter, which is why it is an explicit
+   * user action: `resolveAddress` re-runs on every render and must stay a pure
+   * read. Rejecting is expected and surfaced inline (e.g. the server has not
+   * provisioned the next index yet); the displayed address is left untouched.
+   */
+  onNewAddress?: (assetId: string) => Promise<string>;
+  /**
+   * Optional: the asset's PRIMARY address. When it differs from the address on
+   * screen, an "advanced" disclosure lets the user reach it: a subaddress is
+   * an alias for the same account, and some counterparties (exchanges, older
+   * tooling) still want the primary. Return `null` for assets that have no
+   * separate primary (the disclosure is then never rendered, and the shell does
+   * no derivation work on a screen that re-renders often).
+   */
+  resolvePrimaryAddress?: (assetId: string) => Promise<string | null> | string | null;
   class?: string;
 }
 
@@ -122,6 +147,13 @@ export function ReceiveScreen(props: ReceiveScreenProps) {
           {...(props.onRequestInvoice
             ? { onRequestInvoice: props.onRequestInvoice }
             : {})}
+          {...(props.canIssueNewAddress
+            ? { canIssueNewAddress: props.canIssueNewAddress }
+            : {})}
+          {...(props.onNewAddress ? { onNewAddress: props.onNewAddress } : {})}
+          {...(props.resolvePrimaryAddress
+            ? { resolvePrimaryAddress: props.resolvePrimaryAddress }
+            : {})}
         />
       )}
     </div>
@@ -168,6 +200,9 @@ function ShowAddress({
   onCopy,
   resolveIcon,
   onRequestInvoice,
+  canIssueNewAddress,
+  onNewAddress,
+  resolvePrimaryAddress,
 }: {
   assetId: string;
   resolveAddress: (assetId: string) => Promise<string> | string;
@@ -175,11 +210,33 @@ function ShowAddress({
   renderQr?: (data: string) => ComponentChildren;
   onCopy?: (text: string) => void;
   resolveIcon?: (iconKey: string) => string | undefined;
+  canIssueNewAddress?: (assetId: string) => boolean;
+  onNewAddress?: (assetId: string) => Promise<string>;
+  resolvePrimaryAddress?: (assetId: string) => Promise<string | null> | string | null;
 }) {
   const asset = mustGetAsset(assetId);
   const [address, setAddress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [issuing, setIssuing] = useState(false);
   const [copied, setCopied] = useState(false);
+  // These three are KEYED BY ASSET rather than reset from an effect. The
+  // `resolve*` props are inline closures in the shell, so their identity changes
+  // on every parent render (a balance poll, a session tick); an effect that
+  // cleared them would snap the disclosure shut and blank the error at random.
+  // Keying makes them self-invalidate when the user switches asset, with no
+  // effect involved.
+  const [primaryFor, setPrimaryFor] = useState<{ assetId: string; address: string } | null>(null);
+  const [showPrimaryFor, setShowPrimaryFor] = useState<string | null>(null);
+  const [issueErrorFor, setIssueErrorFor] = useState<{ assetId: string; message: string } | null>(
+    null,
+  );
+  const primary = primaryFor?.assetId === assetId ? primaryFor.address : null;
+  const showPrimary = showPrimaryFor === assetId;
+  const issueError = issueErrorFor?.assetId === assetId ? issueErrorFor.message : null;
+  // Bumped by "New address" so the resolver re-reads the (now advanced)
+  // counter. `resolveAddress` is a pure read, so re-running it is free and
+  // cannot itself hand out another address.
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,7 +252,47 @@ function ShowAddress({
     return () => {
       cancelled = true;
     };
-  }, [assetId, resolveAddress]);
+  }, [assetId, resolveAddress, reloadNonce]);
+
+  // Primary address, resolved alongside. Only used to decide whether to offer
+  // the advanced disclosure; a failure here is silent (it must never block the
+  // receive address itself from rendering).
+  useEffect(() => {
+    if (!resolvePrimaryAddress) return undefined;
+    let cancelled = false;
+    Promise.resolve(resolvePrimaryAddress(assetId))
+      .then((addr) => {
+        if (!cancelled && addr) setPrimaryFor({ assetId, address: addr });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [assetId, resolvePrimaryAddress]);
+
+  const canIssue = !!onNewAddress && !!canIssueNewAddress?.(assetId);
+
+  const handleNewAddress = () => {
+    if (!onNewAddress || issuing) return;
+    setIssuing(true);
+    setIssueErrorFor(null);
+    onNewAddress(assetId)
+      .then((addr) => {
+        setAddress(addr);
+        // Re-sync from the counter too, so the screen matches persisted state
+        // even if the shell derived the string a different way.
+        setReloadNonce((n) => n + 1);
+      })
+      .catch((e: unknown) => {
+        // Keep showing the current address: a refused issuance means the next
+        // index is not safe to hand out, not that the current one went bad.
+        setIssueErrorFor({
+          assetId,
+          message: e instanceof Error ? e.message : 'Could not get a new address',
+        });
+      })
+      .finally(() => setIssuing(false));
+  };
 
   const handleCopy = () => {
     if (!address || !onCopy) return;
@@ -255,6 +352,60 @@ function ShowAddress({
               icon={copied ? '✓' : '📋'}
               onClick={handleCopy}
             />
+          )}
+
+          {canIssue && (
+            <ActionButton
+              testid="receive-new-address-btn"
+              label={issuing ? 'Getting a new address…' : 'New address'}
+              icon="🔄"
+              onClick={handleNewAddress}
+            />
+          )}
+
+          {issueError && (
+            <div
+              data-testid="receive-new-address-error"
+              style={{ color: '#ff6b6b', fontSize: 11, textAlign: 'center' }}
+            >
+              {issueError}
+            </div>
+          )}
+
+          {primary && primary !== address && (
+            <div style={{ width: '100%' }}>
+              <button
+                data-testid="receive-toggle-primary"
+                onClick={() => setShowPrimaryFor(showPrimary ? null : assetId)}
+                style={{
+                  ...iconButtonStyle,
+                  opacity: 0.6,
+                  width: '100%',
+                  textAlign: 'center' as const,
+                }}
+              >
+                {showPrimary ? 'Hide primary address' : 'Show primary address'}
+              </button>
+              {showPrimary && (
+                <div
+                  data-testid="receive-primary-address"
+                  style={{
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    wordBreak: 'break-all',
+                    padding: '8px 10px',
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 8,
+                    boxSizing: 'border-box',
+                    textAlign: 'center',
+                    opacity: 0.8,
+                  }}
+                >
+                  {primary}
+                </div>
+              )}
+            </div>
           )}
 
           {onRequestInvoice && (

@@ -21,7 +21,9 @@ const validCache = () => ({
   fingerprint: 'fp',
   // nostr rides in `keys` (no address entry); parseSessionCache validates its
   // presence separately, so a well-formed payload must carry it.
-  keys: { btc: {}, ltc: {}, xmr: {}, wow: {}, grin: {}, nostr: {} },
+  // btc/ltc carry `accountXpub` (money gate G10): parseSessionCache rejects a
+  // pre-xpub cache so it self-heals to a single re-unlock.
+  keys: { btc: { accountXpub: 'x' }, ltc: { accountXpub: 'x' }, xmr: {}, wow: {}, grin: {}, nostr: {} },
   addresses: { btc: 'a', ltc: 'a', xmr: 'a', wow: 'a', grin: 'a' },
   expiresAtMs: 1_700_000_000_000,
 });

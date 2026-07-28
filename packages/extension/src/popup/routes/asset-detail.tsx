@@ -5,8 +5,12 @@ import {
   peekCapabilities,
   capAllowsPrices,
   chainProviders,
+  btcLtcFreshAddrsEnabled,
+  UtxoAddressBook,
+  buildUtxoScanRefs,
   type UnlockedWallet,
 } from '@smirk/core';
+import { storage } from '../singletons';
 import {
   AssetDetailScreen,
   useRoute,
@@ -359,24 +363,23 @@ async function loadAssetHistory(
   if (assetId === 'btc' || assetId === 'ltc') {
     const addr = wallet.addresses[assetId];
     if (!addr) return [];
+    // Fresh-address mode (ENABLE_BTCLTC_FRESH_ADDRS): aggregate history across
+    // the whole address book via the multi endpoint. With the flag off (or no
+    // account xpub) this falls through to the single primary-address read —
+    // identical to before, and index 0 is always in the scan set regardless.
+    const accountXpub = (
+      wallet.keys as unknown as Record<string, { accountXpub?: string }>
+    )[assetId]?.accountXpub;
+    if (btcLtcFreshAddrsEnabled() && typeof accountXpub === 'string') {
+      const book = new UtxoAddressBook(storage, wallet.fingerprint, assetId);
+      const refs = await buildUtxoScanRefs(book, assetId, accountXpub);
+      const rm = await chainProviders.utxo(assetId).getHistoryMulti(refs.map((x) => x.address));
+      if (rm.error || !rm.data) return [];
+      return rm.data.transactions.map(utxoTxToRow);
+    }
     const r = await chainProviders.utxo(assetId).getHistory(addr);
     if (r.error || !r.data) return [];
-    return r.data.transactions.map(
-      (t): AssetDetailTxRow => ({
-        kind: 'utxo',
-        // Electrum returns total_received / total_sent in atomic units.
-        // direction is whichever is non-zero; amount is the absolute value.
-        direction: (t.total_received ?? 0) > 0 ? 'in' : 'out',
-        amountAtomic: BigInt(
-          (t.total_received ?? 0) > 0
-            ? (t.total_received ?? 0)
-            : (t.total_sent ?? 0),
-        ),
-        txid: t.txid,
-        heightOrPending: t.height > 0 ? t.height : 'pending',
-        ...(t.fee !== undefined ? { feeAtomic: BigInt(t.fee) } : {}),
-      }),
-    );
+    return r.data.transactions.map(utxoTxToRow);
   }
   if (assetId === 'xmr' || assetId === 'wow') {
     const addr = wallet.addresses[assetId];
@@ -412,6 +415,28 @@ async function loadAssetHistory(
     return entries.map(grinJournalEntryToRow);
   }
   return [];
+}
+
+/** Map an Electrum UTXO history row (single- or multi-address) to the UI row.
+ *  Electrum returns total_received / total_sent in atomic units; direction is
+ *  whichever is non-zero, amount is the absolute value. */
+function utxoTxToRow(t: {
+  txid: string;
+  height: number;
+  fee?: number;
+  total_received?: number;
+  total_sent?: number;
+}): AssetDetailTxRow {
+  return {
+    kind: 'utxo',
+    direction: (t.total_received ?? 0) > 0 ? 'in' : 'out',
+    amountAtomic: BigInt(
+      (t.total_received ?? 0) > 0 ? (t.total_received ?? 0) : (t.total_sent ?? 0),
+    ),
+    txid: t.txid,
+    heightOrPending: t.height > 0 ? t.height : 'pending',
+    ...(t.fee !== undefined ? { feeAtomic: BigInt(t.fee) } : {}),
+  };
 }
 
 /** Map a client tx-journal entry onto the UI's `grin` history-row shape. */

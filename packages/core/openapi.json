@@ -2174,6 +2174,51 @@
         ]
       }
     },
+    "/wallet/utxo/balance_multi": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Confirmed/unconfirmed balance summed across a batch of BTC/LTC addresses.",
+        "operationId": "balance_multi",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultiAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Summed balance in satoshis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiBalanceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid/disabled asset, address, or oversized batch"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "503": {
+            "description": "Upstream node unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/wallet/utxo/broadcast": {
       "post": {
         "tags": [
@@ -2309,6 +2354,51 @@
         ]
       }
     },
+    "/wallet/utxo/history_multi": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Confirmed + mempool history across a batch of BTC/LTC addresses, each entry\ntagged with its owning address.",
+        "operationId": "history_multi",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultiAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Address-tagged transaction history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid/disabled asset, address, or oversized batch"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "503": {
+            "description": "Upstream node unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/wallet/utxo/tip": {
       "post": {
         "tags": [
@@ -2384,6 +2474,51 @@
           },
           "400": {
             "description": "Invalid/disabled asset or address"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "503": {
+            "description": "Upstream node unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/wallet/utxo/utxos_multi": {
+      "post": {
+        "tags": [
+          "btc_ltc"
+        ],
+        "summary": "Unspent outputs across a batch of BTC/LTC addresses, each tagged with its\nowning address (the wallet never re-guesses UTXO ownership).",
+        "operationId": "utxos_multi",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultiAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Address-tagged unspent outputs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiUtxosResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid/disabled asset, address, or oversized batch"
           },
           "401": {
             "description": "Missing or invalid token"
@@ -3815,6 +3950,86 @@
           }
         }
       },
+      "MultiAddressRequest": {
+        "type": "object",
+        "description": "A batch query for several addresses of one UTXO asset. The list is bounded\nserver-side (see [`MAX_MULTI_ADDRESSES`]).",
+        "required": [
+          "asset",
+          "addresses"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The addresses to query (each validated by the Electrum client)."
+          },
+          "asset": {
+            "type": "string",
+            "description": "`btc` or `ltc`."
+          }
+        }
+      },
+      "MultiBalanceResponse": {
+        "type": "object",
+        "description": "Confirmed/unconfirmed balance summed across the requested addresses. Summed\nwith checked arithmetic server-side (a hostile value errors, never wraps);\nthe wallet computes any grand total from these integer fields.",
+        "required": [
+          "asset",
+          "confirmed",
+          "unconfirmed"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unconfirmed": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "MultiHistoryResponse": {
+        "type": "object",
+        "required": [
+          "asset",
+          "transactions"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaggedHistoryEntry"
+            }
+          }
+        }
+      },
+      "MultiUtxosResponse": {
+        "type": "object",
+        "required": [
+          "asset",
+          "utxos"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "utxos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaggedUtxo"
+            }
+          }
+        }
+      },
       "MyUsernameResponse": {
         "type": "object",
         "properties": {
@@ -4660,6 +4875,26 @@
           }
         }
       },
+      "SubaddrIndexDto": {
+        "type": "object",
+        "description": "A subaddress index `(major, minor)` an output/tx was received at. Nested to\nmatch the wallet's wasm `LwsOutput` shape (`subaddr_index: {major, minor}`);\nmapped from the LWS `recipient` field. `(0, 0)` is the primary address.",
+        "required": [
+          "major",
+          "minor"
+        ],
+        "properties": {
+          "major": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "minor": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "SubmitRequest": {
         "type": "object",
         "description": "Submit a finalized, signed transaction.",
@@ -4674,6 +4909,72 @@
           "tx_hex": {
             "type": "string",
             "description": "Hex-encoded signed transaction blob."
+          }
+        }
+      },
+      "TaggedHistoryEntry": {
+        "type": "object",
+        "description": "A transaction-history entry TAGGED with its owning address.",
+        "required": [
+          "address",
+          "txid",
+          "height"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "fee": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fee in satoshis (mempool entries only).",
+            "minimum": 0
+          },
+          "height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block height (`0`/negative for unconfirmed)."
+          },
+          "txid": {
+            "type": "string"
+          }
+        }
+      },
+      "TaggedUtxo": {
+        "type": "object",
+        "description": "A single unspent output TAGGED with the address it belongs to. The tag is\nload-bearing: the wallet never re-derives which address owns a UTXO.",
+        "required": [
+          "address",
+          "txid",
+          "vout",
+          "value",
+          "height"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "height": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block height; `0` if unconfirmed.",
+            "minimum": 0
+          },
+          "txid": {
+            "type": "string"
+          },
+          "value": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vout": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -4705,7 +5006,8 @@
           "total_sent",
           "mempool",
           "unlock_time",
-          "spent_outputs"
+          "spent_outputs",
+          "subaddr_index"
         ],
         "properties": {
           "hash": {
@@ -4730,6 +5032,10 @@
             "items": {
               "$ref": "#/components/schemas/SpentOutputDto"
             }
+          },
+          "subaddr_index": {
+            "$ref": "#/components/schemas/SubaddrIndexDto",
+            "description": "Subaddress index this tx was received at (`(0, 0)` = primary address)."
           },
           "timestamp": {
             "type": "string"
@@ -4761,7 +5067,8 @@
           "timestamp",
           "tx_hash",
           "rct",
-          "spend_key_images"
+          "spend_key_images",
+          "subaddr_index"
         ],
         "properties": {
           "amount": {
@@ -4794,6 +5101,10 @@
               "type": "string"
             },
             "description": "Key images seen on-chain that may correspond to this output being spent."
+          },
+          "subaddr_index": {
+            "$ref": "#/components/schemas/SubaddrIndexDto",
+            "description": "Subaddress index this output was received at (`(0, 0)` = primary address)."
           },
           "timestamp": {
             "type": "string"

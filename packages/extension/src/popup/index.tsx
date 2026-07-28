@@ -47,6 +47,11 @@ import {
   recentlySpentInputs,
   reconcilePendingOutgoing,
   chainProviders,
+  btcLtcFreshAddrsEnabled,
+  UtxoAddressBook,
+  buildUtxoScanRefs,
+  recordUtxoActivity,
+  type UtxoAddressRef,
   fallbackFeeTiers,
   deriveNostrIdentity,
   buildSlatepackChannels,
@@ -83,7 +88,17 @@ import {
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
 import { formatUsd, parseAmount, bytesToHex, hexToBytes } from './format';
-import { validateSendRecipient, recipientNpubToHex, isNip05Name, resolveAddressForAsset } from './address';
+import {
+  validateSendRecipient,
+  recipientNpubToHex,
+  isNip05Name,
+  resolveAddressForAsset,
+  primaryAddressForAsset,
+} from './address';
+import {
+  issueNewReceiveAddress,
+  subaddressReceiveEnabled,
+} from './receive-subaddress-index';
 import { encodeNostrRelayRef } from './relay-ref';
 import { respondToInboxItem } from './inbox-actions';
 import {
@@ -430,16 +445,80 @@ async function computeGrinRewindHash(wallet: UnlockedWallet): Promise<string | u
   }
 }
 
+/**
+ * BTC/LTC multi-address scan context for a balance fetch: the `(address, path)`
+ * refs to read, plus the callback that folds observed activity back into the
+ * address book.
+ *
+ * Returns `null` whenever `ENABLE_BTCLTC_FRESH_ADDRS` is off (the default) or
+ * the session predates account xpubs. The balance path then reads the single
+ * primary address, exactly as it does today.
+ *
+ * Supplying the refs here is what keeps the BALANCE and the SEND path agreeing:
+ * `send-handler` already spends across the whole book, so a balance read of the
+ * primary address alone would show less money than the wallet can actually
+ * spend. Reporting activity back is what makes both gap windows slide, so a
+ * restored wallet discovers its change chain instead of leaving those outputs
+ * out of every scan set.
+ */
+async function buildUtxoScanContext(wallet: UnlockedWallet): Promise<{
+  refs: { btc?: UtxoAddressRef[]; ltc?: UtxoAddressRef[] };
+  onUtxoActivity: (asset: 'btc' | 'ltc', active: string[]) => Promise<void>;
+} | null> {
+  if (!btcLtcFreshAddrsEnabled()) return null;
+  const refs: { btc?: UtxoAddressRef[]; ltc?: UtxoAddressRef[] } = {};
+  const books = new Map<'btc' | 'ltc', UtxoAddressBook>();
+  for (const asset of ['btc', 'ltc'] as const) {
+    const xpub = (wallet.keys as unknown as Record<string, { accountXpub?: string }>)[asset]
+      ?.accountXpub;
+    if (typeof xpub !== 'string') continue;
+    const book = new UtxoAddressBook(storage, wallet.fingerprint, asset);
+    books.set(asset, book);
+    refs[asset] = await buildUtxoScanRefs(book, asset, xpub);
+  }
+  if (!refs.btc && !refs.ltc) return null;
+  return {
+    refs,
+    onUtxoActivity: async (asset, active) => {
+      const book = books.get(asset);
+      const set = refs[asset];
+      if (!book || !set) return;
+      await recordUtxoActivity(book, set, active);
+    },
+  };
+}
+
+/**
+ * Recompute a spent-output's key image with the wallet's spend key, so the
+ * balance path can tell a real spend from a ring decoy.
+ *
+ * `subaddrMajor` / `subaddrMinor` are the index the output was RECEIVED at, as
+ * reported on the spend record. Both omitted (or `(0, 0)`) is the primary
+ * address and produces the exact pre-subaddress call. For a subaddress output
+ * both MUST reach wasm: the subaddress secret is folded into the key offset, so
+ * computing it against the primary index yields a key image that never matches
+ * the reported one, the spend reads as a decoy, and its amount is never
+ * subtracted, so the wallet shows money it has already spent, forever, and
+ * later sends fail for insufficient funds while the UI insists otherwise.
+ *
+ * A half-supplied index is an error inside wasm, not a quiet fall back to the
+ * primary address, so a plumbing mistake surfaces as a failure rather than as a
+ * wrong balance.
+ */
 const verifyKeyImage = async ({
   privateViewKeyHex,
   privateSpendKeyHex,
   txPubKeyHex,
   outputIndex,
+  subaddrMajor,
+  subaddrMinor,
 }: {
   privateViewKeyHex: string;
   privateSpendKeyHex: string;
   txPubKeyHex: string;
   outputIndex: number;
+  subaddrMajor?: number;
+  subaddrMinor?: number;
 }): Promise<string> => {
   await ensureWasmInit();
   const resultJson = wasmMonero.computeKeyImage(
@@ -447,6 +526,8 @@ const verifyKeyImage = async ({
     privateSpendKeyHex,
     txPubKeyHex,
     outputIndex,
+    subaddrMajor,
+    subaddrMinor,
   );
   const result = JSON.parse(resultJson) as { success: boolean; data?: string; error?: string };
   if (!result.success || !result.data) {
@@ -802,8 +883,17 @@ function App() {
         (a) => a.id,
       );
       const grinRewindHash = await computeGrinRewindHash(wallet);
+      // BTC/LTC scan set + gap discovery. `null` (and therefore no extra keys
+      // at all) whenever ENABLE_BTCLTC_FRESH_ADDRS is off, which is the default.
+      const utxoScan = await buildUtxoScanContext(wallet);
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
+        // Only meaningful once the wallet can hold subaddress outputs. With the
+        // flag off this is false and the spent-output filter is unchanged.
+        strictSpentSubaddrIndex: subaddressReceiveEnabled(),
+        ...(utxoScan
+          ? { utxoAddressRefs: utxoScan.refs, onUtxoActivity: utxoScan.onUtxoActivity }
+          : {}),
         visibleAssetIds: visible,
         backendUrl: api.getBaseUrl(),
         ...(grinRewindHash ? { grinRewindHash } : {}),
@@ -897,8 +987,17 @@ function App() {
         (a) => a.id,
       );
       const grinRewindHash = await computeGrinRewindHash(wallet);
+      // BTC/LTC scan set + gap discovery. `null` (and therefore no extra keys
+      // at all) whenever ENABLE_BTCLTC_FRESH_ADDRS is off, which is the default.
+      const utxoScan = await buildUtxoScanContext(wallet);
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
+        // Only meaningful once the wallet can hold subaddress outputs. With the
+        // flag off this is false and the spent-output filter is unchanged.
+        strictSpentSubaddrIndex: subaddressReceiveEnabled(),
+        ...(utxoScan
+          ? { utxoAddressRefs: utxoScan.refs, onUtxoActivity: utxoScan.onUtxoActivity }
+          : {}),
         visibleAssetIds: visible,
         backendUrl: api.getBaseUrl(),
         ...(grinRewindHash ? { grinRewindHash } : {}),
@@ -2173,7 +2272,40 @@ function HomeRouter({
         assetIds={visibleAssetIds(sessionState, listAssets())
           .filter((a) => a.receivable)
           .map((a) => a.id)}
-        resolveAddress={(assetId) => resolveAddressForAsset(wallet, assetId)}
+        // PURE READ. This closure is re-created every render, so ShowAddress's
+        // address effect re-fires every render; `resolveAddressForAsset` never
+        // advances the issuance counter, which is what keeps the displayed
+        // address stable instead of burning a subaddress per frame.
+        // The backend URL scopes the issuance counter: a ceiling one instance's
+        // LWS granted says nothing about another's, so switching backends must
+        // not reuse it.
+        resolveAddress={(assetId) => resolveAddressForAsset(wallet, assetId, api.getBaseUrl())}
+        // Only XMR/WOW have subaddresses, and only with the flag on. Flag off
+        // (the default) means the button never renders and the screen behaves
+        // exactly as it does today.
+        canIssueNewAddress={(assetId) =>
+          (assetId === 'xmr' || assetId === 'wow') && subaddressReceiveEnabled()
+        }
+        onNewAddress={(assetId) => {
+          if (assetId !== 'xmr' && assetId !== 'wow') {
+            return Promise.reject(new Error(`No fresh-address support for ${assetId}`));
+          }
+          return issueNewReceiveAddress(
+            wallet,
+            assetId,
+            session?.bootstrap?.userId ?? '',
+            api.getBaseUrl(),
+          );
+        }}
+        // Keeps the primary address reachable behind an advanced disclosure
+        // while a subaddress is on screen. `null` for every other asset: they
+        // have no separate primary, and this runs on each render, so a Grin
+        // slatepack re-derivation here would be pure waste.
+        resolvePrimaryAddress={(assetId) =>
+          assetId === 'xmr' || assetId === 'wow'
+            ? primaryAddressForAsset(wallet, assetId)
+            : null
+        }
         onCopy={(text) => void navigator.clipboard.writeText(text)}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}

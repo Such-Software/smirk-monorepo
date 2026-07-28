@@ -20,8 +20,14 @@
 import {
   chainProviders,
   applyRelayFloor,
+  btcLtcFreshAddrsEnabled,
+  UtxoAddressBook,
+  buildUtxoScanRefs,
+  recordUtxoActivity,
+  utxoAddressAt,
   type UnlockedWallet,
 } from '@smirk/core';
+import { storage } from './singletons';
 import { mustGetAsset } from '@smirk/assets';
 import {
   bitcoin as wasmBitcoin,
@@ -34,6 +40,32 @@ function bytesToHex(b: Uint8Array): string {
   return Array.from(b)
     .map((x) => x.toString(16).padStart(2, '0'))
     .join('');
+}
+
+/**
+ * Normalize an LWS output's `subaddr_index` into "the index to pass to the
+ * signer", or `undefined` for the primary address.
+ *
+ * `undefined` is returned for BOTH "the backend didn't say" (legacy flat
+ * dialect) and an explicit `(0, 0)`: Monero's primary address IS account 0 /
+ * minor 0, and the wasm spend path treats an absent index and `(0,0)`
+ * identically. Collapsing them here means the primary-output payload is
+ * byte-identical to the pre-subaddress one.
+ *
+ * Anything malformed (non-integer, negative) is treated as primary rather than
+ * passed through: a bogus index would silently produce a key image that does
+ * not match the output, and the send would be rejected at submit. Primary is
+ * the only value we can reason about without server input.
+ */
+function subaddrOf(out: {
+  subaddr_index?: { major: number; minor: number };
+}): { major: number; minor: number } | undefined {
+  const s = out.subaddr_index;
+  if (!s) return undefined;
+  const ok = (v: number) => Number.isInteger(v) && v >= 0;
+  if (!ok(s.major) || !ok(s.minor)) return undefined;
+  if (s.major === 0 && s.minor === 0) return undefined;
+  return { major: s.major, minor: s.minor };
 }
 
 /**
@@ -231,20 +263,66 @@ async function sendBtcLtc(
     return { ok: false, error: `No ${asset.toUpperCase()} address in wallet` };
   }
 
+  // Fresh-address mode is opt-in (ENABLE_BTCLTC_FRESH_ADDRS) AND requires the
+  // account xpub (present on every v3 unlock; absent on a pre-xpub session
+  // cache, which self-heals to a re-unlock). With it off — the default — this
+  // whole function behaves exactly as before: one address, fixed `/0/0` path,
+  // change back to the from-address.
+  const accountXpub = (
+    wallet.keys as unknown as Record<string, { accountXpub?: string }>
+  )[asset]?.accountXpub;
+  const freshEnabled = btcLtcFreshAddrsEnabled() && typeof accountXpub === 'string';
+  const coin = asset === 'btc' ? 0 : 2;
+  const singlePath = `m/84'/${coin}'/0'/0/0`;
+
   // 1. Fetch UTXOs and filter out any we've already spent in a
   //    still-pending tx (Electrum may not have reflected the spend
   //    yet). Without this filter, a fast second-send picks the
   //    largest UTXO, which is the one we just spent — Electrum
   //    rejects with "missing inputs / already in mempool".
-  const utxosResp = await chainProviders.utxo(asset).listOutputs(fromAddress);
-  if (utxosResp.error || !utxosResp.data) {
-    return { ok: false, error: utxosResp.error ?? 'Failed to fetch UTXOs' };
+  //
+  //    In fresh-address mode we fetch across the whole address book
+  //    (receive + reserved change indices) via the multi endpoint, so
+  //    every returned UTXO carries its own owning-address + master path
+  //    tag; the signer uses that tag and never re-guesses (money gate G9).
+  type WalletUtxo = {
+    txid: string;
+    vout: number;
+    value: number;
+    height: number;
+    masterPath?: string;
+    address?: string;
+  };
+  let fetchedUtxos: WalletUtxo[];
+  const book = freshEnabled ? new UtxoAddressBook(storage, wallet.fingerprint, asset) : null;
+  if (freshEnabled && book) {
+    const refs = await buildUtxoScanRefs(book, asset, accountXpub as string);
+    const resp = await chainProviders.utxo(asset).listOutputsMulti(refs);
+    if (resp.error || !resp.data) {
+      return { ok: false, error: resp.error ?? 'Failed to fetch UTXOs' };
+    }
+    fetchedUtxos = resp.data.utxos;
+    // Gap discovery, free of charge: every address the listing came back with
+    // is an address that holds money, so mark its index used and slide the
+    // receive / change windows forward. Best-effort: a book write failing
+    // must never block a send that is otherwise ready to go.
+    try {
+      const active = fetchedUtxos.map((u) => u.address).filter((a): a is string => !!a);
+      if (active.length > 0) await recordUtxoActivity(book, refs, active);
+    } catch (e) {
+      console.warn('[smirk] utxo activity record failed', e);
+    }
+  } else {
+    const utxosResp = await chainProviders.utxo(asset).listOutputs(fromAddress);
+    if (utxosResp.error || !utxosResp.data) {
+      return { ok: false, error: utxosResp.error ?? 'Failed to fetch UTXOs' };
+    }
+    fetchedUtxos = utxosResp.data.utxos;
   }
-  const utxos = utxosResp.data.utxos.filter(
-    (u) => !excludeInputs.has(`${u.txid}:${u.vout}`),
-  );
+
+  const utxos = fetchedUtxos.filter((u) => !excludeInputs.has(`${u.txid}:${u.vout}`));
   if (utxos.length === 0) {
-    if (utxosResp.data.utxos.length > 0) {
+    if (fetchedUtxos.length > 0) {
       return {
         ok: false,
         error:
@@ -252,6 +330,19 @@ async function sendBtcLtc(
       };
     }
     return { ok: false, error: 'No spendable UTXOs at this address' };
+  }
+
+  // Owning-address + path tag map, keyed by `txid:vout`. In fresh mode this
+  // comes straight off the tagged multi listing; in single-address mode it's
+  // the fixed primary leaf. Selection below only carries `{txid,vout,value}`,
+  // so we recover each selected input's path/owner from this map — the path
+  // is never re-derived from the amount or re-guessed (money gate G9).
+  const tagByOutpoint = new Map<string, { masterPath: string; ownerAddress?: string }>();
+  for (const u of utxos) {
+    tagByOutpoint.set(`${u.txid}:${u.vout}`, {
+      masterPath: freshEnabled ? u.masterPath ?? singlePath : singlePath,
+      ...(freshEnabled && u.address ? { ownerAddress: u.address } : {}),
+    });
   }
 
   // 2. UTXO selection. Sweep ignores amountAtomic; normal mode uses it.
@@ -270,24 +361,46 @@ async function sendBtcLtc(
     selection = r;
   }
 
-  // 3. Build the unsigned PSBT.
+  // 2b. Change destination. Fresh mode reserves a fresh `/1/j` change address
+  //     BEFORE broadcast (monotonic, mutex-guarded) so change stops clustering
+  //     back onto the receive address. Only reserve when there IS change, so a
+  //     no-change (or dust-dropped) send never burns an index. Flag-off keeps
+  //     change on the from-address exactly as before.
+  let changeAddress = fromAddress;
+  if (freshEnabled && book && selection.changeSat > 0) {
+    try {
+      const j = await book.reserveChange();
+      changeAddress = utxoAddressAt(asset, accountXpub as string, 1, j);
+    } catch (e) {
+      return {
+        ok: false,
+        error: `Reserve change address failed: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+  }
+
+  // 3. Build the unsigned PSBT. Each input carries the path (and, in fresh
+  //    mode, the owner-address tag for the fail-closed G9 script assertion)
+  //    resolved from `tagByOutpoint`.
   const network: BtcNetwork = asset === 'btc' ? 'btc-mainnet' : 'ltc-mainnet';
-  // Smirk v3 single-address scheme — every input is at the same leaf.
-  const masterPath = `m/84'/${asset === 'btc' ? 0 : 2}'/0'/0/0`;
   let unsignedPsbt: string;
   try {
     unsignedPsbt = wasmBitcoin.buildPsbt({
       network,
-      inputs: selection.inputs.map((i) => ({
-        txid: i.txid,
-        vout: i.vout,
-        valueSat: i.value,
-        masterPath,
-      })),
+      inputs: selection.inputs.map((i) => {
+        const tag = tagByOutpoint.get(`${i.txid}:${i.vout}`);
+        return {
+          txid: i.txid,
+          vout: i.vout,
+          valueSat: i.value,
+          masterPath: tag?.masterPath ?? singlePath,
+          ...(tag?.ownerAddress ? { ownerAddress: tag.ownerAddress } : {}),
+        };
+      }),
       recipientAddress: toAddress,
       recipientSat: selection.recipientSat,
       ...(selection.changeSat > 0
-        ? { changeAddress: fromAddress, changeSat: selection.changeSat }
+        ? { changeAddress, changeSat: selection.changeSat }
         : {}),
       mnemonic: wallet.mnemonic,
       passphrase: '',
@@ -378,8 +491,19 @@ async function sendBtcLtc(
  * backend silently skips for external sends — see legacy commit `3afce50`).
  *
  * No fee picker, no sweep yet. Fee comes from LWS's `per_byte_fee`
- * (rounded to `fee_mask`); change goes back to the sender's single
- * address (Smirk uses one main address per asset — no subaddresses).
+ * (rounded to `fee_mask`); change always goes back to the account's
+ * PRIMARY address.
+ *
+ * Subaddresses: each unspent output carries the `subaddr_index` the LWS
+ * attributed it to, and that index is threaded verbatim into BOTH the
+ * key-image computation and the wasm signing params. It is never
+ * re-derived or guessed. A subaddress output's key image folds the
+ * subaddress secret into the key offset, so spending one under the
+ * primary index yields a key image the network rejects and strands the
+ * output. Absent or `(0,0)` means the primary address and the call is
+ * byte-identical to the pre-subaddress path, which is what every output
+ * looks like while `ENABLE_SUBADDRESS_RECEIVE` is off (nothing ever
+ * hands out a subaddress, so nothing can be received on one).
  *
  * Privacy-critical: every transaction must use a fresh `outgoing_view_key`
  * from OS randomness. That happens inside `wasm.sign_transaction` —
@@ -449,6 +573,11 @@ async function sendXmrWow(
   const spendableOutputs: SpendableOutput[] = [];
   let blockedByLocalCache = 0;
   for (const out of lwsOutputs) {
+    // Subaddress the LWS attributed this output to. Absent (legacy backend) or
+    // `(0,0)` is the primary address: pass `undefined` so the wasm call is the
+    // exact pre-subaddress call. A non-primary index MUST reach both the key
+    // image here and the signing params below, or the output is unspendable.
+    const sub = subaddrOf(out);
     let computedKi: string;
     try {
       const kiJson = wasmMonero.computeKeyImage(
@@ -456,6 +585,8 @@ async function sendXmrWow(
         spendKeyHex,
         out.tx_pub_key,
         out.index,
+        sub?.major,
+        sub?.minor,
       );
       computedKi = parseWasmResult<string>(kiJson).toLowerCase();
     } catch (e) {
@@ -589,18 +720,26 @@ async function sendXmrWow(
 
   // 4. Build TxParams JSON. Field names are snake_case to match the
   //    Rust serde contract (see crates/smirk-wasm/src/signing.rs::TxParams).
-  const inputs = selected.map((out, i) => ({
-    output: {
-      amount: out.amount,
-      public_key: out.public_key,
-      tx_pub_key: out.tx_pub_key,
-      index: out.index,
-      global_index: out.global_index,
-      height: out.height,
-      rct: out.rct,
-    },
-    decoys: decoyPool.slice(i * decoysPerInput, (i + 1) * decoysPerInput),
-  }));
+  //    Each input's `subaddr_index` is threaded through only when the output
+  //    was actually received on a subaddress; for a primary output the field is
+  //    omitted entirely, so the JSON is identical to the pre-subaddress payload
+  //    and the Rust side takes its unchanged primary path.
+  const inputs = selected.map((out, i) => {
+    const sub = subaddrOf(out);
+    return {
+      output: {
+        amount: out.amount,
+        public_key: out.public_key,
+        tx_pub_key: out.tx_pub_key,
+        index: out.index,
+        global_index: out.global_index,
+        height: out.height,
+        rct: out.rct,
+        ...(sub ? { subaddr_index: { major: sub.major, minor: sub.minor } } : {}),
+      },
+      decoys: decoyPool.slice(i * decoysPerInput, (i + 1) * decoysPerInput),
+    };
+  });
   const amountNum = Number(effectiveAmount);
   const params = {
     inputs,
@@ -693,7 +832,10 @@ export async function send(
   }
 
   if (asset.id === 'xmr' || asset.id === 'wow') {
-    // Single-recipient, single main address, no subaddresses. Fee
+    // Single-recipient; change returns to the account's primary
+    // address. Inputs received on a subaddress are spent under their
+    // own `subaddr_index` (threaded from the LWS unspent list into both
+    // the key image and the signing params). Fee
     // comes from LWS (per_byte_fee / fee_mask) — wizard's
     // feeRateSatPerVb is deliberately ignored. `sweep` is honored:
     // selects every spendable output, recipient gets sum − fee.

@@ -45,7 +45,10 @@ export type {
   ReceivedTip,
   PublicTipInfo,
 } from './social';
-export type { WalletUtxoMethods } from './wallet-utxo';
+export type { WalletUtxoMethods, TaggedUtxo } from './wallet-utxo';
+// The batch cap lives with the client that enforces it, and is re-exported here
+// so hosts and tests reference ONE constant rather than each hardcoding 32.
+export { UTXO_MULTI_MAX_ADDRESSES } from './wallet-utxo';
 export type { WalletLwsMethods } from './wallet-lws';
 export type { GrinMethods } from './grin';
 export type { SwapMethods, SwapRecord, CreateSwapPayload } from './swap';
@@ -116,6 +119,9 @@ export class SmirkApi
   broadcastTx: WalletUtxoMethods['broadcastTx'];
   getHistory: WalletUtxoMethods['getHistory'];
   estimateFee: WalletUtxoMethods['estimateFee'];
+  getUtxoBalanceMulti: WalletUtxoMethods['getUtxoBalanceMulti'];
+  getUtxosMulti: WalletUtxoMethods['getUtxosMulti'];
+  getHistoryMulti: WalletUtxoMethods['getHistoryMulti'];
 
   // Wallet LWS (XMR/WOW)
   getLwsBalance: WalletLwsMethods['getLwsBalance'];
@@ -125,6 +131,7 @@ export class SmirkApi
   getLwsHistory: WalletLwsMethods['getLwsHistory'];
   registerLws: WalletLwsMethods['registerLws'];
   deactivateLws: WalletLwsMethods['deactivateLws'];
+  provisionSubaddrs: WalletLwsMethods['provisionSubaddrs'];
 
   // Grin (non-custodial: scan is the source of truth; no server output store)
   scanGrin: GrinMethods['scanGrin'];
@@ -196,6 +203,9 @@ export class SmirkApi
     this.broadcastTx = utxo.broadcastTx;
     this.getHistory = utxo.getHistory;
     this.estimateFee = utxo.estimateFee;
+    this.getUtxoBalanceMulti = utxo.getUtxoBalanceMulti;
+    this.getUtxosMulti = utxo.getUtxosMulti;
+    this.getHistoryMulti = utxo.getHistoryMulti;
 
     this.getLwsBalance = lws.getLwsBalance;
     this.getUnspentOuts = lws.getUnspentOuts;
@@ -204,6 +214,7 @@ export class SmirkApi
     this.getLwsHistory = lws.getLwsHistory;
     this.registerLws = lws.registerLws;
     this.deactivateLws = lws.deactivateLws;
+    this.provisionSubaddrs = lws.provisionSubaddrs;
 
     this.scanGrin = grin.scanGrin;
     this.getGrinAddressUser = grin.getGrinAddressUser;

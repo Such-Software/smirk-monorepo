@@ -115,6 +115,10 @@ struct UnsignedInputJson {
     vout: u32,
     value_sat: u64,
     master_path: String,
+    /// Optional owning-address tag for the money-gate-G9 script-match assertion
+    /// in `build_psbt`. Absent (default) → no cross-check, unchanged behavior.
+    #[serde(default)]
+    owner_address: Option<String>,
 }
 
 impl From<UnsignedInputJson> for UnsignedInput {
@@ -124,6 +128,7 @@ impl From<UnsignedInputJson> for UnsignedInput {
             vout: v.vout,
             value_sat: v.value_sat,
             master_path: v.master_path,
+            owner_address: v.owner_address,
         }
     }
 }

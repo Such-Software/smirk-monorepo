@@ -109,8 +109,8 @@ export interface CryptonoteKeys {
  * paper over the asymmetry and force every consumer to narrow.
  */
 export interface DerivedKeys {
-  btc: { privateKey: Uint8Array; publicKey: Uint8Array };
-  ltc: { privateKey: Uint8Array; publicKey: Uint8Array };
+  btc: { privateKey: Uint8Array; publicKey: Uint8Array; accountXpub?: string };
+  ltc: { privateKey: Uint8Array; publicKey: Uint8Array; accountXpub?: string };
   xmr: CryptonoteKeys;
   wow: CryptonoteKeys;
   grin: GrinKeys;
@@ -193,6 +193,72 @@ function deriveBip84Key(
   coinType: number,
 ): { privateKey: Uint8Array; publicKey: Uint8Array } {
   return deriveSecp256k1Key(masterSeed, coinType, 84);
+}
+
+/**
+ * Neutered BIP84 ACCOUNT extended public key (`xpub`) at `m/84'/coin'/0'`.
+ *
+ * The account xpub is the enabler for the gap-limit fresh-address feature
+ * (Lane 5, gated behind `ENABLE_BTCLTC_FRESH_ADDRS`): it lets the wallet
+ * derive any receive (`/0/i`) or change (`/1/j`) PUBLIC key — and thus the
+ * bech32 address — on a WARM session (session-cache restore, mnemonic +
+ * seed absent) WITHOUT the recovery phrase. Signing still requires the
+ * mnemonic (the wasm PSBT path), so this xpub is a view-only credential:
+ * disclosure derives addresses, never a spend authority.
+ *
+ * Index 0 (`m/84'/coin'/0'/0/0`) remains the unchanged primary receive
+ * address, so a wallet with the feature OFF behaves exactly as before.
+ */
+export function deriveBip84AccountXpub(masterSeed: Uint8Array, coinType: number): string {
+  const account = HDKey.fromMasterSeed(masterSeed).derive(`m/84'/${coinType}'/0'`);
+  // `publicExtendedKey` is the neutered (public-only) serialization — no
+  // private material is encoded, which is what makes it warm-session safe.
+  return account.publicExtendedKey;
+}
+
+/**
+ * Derive the BIP84 key at `.../change/index` under a given account.
+ *
+ * `source` is EITHER a master seed (with `coinType` supplied) — in which
+ * case the full `m/84'/coin'/0'/change/index` path is walked and BOTH the
+ * private and public key come back — OR an account-level xpub string (the
+ * `deriveBip84AccountXpub` output), in which case only the PUBLIC key is
+ * available (no private material can exist behind a neutered xpub).
+ *
+ * `change` is 0 (external / receive chain) or 1 (internal / change chain)
+ * per BIP44; `index` is the leaf address index. `(change, index) = (0, 0)`
+ * reproduces the wallet's primary receive key byte-for-byte.
+ */
+export function deriveBip84KeyAt(
+  source: Uint8Array | string,
+  change: 0 | 1,
+  index: number,
+  coinType?: number,
+): { publicKey: Uint8Array; privateKey?: Uint8Array } {
+  if (change !== 0 && change !== 1) {
+    throw new Error(`deriveBip84KeyAt: change must be 0 or 1, got ${change}`);
+  }
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`deriveBip84KeyAt: index must be a non-negative integer, got ${index}`);
+  }
+
+  let node: HDKey;
+  if (typeof source === 'string') {
+    // Account-level xpub → non-hardened change/index descent (pubkey-only).
+    node = HDKey.fromExtendedKey(source).deriveChild(change).deriveChild(index);
+  } else {
+    if (coinType === undefined) {
+      throw new Error('deriveBip84KeyAt: coinType is required when deriving from a seed');
+    }
+    node = HDKey.fromMasterSeed(source).derive(`m/84'/${coinType}'/0'/${change}/${index}`);
+  }
+
+  if (!node.publicKey) {
+    throw new Error('deriveBip84KeyAt: derivation produced no public key');
+  }
+  return node.privateKey
+    ? { publicKey: node.publicKey, privateKey: node.privateKey }
+    : { publicKey: node.publicKey };
 }
 
 /**
@@ -465,8 +531,14 @@ export function deriveAllKeys(
     // Legacy `deriveLegacyBtcLtcKey` remains for the seed-to-keys recovery
     // script so users on the old path can locate their funds.
     return {
-      btc: deriveBip84Key(masterSeed, COIN_TYPES.btc),
-      ltc: deriveBip84Key(masterSeed, COIN_TYPES.ltc),
+      btc: {
+        ...deriveBip84Key(masterSeed, COIN_TYPES.btc),
+        accountXpub: deriveBip84AccountXpub(masterSeed, COIN_TYPES.btc),
+      },
+      ltc: {
+        ...deriveBip84Key(masterSeed, COIN_TYPES.ltc),
+        accountXpub: deriveBip84AccountXpub(masterSeed, COIN_TYPES.ltc),
+      },
       xmr: deriveBip32MoneroKeys(masterSeed, COIN_TYPES.xmr),
       wow: deriveBip32MoneroKeys(masterSeed, COIN_TYPES.wow),
       grin: deriveGrinKey(masterSeed),
