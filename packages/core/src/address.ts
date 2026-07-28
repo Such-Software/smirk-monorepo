@@ -18,6 +18,8 @@ import { bech32 } from '@scure/base';
 import { sha256 } from '@noble/hashes/sha256';
 import { ripemd160 } from '@noble/hashes/ripemd160';
 import { keccak_256 } from '@noble/hashes/sha3';
+import { ed25519 } from '@noble/curves/ed25519';
+import { deriveBip84KeyAt } from './hd';
 
 const NETWORKS = {
   btc: { bech32: 'bc', pubkeyHash: 0x00, scriptHash: 0x05 },
@@ -49,6 +51,30 @@ export function ltcAddress(publicKey: Uint8Array): string {
   return generateBech32Address(publicKey, NETWORKS.ltc.bech32);
 }
 
+/**
+ * Bitcoin P2WPKH address at a specific BIP84 receive/change index, from the
+ * account xpub (`m/84'/0'/0'`). `change` is 0 (receive) or 1 (change);
+ * `index` is the leaf. `(0, 0)` reproduces {@link btcAddress} for the same
+ * wallet. Feeds the gap-limit fresh-address book (Lane 5, gated behind
+ * `ENABLE_BTCLTC_FRESH_ADDRS`). Reuses the same audited bech32 encoder as
+ * the primary address, so a fresh address is byte-identical to what an
+ * external BIP84 wallet (Sparrow, Electrum) derives from the same seed.
+ */
+export function btcAddressAt(accountXpub: string, change: 0 | 1, index: number): string {
+  return generateBech32Address(
+    deriveBip84KeyAt(accountXpub, change, index).publicKey,
+    NETWORKS.btc.bech32,
+  );
+}
+
+/** Litecoin P2WPKH address at a specific BIP84 receive/change index. See {@link btcAddressAt}. */
+export function ltcAddressAt(accountXpub: string, change: 0 | 1, index: number): string {
+  return generateBech32Address(
+    deriveBip84KeyAt(accountXpub, change, index).publicKey,
+    NETWORKS.ltc.bech32,
+  );
+}
+
 /** Witness-version-0 bech32 P2WPKH: `hrp1q…` over HASH160(pubkey). */
 function generateBech32Address(publicKey: Uint8Array, hrp: string): string {
   const hash160 = ripemd160(sha256(publicKey));
@@ -75,6 +101,116 @@ export function xmrAddress(publicSpendKey: Uint8Array, publicViewKey: Uint8Array
 /** Wownero standard address from public spend + view keys. */
 export function wowAddress(publicSpendKey: Uint8Array, publicViewKey: Uint8Array): string {
   return generateCryptonoteAddress(publicSpendKey, publicViewKey, NETWORKS.wow.addressPrefix);
+}
+
+// ----------------------------------------------------------------------------
+// XMR / WOW subaddresses (per-payment receive privacy)
+// ----------------------------------------------------------------------------
+//
+// A subaddress is an unlinkable receive address derived from the SAME account
+// keys. Handing out a fresh one per payment stops on-chain clustering of a
+// user's incoming funds. The LWS (monero-lws / wownero-lws, built with
+// `--max-subaddresses > 0`) attributes funds to a provisioned subaddress range
+// using only the private view key it already holds.
+
+/** ed25519 group order l = 2^252 + 27742317777372353535851937790883648493. */
+const ED25519_L = 2n ** 252n + 27742317777372353535851937790883648493n;
+
+/** Read little-endian `bytes` as a BigInt reduced mod l (a Monero scalar). */
+function leBytesToScalarModL(bytes: Uint8Array): bigint {
+  let s = 0n;
+  for (let i = 0; i < bytes.length; i++) s += BigInt(bytes[i]!) << BigInt(8 * i);
+  return s % ED25519_L;
+}
+
+/** 32-bit unsigned little-endian encoding (matches Rust `u32::to_le_bytes`). */
+function u32le(n: number): Uint8Array {
+  const b = new Uint8Array(4);
+  b[0] = n & 0xff;
+  b[1] = (n >>> 8) & 0xff;
+  b[2] = (n >>> 16) & 0xff;
+  b[3] = (n >>> 24) & 0xff;
+  return b;
+}
+
+/** Domain separator for subaddress derivation: the ASCII bytes `SubAddr\0`. */
+const SUBADDR_DOMAIN = new Uint8Array([0x53, 0x75, 0x62, 0x41, 0x64, 0x64, 0x72, 0x00]);
+
+/**
+ * Derive a Cryptonote subaddress for `(major, minor)` from the account's PUBLIC
+ * spend key `B` and PRIVATE view key `a` (32-byte little-endian scalar).
+ *
+ * Mirrors Monero's `get_subaddress` / monero-oxide `ViewPair::subaddress_keys`
+ * exactly:
+ *   m = Hs("SubAddr\0" || a || major_LE || minor_LE)   // Hs = keccak256 mod l
+ *   D = B + m·G
+ *   C = a·D
+ *   address = base58( subaddressPrefix || D || C || keccak(prefix||D||C)[:4] )
+ *
+ * `(0, 0)` is the PRIMARY address, not a subaddress; callers must pass a
+ * non-zero index. Passing `(0, 0)` throws so a caller cannot silently hand out
+ * the primary address (which the LWS scans separately) as if it were fresh.
+ */
+function cryptonoteSubaddress(
+  publicSpendKey: Uint8Array,
+  privateViewKey: Uint8Array,
+  major: number,
+  minor: number,
+  subaddressPrefix: number,
+): string {
+  if (major === 0 && minor === 0) {
+    throw new Error('(0,0) is the primary address, not a subaddress; use minor >= 1');
+  }
+
+  // m = Hs("SubAddr\0" || a || major_LE || minor_LE)
+  const input = new Uint8Array(8 + 32 + 4 + 4);
+  input.set(SUBADDR_DOMAIN, 0);
+  input.set(privateViewKey, 8);
+  input.set(u32le(major), 40);
+  input.set(u32le(minor), 44);
+  const m = leBytesToScalarModL(keccak_256(input));
+
+  // D = B + m·G  (subaddress public spend key)
+  const B = ed25519.ExtendedPoint.fromHex(publicSpendKey);
+  const D = B.add(ed25519.ExtendedPoint.BASE.multiply(m));
+
+  // C = a·D  (subaddress public view key)
+  const a = leBytesToScalarModL(privateViewKey);
+  const C = D.multiply(a);
+
+  return generateCryptonoteAddress(D.toRawBytes(), C.toRawBytes(), subaddressPrefix);
+}
+
+/** Monero (XMR) subaddress for `(major, minor)`. For account 0, `minor >= 1`. */
+export function xmrSubaddress(
+  publicSpendKey: Uint8Array,
+  privateViewKey: Uint8Array,
+  major: number,
+  minor: number,
+): string {
+  return cryptonoteSubaddress(
+    publicSpendKey,
+    privateViewKey,
+    major,
+    minor,
+    NETWORKS.xmr.subaddressPrefix,
+  );
+}
+
+/** Wownero (WOW) subaddress for `(major, minor)`. For account 0, `minor >= 1`. */
+export function wowSubaddress(
+  publicSpendKey: Uint8Array,
+  privateViewKey: Uint8Array,
+  major: number,
+  minor: number,
+): string {
+  return cryptonoteSubaddress(
+    publicSpendKey,
+    privateViewKey,
+    major,
+    minor,
+    NETWORKS.wow.subaddressPrefix,
+  );
 }
 
 /**

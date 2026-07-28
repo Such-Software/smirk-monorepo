@@ -85,26 +85,64 @@ export const monero = {
     feePerByte: bigint,
     feeMask: bigint,
   ): string => wasm.estimate_fee(numInputs, numOutputs, feePerByte, feeMask),
+  /**
+   * Build and sign a Monero/Wownero transaction from LWS-format data.
+   *
+   * `paramsJson` is the JSON-serialized `TxParams` (see
+   * `crates/smirk-wasm/src/signing.rs`). Each owned output inside
+   * `inputs[].output` MAY carry an optional `subaddr_index: { major, minor }`
+   * field naming the subaddress it was received on. Absent (or `{0,0}`) means
+   * the primary address and the spend path is unchanged; a non-zero index folds
+   * the subaddress spend secret into the key offset so the output is spendable.
+   * send-handler.ts passes this per input.
+   */
   signTransaction: (paramsJson: string): string => wasm.sign_transaction(paramsJson),
   deriveKeyImage: (
     outputPublicKeyHex: string,
     spendKeyHex: string,
     keyOffsetHex: string,
   ): string => wasm.derive_key_image(outputPublicKeyHex, spendKeyHex, keyOffsetHex),
+  /**
+   * Derive an output's key image from the output public key.
+   *
+   * `subaddrMajor` / `subaddrMinor` are optional. Both omitted (or `(0, 0)`)
+   * means the output was received on the primary address (unchanged). For a
+   * subaddress output BOTH must be supplied so the subaddress secret is folded
+   * into the key offset; otherwise the key image would not match on-chain.
+   */
   deriveOutputKeyImage: (
     viewKey: string,
     spendKey: string,
     txPubKey: string,
     outputIndex: number,
     outputKey: string,
+    subaddrMajor?: number,
+    subaddrMinor?: number,
   ): string =>
-    wasm.derive_output_key_image(viewKey, spendKey, txPubKey, outputIndex, outputKey),
+    wasm.derive_output_key_image(
+      viewKey,
+      spendKey,
+      txPubKey,
+      outputIndex,
+      outputKey,
+      subaddrMajor,
+      subaddrMinor,
+    ),
+  /**
+   * Compute an output's key image without its public key (LWS spend detection).
+   *
+   * `subaddrMajor` / `subaddrMinor` are optional; both omitted (or `(0, 0)`) =
+   * primary address (unchanged). For a subaddress output BOTH must be supplied.
+   */
   computeKeyImage: (
     viewKey: string,
     spendKey: string,
     txPubKey: string,
     outputIndex: number,
-  ): string => wasm.compute_key_image(viewKey, spendKey, txPubKey, outputIndex),
+    subaddrMajor?: number,
+    subaddrMinor?: number,
+  ): string =>
+    wasm.compute_key_image(viewKey, spendKey, txPubKey, outputIndex, subaddrMajor, subaddrMinor),
 };
 
 // =============================================================================
@@ -838,6 +876,14 @@ export interface BtcBuildPsbtParams {
      * `signPsbt` can later resolve the right child key.
      */
     masterPath: string;
+    /**
+     * Optional owning-address tag (the wallet's own record of which
+     * receive/change address this UTXO belongs to). When set, `build_psbt`
+     * fails closed unless the P2WPKH script derived from `masterPath` equals
+     * this address's script — money gate G9. Omit for the single-address
+     * (flag-off) path to keep behavior byte-for-byte unchanged.
+     */
+    ownerAddress?: string;
   }>;
   recipientAddress: string;
   recipientSat: number;
@@ -911,6 +957,7 @@ export const bitcoin = {
         vout: i.vout,
         value_sat: i.valueSat,
         master_path: i.masterPath,
+        ...(i.ownerAddress !== undefined ? { owner_address: i.ownerAddress } : {}),
       })),
       recipient_address: params.recipientAddress,
       recipient_sat: params.recipientSat,

@@ -25,6 +25,8 @@ import {
   isValidXmrAddress,
   xmrAddress,
   wowAddress,
+  xmrSubaddress,
+  wowSubaddress,
   grinSlatpackAddress,
 } from '../address';
 
@@ -145,4 +147,61 @@ test('cross-asset rejection — each validator only accepts its own family', () 
   assert.equal(isValidLtcAddress(xmr), false);
   assert.equal(isValidLtcAddress(wow), false);
   assert.equal(isValidLtcAddress(grin), false);
+});
+
+// ============================================================================
+// XMR / WOW subaddress derivation (per-payment receive privacy)
+// ============================================================================
+//
+// Reference vectors generated from the vendored monero-oxide `ViewPair`
+// (crates/monero-oxide/.../wallet/src/view_pair.rs `subaddress`) — the same
+// library the wallet trusts for signing. Emitter (run once, then reverted):
+//   let spend = curve25519_dalek::Scalar::from_bytes_mod_order([9u8; 32]);
+//   let view  = curve25519_dalek::Scalar::from_bytes_mod_order([7u8; 32]);
+//   let vp = ViewPair::new(Point::from(&spend * G), Zeroizing::new(Scalar::from(view)));
+//   vp.subaddress(Network::Mainnet, SubaddressIndex::new(0, n));
+// publicSpendKey = spend·G (compressed); privateViewKey = view bytes ([7; 32]).
+
+const hexToBytes = (h: string): Uint8Array =>
+  new Uint8Array((h.match(/.{2}/g) ?? []).map((b) => parseInt(b, 16)));
+
+const REF_SPEND_PUB = hexToBytes(
+  '4faa93763d0702316ddef05a7921b30b30e81530b44cf9f35773ffee16f68638',
+);
+const REF_VIEW_PRIV = new Uint8Array(32).fill(7);
+const REF_XMR_SUB_0_1 =
+  '82sVjEz8Hh95213ep3PT2iHCdW3v5mzg9NZVMQGTUccQaBQ44rgmzqANG2qvjLhYTnA3aDgpiSBMJ5xB2jQwK67R7sw3fUs';
+const REF_XMR_SUB_0_2 =
+  '8B1BTbfkZUWKePoXVc3VDB6Quxw2Mni883MVGV2P7umPN4zQNVp7ZKoHCJQ7mRc2eKd2s44sxEXhEDEaR8MKxnyPBJ64Tnm';
+
+test('xmrSubaddress matches monero-oxide reference vectors', () => {
+  assert.equal(xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 1), REF_XMR_SUB_0_1);
+  assert.equal(xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 2), REF_XMR_SUB_0_2);
+});
+
+test('xmr subaddresses validate and use the subaddress prefix', () => {
+  const s1 = xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 1);
+  assert.ok(isValidXmrAddress(s1));
+  assert.ok(s1.startsWith('8')); // Monero subaddress prefix 42 (standard is '4', prefix 18)
+  assert.notEqual(s1, xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 2));
+});
+
+test('wowSubaddress produces a valid, distinct WOW subaddress', () => {
+  const w1 = wowSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 1);
+  assert.ok(isValidWowAddress(w1));
+  // Same D,C derivation as XMR (cross-checked above); only the WOW subaddress
+  // prefix (12208, verified against a Stack Wallet address) differs.
+  assert.notEqual(w1, wowSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 2));
+});
+
+test('subaddress derivation is deterministic', () => {
+  assert.equal(
+    xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 5),
+    xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 5),
+  );
+});
+
+test('subaddress (0,0) throws — it is the primary address, not a subaddress', () => {
+  assert.throws(() => xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 0));
+  assert.throws(() => wowSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 0));
 });

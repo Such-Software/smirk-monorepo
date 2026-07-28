@@ -117,6 +117,30 @@ pub struct LwsOutput {
     /// RingCT data (hex) - commitment
     #[serde(default)]
     pub rct: String,
+    /// Subaddress index this output was received on.
+    ///
+    /// `#[serde(default)]` so existing primary-only LWS payloads (which omit the
+    /// field) still parse; absent (or `(0, 0)`) means the output was received on
+    /// the primary address and the spend path is byte-identical to before. When
+    /// present with a non-zero index, the subaddress spend secret `m` is folded
+    /// into the key offset so the output is spendable.
+    #[serde(default)]
+    pub subaddr_index: Option<SubaddrIndex>,
+}
+
+/// Subaddress index `(major, minor)` for an owned output.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct SubaddrIndex {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl LwsOutput {
+    /// The subaddress index as a plain `(major, minor)` tuple, or `None` for a
+    /// primary-address output. Passed straight into `derive_key_offset`.
+    fn subaddr_tuple(&self) -> Option<(u32, u32)> {
+        self.subaddr_index.map(|s| (s.major, s.minor))
+    }
 }
 
 /// A random output for decoy selection from LWS `get_random_outs`.
@@ -237,6 +261,7 @@ fn parse_commitment_point(rct: &str) -> Result<Point, String> {
 fn build_output_with_decoys(
     input: &TxInput,
     view_key: &[u8; 32],
+    spend_scalar: &Scalar,
 ) -> Result<OutputWithDecoys, String> {
     let output = &input.output;
 
@@ -246,13 +271,42 @@ fn build_output_with_decoys(
     // Parse transaction public key
     let tx_pub_key = parse_hex_32(&output.tx_pub_key)?;
 
-    // Derive key_offset from view_key and tx_pub_key
-    let key_offset = derive_key_offset(view_key, &tx_pub_key, output.index as usize)
-        .map_err(|e| e.to_string())?;
+    // Derive key_offset from view_key and tx_pub_key. For a subaddress output
+    // (`subaddr_index` present and non-zero) this folds in the subaddress spend
+    // secret `m`; for primary outputs it is the bare shared secret (unchanged).
+    let key_offset = derive_key_offset(
+        view_key,
+        &tx_pub_key,
+        output.index as usize,
+        output.subaddr_tuple(),
+    )
+    .map_err(|e| e.to_string())?;
 
-    // Derive commitment mask
+    // Derive commitment mask. This is subaddress-independent (it only depends on
+    // the shared secret), so it is NOT threaded with subaddr_index.
     let mask = derive_commitment_mask(view_key, &tx_pub_key, output.index as usize)
         .map_err(|e| e.to_string())?;
+
+    // Defense-in-depth self-check: the recovered one-time private key
+    // `x = spend_scalar + key_offset` must actually control this output, i.e.
+    // `x·G == P` (the output public key). A mismatch means a wrong key_offset
+    // (e.g. a missing or incorrect subaddress term), a wrong spend/view key, or
+    // corrupt LWS data. monero-oxide's `sign()` also asserts this and returns
+    // `WrongPrivateKey`, so this is belt-and-suspenders: either way no bad
+    // transaction is ever broadcast. We fail loudly here BEFORE building the
+    // signable transaction so the error is legible.
+    {
+        let one_time_priv = curve25519_dalek::Scalar::from((*spend_scalar).into())
+            + curve25519_dalek::Scalar::from(key_offset.into());
+        let recovered = curve25519_dalek::constants::ED25519_BASEPOINT_POINT * one_time_priv;
+        if recovered.compress().to_bytes() != output_key.compress().to_bytes() {
+            return Err(
+                "Output one-time key mismatch: recovered key does not control the output \
+                 public key (wrong spend key, view key, or subaddress index); refusing to sign"
+                    .to_string(),
+            );
+        }
+    }
 
     // Create commitment with mask and amount
     let commitment = Commitment::new(mask, output.amount);
@@ -489,7 +543,7 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     // Build OutputWithDecoys for each input
     let mut inputs_with_decoys = Vec::with_capacity(params.inputs.len());
     for input in &params.inputs {
-        let owd = build_output_with_decoys(input, &view_key)?;
+        let owd = build_output_with_decoys(input, &view_key, &spend_scalar)?;
         inputs_with_decoys.push(owd);
     }
 
@@ -630,9 +684,15 @@ pub fn estimate_fee(
 /// * `tx_pub_key` - Transaction public key (hex)
 /// * `output_index` - Output index within transaction
 /// * `output_key` - Output public key (hex)
+/// * `subaddr_major` / `subaddr_minor` - Optional subaddress index the output
+///   was received on. Both absent (or `(0, 0)`) = primary address, unchanged.
+///   For a subaddress output both MUST be supplied so the subaddress secret `m`
+///   is folded into the key offset (else the key image is wrong). Supplying
+///   only one of the two is an error, not a fallback to the primary address.
 ///
 /// # Returns
-/// Key image as hex string.
+/// Key image as hex string, or an error when the derived one-time key does not
+/// control `output_key` (wrong keys or wrong/missing subaddress index).
 #[wasm_bindgen]
 pub fn derive_output_key_image(
     view_key: &str,
@@ -640,10 +700,54 @@ pub fn derive_output_key_image(
     tx_pub_key: &str,
     output_index: u32,
     output_key: &str,
+    subaddr_major: Option<u32>,
+    subaddr_minor: Option<u32>,
 ) -> String {
-    match derive_output_key_image_inner(view_key, spend_key, tx_pub_key, output_index, output_key) {
+    let subaddr_index = match subaddr_index_from_parts(subaddr_major, subaddr_minor) {
+        Ok(idx) => idx,
+        Err(e) => return WasmResult::err(&e),
+    };
+    match derive_output_key_image_inner(
+        view_key,
+        spend_key,
+        tx_pub_key,
+        output_index,
+        output_key,
+        subaddr_index,
+    ) {
         Ok(ki) => WasmResult::ok(ki),
         Err(e) => WasmResult::err(&e),
+    }
+}
+
+/// Build an `Option<(major, minor)>` from two optional wasm args.
+///
+/// Both absent is the primary address (`None`), byte-identical to the
+/// pre-subaddress behavior when callers omit the arguments entirely. Both
+/// present is a subaddress index.
+///
+/// A half-supplied index is rejected. Silently treating `(Some(major), None)`
+/// as the primary address would derive a key offset without the subaddress
+/// secret `m`, producing a key image that does not match the on-chain output:
+/// the wallet would then miss a real spend and could reuse an already-spent
+/// output. The caller must supply both components or neither.
+fn subaddr_index_from_parts(
+    major: Option<u32>,
+    minor: Option<u32>,
+) -> Result<Option<(u32, u32)>, String> {
+    match (major, minor) {
+        (None, None) => Ok(None),
+        (Some(maj), Some(min)) => Ok(Some((maj, min))),
+        (Some(_), None) => Err(
+            "subaddr_minor is required when subaddr_major is supplied \
+             (a subaddress index is the full (major, minor) pair)"
+                .to_string(),
+        ),
+        (None, Some(_)) => Err(
+            "subaddr_major is required when subaddr_minor is supplied \
+             (a subaddress index is the full (major, minor) pair)"
+                .to_string(),
+        ),
     }
 }
 
@@ -653,14 +757,16 @@ fn derive_output_key_image_inner(
     tx_pub_key: &str,
     output_index: u32,
     output_key: &str,
+    subaddr_index: Option<(u32, u32)>,
 ) -> Result<String, String> {
     let view_key_bytes = parse_hex_32(view_key)?;
     let spend_key_bytes = parse_hex_32(spend_key)?;
     let tx_pub_key_bytes = parse_hex_32(tx_pub_key)?;
 
-    // Derive key offset
-    let key_offset = derive_key_offset(&view_key_bytes, &tx_pub_key_bytes, output_index as usize)
-        .map_err(|e| e.to_string())?;
+    // Derive key offset (folds in the subaddress secret when subaddr_index is set)
+    let key_offset =
+        derive_key_offset(&view_key_bytes, &tx_pub_key_bytes, output_index as usize, subaddr_index)
+            .map_err(|e| e.to_string())?;
 
     // Parse spend key
     let spend_scalar = subtle::CtOption::<curve25519_dalek::Scalar>::from(
@@ -676,6 +782,24 @@ fn derive_output_key_image_inner(
 
     // Parse output key point
     let output_point = parse_point(output_key)?;
+
+    // Fail-closed self-check, identical to the one `build_output_with_decoys`
+    // runs before signing: the recovered one-time private key `x` must actually
+    // control this output, i.e. `x·G == P`. Without it, a caller that passed the
+    // wrong keys or omitted the subaddress index would get a plausible-looking
+    // but WRONG key image back, and the wallet would mark the wrong output (or
+    // no output) as spent. Refusing is the only safe answer.
+    {
+        let recovered = curve25519_dalek::constants::ED25519_BASEPOINT_POINT * one_time_key;
+        if recovered.compress().to_bytes() != output_point.compress().to_bytes() {
+            return Err(
+                "Output one-time key mismatch: recovered key does not control the output \
+                 public key (wrong spend key, view key, or subaddress index); refusing to \
+                 derive a key image"
+                    .to_string(),
+            );
+        }
+    }
 
     // Compute Hp(output_key)
     let hp = Point::biased_hash(output_point.compress().to_bytes());
@@ -694,14 +818,27 @@ fn derive_output_key_image_inner(
 ///
 /// Returns JSON: { "success": true, "data": "<key_image_hex>" }
 /// or: { "success": false, "error": "<message>" }
+///
+/// `subaddr_major` / `subaddr_minor` are optional: both absent (or `(0, 0)`) =
+/// primary address (unchanged). For a subaddress-received output both MUST be
+/// supplied so the subaddress secret `m` is folded into the key offset; otherwise
+/// the derived output key and key image would not match the on-chain output.
+/// Supplying only one of the two is an error, not a fallback to the primary
+/// address.
 #[wasm_bindgen]
 pub fn compute_key_image(
     view_key: &str,
     spend_key: &str,
     tx_pub_key: &str,
     output_index: u32,
+    subaddr_major: Option<u32>,
+    subaddr_minor: Option<u32>,
 ) -> String {
-    match compute_key_image_inner(view_key, spend_key, tx_pub_key, output_index) {
+    let subaddr_index = match subaddr_index_from_parts(subaddr_major, subaddr_minor) {
+        Ok(idx) => idx,
+        Err(e) => return WasmResult::err(&e),
+    };
+    match compute_key_image_inner(view_key, spend_key, tx_pub_key, output_index, subaddr_index) {
         Ok(ki) => WasmResult::ok(ki),
         Err(e) => WasmResult::err(&e),
     }
@@ -712,14 +849,16 @@ fn compute_key_image_inner(
     spend_key: &str,
     tx_pub_key: &str,
     output_index: u32,
+    subaddr_index: Option<(u32, u32)>,
 ) -> Result<String, String> {
     let view_key_bytes = parse_hex_32(view_key)?;
     let spend_key_bytes = parse_hex_32(spend_key)?;
     let tx_pub_key_bytes = parse_hex_32(tx_pub_key)?;
 
-    // Derive key offset: Hs(a*R || output_index)
-    let key_offset = derive_key_offset(&view_key_bytes, &tx_pub_key_bytes, output_index as usize)
-        .map_err(|e| e.to_string())?;
+    // Derive key offset: Hs(a*R || output_index) (+ subaddress secret m when set)
+    let key_offset =
+        derive_key_offset(&view_key_bytes, &tx_pub_key_bytes, output_index as usize, subaddr_index)
+            .map_err(|e| e.to_string())?;
 
     // Parse spend key
     let spend_scalar = subtle::CtOption::<curve25519_dalek::Scalar>::from(
@@ -783,5 +922,229 @@ mod amount_deser_tests {
     fn negative_or_garbage_amount_is_rejected() {
         assert!(serde_json::from_str::<TxDestination>(r#"{"address":"x","amount":"-1"}"#).is_err());
         assert!(serde_json::from_str::<TxDestination>(r#"{"address":"x","amount":"nope"}"#).is_err());
+    }
+}
+
+#[cfg(test)]
+mod subaddr_index_tests {
+    use super::LwsOutput;
+
+    /// Backward compat: an existing primary-only payload with NO subaddr_index
+    /// field still parses, and maps to the primary (None) spend path.
+    #[test]
+    fn missing_subaddr_index_parses_as_primary() {
+        let json = r#"{"amount":10,"public_key":"aa","tx_pub_key":"bb","index":0,"global_index":1,"height":2,"rct":""}"#;
+        let out: LwsOutput = serde_json::from_str(json).unwrap();
+        assert_eq!(out.subaddr_tuple(), None);
+    }
+
+    /// An explicit primary index (0,0) also maps to None-equivalent primary path.
+    #[test]
+    fn explicit_zero_subaddr_index_parses() {
+        let json = r#"{"amount":10,"public_key":"aa","tx_pub_key":"bb","index":0,"global_index":1,"height":2,"rct":"","subaddr_index":{"major":0,"minor":0}}"#;
+        let out: LwsOutput = serde_json::from_str(json).unwrap();
+        assert_eq!(out.subaddr_tuple(), Some((0, 0)));
+    }
+
+    /// A real subaddress index is threaded through as (major, minor).
+    #[test]
+    fn subaddr_index_maps_to_tuple() {
+        let json = r#"{"amount":10,"public_key":"aa","tx_pub_key":"bb","index":0,"global_index":1,"height":2,"rct":"","subaddr_index":{"major":1,"minor":7}}"#;
+        let out: LwsOutput = serde_json::from_str(json).unwrap();
+        assert_eq!(out.subaddr_tuple(), Some((1, 7)));
+    }
+}
+
+#[cfg(test)]
+mod key_image_guard_tests {
+    use super::*;
+    use crate::output::{derive_shared_secret, subaddress_secret};
+    use curve25519_dalek::Scalar as DScalar;
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+
+    const OUTPUT_INDEX: u32 = 3;
+
+    /// A self-consistent output as it would exist on chain.
+    ///
+    /// For a subaddress `(major, minor)`: `D = (b + m)·G` is the subaddress
+    /// public spend key, the sender publishes `R = r·D`, and the one-time key is
+    /// `P = Hs(8aR || o)·G + D`. For the primary address `D = B = b·G` and
+    /// `R = r·G`. Returns `(view_key_hex, spend_key_hex, tx_pub_key_hex,
+    /// output_key_hex)`.
+    fn on_chain_output(subaddr: Option<(u32, u32)>) -> (String, String, String, String) {
+        let a = DScalar::from_bytes_mod_order([7u8; 32]);
+        let view_key = a.to_bytes();
+        let b = DScalar::from_bytes_mod_order([11u8; 32]);
+
+        // The subaddress spend secret, or zero for the primary address.
+        let m = match subaddr {
+            None | Some((0, 0)) => DScalar::ZERO,
+            Some((major, minor)) => {
+                DScalar::from(subaddress_secret(&view_key, major, minor).into())
+            }
+        };
+        let d = ED25519_BASEPOINT_POINT * (b + m);
+
+        // R = r·D (r·G for the primary address, where D == B).
+        let r = DScalar::from_bytes_mod_order([13u8; 32]);
+        let tx_pub_point = d * r;
+        let tx_pub_key = tx_pub_point.compress().to_bytes();
+
+        let shared =
+            derive_shared_secret(&view_key, &tx_pub_key, OUTPUT_INDEX as usize).unwrap();
+        let p = (ED25519_BASEPOINT_POINT * DScalar::from(shared.into())) + d;
+
+        (
+            hex::encode(view_key),
+            hex::encode(b.to_bytes()),
+            hex::encode(tx_pub_key),
+            hex::encode(p.compress().to_bytes()),
+        )
+    }
+
+    /// Both parts absent is the primary address; both present is a subaddress.
+    #[test]
+    fn subaddr_index_from_parts_accepts_both_or_neither() {
+        assert_eq!(subaddr_index_from_parts(None, None).unwrap(), None);
+        assert_eq!(
+            subaddr_index_from_parts(Some(1), Some(7)).unwrap(),
+            Some((1, 7))
+        );
+        assert_eq!(
+            subaddr_index_from_parts(Some(0), Some(0)).unwrap(),
+            Some((0, 0))
+        );
+    }
+
+    /// A half-supplied index must be rejected, not silently downgraded to the
+    /// primary derivation (which would return a wrong key image as a success).
+    #[test]
+    fn subaddr_index_from_parts_rejects_half_supplied_index() {
+        assert!(subaddr_index_from_parts(Some(1), None).is_err());
+        assert!(subaddr_index_from_parts(None, Some(7)).is_err());
+    }
+
+    /// The wasm entry points surface that rejection as an error result rather
+    /// than a key image.
+    #[test]
+    fn wasm_entry_points_reject_half_supplied_index() {
+        let (view_key, spend_key, tx_pub_key, output_key) = on_chain_output(Some((1, 7)));
+
+        let out = derive_output_key_image(
+            &view_key,
+            &spend_key,
+            &tx_pub_key,
+            OUTPUT_INDEX,
+            &output_key,
+            Some(1),
+            None,
+        );
+        assert!(out.contains(r#""success":false"#), "got {out}");
+        assert!(out.contains("subaddr_minor is required"), "got {out}");
+
+        let out = compute_key_image(&view_key, &spend_key, &tx_pub_key, OUTPUT_INDEX, None, Some(7));
+        assert!(out.contains(r#""success":false"#), "got {out}");
+        assert!(out.contains("subaddr_major is required"), "got {out}");
+    }
+
+    /// Regression: the primary-address path is untouched. A primary output still
+    /// derives a key image, and it is the same one both entry points produce.
+    #[test]
+    fn primary_output_key_image_still_derives() {
+        let (view_key, spend_key, tx_pub_key, output_key) = on_chain_output(None);
+
+        let ki = derive_output_key_image_inner(
+            &view_key,
+            &spend_key,
+            &tx_pub_key,
+            OUTPUT_INDEX,
+            &output_key,
+            None,
+        )
+        .expect("primary output must still derive a key image");
+
+        let computed =
+            compute_key_image_inner(&view_key, &spend_key, &tx_pub_key, OUTPUT_INDEX, None)
+                .unwrap();
+        assert_eq!(ki, computed);
+    }
+
+    /// With the correct subaddress index the derivation succeeds and agrees with
+    /// `compute_key_image_inner`, which reconstructs the output key from the same
+    /// one-time private key.
+    #[test]
+    fn subaddress_output_with_correct_index_derives() {
+        for idx in [(0u32, 1u32), (0, 7), (1, 2), (3, 100)] {
+            let (view_key, spend_key, tx_pub_key, output_key) = on_chain_output(Some(idx));
+
+            let ki = derive_output_key_image_inner(
+                &view_key,
+                &spend_key,
+                &tx_pub_key,
+                OUTPUT_INDEX,
+                &output_key,
+                Some(idx),
+            )
+            .unwrap_or_else(|e| panic!("subaddress {idx:?} must derive: {e}"));
+
+            let computed = compute_key_image_inner(
+                &view_key,
+                &spend_key,
+                &tx_pub_key,
+                OUTPUT_INDEX,
+                Some(idx),
+            )
+            .unwrap();
+            assert_eq!(ki, computed, "both entry points must agree for {idx:?}");
+        }
+    }
+
+    /// The money gate: a subaddress output whose index is omitted (or wrong) must
+    /// NOT produce a key image. Before the `x·G == P` check this returned a
+    /// well-formed but wrong key image, so the wallet would fail to recognize the
+    /// output as spent.
+    #[test]
+    fn subaddress_output_without_index_is_refused() {
+        let (view_key, spend_key, tx_pub_key, output_key) = on_chain_output(Some((1, 7)));
+
+        let err = derive_output_key_image_inner(
+            &view_key,
+            &spend_key,
+            &tx_pub_key,
+            OUTPUT_INDEX,
+            &output_key,
+            None,
+        )
+        .expect_err("omitting the subaddress index must be refused, not silently wrong");
+        assert!(err.contains("one-time key mismatch"), "got {err}");
+
+        let err = derive_output_key_image_inner(
+            &view_key,
+            &spend_key,
+            &tx_pub_key,
+            OUTPUT_INDEX,
+            &output_key,
+            Some((1, 8)),
+        )
+        .expect_err("a wrong subaddress index must be refused");
+        assert!(err.contains("one-time key mismatch"), "got {err}");
+    }
+
+    /// A wrong spend key is refused too (the check is not subaddress-specific).
+    #[test]
+    fn wrong_spend_key_is_refused() {
+        let (view_key, _spend_key, tx_pub_key, output_key) = on_chain_output(None);
+        let wrong = hex::encode(DScalar::from_bytes_mod_order([12u8; 32]).to_bytes());
+
+        let err = derive_output_key_image_inner(
+            &view_key,
+            &wrong,
+            &tx_pub_key,
+            OUTPUT_INDEX,
+            &output_key,
+            None,
+        )
+        .expect_err("a wrong spend key must be refused");
+        assert!(err.contains("one-time key mismatch"), "got {err}");
     }
 }
