@@ -144,6 +144,22 @@ export async function executeApproval(
         );
       }
       const req = request;
+      // Defense in depth: the wallet-handler boundary already rejects grin
+      // in-page payments (UNSUPPORTED_ASSET), but never let a grin send
+      // reach deps.send. A dapp-initiated grin send would write finalize
+      // context into a SendWizard slot it never populates, so the returned
+      // S2 could never finalize and would lock the user's inputs for ~7
+      // days. Refuse here too rather than trust the upstream guard.
+      if ((req.asset as SmirkAsset) === 'grin') {
+        return {
+          kind: 'requestPayment',
+          approved: true,
+          result: {
+            success: false,
+            error: 'Grin payments are not supported for in-page requests yet',
+          },
+        };
+      }
       const sessionState = await deps.loadState();
       const excludeInputs = recentlySpentInputs(
         sessionState.pendingOutgoing ?? [],

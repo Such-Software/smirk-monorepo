@@ -248,6 +248,7 @@ export type SmirkErrorCode =
   | 'USER_REJECTED' //   user denied the approval prompt
   | 'NOT_CONNECTED' //   no permission for this origin
   | 'NOT_AUTHORIZED' //  permission exists but doesn't cover the requested asset
+  | 'UNSUPPORTED_ASSET' //  the asset can't be used for this method yet (capability boundary)
   | 'LOCKED' //          wallet locked, user must unlock first
   | 'INVALID_PARAMS' //  request shape was wrong
   | 'UNSUPPORTED' //     method not implemented on this version

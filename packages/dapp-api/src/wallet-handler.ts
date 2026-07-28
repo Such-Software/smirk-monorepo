@@ -207,12 +207,30 @@ async function dispatchInner<M extends SmirkMethod>(
       // shows the payment confirmation and sends from the unlocked
       // wallet. Asset-scope is still enforced from the stored grant.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
+      // Widen the asset to include 'grin' at the type boundary so a grin
+      // payment request is REPRESENTABLE and thus explicitly rejectable
+      // here (rather than being silently absent from the union). The send
+      // path itself narrows back to the four supported chains below.
       const params = req.params as {
-        asset: 'btc' | 'ltc' | 'xmr' | 'wow';
+        asset: 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
         amount: string;
         address: string;
         memo?: string;
       };
+      // Capability boundary: in-page grin sends are not supported yet. The
+      // interactive Grin path (deferred to v0.4) would write finalize
+      // context into a SendWizard slot it never populates, so the returned
+      // S2 could never finalize and would lock the user's inputs for ~7
+      // days — a real fund-availability hazard. Reject BEFORE the asset-
+      // scope check so this reads as a capability limit, not an auth leak
+      // (the rejection must not depend on whether the origin holds a grin
+      // grant).
+      if (params.asset === 'grin') {
+        throw new HandlerError(
+          'UNSUPPORTED_ASSET',
+          'Grin payments are not supported for in-page requests yet',
+        );
+      }
       if (!perm.assets.includes(params.asset)) {
         throw new HandlerError(
           'NOT_AUTHORIZED',
