@@ -88,6 +88,10 @@ wasm-node:
 	$(WASM_BINDGEN) --target nodejs \
 	  --out-dir crates/smirk-wasm/pkg-node \
 	  target/wasm32-unknown-unknown/release/smirk_wasm.wasm
+# The repo root is `"type": "module"`, so without this Node reads the
+# --target nodejs (CommonJS) output as ESM and wasm-smoke dies with
+# "exports is not defined in ES module scope". pkg-node/ is gitignored.
+	@printf '{"type":"commonjs"}\n' > crates/smirk-wasm/pkg-node/package.json
 
 # Runtime smoke test against the Node WASM build. Catches wasm-bindgen
 # typing mismatches, missing exports, and runtime bugs that native unit

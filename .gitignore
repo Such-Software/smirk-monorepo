@@ -87,3 +87,8 @@ packages/e2e/videos/
 
 # Project-specific literals for scripts/secret-scan.sh (never public)
 scripts/secret-scan.local.txt
+
+# Playwright output. Never commit: traces/screenshots of e2e runs can capture
+# wallet state, and this repo is PUBLIC.
+test-results/
+playwright-report/
