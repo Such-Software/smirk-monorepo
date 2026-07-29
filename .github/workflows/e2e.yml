@@ -1,0 +1,168 @@
+name: E2E (tier A)
+
+# Tier A: end-to-end coverage that needs NO secrets and NO funded wallets, so it
+# can run on every PR including from forks.
+#
+# Why this exists: v0.3.0 shipped with an e2e suite that had never actually run.
+# A bare `playwright test` reported "2 passed, 23 skipped" and exited 0, because
+# 18 specs skip themselves when smoke mnemonics are absent. The skip-guard
+# reporter now fails that, but a guard nobody runs is not a guard, so this
+# workflow runs it automatically.
+#
+# Scope is deliberately narrow and honest: three specs that pass against a fresh,
+# unfunded wallet. Money paths (send, tips, swaps, grin slates) need funded
+# wallets and real chain nodes, and belong in tier B on a self-hosted runner.
+# Using throwaway mnemonics here was tried and is WORSE than skipping: the specs
+# run, hit an unregistered/unfunded wallet, and fail for reasons unrelated to
+# the change under test.
+#
+# What tier A does prove on every PR:
+#   - the extension builds and loads, and onboarding renders
+#   - a wallet can be created, verified and registered against a real backend
+#   - a cold launch contacts ZERO network endpoints (the privacy guarantee)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-tier-a-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Tier A (no secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: smirk
+          POSTGRES_PASSWORD: smirk
+          POSTGRES_DB: smirk_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      BACKEND_URL: http://127.0.0.1:8080/api/v1
+      # Must match BACKEND_URL. The extension bakes its target in at BUILD time,
+      # and global-setup.ts fails the run if the two disagree, because a mismatch
+      # otherwise shows up as a pile of unrelated-looking test failures.
+      VITE_SMIRK_BACKEND_URL: http://127.0.0.1:8080/api/v1
+      E2E_MIN_EXECUTED: '3'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The backend lives in its own PUBLIC repo, so no token is needed.
+      - name: Check out smirk-backend-core
+        uses: actions/checkout@v4
+        with:
+          repository: Such-Software/smirk-backend-core
+          path: backend
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install clang (wasm C target)
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            backend/target
+          key: e2e-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: e2e-cargo-${{ runner.os }}-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.100 --locked || true
+
+      - name: Build backend
+        working-directory: backend
+        run: cargo build --release --bin smirk-backend-core
+
+      - name: Start backend
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://smirk:smirk@127.0.0.1:5432/smirk_e2e
+          SERVER_HOST: 127.0.0.1
+          SERVER_PORT: '8080'
+          ENVIRONMENT: development
+          PUBLIC_API_URL: http://127.0.0.1:8080/api/v1
+          # PoW off: tier A is not testing the Sybil gate, and solving one costs
+          # seconds per registration. POW_REQUIRED alone is not enough, the
+          # master switch has to be off too.
+          FEATURE_POW: 'false'
+          POW_REQUIRED: 'false'
+          # Chains ENABLED but with no reachable node. Tier A never queries a
+          # balance, and disabling them would change /capabilities and therefore
+          # change what onboarding renders, which is part of what we are testing.
+          FEATURE_BTC: 'true'
+          FEATURE_LTC: 'true'
+          FEATURE_XMR: 'true'
+          FEATURE_WOW: 'true'
+          FEATURE_GRIN: 'false'
+          # Address-privacy features stay OFF here, matching the shipping default.
+          FEATURE_XMR_SUBADDR_PROVISIONING: 'false'
+          FEATURE_UTXO_MULTI_ADDRESS: 'false'
+          # Secrets are throwaway: this instance is destroyed with the runner and
+          # never holds real funds or real users.
+          JWT_SECRET: ci-e2e-jwt-secret-not-a-real-secret-000000000000
+          REFRESH_TOKEN_PEPPER: ci-e2e-refresh-pepper-not-real-000000000000
+          SEED_FINGERPRINT_PEPPER: ci-e2e-fingerprint-pepper-not-real-0000000
+          IP_SALT: ci-e2e-ip-salt-not-real-0000000000000000000
+        run: |
+          ./target/release/smirk-backend-core > /tmp/backend.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS -m 2 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "backend up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "backend failed to start:"; tail -50 /tmp/backend.log; exit 1
+
+      - name: Install TS deps
+        run: npm ci
+
+      - name: Build libs + extension (against the CI backend)
+        run: make ext-chrome
+
+      - name: Install Playwright browser
+        working-directory: packages/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run tier A e2e
+        working-directory: packages/e2e
+        run: |
+          npx playwright test \
+            tests/onboarding.spec.ts \
+            tests/create-new-wallet.spec.ts \
+            tests/first-launch-exposure.spec.ts \
+            --reporter=list,./skip-guard-reporter.ts
+
+      - name: Backend log (on failure)
+        if: failure()
+        run: tail -100 /tmp/backend.log || true
+
+      - name: Upload traces (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier-a-traces
+          path: packages/e2e/test-results/
+          retention-days: 7
