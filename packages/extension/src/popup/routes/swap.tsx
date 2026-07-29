@@ -38,8 +38,14 @@ export function SwapRouter({
   // Webhook URL pointing at *our* backend's receiver. Trocador POSTs
   // status changes here; receiver authenticates via the per-swap
   // webhook_token passed in `passthrough`.
-  const webhookBase =
+  // VITE_SMIRK_BACKEND_URL is the full API base and already INCLUDES `/api/v1`
+  // (e.g. `https://api.smirk.cash/api/v1`), while the webhook path below is
+  // absolute from the server root. Strip the suffix before appending, or every
+  // build with an explicit backend URL emits `/api/v1/api/v1/webhook/trocador`.
+  // Only the bare default happened to be correct.
+  const backendBase =
     import.meta.env.VITE_SMIRK_BACKEND_URL ?? 'https://backend.smirk.cash';
+  const webhookBase = backendBase.replace(/\/api\/v1\/?$/, '');
   const webhookUrl = `${webhookBase}/api/v1/webhook/trocador`;
 
   // Instantiate TrocadorSwap once per mount with build-time config.

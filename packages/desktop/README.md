@@ -32,6 +32,21 @@ extension-API surfaces the popup uses:
 - **`chrome.windows.create`** ("pop out the wallet to its own
   window") is a no-op. The desktop is already a single first-class
   window, so the action-popup "pop out" button does nothing here.
+- **Network egress is not enforced by CSP.** `connect-src` is
+  `'self' https: wss:`. It previously listed specific Smirk hosts,
+  which silently broke self-hosting: the backend URL is chosen by the
+  user at RUNTIME, CSP is static at BUILD time, so a federated backend
+  at `https://backend.example.org` was blocked by the webview before
+  the request ever left. A wallet that cannot talk to the user's own
+  server is not federated, so the allowlist had to go.
+  This brings desktop to parity with the extension, whose manifest has
+  no `connect-src` restriction at all. `script-src` / `object-src` stay
+  tight, and those are the ones that matter for XSS.
+  Real enforcement returns with the transport work: once egress runs
+  through Rust (`tauri-plugin-websocket` and an HTTP counterpart), the
+  allowlist lives there, where it can be checked against the user's
+  configured backend instead of a compile-time constant. See
+  `docs/private/TRANSPORTS.md`.
 
 ## Development
 
