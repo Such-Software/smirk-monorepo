@@ -653,6 +653,9 @@ function App() {
   // The wizard fails closed while this is false rather than defaulting to the
   // free path on a gated backend.
   const [regResolved, setRegResolved] = useState(false);
+  // True once the user has pressed Create or Import. Gates the /capabilities
+  // read so a cold launch touches no network. See `onBegin` on OnboardingWizard.
+  const [onboardingBegun, setOnboardingBegun] = useState(false);
   // Username pending a Nostr-identity link with the user's CONSENT (never auto).
   // Set when an unlocked account has a handle but no linked npub; a top banner asks
   // before publishing the username->npub mapping. Null = no prompt.
@@ -675,6 +678,16 @@ function App() {
   // wizard can route the gate (invite / payment / choose). Absent => `free`.
   useEffect(() => {
     if (walletState?.kind !== 'empty' || needsMigration) return;
+    // PRIVACY: wait for the user to actually start onboarding. Opening the popup
+    // is not consent, and an unprompted request still tells an observer that
+    // someone just installed a privacy wallet, even when the endpoint is ours.
+    // Deferring to the first real action is what keeps a cold launch at zero
+    // network contact (see the `first-launch-exposure` spec).
+    //
+    // Fail-closed is unaffected: the wizard still blocks on `regResolved` before
+    // committing a keystore, so a gated backend cannot be bypassed. Only the
+    // START of the read moved, not the gate.
+    if (!onboardingBegun) return;
     let stale = false;
     setRegResolved(false);
     const load = async () => {
@@ -710,7 +723,7 @@ function App() {
     return () => {
       stale = true;
     };
-  }, [walletState?.kind, needsMigration]);
+  }, [walletState?.kind, needsMigration, onboardingBegun]);
 
   // Shared post-register onboarding wiring: warm the bootstrap cache and surface
   // any identity this wallet already owns. Used by both the free/invite
@@ -1465,6 +1478,7 @@ function App() {
   if (walletState.kind === 'empty') {
     return (
       <OnboardingWizard
+        onBegin={() => setOnboardingBegun(true)}
         generateMnemonic={generateMnemonicPhrase}
         isValidMnemonic={isValidMnemonic}
         dogeMiningImageUrl={chrome.runtime.getURL('doge-mining.webp')}

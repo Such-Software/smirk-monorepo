@@ -83,6 +83,15 @@ export interface OnboardingWizardProps {
    */
   onFullyDone?: () => Promise<void> | void;
   /**
+   * Fired once, when the user leaves the welcome screen via Create or Import.
+   *
+   * This is the consent boundary. Merely opening the popup must not cause any
+   * network activity, so the shell defers its `/capabilities` read until this
+   * fires. See the `first-launch-exposure` e2e spec, which asserts a cold launch
+   * contacts zero endpoints.
+   */
+  onBegin?: () => void;
+  /**
    * Reserve a Smirk @handle. If omitted, the handle row in the
    * setup step doesn't render. The caller is expected to have a
    * valid auth token before the setup step runs (i.e., onComplete
@@ -226,8 +235,19 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const [step, setStep] = useState<Step>({ kind: 'welcome' });
   const [error, setError] = useState<string | null>(null);
 
-  const startCreate = () => setStep({ kind: 'show', mnemonic: props.generateMnemonic() });
-  const startImport = () => setStep({ kind: 'import-warning' });
+  // `onBegin` fires the moment the user leaves the welcome screen, which is the
+  // first point at which they have actually asked for anything. The shell uses
+  // it to start work that would otherwise have to happen on mount, notably the
+  // /capabilities read. Opening the popup is not consent, so nothing that
+  // touches the network may run before this.
+  const startCreate = () => {
+    props.onBegin?.();
+    setStep({ kind: 'show', mnemonic: props.generateMnemonic() });
+  };
+  const startImport = () => {
+    props.onBegin?.();
+    setStep({ kind: 'import-warning' });
+  };
   const proceedToVerify = (mnemonic: string) => {
     const wordCount = mnemonic.trim().split(/\s+/).length;
     // 3/12 matches the industry middle of the road: Stack Wallet
