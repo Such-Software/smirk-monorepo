@@ -47,6 +47,7 @@ test.skip(
 test('create a fresh wallet → verify generated phrase → register → Home renders', async ({
   context,
   extensionId,
+  footage,
 }) => {
   const caps = await getCapabilities();
   // A fresh, never-seen pubkey must be able to register unauthenticated for this
@@ -72,6 +73,7 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   // ── Reveal screen: read the freshly generated mnemonic out of the DOM ──────
   // Smirk generates 12-word phrases; each word is exposed at a stable
   // per-index testid so the verify step can be answered deterministically.
+  footage.mark('create-pressed', 'user chose Create new wallet');
   await expect(page.getByTestId('onboarding-create-seed-word-0')).toBeVisible({
     timeout: 15_000,
   });
@@ -127,5 +129,6 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   // of the Home surface, not a balance number: the bottom nav renders and the
   // onboarding create entry is gone (the wizard unmounted).
   await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
+  footage.mark('home-rendered', 'wallet created, registered, Home visible');
   await expect(page.getByTestId('onboarding-create-btn')).toHaveCount(0);
 });

@@ -17,10 +17,20 @@ const EXTENSION_DIST =
  * runs keep only the config's on-failure video. Video needs a headed/new-headless
  * Chromium, which the extension context already uses.
  */
+import { homedir } from 'node:os';
+import { Footage } from './footage.js';
+
 export const CAPTURE_VIDEO = ['1', 'on', 'true', 'yes'].includes(
   (process.env.CAPTURE_VIDEO ?? '').toLowerCase(),
 );
-const VIDEO_DIR = process.env.CAPTURE_VIDEO_DIR ?? join(__dirname, '..', 'videos');
+// Per the workstation storage contract (docs/engineering/developer-workstations.md):
+// regenerable output lives in `~/Build/<project>/...`, never in the worktree and
+// never written straight into the shared Seafile library. Raw captures are
+// intermediates; only APPROVED clips get promoted to `~/Seafile/Marketing Media`,
+// by a human, via `scripts/process-footage.mjs --promote`.
+const VIDEO_DIR =
+  process.env.CAPTURE_VIDEO_DIR ??
+  join(homedir(), 'Build', 'smirk-monorepo', 'e2e', 'videos');
 
 /**
  * Capture at a MOBILE-PORTRAIT size by default. The wallet popup + the dapp approval
@@ -46,6 +56,8 @@ const VIDEO_SIZE = {
 export const test = base.extend<{
   context: BrowserContext;
   extensionId: string;
+  /** Mark moments worth showing; see fixtures/footage.ts. */
+  footage: Footage;
 }>({
   context: async ({}, use) => {
     if (!existsSync(join(EXTENSION_DIST, 'manifest.json'))) {
@@ -69,6 +81,13 @@ export const test = base.extend<{
     });
     await use(context);
     await context.close();
+  },
+
+  footage: async ({ context }, use, testInfo) => {
+    const f = new Footage(testInfo);
+    await use(f);
+    // Written after the test body so page.video() paths have resolved.
+    await f.writeManifest(context);
   },
 
   extensionId: async ({ context }, use) => {

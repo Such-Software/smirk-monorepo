@@ -1,0 +1,143 @@
+name: E2E (tier B, self-hosted)
+
+# Tier B: the full suite, on a self-hosted runner on our own workbench, against
+# real chain nodes and the three funded smoke wallets.
+#
+# SECURITY: there is deliberately NO `pull_request` trigger. A self-hosted runner
+# that builds fork PRs is arbitrary code execution on our hardware, with the
+# funded wallets and the mesh sitting right there. Triggers are manual, nightly,
+# and tag-push only. Do not add `pull_request` or `pull_request_target` here.
+#
+# SECRETS: the mnemonics are NOT GitHub secrets. The runner reads them from
+# `packages/smoke-tests/secrets/smoke-mnemonics.env` on local disk (mode 600,
+# git-ignored). They never leave the machine, so there is nothing to leak
+# through the Actions API. Tier A cannot use them at all: GitHub does not give
+# secrets to fork-PR workflows, so a mnemonic-dependent suite would silently
+# skip itself on exactly the PRs that need a signal.
+#
+# What tier B covers that tier A cannot: send/receive, tips and claims, swap
+# quotes, grin slate delivery, balance freshness, and the address-privacy
+# features once their flags are turned on.
+
+on:
+  workflow_dispatch:
+    inputs:
+      capture_video:
+        description: 'Record demo video for each spec (feeds the such-graphics pipeline)'
+        type: boolean
+        default: false
+  schedule:
+    # Nightly. Funded-wallet drift and node outages surface here rather than
+    # during a release.
+    - cron: '0 6 * * *'
+  push:
+    tags: ['v*']
+
+concurrency:
+  # Never two runs at once: they share the funded wallets and one local backend.
+  group: e2e-tier-b
+  cancel-in-progress: false
+
+jobs:
+  full:
+    name: Full suite (real nodes, funded wallets)
+    runs-on: [self-hosted, smirk-workbench]
+    timeout-minutes: 60
+
+    env:
+      BACKEND_URL: http://127.0.0.1:8080/api/v1
+      VITE_SMIRK_BACKEND_URL: http://127.0.0.1:8080/api/v1
+      # Tier B must actually run the suite, not excuse itself. If this floor is
+      # not met the skip-guard fails the run.
+      E2E_MIN_EXECUTED: '22'
+      CAPTURE_VIDEO: ${{ inputs.capture_video && '1' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Preflight. Fail loudly and specifically, because a tier-B failure at
+      # 03:00 should say WHICH dependency was missing, not just "tests failed".
+      - name: Check the funded smoke wallets are present
+        run: |
+          F=packages/smoke-tests/secrets/smoke-mnemonics.env
+          test -f "$F" || { echo "::error::$F missing on this runner. Tier B needs the funded wallets; see docs/private/E2E_ENV.md"; exit 1; }
+          for v in SMOKE_ALICE_MNEMONIC SMOKE_BOB_MNEMONIC SMOKE_CAROL_MNEMONIC; do
+            grep -q "^$v=" "$F" || { echo "::error::$v not set in $F"; exit 1; }
+          done
+          echo "smoke wallets present (values never printed)"
+
+      - name: Check chain services are reachable
+        run: |
+          fail=0
+          check() {
+            timeout 3 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null \
+              && echo "  $2 ($1): up" \
+              || { echo "::error::$2 ($1) unreachable. Tier B needs the LWS/Fulcrum tunnels; see docs/private/E2E_ENV.md"; fail=1; }
+          }
+          check 8443  xmr-lws
+          check 18443 wow-lws
+          check 3480  grin-lws
+          check 50001 fulcrum-btc
+          check 50002 fulcrum-ltc
+          exit $fail
+
+      - name: Start local backend (maximal features)
+        run: |
+          # Maximal feature set ON PURPOSE. Three specs skip on backend CONFIG
+          # rather than code health, so a minimal backend quietly proves less
+          # while still looking green. Verified locally with these flags on:
+          # `nostr-identity` and `feed` both execute and pass, where they
+          # previously skipped. That is 2 of the 3 un-excused.
+          #
+          # Caveats worth knowing rather than rediscovering:
+          #   - FEATURE_FEED / FEATURE_NOSTR_RELAY alone do NOT flip
+          #     `features.feed` / `features.nostr_relay` in /capabilities; those
+          #     also need relay/feed config (RELAY_URL and friends). The specs
+          #     still execute, because they assert behaviour that matches
+          #     whatever the backend advertises.
+          #   - `pay-to-register` needs REGISTRATION_REQUIRE_PAYMENT=true plus a
+          #     reachable payment provider, which is a different backend shape.
+          #     Covering it means a second matrix leg pointed at the office
+          #     BTCPay instance. Until then it stays an expected skip.
+          cd ../smirk-backend-core 2>/dev/null || { echo "::error::smirk-backend-core not checked out next to the monorepo on this runner"; exit 1; }
+          cargo build --release --bin smirk-backend-core
+          FEATURE_NOSTR_IDENTITY=true FEATURE_FEED=true FEATURE_NOSTR_RELAY=true \
+            nohup ./target/release/smirk-backend-core > /tmp/tierb-backend.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -fsS -m 2 http://127.0.0.1:8080/health >/dev/null 2>&1 && { echo "backend up after ${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "::error::backend failed to start"; tail -50 /tmp/tierb-backend.log; exit 1
+
+      - name: Build libs + extension (against the local backend)
+        run: make ext-chrome
+
+      - name: Run the full suite
+        working-directory: packages/e2e
+        run: |
+          set -a; . ../smoke-tests/secrets/smoke-mnemonics.env; set +a
+          # Re-point at the local backend: the secrets file carries its own
+          # SMOKE_BACKEND_URL for the standalone smoke scripts, and it must not
+          # silently redirect the e2e suite at a shared instance.
+          export SMOKE_BACKEND_URL="$BACKEND_URL"
+          npx playwright test --reporter=list,./skip-guard-reporter.ts
+
+      - name: Upload demo footage
+        if: inputs.capture_video
+        uses: actions/upload-artifact@v4
+        with:
+          name: smirk-demo-footage-${{ github.sha }}
+          path: packages/e2e/videos/
+          retention-days: 30
+
+      - name: Backend log (on failure)
+        if: failure()
+        run: tail -120 /tmp/tierb-backend.log || true
+
+      - name: Upload traces (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier-b-traces
+          path: packages/e2e/test-results/
+          retention-days: 14
