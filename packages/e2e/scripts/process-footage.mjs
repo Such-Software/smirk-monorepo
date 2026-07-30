@@ -27,7 +27,7 @@
  *   node scripts/process-footage.mjs --pad-ms 750   # padding around the marked region
  */
 
-import { readdirSync, readFileSync, mkdirSync, copyFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdirSync, copyFileSync, existsSync, writeFileSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -40,6 +40,19 @@ const MARKETING = join(homedir(), 'Seafile', 'Marketing Media', 'smirk-wallet', 
 const args = process.argv.slice(2);
 const PROMOTE = args.includes('--promote');
 const PAD_MS = Number(args[args.indexOf('--pad-ms') + 1]) || 600;
+/**
+ * With a single marker the trim would collapse to PAD either side, giving a
+ * ~1s clip that shows the payoff with none of the action leading to it. Roll
+ * back further so the viewer sees the flow arrive at the marked moment.
+ * Specs with two or more markers already bracket their own region.
+ */
+const PRE_ROLL_MS = Number(args[args.indexOf('--pre-roll-ms') + 1]) || 5000;
+/**
+ * Playwright records EVERY page in the context, including blank tabs and the
+ * service-worker page. Those come out as 0-2KB webm files that are pure noise
+ * in a clip library, so drop them rather than transcoding them.
+ */
+const MIN_SOURCE_BYTES = Number(args[args.indexOf('--min-bytes') + 1]) || 8192;
 
 function ffmpegAvailable() {
   try {
@@ -86,12 +99,18 @@ function main() {
     }
     if (!videos?.length || !markers?.length) continue;
 
-    const firstMs = Math.max(0, markers[0].tMs - PAD_MS);
+    const lead = markers.length > 1 ? PAD_MS : PRE_ROLL_MS;
+    const firstMs = Math.max(0, markers[0].tMs - lead);
     const lastMs = markers[markers.length - 1].tMs + PAD_MS;
     const name = m.replace(/\.footage\.json$/, '');
 
     videos.forEach((src, i) => {
       if (!existsSync(src)) return;
+      const bytes = statSync(src).size;
+      if (bytes < MIN_SOURCE_BYTES) {
+        console.log(`  skip blank capture (${bytes}B): ${basename(src)}`);
+        return;
+      }
       const suffix = videos.length > 1 ? `--window${i + 1}` : '';
       const out = join(OUT_DIR, `${name}${suffix}.mp4`);
       try {
@@ -110,7 +129,7 @@ function main() {
           ],
           { stdio: 'inherit' },
         );
-        produced.push({ out, scenario, markers });
+        produced.push({ out, scenario, markers, clipStartMs: firstMs });
         console.log(`clip: ${basename(out)}  (${((lastMs - firstMs) / 1000).toFixed(1)}s, ${markers.length} markers)`);
       } catch {
         console.error(`  ffmpeg failed for ${src}`);
@@ -129,8 +148,11 @@ function main() {
     '# Smirk e2e demo clips\n\n' +
       'Trimmed to the marked region. Offsets are from the START OF THE CLIP.\n\n' +
       produced
-        .map(({ out, scenario, markers }) => {
-          const base = Math.max(0, markers[0].tMs - PAD_MS);
+        .map(({ out, scenario, markers, clipStartMs }) => {
+          // Must be the REAL trim start: single-marker clips roll back by
+          // PRE_ROLL_MS, not PAD_MS, so recomputing here would skew every
+          // chapter offset by the difference.
+          const base = clipStartMs;
           return (
             `## ${scenario}\n\`${basename(out)}\`\n\n` +
             markers

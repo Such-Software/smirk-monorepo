@@ -54,6 +54,7 @@ test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnem
 test('Send → XMR → address + amount → reach Review (no broadcast)', async ({
   context,
   extensionId,
+  footage,
 }) => {
   // Surface popup-page backend traffic for debugging (the LWS balance
   // hit is the load-bearing, CAPTURABLE signal for XMR here).
@@ -166,6 +167,7 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
   // Submit button label confirms the read-only commit affordance exists
   // (either "Send 🔓" for a normal send or "Send Max 🔓" for sweep).
   await expect(reviewSubmit).toContainText(/Send/i);
+  footage.mark('send-review-reached', 'XMR send composed, Review step with fee + recipient');
 
   // Guard: we must NOT have advanced past Review (no Done screen / txid).
   await expect(page.getByTestId('send-done-txid')).toHaveCount(0);

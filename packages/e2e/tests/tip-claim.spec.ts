@@ -64,6 +64,7 @@ const SHARE_URL = `https://smirk.cash/tip/${TIP_ID}#${fragment.encoded}`;
 test('paste a public BTC tip link → claim → swept success screen', async ({
   context,
   extensionId,
+  footage,
 }) => {
   // --- Stub the claim + sweep network surface (context-level). ---
   await context.route('**/api/v1/tips/social/*/public', async (route) => {
@@ -183,4 +184,5 @@ test('paste a public BTC tip link → claim → swept success screen', async ({
   await expect(page.getByTestId('paste-tip-error')).toHaveCount(0);
   // The "back to inbox" affordance is present → we're on the terminal screen.
   await expect(page.getByTestId('paste-tip-done-btn')).toBeVisible();
+  footage.mark('tip-claimed', 'public BTC tip claimed and swept');
 });

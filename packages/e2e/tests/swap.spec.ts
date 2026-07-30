@@ -81,6 +81,7 @@ const STUB_RATE = {
 test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)', async ({
   context,
   extensionId,
+  footage,
 }) => {
   const page = await context.newPage();
   page.on('console', (m) => {
@@ -169,6 +170,7 @@ test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)',
 
   // Live quote (not expired) → CTA reads "Confirm swap".
   await expect(page.getByTestId('swap-quote-confirm')).toHaveText(/Confirm swap/i);
+  footage.mark('swap-quote-shown', 'live swap quote with provider + rate');
 
   console.log(
     'QUOTE_STEP>>>',

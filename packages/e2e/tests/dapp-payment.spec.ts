@@ -44,6 +44,7 @@ const SHOP_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Wowne
 test('dapp payment popup shows the human amount (decimal->atomic, no BigInt crash)', async ({
   context,
   extensionId,
+  footage,
 }) => {
   // 1. Unlock the wallet (popup surface) so the approval window has a keystore.
   const popup = await context.newPage();
@@ -102,6 +103,7 @@ test('dapp payment popup shows the human amount (decimal->atomic, no BigInt cras
   await expect(approval.locator('body')).toContainText('9 WOW', { timeout: 20_000 });
   await expect(approval.locator('body')).not.toContainText('atomic units');
   await expect(approval.locator('body')).not.toContainText('Cannot convert');
+  footage.mark('dapp-approval-shown', 'in-page payment request rendered with human amount');
 
   // 7. Deny (a real WOW broadcast needs funds/node — out of scope for this popup test).
   await approval.getByRole('button', { name: 'Deny' }).click();

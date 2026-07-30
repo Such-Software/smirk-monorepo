@@ -51,6 +51,7 @@ test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnem
 test('Send → BTC → fee tiers resolve (namespaced) → reach Review (no broadcast)', async ({
   context,
   extensionId,
+  footage,
 }) => {
   // --- Stub the fee route with the NAMESPACED shape (context-level so it
   //     covers whichever page issues the call). smirk-backend-core answers
@@ -146,6 +147,7 @@ test('Send → BTC → fee tiers resolve (namespaced) → reach Review (no broad
   // (the estimateFee dialect fix). The Review label is "Fee tier <name> (N sat/vB)".
   await expect(root).toContainText(/sat\/vB/i);
   await expect(reviewSubmit).toContainText(/Send/i);
+  footage.mark('btc-fee-review', 'BTC fee tier resolved, Review step reached');
 
   // Guard: we must NOT have advanced past Review (nothing broadcast).
   await expect(page.getByTestId('send-done-txid')).toHaveCount(0);

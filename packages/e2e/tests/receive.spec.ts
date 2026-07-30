@@ -38,6 +38,7 @@ test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnem
 test('Receive → XMR → derived address renders (offline, no daemon)', async ({
   context,
   extensionId,
+  footage,
 }) => {
   const page = await context.newPage();
 
@@ -77,6 +78,7 @@ test('Receive → XMR → derived address renders (offline, no daemon)', async (
 
   // The Copy affordance is present (onCopy is wired in the shell).
   await expect(page.getByTestId('receive-copy-btn')).toBeVisible({ timeout: 15_000 });
+  footage.mark('receive-address-shown', 'XMR receive address + copy button visible');
 
   console.log('RECEIVE_XMR_ADDR len=', addrText.length, 'prefix=', addrText.slice(0, 6));
 });

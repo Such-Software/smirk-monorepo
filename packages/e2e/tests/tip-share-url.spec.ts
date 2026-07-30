@@ -52,6 +52,7 @@ test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnem
 test('public BTC tip → success screen surfaces the shareable claim URL', async ({
   context,
   extensionId,
+  footage,
 }) => {
   // --- Stub the tip + funding network surface (context-level: covers the
   //     popup page AND the offscreen doc / SW, whichever issues the call). ---
@@ -191,4 +192,5 @@ test('public BTC tip → success screen surfaces the shareable claim URL', async
   // Copy link → button flips to the confirmed state (clipboard write path).
   await page.getByTestId('tip-copy-link-btn').click();
   await expect(page.getByTestId('tip-copy-link-btn')).toContainText('Copied');
+  footage.mark('tip-link-copied', 'shareable claim URL created and copied');
 });
