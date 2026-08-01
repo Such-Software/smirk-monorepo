@@ -50,8 +50,13 @@ jobs:
       - name: cargo check
         run: cargo check --workspace --all-targets
 
+      # Exclude the vendored upstream daemon-interface tests. They are
+      # integration tests against a LIVE monerod on 127.0.0.1:18081 and fail with
+      # ConnectionRefused on any machine without a node. They pass on a developer
+      # workbench that runs one, which is exactly how a gate ends up looking green
+      # locally and red in CI. They test upstream's RPC client, not our code.
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude wownero-simple-request-rpc
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -104,8 +109,22 @@ jobs:
       - name: Typecheck workspace
         run: npm run typecheck --workspaces --if-present
 
-      - name: Test workspace
-        run: npm test --workspaces --if-present
+      # Explicitly the UNIT suites. `--workspaces --if-present` also picks up
+      # @smirk/e2e, whose `test` script is `playwright test`: it needs a browser,
+      # a running backend, and an extension built against that backend, so it
+      # aborted the whole job on its own preflight. E2E has its own workflow and
+      # its own environment; this job is the unit gate.
+      #
+      # Listed rather than filtered because npm has no workspace exclusion, and a
+      # silent skip is worse than a missing entry: add new packages here.
+      - name: Test workspace (unit)
+        run: |
+          for pkg in @smirk/assets @smirk/core @such-software/smirk-dapp-api \
+                     @smirk/dapp-browser @smirk/extension @smirk/keymap \
+                     @smirk/swap @smirk/ui; do
+            echo "── $pkg ──"
+            npm test -w "$pkg"
+          done
 
   openapi-drift:
     name: API client is current
