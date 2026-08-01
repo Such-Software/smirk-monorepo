@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  visibleAssetIds,
   CURRENT_VERSION,
   DEFAULT_SESSION_STATE,
   InMemoryStorage,
@@ -414,4 +415,50 @@ test('wizard: two wizards with different ids are independent', async () => {
   assert.equal(sendSnap!.step, 0);
 
   store.destroy();
+});
+
+// ── capability-aware asset visibility ────────────────────────────────────────
+//
+// `capAllowsChain` shipped with ZERO callers, so `/capabilities` chain
+// downgrades were ignored: an operator who disabled a chain still had it listed
+// in the wallet, and the user met the failure deep inside a send rather than
+// simply not being offered the asset. `visibleAssetIds` is the single seam every
+// asset list flows through, so the check belongs there.
+
+test('visibleAssetIds hides a chain the instance does not serve', () => {
+  const state = { ui: { hiddenAssets: [] } } as Parameters<typeof visibleAssetIds>[0];
+  const assets = [{ id: 'btc' }, { id: 'xmr' }];
+  const caps = {
+    chains: {
+      btc: { enabled: true },
+      ltc: { enabled: true },
+      xmr: { enabled: false },
+      wow: { enabled: true },
+      grin: { enabled: true },
+    },
+  } as unknown as Parameters<typeof visibleAssetIds>[2];
+  assert.deepEqual(
+    visibleAssetIds(state, assets, caps).map((a) => a.id),
+    ['btc'],
+  );
+});
+
+test('visibleAssetIds stays permissive when capabilities are unknown', () => {
+  // A legacy backend advertises nothing; it still serves every chain the wallet
+  // knows, so an absent caps object must not blank the asset list.
+  const state = { ui: { hiddenAssets: [] } } as Parameters<typeof visibleAssetIds>[0];
+  const assets = [{ id: 'btc' }, { id: 'xmr' }];
+  assert.deepEqual(
+    visibleAssetIds(state, assets, undefined).map((a) => a.id),
+    ['btc', 'xmr'],
+  );
+});
+
+test('visibleAssetIds still honours the user hiding an enabled chain', () => {
+  const state = { ui: { hiddenAssets: ['btc'] } } as Parameters<typeof visibleAssetIds>[0];
+  const assets = [{ id: 'btc' }, { id: 'xmr' }];
+  assert.deepEqual(
+    visibleAssetIds(state, assets, undefined).map((a) => a.id),
+    ['xmr'],
+  );
 });

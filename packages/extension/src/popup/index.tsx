@@ -1955,7 +1955,7 @@ function HomeRouter({
         // (b) not hidden by the user. The chooser should never list
         // anything the user explicitly hid or the registry never
         // intended to be sendable.
-        assetIds={visibleAssetIds(sessionState, listAssets())
+        assetIds={visibleAssetIds(sessionState, listAssets(), caps)
           .filter((a) => a.sendable)
           .map((a) => a.id)}
         validateAddress={validateSendRecipient}
@@ -2294,7 +2294,7 @@ function HomeRouter({
         // Receivable assets only, minus any the user hid. See
         // SendWizard for the rationale on capability + visibility
         // double-gating.
-        assetIds={visibleAssetIds(sessionState, listAssets())
+        assetIds={visibleAssetIds(sessionState, listAssets(), caps)
           .filter((a) => a.receivable)
           .map((a) => a.id)}
         // PURE READ. This closure is re-created every render, so ShowAddress's
@@ -2794,7 +2794,7 @@ function HomeRouter({
         // capability (future assets can opt out of being tip-able)
         // and the user's hide-list. See SendWizard for the
         // capability + visibility double-gating pattern.
-        assetIds={visibleAssetIds(sessionState, listAssets())
+        assetIds={visibleAssetIds(sessionState, listAssets(), caps)
           .filter((a) => a.socialTipping)
           .map((a) => a.id)}
         {...(tipPrefilledAsset ? { prefilledAssetId: tipPrefilledAsset } : {})}
@@ -2982,7 +2982,7 @@ function HomeRouter({
         onReceive: () => void navigate('home/receive'),
         onSwap: () => void switchTab('swap'),
       }}
-      assets={visibleAssetIds(sessionState, listAssets()).map((a) => {
+      assets={visibleAssetIds(sessionState, listAssets(), caps).map((a) => {
         const b = (balances as Record<string, { confirmed: bigint; pending: bigint; locked?: bigint } | undefined> | undefined)?.[a.id];
         const hasLockedConcept =
           a.id === 'xmr' || a.id === 'wow' || a.id === 'grin';

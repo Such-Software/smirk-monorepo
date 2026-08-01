@@ -40,6 +40,11 @@
  * ```
  */
 
+import { capAllowsChain, type BackendCapabilities } from '../api/capabilities';
+
+/** Chains the capability contract knows about. */
+type ChainId = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
+type Caps = BackendCapabilities | null;
 import type { AssetDefinition } from '@smirk/assets';
 import type { SessionState } from './session-state';
 
@@ -57,9 +62,19 @@ import type { SessionState } from './session-state';
 export function visibleAssetIds<T extends Pick<AssetDefinition, 'id'>>(
   state: Pick<SessionState, 'ui'>,
   assets: ReadonlyArray<T>,
+  caps?: Caps,
 ): T[] {
   const hidden = new Set(state.ui.hiddenAssets ?? []);
-  return assets.filter((a) => !hidden.has(a.id));
+  // Honour the INSTANCE's advertised chains, not just the user's preferences.
+  //
+  // `capAllowsChain` existed but had no callers, so `/capabilities` chain
+  // downgrades were ignored entirely: an operator who turns off XMR still had it
+  // listed, and the user would hit failures deep in a send instead of simply not
+  // being offered it. Permissive when caps are unknown, matching capAllowsChain,
+  // so a legacy backend keeps serving every chain the wallet knows.
+  return assets.filter(
+    (a) => !hidden.has(a.id) && capAllowsChain(caps ?? null, a.id as ChainId),
+  );
 }
 
 /**
@@ -70,8 +85,12 @@ export function visibleAssetIds<T extends Pick<AssetDefinition, 'id'>>(
 export function isAssetVisible(
   state: Pick<SessionState, 'ui'>,
   assetId: string,
+  caps?: Caps,
 ): boolean {
-  return !(state.ui.hiddenAssets ?? []).includes(assetId);
+  return (
+    !(state.ui.hiddenAssets ?? []).includes(assetId) &&
+    capAllowsChain(caps ?? null, assetId as ChainId)
+  );
 }
 
 /**
