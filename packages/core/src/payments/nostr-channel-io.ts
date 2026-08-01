@@ -45,7 +45,18 @@ export function createNostrChannelIO(identity: NostrIdentity): NostrChannelIO {
     async outboundRelays(recipientPubkeyHex: string): Promise<string[]> {
       const { relays } = await resolveDmRelays(recipientPubkeyHex);
       // Publish where they read PLUS our own relay, so a copy lands in our inbox.
-      return dedup([...relays, ...messagingRelays()]);
+      const out = dedup([...relays, ...messagingRelays()]);
+      // Publishing to zero relays silently "succeeds" and the payment simply
+      // never arrives. This used to be masked by a hardcoded fallback to
+      // third-party relays; now that the wallet only talks to relays the
+      // operator (or user) chose, an empty set has to be a legible error.
+      if (!out.length) {
+        throw new Error(
+          'No Nostr relay is configured for this backend, so the payment cannot be delivered. ' +
+            'Ask the operator to enable a relay, or use another transport.',
+        );
+      }
+      return out;
     },
 
     async inboxRelays(): Promise<string[]> {

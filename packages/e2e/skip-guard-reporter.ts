@@ -33,6 +33,13 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
     match: 'nostr-identity.spec',
     reason: 'requires FEATURE_NOSTR_IDENTITY=true on the backend under test',
   },
+  {
+    match: 'comms-roundtrip.spec',
+    reason:
+      'requires a REAL relay (messaging.relay_url + features.nostr_relay). ' +
+      'See the spec header for the docker one-liner; do not aim it at production, ' +
+      'the feed test publishes a public note',
+  },
 ];
 
 /**

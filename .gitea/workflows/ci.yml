@@ -86,9 +86,13 @@ jobs:
       # backlog is visible instead of either silently ignored or holding CI red
       # forever. Promote to -D warnings once it is clean.
       # TODO(grin-ext): clear these and move this crate into the enforced step.
+      # `continue-on-error`, not `| tail` or `|| true`: the runner shell uses
+      # pipefail, so piping did NOT make this advisory and the job still failed
+      # on grin-ext's backlog. `|| true` would hide the findings entirely. This
+      # prints them, marks the step failed, and lets the job pass.
       - name: cargo clippy (grin-ext, advisory)
-        run: |
-          cargo clippy --all-targets --no-deps -p grin-ext 2>&1 | tail -40
+        continue-on-error: true
+        run: cargo clippy --all-targets --no-deps -p grin-ext
 
   typescript:
     name: TypeScript workspace
