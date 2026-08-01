@@ -583,6 +583,10 @@ fn serialize_voucher_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Used by the commitment round-trip below. `cargo clippy --fix` removed this
+    // as "unused" because it is only referenced from the test module, which the
+    // lib-target lint pass does not see.
+    use crate::bulletproof::pedersen_commit;
     use crate::secp256k1::random_secret_nonce;
     use crate::seed::mnemonic_to_extended_private_key;
 
