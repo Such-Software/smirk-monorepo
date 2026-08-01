@@ -1,0 +1,163 @@
+name: CI (Gitea)
+
+# The real CI gate for this repo.
+#
+# GitHub Actions is disabled at the Such-Software ORG level, deliberately: code
+# lives on GitHub but builds run here, on the Builds runners (see
+# ~/src/docs/infra/git-hosting-and-lfs.md and .gitea/workflows/desktop-build.yml).
+#
+# The consequence nobody had noticed is that only the DESKTOP build was ported.
+# `.github/workflows/ci.yml` still carried every correctness gate (rust check /
+# test / clippy, the wasm build, the topological TS build, typecheck, unit tests,
+# and the dependency audit) and none of them had run for the whole v0.3.0 cycle,
+# because the workflow they live in cannot execute. A green-looking release was
+# gated on nothing. This file is that workflow, ported to run where CI actually
+# lives.
+#
+# Keep this in sync with .github/workflows/ci.yml, or delete that one. Two copies
+# of a gate, one of which cannot run, is exactly how this happened.
+#
+# `runs-on: linux` matches the Builds runner label used by desktop-build.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  typescript:
+    name: TypeScript workspace
+    runs-on: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang (wasm C target)
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Pin to the wasm-bindgen version the lockfile actually resolves. A
+      # hardcoded version here silently mismatched the lockfile and the install
+      # was swallowed with `|| true`, so the wasm build ran against whatever was
+      # already on the runner.
+      - name: Install wasm-bindgen-cli
+        run: |
+          WB_VERSION=$(cargo pkgid wasm-bindgen | sed 's/.*@//')
+          cargo install -f wasm-bindgen-cli --version "${WB_VERSION}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build WASM (browser target)
+        run: make wasm
+
+      - name: Install TS deps
+        run: npm install
+
+      # Topological order matters: `tsc -p` emits, so each consumer needs its
+      # dependencies' dist/ already populated. `make libs` derives the order from
+      # scripts/build-workspaces.mjs so the list cannot drift from the code.
+      - name: Build workspace (topological)
+        run: |
+          make libs
+          npm run build -w @smirk/extension
+
+      - name: Typecheck workspace
+        run: npm run typecheck --workspaces --if-present
+
+      - name: Test workspace
+        run: npm test --workspaces --if-present
+
+  openapi-drift:
+    name: API client is current
+    runs-on: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install TS deps
+        run: npm install
+      # Fails when openapi.json changed but the generated client was not
+      # regenerated, i.e. the wallet is compiled against a contract the backend
+      # does not serve.
+      - name: API client drift
+        run: npm run check:api -w @smirk/core
+
+  secret-scan:
+    name: Secret scan
+    runs-on: linux
+    steps:
+      - uses: actions/checkout@v4
+      # The project-specific known-bad literals (infra IPs, funded test-wallet
+      # address) live in a git-ignored file; CI reconstitutes it from a secret so
+      # the full scan runs. Without the secret the scanner runs generic-only.
+      - name: Reconstitute project-literal patterns (if provided)
+        env:
+          SECRET_SCAN_PATTERNS: ${{ secrets.SECRET_SCAN_PATTERNS }}
+        run: |
+          if [ -n "$SECRET_SCAN_PATTERNS" ]; then
+            printf '%s\n' "$SECRET_SCAN_PATTERNS" > scripts/secret-scan.local.txt
+          fi
+      - run: bash scripts/secret-scan.sh
+
+  supply-chain:
+    name: Dependency audit
+    runs-on: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        run: npm ci
+      # ENFORCED: shipped runtime dependencies (crypto, signing, nostr) must carry
+      # no high/critical advisory.
+      - name: npm audit (production deps)
+        run: npm audit --omit=dev --audit-level=high
+      # INFORMATIONAL: dev tooling + moderate advisories, non-blocking.
+      - name: npm audit (full, advisory)
+        run: npm audit || true
+      - uses: dtolnay/rust-toolchain@stable
+      # INFORMATIONAL: the vendored monero-oxide / secp256k1zkp subtrees pin older
+      # deps, so this is advisory until a tuned deny.toml lands.
+      - name: cargo audit (advisory)
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo audit || true
