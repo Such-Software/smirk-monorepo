@@ -115,15 +115,20 @@ export function FeedRoute({
     };
   }, [wallet.mnemonic, wallet.fingerprint, selectedPubkey]);
 
-  // The user's premium status gates posting on a `premium-post` relay. Fetched
-  // once; failures read as non-premium (compose shows "needs premium").
+  // Posting rights on a `premium-post` relay. `canPostGeneral` is the SERVER's
+  // own decision and is preferred, because only the server knows the operator
+  // write-allowlist; `hasPremium` is kept for the legacy fallback path against
+  // an older backend that does not send it. Failures read as non-premium.
   const [hasPremium, setHasPremium] = useState(false);
+  const [canPostGeneral, setCanPostGeneral] = useState<boolean | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
     void api
       .getPremiumStatus()
       .then((r) => {
-        if (!cancelled) setHasPremium(r.data?.active ?? false);
+        if (cancelled) return;
+        setHasPremium(r.data?.active ?? false);
+        setCanPostGeneral(r.data?.can_post_general);
       })
       .catch(() => {});
     return () => {
@@ -138,6 +143,7 @@ export function FeedRoute({
         relayUrl: feed.relay_url,
         ...(writePolicy ? { writePolicy } : {}),
         hasPremium,
+        ...(canPostGeneral !== undefined ? { canPostGeneral } : {}),
       })
     : { kind: 'no-relay' };
 
@@ -272,9 +278,21 @@ export function FeedRoute({
           </button>
         </div>
       ) : posting.kind === 'needs-premium' ? (
-        <p data-testid="feed-needs-premium" style={muted}>
-          Posting to this feed needs a premium subscription. You can read it below.
-        </p>
+        <div data-testid="feed-needs-premium" style={muted}>
+          <p style={{ margin: 0 }}>
+            Posting to this feed needs a premium subscription. You can read it below.
+          </p>
+          {/* The operator publishes plans in /capabilities, so quote real prices
+              from THIS backend rather than hardcoding ours. Without this the
+              message was a dead end: no price, no way to buy. */}
+          {caps?.premium?.plans?.length ? (
+            <p data-testid="feed-premium-plans" style={{ margin: '6px 0 0' }}>
+              {caps.premium.plans
+                .map((pl) => `${pl.days}d for ${pl.amount} ${caps.premium?.currency ?? ''}`.trim())
+                .join(' · ')}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       {error && (

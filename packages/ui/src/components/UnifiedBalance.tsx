@@ -132,6 +132,7 @@ export function UnifiedBalance({
         }}
       >
         <TotalEl
+          data-testid="home-total-balance"
           class="smirk-headline-action"
           {...(onCycleDenomination
             ? {

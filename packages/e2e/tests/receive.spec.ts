@@ -47,6 +47,7 @@ test('Receive → XMR → derived address renders (offline, no daemon)', async (
   // balance (WOW 19.79) rendering on Home — never by an offscreen
   // /auth/extension wait.
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  footage.mark('wallet-ready', 'unlocked wallet, before the flow under test');
 
   // Onboarding gone; Home is up + authenticated, and the home tab is the
   // active tab by default post-onboard.

@@ -308,8 +308,52 @@ fn build_output_with_decoys(
         }
     }
 
-    // Create commitment with mask and amount
-    let commitment = Commitment::new(mask, output.amount);
+    // Create the commitment, and PROVE it against the chain before signing.
+    //
+    // A COINBASE (miner) output is not RingCT: its commitment uses mask = 1 (see
+    // monero-oxide `scan.rs`, which leaves `Commitment::zero()`'s mask of ONE in
+    // place for miner transactions), while an ordinary output uses the derived
+    // mask. Deriving the mask unconditionally produced a commitment that does not
+    // match the chain, and the self-check above only proves the one-time KEY is
+    // ours, never that the commitment balances. So the transaction built cleanly
+    // and was rejected by the daemon at submit with no legible error. Input
+    // selection is greedy largest-first, so a single mined output could poison
+    // otherwise-ordinary sends too.
+    //
+    // Rather than infer the output type from LWS field shapes (which vary), try
+    // the RingCT mask, fall back to the coinbase mask, and require that the
+    // result reproduces the on-chain commitment. Whatever we sign is then proven
+    // correct rather than assumed.
+    let onchain_commitment = if output.rct.trim().is_empty() {
+        None
+    } else {
+        Some(parse_commitment_point(&output.rct).map_err(|e| {
+            format!("Could not parse the on-chain commitment for output {}: {e}", output.index)
+        })?)
+    };
+
+    let ringct = Commitment::new(mask, output.amount);
+    let coinbase = Commitment::new(Scalar::ONE, output.amount);
+    let commitment = match onchain_commitment {
+        Some(onchain) => {
+            if ringct.commit() == onchain {
+                ringct
+            } else if coinbase.commit() == onchain {
+                coinbase
+            } else {
+                // Neither opening reproduces the chain: the amount, view key, or
+                // LWS data is wrong. Refuse rather than build an invalid tx.
+                return Err(format!(
+                    "Commitment mismatch for output {}: neither the derived RingCT mask nor the \
+                     coinbase mask reproduces the on-chain commitment; refusing to sign",
+                    output.index
+                ));
+            }
+        }
+        // No commitment reported. Preserve the previous behaviour rather than
+        // failing closed on outputs the server simply does not annotate.
+        None => ringct,
+    };
 
     // Build the ring: combine real output with decoys, then sort by global_index
     let mut ring_members: Vec<(u64, [Point; 2])> = Vec::with_capacity(16);

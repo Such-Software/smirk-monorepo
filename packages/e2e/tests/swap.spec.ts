@@ -108,6 +108,7 @@ test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)',
   // balance (WOW 19.79) rendering on Home — never by an offscreen
   // /auth/extension wait.
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  footage.mark('wallet-ready', 'unlocked wallet, before the flow under test');
 
   // Home is up + bottom nav visible.
   await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });

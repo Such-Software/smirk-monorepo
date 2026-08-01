@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   api,
   deriveNostrIdentity,
@@ -60,6 +60,22 @@ export function NostrIdentityRoute({
   // The account's claimed Smirk username, so we can lead with the human handle
   // (`<username>@<domain>`) instead of a raw npub. Null = no handle claimed.
   const [handle, setHandle] = useState<string | null>(null);
+  // Outcome of the /auth/me lookup, so a failed session is never mistaken for
+  // "you have no handle". See the effect below.
+  const [meState, setMeState] = useState<'loading' | 'ok' | 'unauthenticated' | 'error'>(
+    'loading',
+  );
+  // Result of the last "Publish handle to Nostr" press, so the button reports.
+  const [publishMsg, setPublishMsg] = useState<string | null>(null);
+  // Why the seed is being asked for, shown NEXT TO the control that was pressed.
+  const [unlockPrompt, setUnlockPrompt] = useState<string | null>(null);
+  const unlockInputRef = useRef<HTMLInputElement | null>(null);
+  // Post-onboarding handle claim. Until now `setMySmirkUsername` had exactly one
+  // call site, the onboarding wizard, so a user who skipped that step or whose
+  // claim collided had no way to ever get a handle.
+  const [claimInput, setClaimInput] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [claimErr, setClaimErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | undefined>(undefined);
   const [nsec, setNsec] = useState('');
@@ -104,6 +120,7 @@ export function NostrIdentityRoute({
       setReunlocked(w);
       setUnlockPw('');
       setShowUnlock(false);
+      setUnlockPrompt(null);
     } catch {
       setUnlockErr('Incorrect password');
     } finally {
@@ -111,18 +128,63 @@ export function NostrIdentityRoute({
     }
   };
 
+  // Everything server-derived on this screen (your handle, whether the account is
+  // linked) comes from this one call. It used to have no failure path at all, so an
+  // unauthenticated or failed /auth/me rendered *identically* to "account has no
+  // handle": a blank screen with no explanation. Track the outcome so the screen can
+  // say which it is — the difference matters, because one is fixed by re-unlocking
+  // and the other by claiming a name.
   useEffect(() => {
     let stale = false;
-    void api.getMe().then((r) => {
-      if (stale) return;
-      const pk = r.data?.nostrPubkey;
-      if (pk) setLinkedPubkey((prev) => prev ?? pk);
-      if (r.data?.username) setHandle(r.data.username);
-    });
+    void api
+      .getMe()
+      .then((r) => {
+        if (stale) return;
+        if (r.status === 401) {
+          setMeState('unauthenticated');
+          return;
+        }
+        if (!r.data) {
+          setMeState('error');
+          return;
+        }
+        setMeState('ok');
+        const pk = r.data.nostrPubkey;
+        if (pk) setLinkedPubkey((prev) => prev ?? pk);
+        setHandle(r.data.username ?? null);
+      })
+      .catch(() => {
+        if (!stale) setMeState('error');
+      });
     return () => {
       stale = true;
     };
   }, []);
+
+  /**
+   * Ask for the password, VISIBLY.
+   *
+   * `setShowUnlock(true)` alone is not enough and was the second half of the
+   * "button does nothing" report: the unlock field sits at the TOP of a long
+   * scrolling panel while the controls that need it are at the BOTTOM. When the
+   * field is already open, setting the flag again is a no-op, nothing moves, and
+   * `autoFocus` does not re-fire because the input never remounts. So the user
+   * presses the one button that matters and the screen is visibly inert.
+   *
+   * Scroll the field into view, focus it, and leave a note beside the control
+   * that was pressed saying what it is waiting for.
+   */
+  const promptUnlock = (why: string) => {
+    setShowUnlock(true);
+    setUnlockPrompt(why);
+    // Defer so the field exists on the first open.
+    setTimeout(() => {
+      const el = unlockInputRef.current;
+      if (!el) return;
+      el.scrollIntoView({ block: 'center' });
+      el.focus();
+    }, 0);
+  };
 
   // Persist a mutated vault + reflect it in state. `op` labels the in-flight
   // action so buttons can show progress; errors surface, never throw.
@@ -130,7 +192,7 @@ export function NostrIdentityRoute({
     if (!mnemonic) {
       // Warm resume: a write needs the seed — surface the inline unlock instead
       // of throwing on the saveVault non-null assertion.
-      setShowUnlock(true);
+      promptUnlock('Enter your password to change your identities.');
       return;
     }
     setBusy(op);
@@ -208,7 +270,15 @@ export function NostrIdentityRoute({
   };
 
   const onLinkActive = async () => {
-    if (!vault || !mnemonic) return;
+    if (!vault) return;
+    // Warm resume drops the seed, and linking has to sign with account-0. This used
+    // to `return` silently (and the button was also rendered `disabled`), so the one
+    // control that activates your handle did nothing at all with nothing said. Prompt
+    // for the password instead, exactly as `commit` and `onPublishProfile` do.
+    if (!mnemonic) {
+      promptUnlock('Enter your password to link your identity.');
+      return;
+    }
     setBusy('link');
     setError(undefined);
     try {
@@ -254,15 +324,62 @@ export function NostrIdentityRoute({
     }
   };
 
+  const onClaimHandle = async () => {
+    const wanted = claimInput.trim().replace(/^@/, '').toLowerCase();
+    if (!wanted) return;
+    setClaiming(true);
+    setClaimErr(null);
+    try {
+      const res = await api.setMySmirkUsername(wanted);
+      if (res.status === 409) {
+        // The single most likely outcome when reclaiming a name you used on an
+        // older wallet: it is still held by THAT account, which is a different
+        // account even though it is the same person.
+        setClaimErr(
+          `"${wanted}" is already taken. If it was yours on an older wallet, it is still ` +
+            `held by that wallet's account — the operator has to release or move it.`,
+        );
+        return;
+      }
+      if (res.error || !res.data) {
+        setClaimErr(res.error ?? 'Could not claim that handle.');
+        return;
+      }
+      setHandle(res.data.username);
+      setClaimInput('');
+      // A claimed handle is not discoverable until a kind-0 advertises it.
+      if (mnemonic) void publishNip05Profile(deriveNostrIdentity(mnemonic, 0));
+    } catch (e) {
+      setClaimErr(e instanceof Error ? e.message : 'Could not claim that handle.');
+    } finally {
+      setClaiming(false);
+    }
+  };
+
   const onPublishProfile = () => {
     if (!mnemonic) {
-      setShowUnlock(true);
+      promptUnlock('Enter your password to publish your handle.');
       return;
     }
     setPublishingProfile(true);
-    void publishNip05Profile(deriveNostrIdentity(mnemonic, 0)).finally(() =>
-      setPublishingProfile(false),
-    );
+    setPublishMsg(null);
+    void publishNip05Profile(deriveNostrIdentity(mnemonic, 0))
+      .then((res) => {
+        if (res.ok) {
+          setPublishMsg(`Published ${res.nip05} to Nostr.`);
+          return;
+        }
+        // The overwhelmingly common case, and previously invisible: this backend
+        // account never claimed a name, so there is no handle to advertise.
+        if (res.reason === 'no-handle')
+          setPublishMsg(
+            'This account has no Smirk handle claimed, so there is nothing to publish yet.',
+          );
+        else if (res.reason === 'no-relays')
+          setPublishMsg('No Nostr relays are configured on this backend.');
+        else setPublishMsg(`Could not publish: ${res.detail ?? 'the relays did not accept it'}`);
+      })
+      .finally(() => setPublishingProfile(false));
   };
 
   // Download an encrypted backup of the whole identity vault so burner/imported keys
@@ -370,6 +487,7 @@ export function NostrIdentityRoute({
                 <input
                   type="password"
                   autoFocus
+                  ref={unlockInputRef}
                   data-testid="nostr-unlock-input"
                   value={unlockPw}
                   placeholder="Password"
@@ -390,6 +508,66 @@ export function NostrIdentityRoute({
                 </button>
               </div>
               {unlockErr && <span style={{ color: '#ef4444' }}>{unlockErr}</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* No handle is not the same as no answer. Previously both rendered as an empty
+          gap, which is what made "my handle is missing" impossible to act on. */}
+      {!handle && meState !== 'loading' && (
+        <div
+          data-testid="nostr-handle-absent"
+          style={{
+            marginTop: 10,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid rgba(255,255,255,0.10)',
+            fontSize: 12,
+            opacity: 0.85,
+          }}
+        >
+          {meState === 'unauthenticated'
+            ? 'Not signed in to this backend right now, so your handle cannot be shown. Unlock the wallet and reopen this screen.'
+            : meState === 'error'
+              ? 'Could not reach this backend to look up your handle.'
+              : `No Smirk handle is claimed on the account this wallet is signed in to at ${nip05HomeDomain()}. A handle claimed by a previous wallet or a different seed does not carry over on its own.`}
+
+          {meState === 'ok' && (
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  data-testid="nostr-claim-handle-input"
+                  value={claimInput}
+                  onInput={(e) => setClaimInput((e.target as HTMLInputElement).value)}
+                  onKeyDown={(e) => {
+                    if ((e as KeyboardEvent).key === 'Enter') void onClaimHandle();
+                  }}
+                  placeholder="yourname"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck={false}
+                  disabled={claiming}
+                  style={{ ...settingsInputStyle, flex: 1, minWidth: 0 }}
+                />
+                <span style={{ fontSize: 12, opacity: 0.7, whiteSpace: 'nowrap' }}>
+                  @{nip05HomeDomain()}
+                </span>
+              </div>
+              <button
+                data-testid="nostr-claim-handle-btn"
+                onClick={() => void onClaimHandle()}
+                disabled={claiming || !claimInput.trim()}
+                style={{ ...primaryBtn, alignSelf: 'flex-start' }}
+              >
+                {claiming ? 'Claiming…' : 'Claim this handle'}
+              </button>
+              {claimErr && (
+                <span data-testid="nostr-claim-handle-error" style={{ color: '#ef4444', fontSize: 12 }}>
+                  {claimErr}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -613,16 +791,33 @@ export function NostrIdentityRoute({
             <div data-testid="nostr-linked-badge" style={linkedBadge}>
               ✓ Your account is linked to your primary Nostr identity
             </div>
-            {mnemonic && (
-              <button data-testid="nostr-publish-profile" onClick={onPublishProfile} disabled={publishingProfile} style={{ ...smallBtn, alignSelf: 'flex-start' }}>
-                {publishingProfile ? 'Publishing…' : 'Publish handle to Nostr'}
-              </button>
-            )}
+            {/* Rendered unconditionally: gating this on `mnemonic` hid the control
+                outright on a warm resume. The handler prompts for the password. */}
+            <button data-testid="nostr-publish-profile" onClick={onPublishProfile} disabled={publishingProfile} style={{ ...smallBtn, alignSelf: 'flex-start' }}>
+              {publishingProfile ? 'Publishing…' : 'Publish handle to Nostr'}
+            </button>
           </div>
         ) : (
-          <button data-testid="nostr-link-btn" onClick={() => void onLinkActive()} disabled={busy === 'link' || !vault || !mnemonic} style={primaryBtn}>
+          // Not disabled on a missing seed: a disabled primary button is
+          // indistinguishable from a broken one. Clicking asks for the password.
+          <button data-testid="nostr-link-btn" onClick={() => void onLinkActive()} disabled={busy === 'link' || !vault} style={primaryBtn}>
             {busy === 'link' ? 'Linking…' : 'Link your identity to activate your handle'}
           </button>
+        )}
+        {/* Shown at the control that was pressed. Without this the only feedback
+            was a field far above the fold, which read as a dead button. */}
+        {unlockPrompt && !mnemonic && (
+          <div
+            data-testid="nostr-unlock-prompt"
+            style={{ fontSize: 12, color: '#f5c542', marginTop: 8 }}
+          >
+            ↑ {unlockPrompt}
+          </div>
+        )}
+        {publishMsg && (
+          <div data-testid="nostr-publish-result" style={{ fontSize: 12, opacity: 0.85, marginTop: 8 }}>
+            {publishMsg}
+          </div>
         )}
       </div>
 

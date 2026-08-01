@@ -107,6 +107,20 @@ export interface ConnectResult {
 const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i;
 
 /**
+ * Origins where plain http is legitimate, so requiring https would make the
+ * instance unreachable rather than more secure.
+ *
+ * `.onion` carries its own transport authentication and encryption, and Tor
+ * Browser and arti both treat http onions as secure origins; there is no CA that
+ * will issue for one. Private-range and `.local` addresses are how a self-hoster
+ * actually runs a box on their own LAN. Rejecting both meant the "run your own
+ * backend" promise only held for someone with a public domain and a certificate,
+ * which is the opposite of the intent.
+ */
+const HTTP_OK_ORIGIN =
+  /^https?:\/\/(?:[a-z2-7]{16}|[a-z2-7]{56})\.onion(?::\d+)?(?:\/|$)|^https?:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.local)(?::\d+)?(?:\/|$)/i;
+
+/**
  * Validate + probe a candidate backend BEFORE committing to it (never mutates
  * the singleton). Enforces https (loopback exempt for local dev), fetches
  * `GET {url}/capabilities`, and derives the UTXO route dialect: a numeric
@@ -118,8 +132,12 @@ export async function connectBackend(rawUrl: string): Promise<ConnectResult> {
   let url = rawUrl.trim().replace(/\/+$/, '');
   if (!url) return { ok: false, url, error: 'Enter a backend URL.' };
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  if (!url.startsWith('https://') && !LOOPBACK.test(url)) {
-    return { ok: false, url, error: 'Backend URL must use https://.' };
+  if (!url.startsWith('https://') && !LOOPBACK.test(url) && !HTTP_OK_ORIGIN.test(url)) {
+    return {
+      ok: false,
+      url,
+      error: 'Backend URL must use https:// (or be a .onion, LAN, or localhost address).',
+    };
   }
   // Accept a bare origin (append the versioned API base the wallet speaks).
   if (!/\/api\/v\d+$/.test(url)) url = `${url}/api/v1`;

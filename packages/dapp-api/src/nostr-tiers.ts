@@ -19,8 +19,14 @@
  */
 
 /** Value / authorization kinds — never auto-signed. NIP-99 classified listing
- *  (30402), NIP-42 relay auth / login (22242), and the Goblin money-tier kind 17. */
-export const NOSTR_MONEY_TIER_KINDS: readonly number[] = [17, 30402, 22242];
+ *  (30402), NIP-42 relay auth / login (22242), NIP-98 HTTP auth (27235), and the
+ *  Goblin money-tier kind 17.
+ *
+ *  27235 is here because a NIP-98 event IS a bearer credential: the backend mints
+ *  a full session from one (`POST /auth/nostr`). Leaving it session-grantable let
+ *  a connected site collect an auth token for the user's own wallet backend. See
+ *  the `u`-tag origin guard in `dapp-popup/signers.ts`. */
+export const NOSTR_MONEY_TIER_KINDS: readonly number[] = [17, 27235, 30402, 22242];
 
 /** High-volume social kinds a user may session-grant: notes (1), reactions (7),
  *  gift-wraps (1059). */

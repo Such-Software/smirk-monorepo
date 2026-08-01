@@ -36,7 +36,42 @@ function bundleSources(dir: string): string[] {
   return out;
 }
 
-export default function globalSetup(): void {
+/**
+ * Prove the target is a v3 API, not merely something that answers.
+ *
+ * `/health` is useless for this: `backend.smirk.cash` (the v2 tipbot) and
+ * `api.smirk.cash` (v3) BOTH return 200 there, while only the latter serves
+ * `/api/v1/capabilities`. A build was shipped against the v2 host on the strength
+ * of a green `/health`, so this probes the thing that actually distinguishes them.
+ */
+async function assertServesV3Api(base: string): Promise<void> {
+  const url = `${base.replace(/\/$/, '')}/capabilities`;
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  } catch (e) {
+    throw new Error(
+      `[e2e preflight] Cannot reach ${url}\n` +
+        `  ${e instanceof Error ? e.message : String(e)}\n\n` +
+        `Is the backend up, and does BACKEND_URL include /api/v1?\n`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(
+      `[e2e preflight] ${url} returned HTTP ${res.status}.\n\n` +
+        `That host is reachable but is not serving the v3 API. A 404 here with a\n` +
+        `healthy /health is the signature of pointing at the OLD v2 backend\n` +
+        `(backend.smirk.cash) instead of v3 (api.smirk.cash).\n`,
+    );
+  }
+  try {
+    await res.json();
+  } catch {
+    throw new Error(`[e2e preflight] ${url} did not return JSON, so it is not the v3 API.\n`);
+  }
+}
+
+export default async function globalSetup(): Promise<void> {
   if (!existsSync(DIST)) {
     throw new Error(
       `[e2e preflight] No extension build at ${DIST}.\n` +
@@ -49,7 +84,11 @@ export default function globalSetup(): void {
     .map((f) => readFileSync(f, 'utf8'))
     .join('\n');
 
-  if (haystack.includes(BACKEND_URL)) return; // built against the right target
+  if (haystack.includes(BACKEND_URL)) {
+    // Built against the right target. Now prove that target is really a v3 API.
+    await assertServesV3Api(BACKEND_URL);
+    return;
+  }
 
   // Not found. Work out what it WAS built against so the error is actionable.
   const found = [

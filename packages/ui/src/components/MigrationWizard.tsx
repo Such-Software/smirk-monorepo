@@ -80,7 +80,11 @@ export function MigrationWizard({
             keystore. Same seed, same funds. Your BTC/LTC addresses change
             (funds sweep over automatically), and you gain a Nostr identity.
           </p>
-          <Button variant="primary" onClick={() => setStep('password')}>
+          <Button
+            variant="primary"
+            testid="migrate-begin-btn"
+            onClick={() => setStep('password')}
+          >
             Upgrade
           </Button>
         </>
@@ -95,6 +99,7 @@ export function MigrationWizard({
             Your current wallet password. Stays on this device.
           </p>
           <input
+            data-testid="migrate-password"
             type="password"
             autoFocus
             value={password}
@@ -183,7 +188,7 @@ export function MigrationWizard({
             one keeps its <code>@handle</code> and history here. Settings →
             Backend, any time.
           </div>
-          <Button variant="primary" onClick={onDone}>
+          <Button variant="primary" testid="migrate-done-btn" onClick={onDone}>
             Open wallet
           </Button>
         </>

@@ -39,8 +39,13 @@ const VIDEO_DIR =
  * the such-graphics pipeline (which upscales to the canonical 1920x1080@60 with brand
  * framing). Override with CAPTURE_VIDEO_W / CAPTURE_VIDEO_H for a different aspect.
  */
+// MUST be >= 481px wide. styles.css locks html/body to a fixed 380x600 popup
+// and only switches to `100%/100vh` above a 481px breakpoint, so a narrower
+// capture leaves the wallet letterboxed at 600px inside a taller frame: dead
+// grey space below, and the bottom nav stranded mid-video. 500x900 clears the
+// breakpoint so the layout fills, while staying portrait for short-form.
 const VIDEO_SIZE = {
-  width: Number(process.env.CAPTURE_VIDEO_W ?? 420),
+  width: Number(process.env.CAPTURE_VIDEO_W ?? 500),
   height: Number(process.env.CAPTURE_VIDEO_H ?? 900),
 };
 
@@ -85,6 +90,10 @@ export const test = base.extend<{
 
   footage: async ({ context }, use, testInfo) => {
     const f = new Footage(testInfo);
+    // Track pages as they open; see the note in footage.ts on why reading
+    // context.pages() at teardown loses almost every video.
+    context.on('page', (p) => f.track(p));
+    for (const p of context.pages()) f.track(p);
     await use(f);
     // Written after the test body so page.video() paths have resolved.
     await f.writeManifest(context);

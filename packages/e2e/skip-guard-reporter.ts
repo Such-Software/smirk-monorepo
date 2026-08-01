@@ -50,7 +50,7 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
  * Deliberately not the full count, so adding a conditional spec is not a
  * tripwire, but high enough that a broken environment cannot slip through.
  */
-const MIN_EXECUTED = Number(process.env.E2E_MIN_EXECUTED ?? 18);
+const MIN_EXECUTED = Number(process.env.E2E_MIN_EXECUTED ?? 21);
 
 export default class SkipGuardReporter implements Reporter {
   private skipped: { title: string; file: string }[] = [];

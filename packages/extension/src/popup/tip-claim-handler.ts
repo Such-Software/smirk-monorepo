@@ -56,6 +56,7 @@ import {
   resolveGrinSpendable,
 } from './grin-flows';
 import { decryptTipKeyBackup, getTipKeyBackup } from './tip-key-backup';
+import { nip05HomeDomain } from './nip05';
 
 /**
  * Unwrap the `{success, data?, error?}` envelope every monero-namespaced
@@ -512,19 +513,26 @@ export function parseShareUrl(
   } catch {
     return null;
   }
-  // Match `/tip/<uuid>` or `/tip/<uuid>/` — keep the host check
-  // restrictive. Production accepts smirk.cash + such.software
-  // staging only. `localhost` is allowed in dev builds so the local
-  // claim page works during testing; gating prevents a malicious
-  // localhost page from posing as a Smirk claim URL on a release
-  // build.
+  // Match `/tip/<uuid>` or `/tip/<uuid>/`, and keep the host check restrictive.
+  //
+  // The host is used ONLY to extract the tip id and fragment; the claim itself
+  // always goes to the backend the user configured, never to this URL's host.
+  // The check is therefore anti-confusion, not a trust boundary.
+  //
+  // It previously listed our domains only, which meant a self-hosted instance's
+  // own share links were rejected by its own users' wallets: tips on any
+  // federated deployment could not be claimed at all. Accept the configured
+  // instance's domain alongside the smirk.cash/such.software links that v0.2.4
+  // users still hold.
   const host = url.hostname.toLowerCase();
   const allowLocalhost = import.meta.env.DEV === true;
+  const home = nip05HomeDomain().toLowerCase();
   const okHost =
     host === 'smirk.cash' ||
     host.endsWith('.smirk.cash') ||
     host.endsWith('.such.software') ||
-    (allowLocalhost && host === 'localhost');
+    (!!home && (host === home || host.endsWith(`.${home}`))) ||
+    (allowLocalhost && (host === 'localhost' || host === '127.0.0.1'));
   if (!okHost) return null;
   const match = url.pathname.match(/^\/tip\/([A-Za-z0-9-]+)\/?$/);
   if (!match || !match[1]) return null;

@@ -22,6 +22,7 @@
 
 import { bytesToHex } from '@noble/hashes/utils';
 import {
+  api,
   deriveAppEncryptionKey,
   sealOpen,
   signBitcoinMessage,
@@ -143,6 +144,50 @@ export function signMessageWithUnlocked(
  * storage-free signer. `null` means the identity couldn't be produced (e.g. a
  * per-origin/vault key on a warm resume) → re-unlock.
  */
+/** NIP-98 HTTP-auth event kind. Signing one is handing over a bearer credential. */
+const NIP98_HTTP_AUTH_KIND = 27235;
+
+/**
+ * Refuse to sign a NIP-98 token aimed at the user's OWN backend.
+ *
+ * This is the Nostr twin of {@link RESERVED_AUTH_MESSAGE}. `POST /auth/nostr`
+ * mints a full session from a kind-27235 event whose `u` tag matches the
+ * server's canonical URL, with no nonce and a 30s window. Nothing inspected the
+ * kind or tags before signing, so a connected site could ask for "a Nostr event",
+ * get a valid login token for the user's wallet backend, and replay it. The BTC
+ * path has refused the equivalent since the auth-replay hardening; this closes
+ * the same hole on the Nostr side.
+ *
+ * Only events targeting OUR configured backend are refused: signing NIP-98 for
+ * some other service is a legitimate thing for a dapp to ask.
+ */
+function assertNotSelfAuthToken(event: UnsignedNostrEvent): void {
+  if (event.kind !== NIP98_HTTP_AUTH_KIND) return;
+  const uTag = event.tags?.find((t) => t[0] === 'u')?.[1];
+  if (!uTag) {
+    throw new Error(
+      'Refusing to sign a NIP-98 HTTP-auth event with no `u` tag through the dapp interface.',
+    );
+  }
+  let target: string;
+  try {
+    target = new URL(uTag).host.toLowerCase();
+  } catch {
+    throw new Error('Refusing to sign a NIP-98 event with an unparseable `u` tag.');
+  }
+  let ours: string;
+  try {
+    ours = new URL(api.getBaseUrl()).host.toLowerCase();
+  } catch {
+    return; // No configured backend to protect.
+  }
+  if (target === ours) {
+    throw new Error(
+      'Refusing to sign a Smirk backend sign-in token through the dapp interface.',
+    );
+  }
+}
+
 export function signNostrEventWith(
   identity: NostrIdentity | null,
   event: UnsignedNostrEvent,
@@ -150,6 +195,7 @@ export function signNostrEventWith(
   if (!identity) {
     throw new Error('Nostr signing needs the unlocked identity — re-unlock the wallet');
   }
+  assertNotSelfAuthToken(event);
   return signNostrEvent(event, identity);
 }
 

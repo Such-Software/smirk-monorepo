@@ -78,6 +78,7 @@ import {
   // opt-in — a minimal backend may advertise no prices/tips/grin/feed, so we
   // gate reads + hide surfaces instead of firing calls that 404.
   loadCapabilities,
+  initSmirkMessaging,
   invalidateCapabilities,
   capAllowsPrices,
   capHasTips,
@@ -791,6 +792,16 @@ function App() {
       setCaps(c);
       // Reflect feed availability into the nav (BottomNav reads this flag).
       (globalThis as { __smirk_feed__?: boolean }).__smirk_feed__ = capHasFeed(c);
+      // Configure the relay set for EVERY surface, not just Messages.
+      // `messagingRelays()` used to fall back to hardcoded third-party relays
+      // when nothing had configured it, so the Grin Nostr payment path (which
+      // never called this) published gift-wraps to damus/nos.lol on an instance
+      // whose operator may run neither. The fallback is gone, so this init is
+      // now load-bearing: without it those paths correctly have no relay.
+      initSmirkMessaging({
+        ...(c?.messaging?.relay_url ? { relayUrl: c.messaging.relay_url } : {}),
+        publicRelays: [],
+      });
     });
     return () => {
       cancelled = true;
@@ -2297,17 +2308,34 @@ function HomeRouter({
         // Only XMR/WOW have subaddresses, and only with the flag on. Flag off
         // (the default) means the button never renders and the screen behaves
         // exactly as it does today.
+        // Also requires a REAL bootstrap. When a cached balance snapshot exists
+        // the session is seeded with `bootstrap.userId: ''` as a placeholder so
+        // the render path has something to work with while the authenticated
+        // bootstrap is still in flight. During that window the wallet looks
+        // signed in (a balance is on screen) but provisioning cannot be
+        // authorized, so offering the button would only produce a refusal.
         canIssueNewAddress={(assetId) =>
-          (assetId === 'xmr' || assetId === 'wow') && subaddressReceiveEnabled()
+          (assetId === 'xmr' || assetId === 'wow') &&
+          subaddressReceiveEnabled() &&
+          !!session?.bootstrap?.userId
         }
         onNewAddress={(assetId) => {
           if (assetId !== 'xmr' && assetId !== 'wow') {
             return Promise.reject(new Error(`No fresh-address support for ${assetId}`));
           }
+          // Defence in depth: the button is hidden without a userId, but a
+          // stale render could still get here. Say something a user can act on
+          // rather than surfacing the internal "no active session".
+          const userId = session?.bootstrap?.userId;
+          if (!userId) {
+            return Promise.reject(
+              new Error('Still finishing sign-in. Try again in a moment.'),
+            );
+          }
           return issueNewReceiveAddress(
             wallet,
             assetId,
-            session?.bootstrap?.userId ?? '',
+            userId,
             api.getBaseUrl(),
           );
         }}

@@ -23,7 +23,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { TestInfo } from '@playwright/test';
-import type { BrowserContext } from '@playwright/test';
+import type { BrowserContext, Page } from '@playwright/test';
 
 const VIDEO_DIR =
   process.env.CAPTURE_VIDEO_DIR ??
@@ -42,8 +42,32 @@ export interface Marker {
 export class Footage {
   private readonly markers: Marker[] = [];
   private readonly startedAt = Date.now();
+  /**
+   * Every page the context opened. Tracked as they appear rather than read from
+   * `context.pages()` at teardown: by then most pages have CLOSED, so that list
+   * is usually empty and the manifest ends up with no videos at all. Holding the
+   * Page reference works because `page.video().path()` still resolves after the
+   * page closes (in fact it only resolves then).
+   */
+  private readonly seen: Page[] = [];
 
   constructor(private readonly testInfo: TestInfo) {}
+
+  /** Last known URL per tracked page, so clips can be labelled by ROLE.
+   *  Filtering on file size alone was too crude: it caught the blank 3-7KB
+   *  pages but let through mid-sized ones that are still visually empty. */
+  private readonly urls = new Map<Page, string>();
+
+  /** Called by the fixture for each page the context opens. */
+  track(page: Page): void {
+    this.seen.push(page);
+    this.urls.set(page, page.url());
+    // A page usually opens on about:blank and navigates after, so keep the
+    // latest URL rather than the one it happened to have at creation.
+    page.on('framenavigated', (fr) => {
+      if (!fr.parentFrame()) this.urls.set(page, fr.url());
+    });
+  }
 
   /**
    * Record a moment worth showing. Call it AFTER the assertion that proves the
@@ -63,11 +87,14 @@ export class Footage {
 
     // Video paths only resolve once the page has closed, so collect them here
     // rather than at mark() time.
-    const videos: string[] = [];
-    for (const page of context.pages()) {
+    const videos: { path: string; url: string }[] = [];
+    // Union of tracked pages and any still open, de-duplicated.
+    const pages = [...new Set<Page>([...this.seen, ...context.pages()])];
+    for (const page of pages) {
       try {
         const v = page.video();
-        if (v) videos.push(await v.path());
+        if (!v) continue;
+        videos.push({ path: await v.path(), url: this.urls.get(page) ?? '' });
       } catch {
         /* page already gone; nothing to record */
       }

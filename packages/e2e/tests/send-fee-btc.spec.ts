@@ -83,6 +83,7 @@ test('Send → BTC → fee tiers resolve (namespaced) → reach Review (no broad
   // --- Onboarding: import alice (returning user → no PoW, no gate). Returns
   //     once authenticated (a real backend balance renders on Home). ---
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  footage.mark('wallet-ready', 'unlocked wallet, before the flow under test');
 
   await expect(page.getByTestId('onboarding-import-btn')).toHaveCount(0);
   await expect(page.getByTestId('home-action-send')).toBeVisible({ timeout: 40_000 });

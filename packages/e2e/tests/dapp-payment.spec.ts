@@ -49,6 +49,7 @@ test('dapp payment popup shows the human amount (decimal->atomic, no BigInt cras
   // 1. Unlock the wallet (popup surface) so the approval window has a keystore.
   const popup = await context.newPage();
   await importAndUnlock(popup, { extensionId, mnemonic: MNEMONIC! });
+  footage.mark('wallet-ready', 'unlocked wallet, before the flow under test');
   await expect(popup.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
 
   // 2. Seed the origin's WOW grant via the SW so requestPayment reaches the payment

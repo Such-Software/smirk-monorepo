@@ -148,6 +148,7 @@ test('paste a public BTC tip link → claim → swept success screen', async ({
   // decrypt with + a BTC receive address to sweep into) and a bootstrapped
   // session (userId), both of which importAndUnlock establishes.
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  footage.mark('wallet-ready', 'unlocked wallet, before the flow under test');
 
   // --- Navigate to the paste-tip-link claim screen ---
   await page.getByTestId('nav-tab-inbox').click();

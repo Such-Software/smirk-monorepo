@@ -336,7 +336,9 @@ async function createBtcLtcTip(
     // BTC/LTC have 0-conf so share URL is available immediately for
     // public tips. Targeted tips don't surface a share URL (the bot
     // DMs the recipient instead).
-    shareUrl: fields.isPublic ? buildShareUrl(tipId, urlFragmentEncoded) : null,
+    shareUrl: fields.isPublic
+      ? buildShareUrl(tipId, urlFragmentEncoded, draft.data?.share_url)
+      : null,
     shareUrlPending: false,
   };
 }
@@ -560,7 +562,9 @@ async function createXmrWowTip(
   return {
     ok: true,
     tipId,
-    shareUrl: fields.isPublic ? buildShareUrl(tipId, urlFragmentEncoded) : null,
+    shareUrl: fields.isPublic
+      ? buildShareUrl(tipId, urlFragmentEncoded, draft.data?.share_url)
+      : null,
     // Public tips need to wait for confirmations before the URL is
     // usable from the recipient side (claim flow reads on-chain
     // commitment). Surface as pending so the success screen reads
@@ -886,7 +890,9 @@ async function createGrinTip(
   return {
     ok: true,
     tipId,
-    shareUrl: fields.isPublic ? buildShareUrl(tipId, urlFragmentEncoded) : null,
+    shareUrl: fields.isPublic
+      ? buildShareUrl(tipId, urlFragmentEncoded, draft.data?.share_url)
+      : null,
     shareUrlPending: fields.isPublic,
   };
 }
@@ -911,7 +917,20 @@ function randomBytesHexUuidLike(): string {
  * Format matches the existing claim.smirk.cash landing page that
  * v0.2.4 users have been clicking — keeps cross-version compat.
  */
-function buildShareUrl(tipId: string, urlFragmentEncoded: string | undefined): string | null {
+function buildShareUrl(
+  tipId: string,
+  urlFragmentEncoded: string | undefined,
+  backendShareUrl?: string | null,
+): string | null {
   if (!urlFragmentEncoded) return null;
+  // The backend already builds this from its own `TIP_SHARE_BASE`
+  // (`api/tips.rs` `share_url`) and returns it on the create response. Prefer it:
+  // hardcoding smirk.cash meant a self-hosted instance produced links pointing
+  // at OUR landing page for a tip only THEIR backend can settle, so the claim
+  // simply failed. Fall back to the constant only when the operator has not set
+  // a share base, which keeps existing smirk.cash links working.
+  if (backendShareUrl) {
+    return `${backendShareUrl.replace(/\/$/, '')}#${urlFragmentEncoded}`;
+  }
   return `https://smirk.cash/tip/${tipId}#${urlFragmentEncoded}`;
 }

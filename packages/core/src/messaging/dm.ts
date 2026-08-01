@@ -4,7 +4,7 @@
  */
 
 import { decodeNpub, resolveNip05, type NostrIdentity } from '../nostr';
-import { DEFAULT_PUBLIC_RELAYS, messagingProvider, messagingRelays } from './registry';
+import { messagingProvider, messagingRelays } from './registry';
 import { wrapToDirectMessage } from './nostr';
 import type { DirectMessage, DmSubscription, GiftWrapEvent } from './types';
 
@@ -41,16 +41,23 @@ export async function resolveDmRelays(
   } else {
     pubkeyHex = recipientToHex(recipient);
   }
-  // Look for their kind-10050 across their hint relays + ours + the public set.
-  const lookupRelays = dedup([...hintRelays, ...messagingRelays(), ...DEFAULT_PUBLIC_RELAYS]);
+  // Look for their kind-10050 across their hint relays + whatever we are
+  // configured to use. `DEFAULT_PUBLIC_RELAYS` is deliberately NOT appended:
+  // unconditionally querying damus/nos.lol leaked who the user is looking up,
+  // on an instance whose operator may run no third-party relays at all. The
+  // recipient's own NIP-05 hints already carry cross-wallet reachability.
+  const lookupRelays = dedup([...hintRelays, ...messagingRelays()]);
   let inbox: string[] = [];
   try {
     inbox = await messagingProvider().queryDmRelayList({ pubkeyHex, relays: lookupRelays });
   } catch {
     /* no kind-10050 / unreachable — fall back to the NIP-05 hints */
   }
-  const relays = dedup([...inbox, ...hintRelays]);
-  return { pubkeyHex, relays: relays.length ? relays : DEFAULT_PUBLIC_RELAYS };
+  // Same reasoning for the fallback: if we resolved nothing, say so. Silently
+  // substituting third-party relays sends the gift-wrap somewhere the operator
+  // never sanctioned, and the caller cannot tell that it happened.
+  const relays = dedup([...inbox, ...hintRelays, ...messagingRelays()]);
+  return { pubkeyHex, relays };
 }
 
 /**

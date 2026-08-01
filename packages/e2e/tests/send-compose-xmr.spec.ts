@@ -79,6 +79,7 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
   // /auth/extension wait. Do NOT wait on that POST; it fires offscreen and
   // is invisible to Playwright (the bug the old version tripped on).
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  footage.mark('wallet-ready', 'unlocked wallet, before the flow under test');
 
   // Onboarding gone; Home is up + authenticated.
   await expect(page.getByTestId('onboarding-import-btn')).toHaveCount(0);

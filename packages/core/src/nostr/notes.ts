@@ -122,8 +122,22 @@ export function postingRequirement(caps: {
   relayUrl?: string;
   writePolicy?: string;
   hasPremium: boolean;
+  /**
+   * The server's own decision from `GET /premium/status` (`can_post_general`).
+   * Authoritative when present.
+   *
+   * Re-deriving posting rights on the client from `write_policy` + premium is
+   * WRONG and shipped that way: it cannot see the operator write-allowlist, so
+   * an allowlisted operator was shown "needs premium" and the composer was
+   * hidden even though the relay would have accepted the event. Left optional
+   * so an older backend still degrades to the legacy derivation.
+   */
+  canPostGeneral?: boolean;
 }): PostingRequirement {
   if (!caps.relayUrl) return { kind: 'no-relay' };
+  if (caps.canPostGeneral !== undefined) {
+    return caps.canPostGeneral ? { kind: 'allowed' } : { kind: 'needs-premium' };
+  }
   if (caps.writePolicy === 'premium-post' && !caps.hasPremium) {
     return { kind: 'needs-premium' };
   }

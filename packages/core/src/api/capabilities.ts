@@ -138,6 +138,14 @@ export interface PremiumStatus {
   active: boolean;
   /** RFC3339 expiry timestamp, or `null` if never subscribed. */
   premium_until: string | null;
+  /** True iff the caller's npub is on the operator write-allowlist
+   *  (`RELAY_WRITE_ALLOWLIST_NPUBS`), which permits any kind regardless of
+   *  policy or premium. Optional: older backends omit it. */
+  write_allowlisted?: boolean;
+  /** The SERVER's own answer to "may I publish a general event right now?".
+   *  Authoritative when present, because only the server knows the operator
+   *  write-allowlist. Optional: older backends omit it. */
+  can_post_general?: boolean;
 }
 
 /** Paid premium relay tier. Present only when `features.premium_relay`. */

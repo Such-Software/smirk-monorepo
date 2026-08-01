@@ -25,21 +25,34 @@ import {
 import { nip05HomeDomain } from './nip05';
 
 /**
+ * Why this reports instead of just succeeding quietly: the common failure is not an
+ * exception, it is `username == null` (this account never claimed a handle), which
+ * used to return here indistinguishably from success. The Settings button therefore
+ * spun and stopped with no output, reading as a dead control. Callers that genuinely
+ * do not care (the onboarding path) still ignore the value.
+ */
+export type PublishNip05Result =
+  | { ok: true; nip05: string }
+  | { ok: false; reason: 'no-handle' | 'no-relays' | 'failed'; detail?: string };
+
+/**
  * Publish an account-0 kind-0 profile advertising `nip05 = <username>@<homeDomain>`.
  * Fetches any existing kind-0 on our relays and MERGES (never clobbers a user's
  * about/picture set elsewhere). Only the PRIMARY identity carries the handle — never
- * a burner/imported. Fire-and-forget: swallows every error so it can't break linking.
+ * a burner/imported. Never throws: the outcome comes back as a value.
  */
-export async function publishNip05Profile(identity: NostrIdentity): Promise<void> {
+export async function publishNip05Profile(
+  identity: NostrIdentity,
+): Promise<PublishNip05Result> {
   try {
     const username = (await api.getMySmirkUsername()).data;
-    if (!username) return; // no handle claimed → nothing to advertise
+    if (!username) return { ok: false, reason: 'no-handle' };
     const caps = await loadCapabilities(api);
     const relays = resolvePublishRelays(
       caps?.messaging?.relay_url,
       caps?.feed?.extra_relays ? { publicFallback: caps.feed.extra_relays } : {},
     );
-    if (!relays.length) return;
+    if (!relays.length) return { ok: false, reason: 'no-relays' };
     const nip05 = `${username}@${nip05HomeDomain()}`;
     const client = new NostrClient();
     try {
@@ -60,8 +73,12 @@ export async function publishNip05Profile(identity: NostrIdentity): Promise<void
     } finally {
       client.close();
     }
-  } catch {
-    /* fire-and-forget — never surface / block on a profile publish */
+    return { ok: true, nip05 };
+  } catch (e) {
+    // `exactOptionalPropertyTypes` is on, so omit `detail` rather than set undefined.
+    return e instanceof Error
+      ? { ok: false, reason: 'failed', detail: e.message }
+      : { ok: false, reason: 'failed' };
   }
 }
 
