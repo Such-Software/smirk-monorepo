@@ -177,8 +177,7 @@ pub fn create_send_transaction(
     })?;
     if inputs_total < target {
         return Err(format!(
-            "insufficient inputs: have {} nanogrin, need {} nanogrin (amount + fee)",
-            inputs_total, target
+            "insufficient inputs: have {inputs_total} nanogrin, need {target} nanogrin (amount + fee)"
         ));
     }
     let change_amount = inputs_total - target;
@@ -725,8 +724,7 @@ pub fn sign_invoice(params: &SignInvoiceParams) -> Result<SignInvoiceOutput, Str
     let inputs_total: u64 = params.inputs.iter().map(|i| i.amount).sum();
     if inputs_total < target {
         return Err(format!(
-            "insufficient inputs: have {} nanogrin, need {} (amount + fee)",
-            inputs_total, target
+            "insufficient inputs: have {inputs_total} nanogrin, need {target} (amount + fee)"
         ));
     }
     let change_amount = inputs_total - target;
@@ -969,14 +967,14 @@ pub(crate) fn derive_input_blind_with_fallback(
         let blind = match derive_blind(ext_key, path, input.amount, *switch) {
             Ok(b) => b,
             Err(e) => {
-                diagnostics.push(format!("  {} → derive_blind error: {}", label, e));
+                diagnostics.push(format!("  {label} → derive_blind error: {e}"));
                 continue;
             }
         };
         let commit = match pedersen_commit(input.amount, &blind) {
             Ok(c) => c,
             Err(e) => {
-                diagnostics.push(format!("  {} → pedersen_commit error: {}", label, e));
+                diagnostics.push(format!("  {label} → pedersen_commit error: {e}"));
                 continue;
             }
         };

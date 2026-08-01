@@ -352,8 +352,7 @@ pub fn serialize_slate_v4_bin(slate: &SlateV4) -> Result<Vec<u8>, String> {
         let lock_hgt = slate
             .feat_args
             .as_ref()
-            .map(|a| a.lock_hgt)
-            .unwrap_or(0);
+            .map_or(0, |a| a.lock_hgt);
         w.u64(lock_hgt);
     }
     Ok(w.into_inner())

@@ -176,8 +176,7 @@ fn derive_blind_matches_grin_keychain_derive_key() {
 
         assert_eq!(
             ours, ref_bytes,
-            "derive_blind disagreed with grin_keychain for path {:?} amount {} switch {:?}",
-            path, amount, switch
+            "derive_blind disagreed with grin_keychain for path {path:?} amount {amount} switch {switch:?}"
         );
     }
 }
@@ -406,7 +405,7 @@ fn full_send_round_trip_validates_against_grin_wallet() {
         &finalize_out.slate.sigs[0].xs,
         &finalize_out.slate.sigs[1].xs,
     ).unwrap();
-    eprintln!("[final tx] our p_total (sum of slate.sigs[].xs) (33B) = {:02x?}", our_p_total);
+    eprintln!("[final tx] our p_total (sum of slate.sigs[].xs) (33B) = {our_p_total:02x?}");
 
     let msg = kernel.msg_to_sign().unwrap();
     eprintln!("[final tx] msg = {:02x?}", &msg[..]);
@@ -430,7 +429,7 @@ fn full_send_round_trip_validates_against_grin_wallet() {
     eprintln!("[final tx] kernel.excess_sig.to_raw_data() = {:02x?}", &kernel_sig_raw[..]);
     eprintln!("[final tx] our final_signature             = {:02x?}", &finalize_out.final_signature[..]);
     let matches = kernel_sig_raw == finalize_out.final_signature;
-    eprintln!("[final tx] kernel.excess_sig RAW bytes match our final_signature? {}", matches);
+    eprintln!("[final tx] kernel.excess_sig RAW bytes match our final_signature? {matches}");
     // Try the reverse-bytes hypothesis: each 32-byte half reversed.
     let mut reversed = [0u8; 64];
     for i in 0..32 { reversed[i] = finalize_out.final_signature[31 - i]; }
@@ -440,7 +439,7 @@ fn full_send_round_trip_validates_against_grin_wallet() {
         kernel_sig_raw == reversed);
 
     let kernel_verify_result = kernel.verify();
-    eprintln!("[final tx] kernel.verify() = {:?}", kernel_verify_result);
+    eprintln!("[final tx] kernel.verify() = {kernel_verify_result:?}");
 
     tx.validate(Weighting::AsTransaction)
         .expect("grin_core::Transaction::validate must pass — \
@@ -751,7 +750,7 @@ fn partial_sign_matches_grin_aggsig_sign_single() {
         let mut h = Sha256::new();
         h.update(&nonce_sum_compressed[1..]);
         h.update(&pubkey_sum_compressed[..]);
-        h.update(&msg_bytes);
+        h.update(msg_bytes);
         let out = h.finalize();
         eprintln!("[ref] expected challenge e = {:02x?}", &out[..]);
     }
@@ -784,8 +783,7 @@ fn partial_sign_matches_grin_aggsig_sign_single() {
 
     assert_eq!(
         our_partial_s, ref_s,
-        "our partial_sign s scalar must match grin aggsig::sign_single's s scalar.\n  ref: {:02x?}\n  ours: {:02x?}",
-        ref_s, our_partial_s
+        "our partial_sign s scalar must match grin aggsig::sign_single's s scalar.\n  ref: {ref_s:02x?}\n  ours: {our_partial_s:02x?}"
     );
 
     // Compare full aggregated sig (our final_signature vs grin's add_signatures).

@@ -42,7 +42,6 @@
 //! their own new-output blind from their keychain).
 
 use crate::blind::{sub as scalar_sub, sum as scalar_sum};
-use crate::bulletproof::pedersen_commit;
 use crate::kernel::KernelFeatures;
 use crate::keychain::{derive_blind, SwitchCommitmentType};
 use crate::recovery::create_recoverable_output;
@@ -632,7 +631,7 @@ mod tests {
         assert_eq!(result.voucher.amount, 5_000_000_000);
         assert!(result.change.is_some());
         assert!(!result.tx_bytes.is_empty());
-        assert_eq!(result.tx_bytes.len() > 100, true); // non-trivial bytes
+        assert!(result.tx_bytes.len() > 100); // non-trivial bytes
         // Voucher blind is the secret that will be encrypted to recipient.
         assert_ne!(result.voucher.blinding_factor, [0u8; 32]);
     }
