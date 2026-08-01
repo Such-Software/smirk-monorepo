@@ -1075,6 +1075,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallet/lws/provision_subaddrs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Provision account-0 subaddress indices at the LWS for an already-registered
+         *     account, and report the ceiling the LWS confirmed.
+         * @description Mounted only when `FEATURE_XMR_SUBADDR_PROVISIONING` is on (see
+         *     `/capabilities` → `features.xmr_subaddr_provisioning`); otherwise the route
+         *     does not exist and the request 404s.
+         */
+        post: operations["provision_subaddrs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallet/lws/random_outs": {
         parameters: {
             query?: never;
@@ -1647,6 +1670,19 @@ export interface components {
             prices: boolean;
             /** @description Tipping (parked). */
             tips: boolean;
+            /**
+             * @description Batch (multi-address) BTC/LTC queries: this instance serves
+             *     `POST /wallet/utxo/{balance,utxos,history}_multi`. Off ⇒ those routes are
+             *     not mounted (404) and the wallet must query one address at a time.
+             */
+            utxo_multi_address: boolean;
+            /**
+             * @description Monero/Wownero subaddress provisioning: this instance registers a batch
+             *     of account-0 subaddress indices with its LWS and serves
+             *     `POST /wallet/lws/provision_subaddrs`. Off ⇒ that route is not mounted
+             *     (404) and the wallet must keep receiving on the primary address only.
+             */
+            xmr_subaddr_provisioning: boolean;
         };
         /** @description A fee-estimate request. */
         FeeRequest: {
@@ -2087,6 +2123,36 @@ export interface components {
             /** @description RFC 3339 timestamp of the last successful refresh; `null` until the first. */
             updated_at?: string | null;
         };
+        /**
+         * @description Provision a batch of account-0 subaddress indices for an account. Additive to
+         *     `register`; the identity comes from the bearer token, so any `user_id` on the
+         *     wire is ignored.
+         */
+        ProvisionRequest: {
+            address: string;
+            /** @description `xmr` or `wow`. */
+            asset: string;
+            /**
+             * Format: int32
+             * @description Highest minor index wanted for account 0. Clamped to the server ceiling.
+             *     Omit for the instance default.
+             */
+            max_minor?: number | null;
+            /** @description Private view key (64 hex). Forwarded to the LWS; never stored or logged. */
+            view_key: string;
+        };
+        /** @description The subaddress ceiling the LWS CONFIRMED for account 0. */
+        ProvisionResponse: {
+            asset: string;
+            /**
+             * Format: int32
+             * @description Highest minor index the LWS confirmed it is scanning for account 0, read
+             *     back from its response - never an echo of the request. Every index in
+             *     `0..=provisioned_minor_max` is provisioned; the wallet must not hand out
+             *     an index above it.
+             */
+            provisioned_minor_max: number;
+        };
         /** @description A user's per-asset receiving public keys, by asset. */
         PublicKeysInfo: {
             btc?: string | null;
@@ -2162,6 +2228,14 @@ export interface components {
              * @description Scan from this block height (wallet birthday). Omit to scan from now.
              */
             start_height?: number | null;
+            /**
+             * Format: int32
+             * @description How many account-0 minor subaddress indices to provision at the LWS.
+             *     Clamped to the server ceiling, and may only RAISE this instance's
+             *     default; it can never enable provisioning on an instance that has it off.
+             *     Omit to use the instance default.
+             */
+            subaddr_count?: number | null;
             /** @description Private view key (64 hex). Forwarded to the LWS; never stored or logged. */
             view_key: string;
         };
@@ -2287,13 +2361,44 @@ export interface components {
             mixin: number;
             /** Format: int64 */
             out_index: number;
+            /**
+             * @description Subaddress index of the output BEING SPENT (`(0, 0)` = primary address),
+             *     taken from the spend record itself.
+             *
+             *     Load-bearing for the balance: the wallet recomputes this output's key
+             *     image to tell a real spend from a ring decoy, and the key image depends
+             *     on the subaddress index. Without it a subaddress spend is recomputed
+             *     against the primary index, the key images never match, the spend is
+             *     dismissed as a decoy, and the amount is never subtracted - the balance
+             *     over-reports forever. It is deliberately NOT the enclosing transaction's
+             *     `subaddr_index`, which is the change index and would be just as wrong.
+             */
+            subaddr_index: components["schemas"]["SubaddrIndexDto"];
             tx_pub_key: string;
         };
         StatusResp: {
             /** @description Whether the caller currently holds active premium. */
             active: boolean;
+            /**
+             * @description Whether the caller may publish general (non-wallet) events to this
+             *     instance's relay RIGHT NOW.
+             *
+             *     The authority on this is [`crate::infra::relay::policy::decide`], which
+             *     runs server-side at admission. Clients previously re-derived it from
+             *     `write_policy` + premium alone and so had no way to know about the
+             *     operator write-allowlist: an allowlisted operator was told "premium
+             *     required" and the composer was hidden, even though the relay would have
+             *     accepted the event. Publish the decision instead of the inputs.
+             */
+            can_post_general: boolean;
             /** @description Premium expiry (RFC3339), or null if never premium / lapsed. */
             premium_until?: string | null;
+            /**
+             * @description Whether the caller's linked npub is on the operator write-allowlist
+             *     (`RELAY_WRITE_ALLOWLIST_NPUBS`), which permits publishing ANY kind
+             *     regardless of policy or premium.
+             */
+            write_allowlisted: boolean;
         };
         /**
          * @description A subaddress index `(major, minor)` an output/tx was received at. Nested to
@@ -4299,6 +4404,58 @@ export interface operations {
             };
         };
     };
+    provision_subaddrs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProvisionRequest"];
+            };
+        };
+        responses: {
+            /** @description LWS-confirmed subaddress ceiling for account 0 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvisionResponse"];
+                };
+            };
+            /** @description Invalid/disabled asset, address, or view key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Subaddress provisioning is not enabled on this instance */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream node unavailable, or it cannot provision subaddresses */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     random_outs: {
         parameters: {
             query?: never;
@@ -4567,6 +4724,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The batch exceeded its deadline; retry with a smaller batch */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     broadcast: {
@@ -4747,6 +4911,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The batch exceeded its deadline; retry with a smaller batch */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     tip: {
@@ -4877,6 +5048,13 @@ export interface operations {
             };
             /** @description Upstream node unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The batch exceeded its deadline; retry with a smaller batch */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };
