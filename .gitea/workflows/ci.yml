@@ -17,7 +17,10 @@ name: CI (Gitea)
 # Keep this in sync with .github/workflows/ci.yml, or delete that one. Two copies
 # of a gate, one of which cannot run, is exactly how this happened.
 #
-# `runs-on: linux` matches the Builds runner label used by desktop-build.yml.
+# `runs-on: ubuntu-latest` is the label the linux-beast runner actually
+# advertises (see the matrix in desktop-build.yml). A bare `linux` label queues
+# forever with no runner and no error, which is indistinguishable from a broken
+# runner: run 823 sat queued until the label was corrected.
 
 on:
   push:
@@ -32,7 +35,7 @@ env:
 jobs:
   rust:
     name: Rust workspace
-    runs-on: linux
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +58,7 @@ jobs:
 
   typescript:
     name: TypeScript workspace
-    runs-on: linux
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -106,7 +109,7 @@ jobs:
 
   openapi-drift:
     name: API client is current
-    runs-on: linux
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -122,7 +125,7 @@ jobs:
 
   secret-scan:
     name: Secret scan
-    runs-on: linux
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       # The project-specific known-bad literals (infra IPs, funded test-wallet
@@ -139,7 +142,7 @@ jobs:
 
   supply-chain:
     name: Dependency audit
-    runs-on: linux
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
