@@ -50,13 +50,20 @@ jobs:
       - name: cargo check
         run: cargo check --workspace --all-targets
 
-      # Exclude the vendored upstream daemon-interface tests. They are
-      # integration tests against a LIVE monerod on 127.0.0.1:18081 and fail with
-      # ConnectionRefused on any machine without a node. They pass on a developer
-      # workbench that runs one, which is exactly how a gate ends up looking green
-      # locally and red in CI. They test upstream's RPC client, not our code.
-      - name: cargo test
-        run: cargo test --workspace --exclude wownero-simple-request-rpc
+      # `--lib` (unit tests) deliberately, not the full test set.
+      #
+      # The vendored monero-oxide subtrees carry upstream INTEGRATION tests that
+      # dial a live monerod on 127.0.0.1:18081 (both
+      # interface/daemon/simple-request/tests and wallet/tests). They fail with
+      # ConnectionRefused on any machine without a node, and pass on a developer
+      # workbench that runs one, which is exactly how a gate looks green locally
+      # and red in CI. They exercise upstream's RPC client against a chain, not
+      # our code, and this repo is not where they should gate a release.
+      #
+      # Excluding crates one at a time was whack-a-mole; the property that
+      # actually distinguishes them is unit vs integration.
+      - name: cargo test (unit)
+        run: cargo test --workspace --lib
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -87,10 +94,14 @@ jobs:
           WB_VERSION=$(cargo pkgid wasm-bindgen | sed 's/.*@//')
           cargo install -f wasm-bindgen-cli --version "${WB_VERSION}"
 
+      # Node 22, not 20: @smirk/extension's test script is
+      # `node --test 'src/**/*.test.ts'`, and glob expansion by node --test needs
+      # 22. On 20 it reports "Could not find ..." and fails the job, which is also
+      # what a contributor on node 20 would hit locally.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Build WASM (browser target)
         run: make wasm
@@ -133,7 +144,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Install TS deps
         run: npm install
       # Fails when openapi.json changed but the generated client was not
@@ -166,7 +177,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Install deps
         run: npm ci
       # ENFORCED: shipped runtime dependencies (crypto, signing, nostr) must carry
