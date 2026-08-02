@@ -21,6 +21,7 @@ import { claimPublicTip } from '../tip-claim-handler';
 import { readBootstrapCache } from '../bootstrap-cache';
 import type { BrowserControllerGlobal, IframeBrowserController } from '../browser-controller';
 import { chromeStoragePermissionStore } from '../../background/dapp/permissions';
+import { nip05HomeDomain } from '../nip05';
 import {
   createInPopupApprovalQueue,
   createLiveWalletProvider,
@@ -139,7 +140,10 @@ export function BrowseTab({
         .then((tabs) => {
           if (cancelled) return;
           if (tabs.length === 0) {
-            void controller.newTab('https://smirk.cash');
+            // The configured instance's own domain, not ours. Opening
+            // smirk.cash by default sends a self-hoster's users to a site
+            // their operator does not run.
+            void controller.newTab(`https://${nip05HomeDomain()}`);
           }
         })
         .catch(() => undefined);

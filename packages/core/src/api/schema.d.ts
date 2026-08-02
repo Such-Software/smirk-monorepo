@@ -1424,6 +1424,19 @@ export interface components {
             features: components["schemas"]["FeatureCapabilities"];
             feed?: null | components["schemas"]["FeedCapability"];
             messaging?: null | components["schemas"]["MessagingCapability"];
+            /**
+             * @description The domain this instance's handles live at, i.e. the `<domain>` in
+             *     `name@<domain>`, and the host serving `/.well-known/nostr.json`.
+             *
+             *     Advertised because the wallet cannot derive it. It used to guess by
+             *     stripping a leading `api.` from the backend URL, which is right only for
+             *     a smirk.cash-shaped two-host deployment. An operator serving the API at
+             *     `api.example.org` without also serving `example.org`, or at any other
+             *     name, had their users publish handles that resolve nowhere. Absent when
+             *     the operator has not set a public URL, in which case the client falls
+             *     back to the old heuristic.
+             */
+            nip05_domain?: string | null;
             premium?: null | components["schemas"]["PremiumCapability"];
             /** @description Registration gates for a new wallet on this instance. */
             registration: components["schemas"]["RegistrationCapability"];

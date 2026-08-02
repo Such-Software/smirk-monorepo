@@ -1865,6 +1865,12 @@ function App() {
                 // the re-bootstrap against the new instance must not paint stale
                 // cross-backend numbers on first open.
                 await clearBalanceSnapshot();
+                // And the relay set, which is a module global that otherwise
+                // SURVIVES the switch: the wallet would keep publishing DMs and
+                // payments to the previous operator's relay while believing it had
+                // moved. Cleared here and repopulated by the capabilities effect
+                // from the new instance's advertisement.
+                initSmirkMessaging({ publicRelays: [] });
                 setSession(null);
                 await refresh();
               }}

@@ -85,6 +85,14 @@ export function planRegistration(reg?: RegistrationCapability): RegistrationPlan
 }
 
 export interface BackendCapabilities {
+  /** The domain this instance's handles live at (the `<domain>` in
+   *  `name@<domain>`, and the host serving `/.well-known/nostr.json`).
+   *
+   *  Advertised by the backend because the client cannot derive it: the old
+   *  approach stripped a leading `api.` from the backend URL, which is correct
+   *  only for a two-host deployment shaped like smirk.cash. Optional, since an
+   *  older backend does not send it. */
+  nip05_domain?: string;
   version: string;
   contract_version: number;
   chains: Record<

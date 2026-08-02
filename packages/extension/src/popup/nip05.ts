@@ -5,7 +5,7 @@
  * resolved key before paying (federation hardening — "follow the key, not the name").
  */
 
-import { api, createNip05Resolver, homeDomainFromApiBase, type Nip05PinStore, type Nip05Resolver } from '@smirk/core';
+import { api, createNip05Resolver, homeDomainFromApiBase, type Nip05PinStore, type Nip05Resolver, peekCapabilities } from '@smirk/core';
 
 import { storage } from './singletons';
 
@@ -41,5 +41,12 @@ export function instanceHomeDomain(): string {
  *  hosts, so we prefer the registrable/bare domain (strip a leading `api.`) to match
  *  the handle users expect — `you@smirk.cash`, not `you@api.smirk.cash`. */
 export function nip05HomeDomain(): string {
+  // Prefer what the instance ADVERTISES (`/capabilities` → `nip05_domain`). The
+  // fallback below strips a leading `api.`, which is right only for a two-host
+  // deployment shaped like smirk.cash: an operator serving the API at
+  // `api.example.org` without also serving `example.org` had their users publish
+  // handles that resolve nowhere. Guessing is the bug; the server knows.
+  const advertised = peekCapabilities()?.nip05_domain;
+  if (advertised) return advertised.toLowerCase();
   return instanceHomeDomain().replace(/^api\./, '');
 }
