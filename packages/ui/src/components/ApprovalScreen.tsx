@@ -108,6 +108,9 @@ export type ApprovalRequest =
       scheme: 'nip44' | 'nip04';
       peer: string;
       data: string;
+      /** True on this origin's FIRST crypto call, which prompts instead of
+       *  self-approving. Mirrors the field in @such-software/smirk-dapp-api. */
+      firstGrant?: boolean;
     };
 
 export interface ApprovalScreenProps {

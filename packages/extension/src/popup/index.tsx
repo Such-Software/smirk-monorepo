@@ -30,6 +30,7 @@
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
+  LEGACY_WALLET_KEY,
   SESSION_CACHE_KEY,
   api,
   fetchAllBalances,
@@ -1480,20 +1481,37 @@ function App() {
           // Sweep legacy m/44' BTC/LTC funds to the new m/84' addresses, then
           // report what actually happened. The done screen used to assert
           // "Funds swept" regardless of outcome; it now says only what is true.
+          // The pre-v3 CryptoNote derivation cohort. v0.3 derives v3 keys
+          // unconditionally (keystore.ts), so a wallet written with
+          // derivationVersion 1 or 2 has XMR/WOW at an address this wallet does
+          // not watch, and there is no in-app sweep for it. Saying nothing while
+          // the wizard promises "same seed, same funds" is how someone concludes
+          // their Monero is gone. `assessLegacyCleanupSafety` can live-probe
+          // those addresses but has never been wired up; flagging the cohort is
+          // the honest minimum until it is.
+          const legacyBlob = await storage.get<{ derivationVersion?: 1 | 2 | 3 }>(
+            LEGACY_WALLET_KEY,
+          );
+          const preV3 =
+            legacyBlob?.derivationVersion === 1 || legacyBlob?.derivationVersion === 2;
+
           const sweep = await convergeLegacySweep(wallet);
           const moved = (['btc', 'ltc'] as const).filter(
             (a) => sweep[a]?.status === 'swept',
           );
+          const cohortNote = preV3
+            ? ' Your old wallet used an earlier Monero/Wownero key derivation, so any XMR, WOW or Grin it held sits at a different address that this wallet does not watch. Your seed still controls it. Keep your old wallet until you have moved those funds.'
+            : '';
           if (sweep.errored) {
-            return 'Your old BTC/LTC funds could not be moved just yet; the wallet will retry automatically.';
+            return `Your old BTC/LTC funds could not be moved just yet; the wallet will retry automatically.${cohortNote}`;
           }
           if (moved.length) {
-            return `Funds swept to your new ${moved.map((a) => a.toUpperCase()).join(' and ')} address${moved.length > 1 ? 'es' : ''}.`;
+            return `Funds swept to your new ${moved.map((a) => a.toUpperCase()).join(' and ')} address${moved.length > 1 ? 'es' : ''}.${cohortNote}`;
           }
           if (sweep.btc?.status === 'already-swept' || sweep.ltc?.status === 'already-swept') {
-            return 'Your old BTC/LTC funds were already moved across.';
+            return `Your old BTC/LTC funds were already moved across.${cohortNote}`;
           }
-          return 'No old BTC/LTC funds needed moving.';
+          return `No old BTC/LTC funds needed moving.${cohortNote}`;
         }}
         onDone={refresh}
       />

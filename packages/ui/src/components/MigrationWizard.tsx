@@ -82,9 +82,14 @@ export function MigrationWizard({
             Upgrade your wallet
           </h1>
           <p style={{ margin: 0, fontSize: 14, color: 'var(--smirk-fg-muted)' }}>
+            {/* "Same seed, same funds" was doing a lot of work here. It is true
+                of the seed, but a pre-v3 CryptoNote cohort has XMR/WOW at an
+                address v0.3 does not watch, and the sweep can fail. Promise what
+                is always true; the done screen reports what actually happened. */}
             Found your v0.2 wallet. We'll re-seal your seed under the v0.3
-            keystore. Same seed, same funds. Your BTC/LTC addresses change
-            (funds sweep over automatically), and you gain a Nostr identity.
+            keystore — same seed, so nothing is re-created. Your BTC/LTC
+            addresses change and existing funds sweep across, and you gain a
+            Nostr identity. We'll tell you exactly what moved when it's done.
           </p>
           <Button
             variant="primary"
