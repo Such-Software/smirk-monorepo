@@ -5,10 +5,11 @@
  * Per-asset dispatch:
  * - BTC / LTC: UTXO fetch → greedy selection → buildPsbt → signPsbt
  *   → extractTx → broadcast.
- * - XMR / WOW: not implemented yet — returns a clear error so the UI
- *   surfaces "send not available for this asset" rather than the old
- *   fake-success stub.
- * - GRIN: not implemented yet — slatepack ceremony lands later.
+ * - XMR / WOW: LWS unspent fetch → key-image verification → greedy input
+ *   selection → decoy fetch → wasm sign → broadcast.
+ * - GRIN: not sent from here. The slatepack ceremony lives in
+ *   `grin-flows.ts`; this handler returns an explicit error for it so the
+ *   wizard surfaces a real message rather than a fake-success stub.
  *
  * Architecture per `docs/SEND_FLOW.md`. The handler stays inside the
  * extension package because it ties together the asset-specific
@@ -484,15 +485,15 @@ async function sendBtcLtc(
  *
  * Flow: get_unspent_outs → greedy input selection (iterating fee estimate
  * with the wasm helper) → get_random_outs (ring-size − 1 decoys per
- * input, distributed across inputs) → wasm.sign_transaction → submitLwsTx
- * with `recipient_address` + `amount` + `tx_hash` so the backend can
- * insert a `pending_transactions` row for instant smirk-to-smirk pending
- * detection (only fires when the recipient is a registered Smirk address;
- * backend silently skips for external sends — see legacy commit `3afce50`).
+ * input, distributed across inputs) → wasm.sign_transaction → broadcast
+ * of the signed tx hex. Only the signed transaction is submitted; the
+ * rationale for withholding the recipient and amount is at the submit
+ * call below.
  *
- * No fee picker, no sweep yet. Fee comes from LWS's `per_byte_fee`
- * (rounded to `fee_mask`); change always goes back to the account's
- * PRIMARY address.
+ * No fee picker. Fee comes from LWS's `per_byte_fee` (rounded to
+ * `fee_mask`); change always goes back to the account's PRIMARY address.
+ * Sweep is supported: it selects every spendable output and sends
+ * sum(inputs) − fee.
  *
  * Subaddresses: each unspent output carries the `subaddr_index` the LWS
  * attributed it to, and that index is threaded verbatim into BOTH the
@@ -740,10 +741,13 @@ async function sendXmrWow(
       decoys: decoyPool.slice(i * decoysPerInput, (i + 1) * decoysPerInput),
     };
   });
-  const amountNum = Number(effectiveAmount);
+  // Decimal string, never `Number()`: a sweep of a large balance exceeds 2^53
+  // atomic units and a JS number would silently round the destination amount.
+  // `TxDestination.amount` deserializes with `de_u64_flex`, which takes either.
+  const amountStr = effectiveAmount.toString();
   const params = {
     inputs,
-    destinations: [{ address: toAddress, amount: amountNum }],
+    destinations: [{ address: toAddress, amount: amountStr }],
     change_address: fromAddress,
     fee_per_byte: per_byte_fee,
     fee_mask,
@@ -773,7 +777,7 @@ async function sendXmrWow(
     console.error('[smirk send xmr/wow] submit failed', {
       asset,
       recipient: toAddress,
-      amount: amountNum,
+      amount: amountStr,
       txHash: signed.tx_hash,
       fee: signed.fee,
       inputCount: selected.length,

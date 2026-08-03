@@ -511,7 +511,7 @@ export const grin = {
       signatureHex,
     ),
 
-  // ---- High-level wallet orchestrators (Phase 1 → Phase 2)
+  // ---- High-level wallet orchestrators
   //
   // These wrap the 6 send/invoice ceremonies. Each takes a typed
   // params struct, marshals to JSON for the wasm call, and parses

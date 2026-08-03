@@ -40,7 +40,6 @@ import {
   decryptPublicTipPayload,
   decodeUrlFragmentKey,
   bytesToHex,
-  hexToBytes,
   randomBytes,
   chainProviders,
   type UnlockedWallet,
@@ -1054,8 +1053,3 @@ function uuidV4(): string {
   const hex = bytesToHex(bytes);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
-
-// silence unused-import warning for hexToBytes — kept for parity with
-// the sender's tip-handler, future-proofing for additional decryption
-// paths (e.g. a hex-encoded view key in some future asset).
-void hexToBytes;

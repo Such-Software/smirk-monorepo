@@ -1,4 +1,4 @@
-//! Transaction parsing and construction.
+//! Transaction parsing. Construction and signing live in `signing.rs`.
 
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -45,27 +45,3 @@ pub fn parse_tx(hex_data: &str) -> String {
         Err(e) => WasmResult::err(&format!("Parse error: {:?}", e)),
     }
 }
-
-// ============================================================================
-// Transaction Construction (TODO)
-// ============================================================================
-//
-// The following functions will be implemented:
-//
-// 1. prepare_outputs_with_decoys(outputs_json, decoys_json) -> String
-//    Takes owned outputs (from LWS get_unspent_outs) and decoy data
-//    (from LWS get_random_outs), returns serialized OutputWithDecoys
-//
-// 2. create_transaction(
-//      outputs_with_decoys_json,
-//      destination_address,
-//      amount,
-//      change_address,
-//      fee_per_byte,
-//      fee_mask,
-//      outgoing_view_key_hex
-//    ) -> String
-//    Creates a SignableTransaction, returns serialized form
-//
-// 3. sign_transaction(signable_tx_hex, spend_key_hex) -> String
-//    Signs the transaction, returns signed transaction hex for broadcast

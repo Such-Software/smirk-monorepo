@@ -21,9 +21,9 @@ import type { WalletSession } from '../types';
  * additional providers slot in by extending the wizard branch in
  * SwapTab and adding more handlers here.
  *
- * Client-direct architecture (V0_3_PLAN.md Decision 2): Trocador calls
- * go straight from this context to api.trocador.app. Backend
- * involvement is bookkeeping only — `POST /api/v1/swaps` so the
+ * Client-direct architecture: Trocador calls go straight from this
+ * context to api.trocador.app, so the backend never proxies user
+ * money. Backend involvement is bookkeeping only — `POST /api/v1/swaps` so the
  * status mirror webhook has somewhere to write.
  */
 export function SwapRouter({

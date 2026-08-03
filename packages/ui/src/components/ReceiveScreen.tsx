@@ -52,7 +52,7 @@ export interface ReceiveScreenProps {
   /**
    * The account's Smirk handle (`name@domain`), when a username is claimed.
    * Shown as the human identity above the raw per-asset address. Send-by-handle
-   * across chains lands once the resolver ships (see FIRST_CLASS_HANDLE plan).
+   * across chains lands once the resolver ships.
    */
   handle?: string;
   /**

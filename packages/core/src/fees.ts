@@ -15,10 +15,9 @@
  *   - dapp approval send                    — execute-approval.ts (via send)
  *   - tip claim sweep (sweepUtxo)           — tip-claim-handler.ts
  *
- * 2026-06-19: introduced after the e2e harness caught LTC public-tip
- * funding failing ("rejected by network rules") while plain sends — the
- * only path that already floored — succeeded. The estimate was 1.0; the
- * unfloored funding/sweep paths broadcast at 1.0 and were rejected.
+ * A 1.0 sat/vB estimate is what gets rejected in practice, so the floor
+ * sits just above it. The tip-funding and sweep paths are the ones that
+ * broadcast unfloored before this constant existed.
  */
 export const RELAY_FLOOR_SAT_PER_VB = 1.1;
 

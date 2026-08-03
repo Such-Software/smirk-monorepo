@@ -14,12 +14,12 @@ import { installSmirkPageApi } from '@such-software/smirk-dapp-api';
 installSmirkPageApi();
 ```
 
-After that, `window.smirk` exists in three contexts with the same shape:
+After that, `window.smirk` exists in three contexts:
 - the v0.2.x browser extension (content script installs it before your code runs)
 - the v0.3.0 desktop wallet's embedded browser (iframe + postMessage transport)
 - the v0.4 mobile wallet's embedded browser (Capacitor bridge — same call signature)
 
-All existing v0.2.x dapp code that uses `window.smirk.connect()`, `signMessage()`, `requestPayment()`, etc. continues to work everywhere. You do not have to choose a transport — `installSmirkPageApi()` picks the right one automatically.
+The extension surface is the full one. The embedded-browser surfaces carry the core subset: `connect`, `getPublicKeys`, `getAddresses`, `signMessage`, `requestPayment`, `claimPublicTip`. The script the desktop wallet injects on macOS and Windows also omits `disconnect` and `isConnected`. Existing v0.2.x dapp code that stays inside the core subset keeps working everywhere; feature-detect anything outside it. You do not have to choose a transport: `installSmirkPageApi()` picks the right one automatically.
 
 ## Why the change
 
@@ -36,7 +36,7 @@ Three transports, one API. The `@such-software/smirk-dapp-api` package abstracts
 `installSmirkPageApi()` runs synchronously on page load. In order:
 
 1. **Already-injected check.** If `window.smirk` is already defined, the extension content script ran first. We leave it alone. v0.2.x dapps in the user's regular browser see no change.
-2. **Parent-frame check.** If `window.parent !== window`, the page is iframed by something. The wallet's `IframeBrowserController` (Linux desktop today, all desktop platforms in v0.3.x, mobile in v0.4) embeds dapp pages this way. We install a `window.smirk` whose every method posts a `SMIRK_REQUEST` envelope to `window.parent` and resolves on the matching response.
+2. **Parent-frame check.** If `window.parent !== window`, the page is iframed by something. The wallet's `IframeBrowserController` (Linux desktop; mobile in v0.4) embeds dapp pages this way; macOS and Windows use a native Tauri webview per tab and inject the page API themselves. We install a `window.smirk` whose every method posts a `SMIRK_REQUEST` envelope to `window.parent` and resolves on the matching response.
 3. **Otherwise.** No extension, no iframe — `window.smirk` stays undefined. Your existing "install Smirk" fallback UI applies.
 
 The detection is opt-in: dapps that haven't migrated to v0.3.0 keep working in the extension context and present "extension not found" to the v0.3.0 desktop user. Calling `installSmirkPageApi()` is what enables the iframe path.
@@ -58,14 +58,15 @@ Same as v0.2.x: see the [`window.smirk` API reference](https://github.com/Such-S
 
 ## Sign in with Nostr (NIP-98)
 
-Since `@such-software/smirk-dapp-api` 0.4.0, a dapp can authenticate a user with their wallet's **seed-derived Nostr identity** — the same npub the wallet uses to sign in to its own backend (NIP-06 derivation, schnorr/BIP-340). No passwords, no email, no Smirk servers in the loop: the dapp gets a stable public key and a signature it verifies itself.
+Since `@such-software/smirk-dapp-api` 0.4.0, a dapp can authenticate a user with a **seed-derived Nostr identity** (NIP-06 derivation, schnorr/BIP-340). At grant time the user chooses whether to share their main npub or a per-origin identity that only your site sees; either way the key is stable for your origin. No passwords, no email, no Smirk servers in the loop: the dapp gets a stable public key and a signature it verifies itself.
 
 Two methods (both flat on `window.smirk`):
 
 ```ts
 // The user's Nostr public key (32-byte x-only, hex). Prompts a one-time
 // per-origin "allow this site to see your Nostr identity" approval.
-const pubkey: string = await window.smirk.getNostrPublicKey();
+const pubkey = await window.smirk.getNostrPublicKey(); // string | null
+if (!pubkey) return; // the user declined the identity grant
 
 // Ask the wallet to sign a NIP-01 event. The wallet stamps created_at (if
 // omitted), pubkey, the event id, and the schnorr signature.
@@ -87,6 +88,8 @@ A minimal login:
 3. Send the signed event to your server; verify the schnorr signature over the NIP-01 id against `signed.pubkey`, and check the tags match the request (and `created_at` is fresh). A valid signature proves the user controls that npub.
 
 `signNostrEvent` is general-purpose NIP-01 — kind 27235 for NIP-98 auth, kind 1 for a note your dapp publishes on the user's behalf, etc. The private key never leaves the wallet; the page only ever receives the signed event.
+
+Kind 27235 carries two constraints. The event must have a `u` tag holding a parseable absolute URL: the wallet refuses to sign a NIP-98 event blind. And that URL's host must not be the user's own Smirk backend, so a site cannot mint a wallet sign-in token through the dapp interface.
 
 **Version gate — feature-detect.** The Nostr identity is a **v0.3+** feature: the v0.2.x extension has no npub, so `getNostrPublicKey` / `signNostrEvent` are absent (or reject) there. Guard before using them:
 
@@ -150,7 +153,10 @@ identity, so `getNostrPublicKey()` / `signNostrEvent()` work there too.
 | Legacy dapp uses `window.smirk` only (no `installSmirkPageApi()` call)                               | works                    | works                    | shows "wallet not found"        | shows "wallet not found"     |
 | Dapp uses `installSmirkPageApi({ mode: 'never' })`                                                   | works (extension wins)   | works (extension wins)   | shows "wallet not found"        | shows "wallet not found"     |
 | Dapp uses `installSmirkPageApi({ mode: 'force' })` (testing: install even when not in Smirk iframe) | works (extension wins)   | works (extension wins)   | works                           | works                        |
-| Dapp uses `getNostrPublicKey()` / `signNostrEvent()` (Sign in with Nostr, dapp-api ≥ 0.4.0)          | not available (no npub)  | works                    | works                           | works                        |
+| Dapp uses `getNostrPublicKey()` / `signNostrEvent()` (Sign in with Nostr, dapp-api ≥ 0.4.0)          | not available (no npub)  | works                    | not available (page surface omits it) | not available (page surface omits it) |
+
+The wallet side implements the Nostr methods; the embedded-browser page surface
+does not install them yet, so feature-detect before offering Sign in with Nostr.
 
 ## Where to file issues
 

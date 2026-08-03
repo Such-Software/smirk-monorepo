@@ -489,11 +489,9 @@ export function dearmorSlateAndSender(
  * ```
  *
  * For a typical 1-input 2-output 1-kernel send: weight = 46, fee = 23_000_000
- * nanogrin (0.023 GRIN). v0.2.4 used these same numbers (see
- * `/home/jw/src/smirk-extension/src/lib/grin/constants.ts`); the
- * monorepo briefly shipped a wrong `BASE_FEE × max(1, 4·out − in + kern)`
- * formula that produced 8M nanogrin — accepted by every test broadcast
- * since 2026-04-28 was rejected by the node with
+ * nanogrin (0.023 GRIN). The v0.2.4 extension uses the same numbers.
+ * Do not substitute `BASE_FEE × max(1, 4·out − in + kern)`: it yields
+ * 8M nanogrin, which the node rejects with
  * `Failed to update pool: Low fee transaction 8000000`.
  *
  * Used for greedy input selection — iterate, recompute fee per

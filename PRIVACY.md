@@ -11,11 +11,15 @@ backend does receive, to power balances and optional features:
 
 - **Monero/Wownero view keys**, so the light-wallet-server can scan the chain for
   your incoming funds (a view key cannot spend).
+- A **Grin `rewind_hash`**, a view-only credential derived from your public root
+  key, so the Grin light-wallet-server can rewind the UTXO set and return your
+  outputs. It can read but never spend, and the scan stores nothing server-side.
 - **Public addresses** (BTC/LTC) to look up balances via Electrum/Fulcrum, and
   **signed transaction bytes** to broadcast. Recipient address and amount are not
   transmitted on broadcast.
 - A one-way **seed fingerprint** (SHA-256) as a stable, non-reversible identifier.
-- An **optional** Nostr identity + `name@smirk.cash` handle (public by design) and
+- An **optional** Nostr identity + a `name@domain` handle on whichever instance
+  you use (public by design) and
   **optional** end-to-end encrypted messaging (relays see only ciphertext).
 - IP addresses only as a **salted one-way hash**, for rate-limiting.
 

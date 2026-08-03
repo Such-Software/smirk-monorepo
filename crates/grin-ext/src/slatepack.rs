@@ -36,8 +36,8 @@ use sha2::{Digest, Sha256};
 //   payload_len: u32                               (4 bytes)
 //   payload    : raw bytes
 //
-// We always emit version 1.0. `mode` is 0 (plain) for now; `mode = 1` (age
-// encryption) is a follow-up commit alongside the encryption module.
+// We always emit version 1.0. `mode` is 0 for plain slates and 1 for
+// age-encrypted payloads (see `slatepack_encryption`).
 
 /// Slatepack version. Currently always 1.0 in production grin-wallet output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +57,8 @@ pub enum SlatepackMode {
     /// `mode = 0` — payload is a binary slate, unencrypted.
     Plain = 0,
     /// `mode = 1` — payload is age-encrypted to one or more recipients.
-    /// Encryption support is not yet implemented in this crate.
+    /// Produced and consumed by `slatepack_encryption::pack_encrypted` /
+    /// `unpack_encrypted`.
     Encrypted = 1,
 }
 

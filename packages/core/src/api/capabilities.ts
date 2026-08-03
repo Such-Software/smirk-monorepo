@@ -229,20 +229,6 @@ export interface MessagingCapability {
   supported_nips: number[];
 }
 
-/**
- * Earliest wallet-birthday / restore date this instance's policy permits, given
- * `now`. `null` = no floor (the `unlimited` policy — any date is allowed).
- *
- * - `unlimited`   → `null` (no restriction)
- * - `create-only` → `now` (only a wallet created ~today registers; the backend
- *   refuses a deeper restore scan)
- * - `bounded`     → `now − max_depth_days`
- *
- * The wallet uses this to bound the restore-date picker on import and to explain
- * why an older date isn't available on this backend. Pure (testable; `now` is
- * injected) and the single place the policy semantics live client-side — mirrors
- * the backend's enforcement so the UX and the server agree.
- */
 // ============================================================================
 // Feature gates. Everything is opt-in: a minimal backend may advertise no
 // prices, tips, feed, or relay, and "absent" is a valid first-class state, not
@@ -283,6 +269,20 @@ export const capAllowsChain = (
   chain: 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin',
 ): boolean => c == null || c.chains[chain].enabled;
 
+/**
+ * Earliest wallet-birthday / restore date this instance's policy permits, given
+ * `now`. `null` = no floor (the `unlimited` policy — any date is allowed).
+ *
+ * - `unlimited`   → `null` (no restriction)
+ * - `create-only` → `now` (only a wallet created ~today registers; the backend
+ *   refuses a deeper restore scan)
+ * - `bounded`     → `now − max_depth_days`
+ *
+ * The wallet uses this to bound the restore-date picker on import and to explain
+ * why an older date isn't available on this backend. Pure (testable; `now` is
+ * injected) and the single place the policy semantics live client-side — mirrors
+ * the backend's enforcement so the UX and the server agree.
+ */
 export function earliestRestoreDate(restore: RestoreCapability, now: Date): Date | null {
   switch (restore.policy) {
     case 'unlimited':

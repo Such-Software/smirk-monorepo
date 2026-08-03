@@ -61,11 +61,12 @@ export interface SessionState {
    * - `autoLockMinutes`: how long the wallet stays unlocked after the
    *   session ends (popup-close on extension, backgrounding on mobile,
    *   window-close on desktop). **Has security implications** — when
-   *   > 0, the unlocked mnemonic is mirrored to the platform's
-   *   ephemeral-keyed storage for the configured duration. `0`
-   *   (default) = lock immediately at session end (the safe default).
-   *   `-1` = never auto-lock until the user manually locks or the
-   *   app fully exits.
+   *   > 0, the derived leaf keys and addresses (never the mnemonic or
+   *   seed) are mirrored to the platform's ephemeral-keyed storage for
+   *   the configured duration. `0` (default) = lock immediately at
+   *   session end (the safe default). Values are normalised by
+   *   `clampAutoLockMinutes`: any negative value, and anything above
+   *   `AUTO_LOCK_MAX_MINUTES` (24 h), clamps to the 24 h cap.
    * - `theme`: id of the registered theme from `@smirk/ui/themes`.
    *   Unknown ids fall back to the default theme at apply time.
    */

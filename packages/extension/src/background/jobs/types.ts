@@ -75,9 +75,6 @@ export interface JobKindMap {
       accessToken: string;
     };
   };
-  // Future: add entries here as we port flows over.
-  // 'grin-finalize': { input: { slate: string; ... }; output: { ... } };
-  // 'swap-poll':    { input: { tradeId: string };    output: { ... } };
 }
 
 /**

@@ -20,9 +20,10 @@
  *      Telegram / Discord once funding confirms (per asset's
  *      confirmation requirement).
  *
- * v0.3 first cut: BTC/LTC fully wired. XMR/WOW + Grin (voucher) ship
- * in the next commit — those need fresh-keypair generation paths +
- * tx-build wiring that's per-chain-specific and worth its own commit.
+ * All five assets are wired. BTC/LTC and XMR/WOW fund a freshly
+ * generated single-use keypair and derive the tip address from it;
+ * Grin funds a single-party voucher output instead, since it has no
+ * address to pay.
  */
 
 import { sha256 } from '@noble/hashes/sha256';
@@ -61,8 +62,7 @@ import { storeTipKeyBackup } from './tip-key-backup';
  * in Sent Tips). Server-side dedupes on `(tip_id, funding_txid)` so
  * retries are safe to issue.
  *
- * Per Finding 6 in the v0.3.0 pre-ship audit (TODO.md). Three
- * attempts at 1s, 3s, 9s — total worst-case ~13s before surfacing
+ * Three attempts at 1s, 3s, 9s — total worst-case ~13s before surfacing
  * to the user. If all attempts fail the on-chain funds are still
  * recoverable: the local backup carries the tip key so the user can
  * clawback via the on-chain sweep path, but the tip won't appear in
@@ -545,7 +545,7 @@ async function createXmrWowTip(
   }
 
   // 7. Phase 2 — attach the broadcast txid. Client retries 3x with
-  //    exponential backoff per Finding 6; if all retries fail the
+  //    exponential backoff; if all retries fail the
   //    funds are on chain and the spend key is in the local backup,
   //    so the asset-detail tip row → Clawback fully recovers.
   const attach = await attachFundingWithRetry(tipId, sendResult.txid);
@@ -877,7 +877,7 @@ async function createGrinTip(
 
   // 10. Phase 2 — attach the slate_id (acts as the funding identifier
   //     for Grin since the kernel commit IS the on-chain identity).
-  //     Client retries 3x with exponential backoff per Finding 6.
+  //     Client retries 3x with exponential backoff.
   const attach = await attachFundingWithRetry(tipId, slateId);
   if (!attach.ok) {
     return {

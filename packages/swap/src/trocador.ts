@@ -10,13 +10,12 @@
  * itself custodies funds during the swap; Smirk just builds the
  * request and shows the user the deposit address to send to.
  *
- * The affiliate API key ships in the extension bundle. Per the
- * 2026-05-14 architecture call, this is an explicit risk-accepted
- * tradeoff: a leaked affiliate key affects rev-share, not custody
- * (Trocador's classification is "affiliate" not "bearer credential"),
- * and a server-side proxy would push Smirk into a money-transmitter
- * posture the team has chosen to avoid. See `docs/V0_3_PLAN.md`
- * Decision 2.
+ * The affiliate API key ships in the extension bundle. This is an
+ * explicit risk-accepted tradeoff: a leaked affiliate key affects
+ * rev-share, not custody (Trocador's classification is "affiliate" not
+ * "bearer credential"), and a server-side proxy would push Smirk into a
+ * money-transmitter posture the team has chosen to avoid. See
+ * `docs/V0_3_PLAN.md` Decision 2 in the backend repo.
  *
  * Reference: Cake Wallet's `trocador_exchange_provider.dart` for
  * field-name parity; endpoints validated against `api.trocador.app`
@@ -208,10 +207,10 @@ export class TrocadorSwap implements Swap {
     this.markup = opts.markup ?? '';
   }
 
-  /** All Smirk-supported assets are nominally on Trocador, but live
-   *  pair availability is decided at quote time (some pairs fall back
-   *  to providers with no inventory). `supports()` is just a coarse
-   *  "is this asset on our map?" filter — call `quote()` for the
+  /** Coarse map-membership filter: BTC/LTC/XMR only (see
+   *  `TROCADOR_COIN` for why WOW and GRIN are excluded). Live pair
+   *  availability is still decided at quote time, since some pairs fall
+   *  back to providers with no inventory; call `quote()` for the
    *  real answer per pair. */
   supports(from: AssetId, to: AssetId): boolean {
     return from !== to && from in TROCADOR_COIN && to in TROCADOR_COIN;
@@ -349,13 +348,12 @@ export class TrocadorSwap implements Swap {
     if (this.markup) tradeParams.set('markup', this.markup);
     if (this.opts.webhookUrl) tradeParams.set('webhook', this.opts.webhookUrl);
     // Per-trade passthrough takes precedence over the constructor
-    // default. The wallet generates a fresh random token per swap so
-    // each trade has its own webhook secret — pre-2026-06-13 this was
-    // generated and persisted to the backend but never threaded into
-    // /new_trade, so every webhook delivery arrived with passthrough
-    // empty and was rejected by the backend's constant-time check.
-    // The 60s backup poller silently masked it; the primary push
-    // path was dead end-to-end. See SwapStartParams.passthrough.
+    // default. The wallet mints a fresh random token per swap so each
+    // trade has its own webhook secret, and it MUST be threaded into
+    // /new_trade: without it every delivery arrives with passthrough
+    // empty, the backend's constant-time check rejects it, and only the
+    // 60s backup poller keeps state moving, which masks the dead push
+    // path. See SwapStartParams.passthrough.
     const passthrough = params.passthrough ?? this.opts.passthrough;
     if (passthrough) tradeParams.set('passthrough', passthrough);
 
@@ -423,11 +421,10 @@ function mapStatus(t: TrocadorTradeResponse): SwapStatus {
     case 'finished':
       return {
         state: 'completed',
-        // Trocador's `id_provider` is the underlying CEX's order id —
-        // NOT a chain txid. We pass it through unchanged so the UI
-        // can render it informationally; leaving empty when absent
-        // (was previously falling back to trade_id, which would
-        // render as a broken explorer link).
+        // Trocador's `id_provider` is the underlying CEX's order id,
+        // NOT a chain txid. Passed through unchanged so the UI can
+        // render it informationally; left empty when absent, because
+        // falling back to trade_id renders as a broken explorer link.
         outboundTxId: t.id_provider || '',
         toAmount: decimalToAtomicString(
           normalizeAmountString(t.amount_to),

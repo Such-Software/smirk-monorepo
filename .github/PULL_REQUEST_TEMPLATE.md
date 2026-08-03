@@ -49,8 +49,8 @@ standards reference.
 - [ ] Animations respect `prefers-reduced-motion`.
 - [ ] All visible text strings go through `t()` (i18n-ready, even
       for English-only ship).
-- [ ] Dynamic announcements route through `<LiveRegion>` (when it
-      lands), not raw `aria-live`.
+- [ ] Dynamic announcements use a polite live region rather than
+      ad-hoc DOM updates.
 - [ ] If the change introduces a new interaction pattern, the
       pattern is documented in `docs/ACCESSIBILITY.md`.
 - [ ] If the change introduces or alters a keyboard shortcut, the
@@ -70,8 +70,8 @@ auth, dapp surface, network egress, or storage.
       hand-rolled crypto.
 - [ ] Errors do not leak secrets (timing, error messages, log
       strings).
-- [ ] If the change is security-relevant, an entry is added to
-      `docs/SECURITY_LOG.md`.
+- [ ] If the change is security-relevant, say so in the PR summary so a
+      maintainer can record it.
 
 ## Cross-platform parity
 

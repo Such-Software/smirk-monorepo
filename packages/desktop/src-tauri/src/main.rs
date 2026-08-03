@@ -9,15 +9,14 @@
 
 mod browser_plugin;
 
-// No native menu bar. The wallet is a small focused tool; the menu
-// items we had (Close Window, clipboard, Fullscreen, Minimize, About)
-// duplicated either the system window controls or the in-wallet UI.
-// On Linux/GTK several Tauri 2.x `PredefinedMenuItem`s also render
-// without labels, so the bar showed empty submenus. Keyboard
-// shortcuts for clipboard / fullscreen work via the webview anyway.
-// Re-introduce only if wallet-specific actions warrant their own
-// surface — wire as `webview.emit("smirk:menu:X")` per the original
-// menu.rs contributor note.
+// No native menu bar. The wallet is a small focused tool; the items a
+// menu would carry (Close Window, clipboard, Fullscreen, Minimize,
+// About) duplicate either the system window controls or the in-wallet
+// UI, and keyboard shortcuts for clipboard / fullscreen work via the
+// webview anyway. On Linux/GTK several Tauri 2.x `PredefinedMenuItem`s
+// also render without labels, so the bar showed empty submenus. A
+// wallet-specific action that needs a menu should emit
+// `smirk:menu:<action>` to the webview.
 fn main() {
     // Linux/WebKitGTK: the DMA-BUF renderer + accelerated compositor
     // both lose their backing surface when a child WebviewWindow's

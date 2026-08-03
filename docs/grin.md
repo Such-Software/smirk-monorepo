@@ -2,7 +2,7 @@
 
 Smirk's Grin / Mimblewimble support is being reimplemented from primitives into `crates/grin-ext/` so we own the protocol layer end-to-end and can extend it with features (atomic-swap adaptor signatures, NRD-kernel time-locks, custom slate workflows) that don't exist in upstream `grin-wallet`.
 
-The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships Grin support via vendored MWC-Wallet WebAssembly, which has been validated against the official `grin-wallet` GUI (a Smirk seed restored in `grin-wallet` recovers the same funds). That implementation serves as the behavioral oracle for the new Rust crate — `crates/grin-ext/` must produce byte-identical outputs for the same inputs before it cuts over to production. The v0.3 monorepo (`packages/extension`) is the canonical client going forward; `smirk-extension` is kept frozen as the migration source.
+The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships Grin support via vendored MWC-Wallet WebAssembly, which has been validated against the official `grin-wallet` GUI (a Smirk seed restored in `grin-wallet` recovers the same funds). `crates/grin-ext/` is the production Grin implementation: the v0.3 extension routes every slate ceremony through it, and byte-level parity is held by the cross-validation suite against `grin_wallet_libwallet` (see `crates/grin-ext/tests/README.md`). The v0.3 monorepo (`packages/extension`) is the canonical client going forward; `smirk-extension` is kept frozen as the migration source.
 
 ## Approach
 
@@ -54,7 +54,7 @@ Crypto primitives are well-tested upstream — we don't reimplement them. Protoc
 | Switch-commitment-aware blind derivation (BIP32 child key → `blind_switch` with the J generator from secp256k1-zkp) | ✅ Done — Grin Hard Fork 2 consensus requirement; byte-equivalent with `grin_keychain::ExtKeychain::derive_key` across 5 cross-validation cases |
 | Slate v4 compact-binary serialization (`SlatepackBin` wire format) | ✅ Done — `crates/grin-ext/src/slate_bin.rs` ported from `grin_wallet_libwallet::v4_bin`; binary round-trip verified against the official library |
 | **6 high-level wallet orchestrators** in `crates/grin-ext/src/wallet_flows.rs` | ✅ Done — `create_send_transaction`, `sign_incoming_send_slate`, `finalize_send_slate`, `create_invoice`, `sign_invoice`, `finalize_invoice`. Each takes wallet-level params (extended priv key, inputs, amount, fee) and returns slate + context + tx_bytes. Mirror the XMR/WOW pattern where Rust does the signing but TS does the orchestration |
-| Cross-validation against `grin_wallet_libwallet` 5.4.0 | ✅ Done — `crates/grin-ext/tests/grin_wallet_compat.rs`: 8 tests covering sign convention, `derive_blind` vs `grin_keychain` (5 cases), full S1→S2→S3 round-trip, full I1→I2→I3 round-trip, binary slate round-trip, random secret nonce. Catches protocol-mismatch bugs that internal tests can't (e.g. the c78aff0 `outputs − inputs − offset` fix) |
+| Cross-validation against `grin_wallet_libwallet` 5.4.0 | ✅ Done — `crates/grin-ext/tests/grin_wallet_compat.rs`: 12 tests covering sign convention, `derive_blind` vs `grin_keychain` (5 cases), full S1→S2→S3 round-trip, full I1→I2→I3 round-trip, binary slate round-trip, random secret nonce, `partial_sign` vs `grin_aggsig::sign_single`, depth-3 / depth-4 derivation divergence, `pubkey_to_commitment`, and output identification. Catches protocol-mismatch bugs that internal tests can't (e.g. the c78aff0 `outputs − inputs − offset` fix) |
 
 ## Key derivation chain
 
@@ -249,7 +249,7 @@ paths). The default scan path, `grin-lws` (below), closes this gap: its
 `get_unspent_outs` recovers each output's `key_id` server-side by rewinding the
 rangeproof, so the client parses that verified `key_id` into the spend path and
 never has to search. The wallet spends directly from the LWS-provided `key_id`
-(the Phase 8 work in `grin-flows.ts`).
+(see `packages/extension/src/popup/grin-flows.ts`).
 
 The brute-force identify helper remains only as a fallback for the `grin-wallet`
 scan path, which returns commitments without a `key_id`. Smirk outputs are
@@ -300,14 +300,18 @@ across transports (see the slate-construction rows in **Status**); only the
    (greedy largest-first with fee iteration) **minus** any commit already in the
    overlay's pending-spent set, and builds the initial slate
    (`createSendTransaction`), which emits a change output at `nextChildIndex`.
+   The build atomically reserves `nextChildIndex` and records a not-yet-broadcast
+   overlay entry (spent input commits + change), so a concurrent
+   send/invoice/receive can neither re-select those inputs nor re-derive the same
+   change index while the slate is in flight.
 2. **S2** — recipient adds their output + range proof + partial signature
    (`signIncomingSendSlate`) and returns the slate.
 3. **S3** — sender finalizes (`finalizeSendSlate`) and broadcasts via
-   `POST /wallet/grin/broadcast {tx}`. **Only on a successful broadcast** does the
-   sender add a pending-overlay entry (spent input commits + change) and bump
-   `nextChildIndex` — S1 alone may never finalize, so nothing is recorded until the
-   tx is actually on the wire. The excluded-from-selection guarantee then holds
-   from broadcast until the next scan shows the inputs gone.
+   `POST /wallet/grin/broadcast {tx}`, then flips that overlay entry to broadcast
+   and re-anchors its TTL to the real broadcast time. The index is not bumped
+   again. The excluded-from-selection guarantee holds until the next scan shows
+   the inputs gone. A cancel while still pre-broadcast frees the entry; an
+   abandoned one ages out on the 7-day backstop.
 
 Per transport: over **Nostr**, each leg is a gift-wrap, and a successful S3 emits a
 `finalizeNotice` settlement gift-wrap so the recipient's inbox item retires by
@@ -323,25 +327,34 @@ send, receive, respond, and cancel share the same transport plumbing.
 
 **Invoice (receiver-initiated): I1 → I2 → I3**
 
-1. **I1** — payee builds an invoice slate naming the amount (`createInvoice`).
+1. **I1** — payee reserves `nextChildIndex` for its incoming output and builds an
+   invoice slate naming the amount (`createInvoice`). No overlay entry is recorded
+   yet: nobody has committed to pay, so counting the amount would inflate the
+   pending balance on speculation.
 2. **I2** — payer scans, identifies + selects inputs (minus pending-spent) and adds
-   inputs, fee, and their partial signature (`signInvoice`).
+   inputs, fee, and their partial signature (`signInvoice`), recording its own
+   pending entry (spent inputs + change) at build time.
 3. **I3** — payee finalizes (`finalizeInvoice`) and broadcasts, then records its
-   incoming output in the overlay and bumps `nextChildIndex`.
+   incoming output in the overlay. The index was already reserved at I1.
 
 The same three transports carry the invoice legs. On the receive side generally
-(incoming send or invoice), a broadcast records an `incoming` overlay entry so the
-received amount shows as *pending* until a scan confirms it, and bumps
-`nextChildIndex` so the receive index is never reused. Cancelling clears the
+(incoming send or invoice), an `incoming` overlay entry makes the received amount
+show as *pending* until a scan confirms it. The invoice payee records it when it
+broadcasts I3; a wallet signing an incoming S1 records it as it signs, since there
+the sender does the broadcasting. Either way the index is reserved before the
+output is built, so a receive index is never reused. Cancelling clears the
 relevant overlay entry.
 
 **Money-critical invariants (all transports):**
 
-- **Exclude-until-mined.** An input a broadcast tx consumes is added to the
-  pending-spent set on successful broadcast and excluded from selection until a
+- **Exclude-until-mined.** An input a slate consumes is added to the
+  pending-spent set when the slate is *built* and excluded from selection until a
   scan proves it gone — preventing an accidental double-spend of the same UTXO in
-  the confirmation gap. This is enforced identically whether the carrier is Nostr,
-  relay, or clipboard.
+  the confirmation gap. Reserving at build rather than at broadcast also closes
+  the window where a concurrent flow re-selects the same UTXO while the first
+  slate is still in flight. A pre-broadcast cancel frees it immediately; the
+  7-day backstop frees an abandoned one. This is enforced identically whether the
+  carrier is Nostr, relay, or clipboard.
 - **No index reuse.** `nextChildIndex` is monotonic and bumped on every created
   change/receive output; reusing it would re-derive an identical, unspendable
   commitment.
@@ -351,11 +364,11 @@ relevant overlay entry.
 Two-tier verification before any feature ships:
 
 1. **Mathematical reproducibility** — Rust unit tests with golden vectors computed independently (e.g. via Python's `hmac` module). Any HMAC-SHA512 implementation must produce the same bytes given the same inputs.
-2. **Behavioral parity with legacy smirk-extension v0.2.x** — once a feature has Rust unit tests passing, verify it produces the same output as the (frozen) TypeScript/MWC stack for the same inputs. Once parity holds across a representative input set, the new code is safe to ship into the v0.3 monorepo extension.
+2. **Protocol parity with the official reference** — cross-validate every load-bearing primitive against `grin_wallet_libwallet` in `crates/grin-ext/tests/grin_wallet_compat.rs`. Internal tests cannot catch a convention that is self-consistent but wrong on the wire; the reference parser and kernel-excess derivation can.
 
 ## WASM exports
 
-Available now in `crates/smirk-wasm/src/grin/` (organized into submodules — `keys`, `schnorr`, `multiparty`, `adaptor`, `bulletproof`, `blind`, `slate`, `slate_builder`, `kernel`, `transaction`, `payment_proof`, `slatepack`):
+Available now in `crates/smirk-wasm/src/grin/` (organized into submodules — `keys`, `schnorr`, `multiparty`, `adaptor`, `bulletproof`, `blind`, `slate`, `slate_builder`, `kernel`, `transaction`, `payment_proof`, `slatepack`, `wallet_flows`, `voucher`):
 
 | Function | Returns |
 |---|---|
@@ -374,7 +387,7 @@ Available now in `crates/smirk-wasm/src/grin/` (organized into submodules — `k
 | `grin_kernel_sig_msg(kind, fee?, lock_height?, relative_height?)` | `hex` — 32-byte BLAKE2b message to Schnorr-sign for a kernel of the given type |
 | `grin_kernel_features_bytes(kind, fee?, lock_height?, relative_height?)` | `hex` — kernel features in v2 wire format (for slate v4 kernel serialization) |
 | `grin_blind_add(a_hex, b_hex)` / `grin_blind_sub` / `grin_blind_sum` | `hex` — secp256k1 scalar arithmetic mod curve order |
-| `grin_sender_blind_excess(input_blinds, sender_output_blinds, kernel_offset)` | `hex` — Σinputs − Σoutputs − offset |
+| `grin_sender_blind_excess(input_blinds, sender_output_blinds, kernel_offset)` | `hex` — Σoutputs − Σinputs − offset |
 | `grin_sender_init_s1(slate_id, amount, fee, kernel_kind, lock_height?, relative_height?, sender_blind_excess, kernel_offset, kernel_nonce)` | `JSON: { slate_json, context }` — produces an S1 slate for the receiver and the private context the sender retains for finalize |
 | `grin_receiver_round_s2(s1_slate_json, output_blind, kernel_nonce, bp_rewind_nonce, bp_private_nonce)` | `JSON: { slate_json, context }` — produces an S2 slate (with receiver's output commitment + range proof + partial sig) and the private context the receiver retains |
 | `grin_sender_finalize_s3(s2_slate_json, slate_id, amount, fee, kernel_kind, lock_height?, relative_height?, sender_blind_excess, kernel_offset, kernel_nonce)` | `JSON: { slate_json, final_signature_hex }` — produces the S3 slate + the verified 64-byte aggregate kernel signature |
@@ -412,6 +425,8 @@ Available now in `crates/smirk-wasm/src/grin/` (organized into submodules — `k
 | `grin_create_invoice(params_json)` | `JSON: { slate_json, receiver_context_json, receiver_output_info_json }` — invoice-flow init (I1): receiver picks amount, adds output + partial sig |
 | `grin_sign_invoice(params_json)` | `JSON: { slate_json, sender_context_json, change_output_info_json }` — payer's response to invoice (I2): adds inputs, fee, sender partial |
 | `grin_finalize_invoice(params_json)` | `JSON: { slate_json, final_signature_hex, tx_bytes_hex, kernel_excess_hex }` — receiver-side I3: aggregate + assemble TX bytes |
+| `grin_create_grin_voucher(params_json)` | `JSON: { voucher, change?, kernel_excess_hex, tx_bytes_hex, tx_json }` — sender-side single-party tx placing a voucher UTXO on chain (non-interactive transfer, used by social tipping); returns the voucher's blinding factor for the JS layer to encrypt to the recipient |
+| `grin_sweep_grin_voucher(params_json)` | `JSON: { output, kernel_excess_hex, tx_bytes_hex, tx_json }` — claimer-side: given the decrypted blinding factor, sweeps the voucher UTXO into a new output the claimer controls |
 | `grin_random_secret_nonce()` | `hex` — fresh 32-byte secp256k1 scalar (mod n); used by callers needing kernel/sig nonces |
 | `grin_slate_v4_to_bin_hex(slate_json)` | `hex` — slate v4 compact-binary serialization (`SlatepackBin` payload) |
 | `grin_slate_v4_from_bin_hex(bin_hex)` | `string` — inverse: binary back to canonical slate v4 JSON |

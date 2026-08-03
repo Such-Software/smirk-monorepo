@@ -68,7 +68,10 @@ export type ApprovalRequest =
       kind: 'requestPayment';
       origin: OriginContext;
       asset: 'btc' | 'ltc' | 'xmr' | 'wow';
-      /** Atomic-units string. Wallet formats for display. */
+      /** Human decimal amount exactly as the page sent it, e.g. "9.5".
+       *  The platform's approval UI converts to atomic units with the
+       *  asset's decimals before executing; do not call `BigInt()` on
+       *  this value. */
       amount: string;
       address: string;
       memo?: string;

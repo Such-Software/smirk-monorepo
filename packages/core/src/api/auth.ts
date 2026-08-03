@@ -51,9 +51,10 @@ export interface AuthMethods {
     /** Bitcoin message signature of `smirk-auth-{timestamp}` using BTC private key. */
     signature: string;
     /**
-     * Optional ALTCHA proof-of-work solution. Always sent by v0.3.0+
-     * clients (so the backend can flip `POW_REQUIRED=true` without
-     * breaking us). The `challenge` must be the FULL original
+     * Optional ALTCHA proof-of-work solution. Sent for a NEW wallet,
+     * so the backend can run `POW_REQUIRED=true` without a client
+     * redeploy; omitted for a returning wallet, which the backend
+     * exempts. The `challenge` must be the FULL original
      * Challenge object returned by `/auth/pow-challenge`, NOT the
      * Solution's internal challenge-hash field — the envelope shape
      * matches the backend's `altcha::Payload` struct exactly.

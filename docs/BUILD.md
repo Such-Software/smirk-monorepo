@@ -6,7 +6,9 @@ separate `smirk-backend-core` repo and is not built here.
 
 ## Prerequisites
 
-- **Node.js 20+** and npm.
+- **Node.js 22+** and npm. Node 20 is not enough: the package test scripts pass
+  a glob to `node --test`, and `node --test` only expands globs from 22. This is
+  why CI pins 22.
 - **Rust** (stable), required for **both** clients. The browser extension does
   not just need Rust for the desktop app: the wallet's cryptography ships as a
   WebAssembly bundle built from the `crates/` Rust workspace, and the extension
@@ -57,11 +59,17 @@ an empty `pkg/` and the extension loads without working crypto.
 
 The apps import the workspace libraries (`@smirk/core`, `@smirk/ui`,
 `@smirk/assets`, `@smirk/wasm`, …) from their **built `dist/`**, so build the
-libraries before an app. The simplest path builds every workspace:
+libraries before an app. `tsc -p` emits, so each library needs its dependencies'
+`dist/` already on disk:
 
 ```bash
-npm run build            # builds all @smirk/* library dists (repo root)
+make libs                # every @smirk/* library dist, in derived dependency order
 ```
+
+Root `npm run build` walks the workspaces alphabetically rather than in
+dependency order, so on a fresh clone `@smirk/core` compiles before `@smirk/wasm`
+has a `dist/` to resolve against; it appears to work only when a stale `dist/` is
+already there. CI builds with `make libs` for that reason.
 
 ## Browser extension
 
@@ -76,8 +84,8 @@ make ext-firefox   # dist/ with the Firefox manifest
 ```
 
 The npm scripts build only the extension itself and assume the WASM bundle and
-the workspace `dist/`s are already built, so run `make wasm` (and `npm run
-build`) first if you use them directly:
+the workspace `dist/`s are already built, so run `make wasm` (and `make libs`)
+first if you use them directly:
 
 ```bash
 make wasm                                     # once, if not already built
@@ -106,9 +114,10 @@ npm run tauri:build -w @smirk/desktop        # native app + installers
 ```
 
 Output: `packages/desktop/src-tauri/target/release/` — the raw binary
-(`smirk-wallet`) and, under `bundle/`, the platform installers (Linux:
-AppImage + `.deb`; macOS: `.dmg`; Windows: NSIS). The **first** build compiles
-the full Rust webview stack and can take several minutes.
+(`smirk-desktop`) and, under `bundle/`, the platform artifacts as configured by
+`bundle.targets` in `src-tauri/tauri.conf.json` (Linux: AppImage; macOS: `.app`;
+Windows: NSIS). The **first** build compiles the full Rust webview stack and can
+take several minutes.
 
 For iterative development (hot-reload, no bundle):
 
@@ -120,5 +129,18 @@ npm run tauri:dev -w @smirk/desktop
 
 ```bash
 npm run typecheck        # all workspaces
-npm test                 # all workspaces
+
+# The unit gate, as CI runs it. npm has no workspace exclusion, so the packages
+# are listed: add new ones here.
+for pkg in @smirk/assets @smirk/core @such-software/smirk-dapp-api \
+           @smirk/dapp-browser @smirk/extension @smirk/keymap \
+           @smirk/swap @smirk/ui; do
+  npm test -w "$pkg"
+done
 ```
+
+Root `npm test` is not the unit gate: `--workspaces --if-present` also reaches
+`@smirk/e2e`, whose test script is `playwright test`, which needs a browser, a
+running backend, and an extension built against that backend, and aborts on its
+own preflight. Run the Playwright suite in its own environment with
+`npm run e2e -w @smirk/e2e`.

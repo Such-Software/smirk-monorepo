@@ -36,10 +36,9 @@
  * either Rust or TS should live in Rust where it has direct access to
  * the webview APIs; TS just round-trips.
  *
- * Status: fully wired as of v0.3.0. Each tab is a borderless
- * `WebviewWindow` on the Rust side; this controller's `invoke` calls
- * drive the actual webview lifecycle. See `browser_plugin.rs` for
- * the architecture write-up.
+ * Each tab is a borderless `WebviewWindow` on the Rust side; this
+ * controller's `invoke` calls drive the webview lifecycle. See
+ * `browser_plugin.rs` for the architecture.
  */
 
 import { invoke } from '@tauri-apps/api/core';

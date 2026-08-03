@@ -14,8 +14,10 @@ Smirk ships to three surfaces over the v0.3 → v0.5 arc:
 
 - **Extension** (Chrome MV3 + Firefox MV3) — primary today
 - **Desktop** (Tauri bundled WebView) — v0.3.0, including the
-  embedded dapp browser (one `WebviewWindow` per browser tab,
-  composited over the wallet UI)
+  embedded dapp browser: one `WebviewWindow` per browser tab on macOS
+  and Windows, composited over the wallet UI; an in-process iframe
+  controller on Linux, where WebKitGTK loses its compositor surface
+  on parent-window resize
 - **Mobile** (Capacitor bundled WebView) — v0.4
 
 All three are essentially "Preact app in a WebView." They differ on
@@ -39,10 +41,15 @@ smirk-monorepo/
 │   ├── core/          @smirk/core         — wallet logic, API, keystore, HD
 │   ├── ui/            @smirk/ui           — Preact components (shell-agnostic)
 │   ├── wasm/          @smirk/wasm         — WASM facade over `crates/smirk-wasm`
-│   ├── swap/          @smirk/swap         — swap orchestration (ThorchainSwap, Trocador aggregator today; native signing planned)
+│   ├── swap/          @smirk/swap         — swap orchestration (Trocador aggregator today; ThorchainSwap is a stub; native signing planned)
+│   ├── dapp-api/      @such-software/smirk-dapp-api — the page-injected `window.smirk` protocol
+│   ├── dapp-browser/  @smirk/dapp-browser — `DappBrowserController` plus tab/navigation types
+│   ├── keymap/        @smirk/keymap       — cross-platform shortcut registry
 │   ├── extension/     @smirk/extension    — Chrome MV3 / Firefox MV3 shell
 │   ├── mobile/        @smirk/mobile       — (future) Capacitor shell
-│   └── desktop/       @smirk/desktop      — Tauri shell
+│   ├── desktop/       @smirk/desktop      — Tauri shell
+│   ├── e2e/           @smirk/e2e          — Playwright end-to-end suite
+│   └── smoke-tests/   @smirk/smoke-tests  — two-wallet mainnet harness
 └── crates/
     ├── smirk-wasm/    — Rust→WASM crypto facade (XMR/WOW/BTC/LTC signing, Grin)
     ├── grin-ext/      — Grin / Mimblewimble protocol, 6 wallet orchestrators, slate v4 (JSON+bin), cross-validated against grin-wallet
@@ -57,13 +64,13 @@ smirk-monorepo/
 ```
 shells (extension/mobile/desktop)
     │
+    ├──> @smirk/swap ──> @smirk/assets
+    │
     ▼
-  @smirk/ui  ──┐
-               ▼
-       @smirk/core ──> @smirk/assets, @smirk/wasm
-               │
-               ▼
-       @smirk/swap
+  @smirk/ui ──> @smirk/dapp-browser
+    │
+    ▼
+  @smirk/core ──> @smirk/assets, @smirk/wasm
 ```
 
 - `@smirk/core` MUST NOT depend on any shell or on `@smirk/ui`.
@@ -71,6 +78,13 @@ shells (extension/mobile/desktop)
   with injected callbacks; no `chrome.storage` references, no
   `Capacitor` references.
 - Shells own platform wiring and inject implementations into core/ui.
+- Exception, and a known deviation rather than a pattern to copy: the
+  desktop shell does not own its own UI. It imports the extension's
+  popup (`@smirk/extension/popup`, resolved by a Vite alias in
+  `packages/desktop/vite.config.ts` and not declared as a package
+  dependency) and satisfies its `chrome.*` calls with a Tauri-backed
+  shim (`packages/desktop/src/chrome-shim.ts`) rather than injecting
+  `PlatformStorage`.
 
 If you find yourself wanting to put `chrome.storage` in `@smirk/core`,
 you're about to break this. Use the `PlatformStorage` interface.
@@ -91,9 +105,9 @@ you're about to break this. Use the `PlatformStorage` interface.
 | Asset registry (decimals, families, capabilities) | `@smirk/assets` | Pure data |
 | Preact components (Home, Send, Receive, Onboarding, Settings, etc.) | `@smirk/ui` | Render the same in any WebView |
 | Popup state machine, route persistence, wizard scaffold | `@smirk/core/state` | Generic — wired to a `PlatformStorage` |
-| Swap orchestration interface + ThorchainSwap | `@smirk/swap` | HTTP only |
+| Swap orchestration interface + TrocadorSwap | `@smirk/swap` | HTTP only |
 | Grin slate orchestration (S1/S2/S3 + I1/I2/I3) | `packages/extension/src/popup/grin-flows.ts` (extension-side; folds into `@smirk/core` when mobile lands) | Calls into `@smirk/wasm` `grin.*` for crypto |
-| Pending-outgoing tri-state reconciliation | `@smirk/core/state/pending-outgoing` | Generic across XMR/WOW/Grin |
+| Pending-outgoing tri-state reconciliation | `@smirk/core/state/pending-outgoing` | Generic across all five chains; per-family input identifiers |
 
 ### Platform-specific (lives in `packages/<shell>/`)
 
@@ -101,9 +115,9 @@ you're about to break this. Use the `PlatformStorage` interface.
 |---|---|---|
 | Persistent storage backend | chrome.storage.local / Capacitor Preferences / Tauri filesystem-or-keychain | `PlatformStorage` interface in `@smirk/core/state/platform` |
 | Ephemeral / session storage | chrome.storage.session / in-memory only / OS keychain | `PlatformStorage` (different instance) |
-| Background process | MV3 service worker / Capacitor background plugin / Tauri Rust backend | `BackgroundScheduler` (to be defined; see Open Questions) |
+| Background process | MV3 service worker / Capacitor background plugin / Tauri Rust backend | `WalletTimers` interface in `@smirk/core/state/platform` (declared, unimplemented) |
 | Clipboard | `navigator.clipboard` works in extension/desktop; Capacitor plugin on mobile | inject `onCopy` callback into `ReceiveScreen` |
-| Notifications | `chrome.notifications` / Capacitor Push / Tauri Notifications | (TBD — `Notifier` interface) |
+| Notifications | `chrome.notifications` / Capacitor Push / Tauri Notifications | `WalletNotifications` interface in `@smirk/core/state/platform` (declared, unimplemented) |
 | Biometric unlock | not in extension / Capacitor biometric on mobile / Tauri biometric crate on desktop | `BiometricUnlock` interface, optional |
 | Pop-out window | `chrome.windows.create` on extension; resize on mobile/desktop | already abstracted via `AppShell`'s `onPopOut` prop |
 | WASM loading | bundled asset URL on extension; Capacitor file:// on mobile; Tauri file:// on desktop | `initialize(moduleOrPath?)` already handles |
@@ -145,8 +159,9 @@ catches up.
 `script-src 'self'; object-src 'self'`. That blocks WebAssembly
 compilation entirely → popup logs
 `Compiling or instantiating WebAssembly module violates the following
-Content Security Policy directive…`. Silent failure: my code's
-try/catch swallows the throw and balance computation degrades.
+Content Security Policy directive…`. The failure is silent: the
+try/catch around WASM init swallows the throw and balance computation
+degrades.
 
 **Resolution:** Add to manifest:
 
@@ -156,10 +171,9 @@ try/catch swallows the throw and balance computation degrades.
 }
 ```
 
-This is present in both `manifest.json` and `manifest.firefox.json`
-and has been since 2026-05-11. Don't remove it — without
-`'wasm-unsafe-eval'` the Monero / Wownero / Grin code paths fail to
-load.
+Both `manifest.json` and `manifest.firefox.json` carry this. Do not
+remove it: without `'wasm-unsafe-eval'` the Monero / Wownero / Grin
+code paths fail to load.
 
 ### `import * from "env"` stub aliasing
 
@@ -175,8 +189,10 @@ throws `LinkError`. Use `--target no-modules` instead.
 expires" sentinel of `Infinity` round-tripped through a JSON-based
 storage layer becomes invalid. We use `chrome.storage.session` which
 uses structured cloning (preserves `Infinity` correctly), but it's
-fragile to depend on. The session-cache for opt-in auto-unlock uses
-`Number.MAX_SAFE_INTEGER` as the "never" sentinel for portability.
+fragile to depend on. The session-cache for opt-in auto-unlock has no
+"never" option: `clampAutoLockMinutes` bounds the lifetime to
+`AUTO_LOCK_MAX_MINUTES` (24h), and a legacy sentinel read from storage
+collapses to that cap.
 
 ### LWS admin endpoint hard rules
 
@@ -195,19 +211,52 @@ non-diagnostic operations.
 
 ---
 
-## Cross-cutting abstractions to land before v0.4 mobile/desktop
+## Backend federation
 
-These don't exist yet. Listing them so they're not surprises when
-mobile/desktop shells start landing.
+The wallet is backend-agnostic: the default public instance, a
+self-hosted `smirk-backend-core`, or another operator's.
 
-### `BackgroundScheduler` interface
+- The selected instance is durable state, stored under
+  `BACKEND_CONFIG_KEY` in `@smirk/core/api/backend-config`. Every JS
+  context (service worker, offscreen runner, popup) reads it and
+  re-applies it at boot, so they never diverge on which backend they
+  are talking to.
+- `/capabilities` is the per-instance contract: advertised chains,
+  `nip05_domain`, relay and feed config, registration gates. The
+  wallet gates features on it rather than deriving them from the
+  backend URL.
+- Switching instances drops the JWT (a token minted by one backend is
+  meaningless to another), invalidates the memoized capabilities, and
+  clears the bootstrap, dapp and balance caches. It also resets the
+  messaging relay set, which is a module global that would otherwise
+  survive the switch and keep publishing to the previous operator's
+  relays.
 
-Polls balances on a cadence even when no popup is open.
+`packages/ui/src/components/BackendPicker.tsx` is the selection UI;
+the teardown lives in the shell's `onBackendSwitched` handler.
+
+---
+
+## Cross-cutting abstractions for mobile/desktop
+
+`WalletTimers` and `WalletNotifications` are declared in
+`@smirk/core/state/platform` and re-exported from `@smirk/core/state`.
+No shell implements either: the extension calls `chrome.alarms` and
+`chrome.notifications` directly
+(`packages/extension/src/background/dm-watch.ts`), and the desktop
+shim polyfills neither. `CredentialStore` is not declared anywhere.
+
+### `WalletTimers` interface
+
+One-shot scheduler, not a periodic poller. It fires the registered
+callback even when the wallet UI surface is closed or backgrounded;
+auto-lock is the current caller.
 
 ```ts
-interface BackgroundScheduler {
-  schedulePeriodic(name: string, intervalMin: number, handler: () => Promise<void>): Promise<void>;
+interface WalletTimers {
+  scheduleOnce(name: string, delayMs: number): Promise<void>;
   cancel(name: string): Promise<void>;
+  onTimer(listener: (name: string) => void): () => void;
 }
 ```
 
@@ -234,14 +283,16 @@ Implementations:
 - Mobile: iOS Keychain / Android Keystore via Capacitor
 - Desktop: OS keychain (Tauri keychain plugin)
 
-### `Notifier` interface (push + local notifications)
+### `WalletNotifications` interface (push + local notifications)
 
-For incoming tips, completed swaps, etc.
+For incoming tips, completed swaps, etc. There is no permission-request
+method; `id` lets the caller replace or dismiss a specific notification
+later.
 
 ```ts
-interface Notifier {
-  request(): Promise<'granted' | 'denied' | 'default'>;
-  notify(opts: { title: string; body: string; tag?: string }): Promise<void>;
+interface WalletNotifications {
+  show(input: { id: string; title: string; body: string; iconUrl?: string }): Promise<void>;
+  dismiss(id: string): Promise<void>;
 }
 ```
 
@@ -250,7 +301,7 @@ Tauri `Notification`.
 
 ---
 
-## Desktop platform — Tauri vs Electron (decided 2026-05-11)
+## Desktop platform: Tauri, not Electron
 
 Decision: **Tauri**, with `WebviewWindow::new()` available for an
 in-app dapp browser later. Will not switch to Electron.
@@ -284,12 +335,13 @@ bundle/memory wins are immediate.
 | macOS | WKWebView (WebKit) | First-class — Safari engine |
 | Linux | WebKitGTK | Weakest link — historical bugs in Web Crypto, WebGL, newer JS features |
 
-Because we control our own dapps, the WebKitGTK gap matters only when
-the wallet also browses third-party EVM dapps post-ETH-L1. Test
-top targets (Uniswap, OpenSea, etc.) against WebKitGTK during the
-v0.4 Tauri scaffolding before committing. If the gap is unacceptable
-at that point, the Electron decision can be revisited — but only
-once measurements force it.
+WebKitGTK already costs the Linux build a separate browser path
+(`packages/desktop/src/main.ts` selects an iframe-backed controller
+there) and a 120 ms resize debounce on the native path, both because
+the embedded WebView loses its compositor surface on parent-window
+resize (tauri#7537, wry#1727). What is still unmeasured is
+third-party dapp compatibility under WebKitGTK: measure that before
+anyone reopens the Electron decision.
 
 **`window.smirk` injection** works via Tauri's `initialization_script()`,
 which runs before page DOM. Standard MetaMask content-script pattern.
@@ -334,9 +386,9 @@ WebKitGTK with no workaround).
 
 ## Audit posture cross-references
 
-The 2026-05-10 OVK + LWS migration era surfaced several patterns
-worth not re-introducing. The public, actionable one lives in this
-doc under "Build-pipeline gotchas": WASM env imports and MV3 CSP.
+The OVK and LWS migration left several patterns worth not
+re-introducing. The public, actionable one lives in this doc under
+"Build-pipeline gotchas": WASM env imports and MV3 CSP.
 
 When porting code from the legacy `smirk-extension` v0.2.x codebase
 into a monorepo package, treat it as a rewrite target rather than a

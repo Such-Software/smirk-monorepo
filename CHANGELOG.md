@@ -4,7 +4,7 @@ All notable user-facing changes to Smirk Wallet.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This monorepo packages the Smirk Wallet browser extension (Chrome MV3
-+ Firefox), the upcoming Tauri desktop shell, and the shared core /
++ Firefox), the Tauri desktop shell, and the shared core /
 UI / asset / swap libraries that power both. Version numbers refer to
 the public wallet build.
 
@@ -19,6 +19,9 @@ validation, the self-hostable backend components that make Smirk federated
 end to end, and a Nostr-identity overhaul finished during the release window
 (the store builds were regenerated as these landed).
 
+- **Desktop wallet.** The Tauri 2.x shell for Windows, macOS and Linux ships
+  alongside the extension, sharing the same code path and carrying the embedded
+  dapp browser. Capacitor mobile is deferred to v0.4.
 - **Reliable sends and balances on every backend.** Resolved a set of
   client/backend contract mismatches that could disable Bitcoin/Litecoin fee
   estimation (and with it sends and public-tip funding) and Monero/Wownero sends
@@ -261,8 +264,8 @@ with, but for the security-conscious:
   clients continue to work against the new backend during the
   upgrade rollout. There is no flag-day cutover.
 - **Pre-v0.3 BIP44 key derivation** continues to work for users
-  who imported their wallet in 2026-04 or later (BIP84 since
-  commit 84773c0). If you imported earlier and see a public-key
+  who imported their wallet in 2026-04 or later, when derivation
+  moved to BIP84. If you imported earlier and see a public-key
   mismatch on upgrade, check `docs/MIGRATION.md` (backend, internal)
   for the audit context.
 

@@ -3,20 +3,20 @@
 How "user taps Send → tx lands on chain" works for each of Smirk's five
 assets, as shipped in v0.3.
 
-Status as of 2026-05-13: end-to-end send is working for **all five
-assets** on mainnet. BTC/LTC PSBT path shipped 2026-05-11 (9b4c395),
-XMR/WOW + tri-state balance reconciliation shipped 2026-05-12 (bf3ad28,
-b2ec790), Grin Phase 3.1 (SendWizard interactive Exchange step +
-clipboard-mode wiring) shipped 2026-05-13 (0f21587). Phase 3.2–3.5
-(invoice flow, Inbox, paste-incoming, cancel/expire) is the remaining
-Grin work — see `crates/grin-ext/` notes + the v0.3 plan in
-`smirk-backend/docs/V0_3_PLAN.md`.
+Send is implemented for all five assets on mainnet. BTC/LTC use a PSBT
+path; XMR/WOW use LWS unspent outputs plus a wasm RingCT signer; Grin
+runs the interactive slatepack ceremony.
 
 ## Smirk's single-address scheme — read this first
 
-Smirk derives **exactly one address per chain** for every user. There's
-no gap-limit receive-address rotation (BIP44-style), no separate change
-index. The v3 (2026-05-11) leaf paths are fixed:
+By default Smirk derives **exactly one address per chain** for every
+user: no gap-limit receive-address rotation (BIP44-style), no separate
+change index. Two opt-in paths relax that, both shipped dark: BTC/LTC
+fresh receive plus `/1/j` change addresses behind
+`ENABLE_BTCLTC_FRESH_ADDRS` (default off, `@smirk/core/utxo-addressbook`),
+and XMR/WOW subaddress receive behind `ENABLE_SUBADDRESS_RECEIVE`
+(default off, `popup/receive-subaddress-index.ts`). The v3 leaf paths
+are fixed:
 
 | Asset | Path                  | Encoding   | External-wallet import |
 |-------|-----------------------|------------|-----------------------|
@@ -26,11 +26,13 @@ index. The v3 (2026-05-11) leaf paths are fixed:
 | WOW   | `m/44'/2086'/0'/0/0`  | Cryptonote primary | Cake-compatible by the same derivation. |
 | Grin  | HMAC-SHA512 over BIP39 entropy with key `"IamVoldemort"` → ed25519 leaf | Slatepack | grin-wallet / Grim compatible. |
 
-**Implication for Send:** change always goes back to the **same** address
-the funds came from. No separate change-address derivation. The
-`changeAddress` parameter in `buildPsbt` (BTC/LTC) and the change
-recipient in the Monero signer (XMR/WOW) are literally the user's own
-primary address. Grin's slate protocol handles change at the kernel
+**Implication for Send:** with both flags off, change goes back to the
+**same** address the funds came from. The `changeAddress` parameter in
+`buildPsbt` (BTC/LTC) and the change recipient in the Monero signer
+(XMR/WOW) are literally the user's own primary address. With
+`ENABLE_BTCLTC_FRESH_ADDRS` on, BTC/LTC change instead goes to a
+reserved `/1/j` change address; XMR/WOW change returns to the primary
+address either way. Grin's slate protocol handles change at the kernel
 level — no address needed.
 
 This is also why the WASM `bitcoin.signPsbt` can take a `masterPath` at
@@ -59,29 +61,19 @@ remain at `m/44'/coin'/0'/0/0` since Cake's BIP39 mode uses that
 exact path for its mod-ℓ derivation — switching XMR/WOW would break
 Cake compat.
 
-**Pre-release migration plan (gates v0.3 launch):**
+**Recovery for pre-v0.3 wallets:**
 
-1. Re-scan BTC/LTC addresses immediately before v0.3 launch. Initial
-   2026-05-11 sweep found a small number of affected users.
-2. DM affected users (out-of-band) with `scripts/seed-to-keys/`
-   instructions: the script prints both their *legacy* and
-   *v3-standard* addresses. They can sweep funds from legacy → v3
-   themselves (or wait until after v0.3 ships and import the legacy
-   hex private key into Sparrow/etc to spend).
-3. Same script + outreach also covers the WOW-holding users from
-   the v1/v2 → v3 derivation migration (separate concern from
-   BTC/LTC but same channel of users).
-
-**After v0.3 ships:**
-
-- `seed-to-keys` continues to be the recovery path for any user who
-  upgrades without sweeping first.
+- `scripts/seed-to-keys/` is the recovery path for anyone who upgraded
+  without sweeping first. It takes a mnemonic and prints the BTC/LTC
+  hex private keys plus addresses at every derivation generation, so a
+  legacy address's funds can be swept to the v3 address or imported
+  straight into Sparrow / Electrum / Bitcoin Core. It covers the WOW
+  holders from the v1/v2 → v3 derivation migration too.
 - The legacy `m/44'/coin'/0'/0/0` BTC/LTC code path stays in
   `@smirk/core/hd.ts` as `deriveLegacyBtcLtcKey` (only `deriveAllKeys`
   v1/v2 still use it; v3 uses `deriveBip84Key`).
-- After all affected users have moved funds out, `deriveLegacyBtcLtcKey`
-  can be removed from the monorepo. Tracked in
-  `smirk-backend/docs/TECHNICAL_DEBT.md` item #15.
+- `deriveLegacyBtcLtcKey` stays until affected users have moved funds
+  out, then it is removed.
 
 XMR/WOW Cake-compat is unaffected by this change (their derivation
 path didn't move). Grin compat with grin-wallet/Grim also unchanged.
@@ -104,28 +96,41 @@ Every send, regardless of asset, goes through five stages:
                   (via Smirk backend OR user's self-hosted RPC if in private mode)
 ```
 
-The `SendWizard` already covers stages 1–3 at the UI level (asset →
-amount → recipient → review). What's missing is the actual implementation
-of PREPARE / SIGN / BROADCAST for each asset.
+The `SendWizard` covers stages 1–3 at the UI level (asset → address →
+compose → review). PREPARE / SIGN / BROADCAST live per asset: BTC/LTC
+and XMR/WOW in `packages/extension/src/popup/send-handler.ts`, Grin in
+`packages/extension/src/popup/grin-flows.ts` over the wasm
+orchestrators.
 
 ## Where each piece lives
 
 ```
 @smirk/ui
-├── SendWizard.tsx              UI scaffolding (asset, amount, recipient, review)
-│                               ↓ onSubmit({ assetId, atomic, recipient }) → SendSubmitResult
+├── SendWizard.tsx              UI scaffolding (asset, address, compose, review)
+│                               ↓ onSubmit({ fromAssetId, amountAtomic, toAddress,
+│                                            feeRateSatPerVb, sweep }) → SendSubmitResult
 │                               Grin branch: onGrinBuildSlate / onGrinFinalize / onGrinCancel
-└── GrinRequestWizard.tsx       Receiver-initiated invoice flow (Phase 3.2)
+└── GrinRequestWizard.tsx       Receiver-initiated invoice flow
 
 packages/extension/src/popup/send-handler.ts        — generic dispatcher
-└── buildSendHandler(wallet, api, wasm)
-    ├── sendBtc / sendLtc       PREPARE via api.getUtxos, ESTIMATE via api.estimateFee,
+└── send(wallet, fields, excludeInputs)
+    fields = { fromAssetId, amountAtomic, toAddress, feeRateSatPerVb, sweep }
+    excludeInputs = inputs already spent by still-pending sends
+                    (`txid:vout` for UTXO chains, lowercase-hex key image
+                    for CryptoNote)
+    ├── sendBtcLtc              PREPARE via chainProviders.utxo(asset).listOutputs,
     │                           SIGN via wasm.bitcoin.buildPsbt + signPsbt + extractTx,
-    │                           BROADCAST via api.broadcastTx
-    └── sendXmrWow              PREPARE via api.getLwsUnspent + api.getLwsDecoys,
+    │                           BROADCAST via chainProviders.utxo(asset).broadcast
+    └── sendXmrWow              PREPARE via chainProviders.lws(asset).listOutputs
+                                + .getRandomOutputs,
                                 key-image filter for spent outputs,
                                 SIGN via wasm.monero.signTransaction (fresh OVK per tx),
-                                BROADCAST via api.submitRawTx (LWS submit_raw_tx)
+                                BROADCAST via chainProviders.lws(asset).broadcast
+                                (LWS submit_raw_tx)
+
+    The chain providers are backed by `@smirk/core/api`: `getUtxos` /
+    `estimateFee` / `broadcastTx` for UTXO chains, `getUnspentOuts` /
+    `getRandomOuts` / `submitLwsTx` for LWS.
 
 packages/extension/src/popup/grin-flows.ts          — Grin orchestrator
 └── startGrinSend / processGrinS2 / cancelGrinSend
@@ -175,13 +180,12 @@ Keep `@smirk/ui` pure presentation — all chain logic in
 
 ### As shipped
 
-All four BTC/LTC layers landed 2026-05-11 (ad46ce6, 0d29947, 20c510a,
-9b4c395):
+Four layers:
 
-- `crates/btc-ext/src/build.rs::build_psbt` + `extract.rs::extract_tx`
+- `crates/btc-ext/src/build.rs::build_psbt` + `build.rs::extract_tx`
 - `crates/smirk-wasm/src/bitcoin.rs` exports `btc_build_psbt` + `btc_extract_tx`
 - `@smirk/wasm` `bitcoin.buildPsbt` + `bitcoin.extractTx` TS facades
-- `packages/extension/src/popup/send-handler.ts::sendBtc` / `sendLtc`
+- `packages/extension/src/popup/send-handler.ts::sendBtcLtc`
 - Greedy fee iterator + sweep mode + fee picker in `SendWizard`
 
 ### Edge cases for v0.3
@@ -193,9 +197,11 @@ All four BTC/LTC layers landed 2026-05-11 (ad46ce6, 0d29947, 20c510a,
 - Address validation: `@smirk/core/address` already handles bech32 +
   P2TR + legacy. The send UI should reject obvious garbage at the form
   level; `build_psbt` does a final network-match check.
-- **Single-address scheme**: every spend's change goes back to the same
-  address the UTXOs came from. No privacy loss vs. the existing scheme;
-  Smirk has never had per-address rotation.
+- **Single-address scheme**: with `ENABLE_BTCLTC_FRESH_ADDRS` off,
+  every spend's change goes back to the same address the UTXOs came
+  from. With the flag on, the send reserves a fresh `/1/j` change
+  address before broadcast, and only when there actually is change, so
+  a dust-dropped send never burns an index.
 
 ---
 
@@ -207,31 +213,32 @@ LWS daemon; ring composition matters for both privacy and validity.
 ### Stages
 
 1. **PREPARE**
-   - `api.getLwsUnspent(asset, address, view_key)` → list of unspent
-     outputs we own.
+   - `chainProviders.lws(asset).listOutputs(address, viewKey)` → list of
+     unspent outputs we own.
    - Filter via `wasm.monero.computeKeyImage` to weed out
      decoy-false-positive matches (same pattern as balance fetch).
    - Greedy output selection by amount.
-   - `api.getLwsDecoys(asset, ringSize: 16 for XMR / 22 for WOW)` for
-     each chosen real input — pull ring members.
+   - `chainProviders.lws(asset).getRandomOutputs(count)` (ring size 16
+     for XMR / 22 for WOW) for each chosen real input — pull ring
+     members.
 2. **ESTIMATE**
    - LWS reports per-byte fee schedule + mask. Compute tx size from
      input count, ring size, and output count (1 recipient + 1 change).
 3. **REVIEW** — UI shows recipient, amount, fee, total.
 4. **SIGN** — `wasm.monero.signTransaction(paramsJson)` with everything
    the WASM signer needs: real outputs, decoys, recipient address, change
-   address, OVK (fresh per-tx per `fresh_outgoing_view_key()` —
-   2026-05-10 fix), fee, fee mask.
-5. **BROADCAST** — POST signed-tx-hex to LWS `/submit_raw_tx`. Backend
-   needs a wrapper (`api.submitTx(asset, txHex)`).
+   address, OVK (fresh per-tx per `fresh_outgoing_view_key()`), fee,
+   fee mask.
+5. **BROADCAST** — `chainProviders.lws(asset).broadcast(txHex)` posts
+   the signed tx hex to LWS `/submit_raw_tx`. Only the signed tx is
+   sent: withholding recipient and amount denies the LWS operator a
+   sender↔recipient↔amount link.
 
 ### As shipped
 
-bf3ad28 (handler + fee preview + spent-output filter) and b2ec790
-(Phase 2 — tri-state balance, pendingOutgoing, 3-signal reconciliation):
-
-- `api.getLwsUnspent` + `api.getLwsDecoys` + `api.submitRawTx` wrappers
-  in `@smirk/core/api`.
+- `chainProviders.lws(asset).listOutputs` / `.getRandomOutputs` /
+  `.broadcast`, backed by `@smirk/core/api`'s `getUnspentOuts` /
+  `getRandomOuts` / `submitLwsTx`.
 - `packages/extension/src/popup/send-handler.ts::sendXmrWow` glues
   prepare → sign → broadcast.
 - Fresh OVK per tx via `fresh_outgoing_view_key()` (never hardcoded).
@@ -242,14 +249,22 @@ bf3ad28 (handler + fee preview + spent-output filter) and b2ec790
 
 - Spend-all (no change) flows: smaller tx, but the change-address
   derivation should always be derivable as fallback for partial sends.
-- Sub-address support: deferred. v0.3 sends only to/from the primary
-  address.
+- Subaddress support: a subaddress destination is a valid recipient
+  (`@smirk/core/address` carries the subaddress prefixes, XMR 42 and
+  WOW 12208; the wasm signer parses `AddressType::Subaddress`). An
+  output received on a subaddress is spent under its own
+  `(major, minor)` index, threaded verbatim from the LWS unspent list
+  into both the key image and the signing params, never re-derived.
+  Absent or `(0,0)` means the primary address. Change always returns to
+  the primary address. Handing out fresh receive subaddresses is gated
+  behind `ENABLE_SUBADDRESS_RECEIVE`, default off; spending them is not
+  gated.
 - Locked output handling: skipped in selection; surfaced as the
-  **locked** band of the tri-state UI (Phase 2, b2ec790). Reconciliation
-  uses three signals (local input cache, input-identifier match vs
+  **locked** band of the tri-state UI. Reconciliation uses three
+  signals (local input cache, input-identifier match vs
   `verifiedSpentInputs`, `locked_balance > 0` fallback) to decide when a
-  `pendingOutgoing` entry has settled — avoids the four bugs we hit in
-  the legacy extension (commits 839e001, 15661ba, 1266671, ad46ce6).
+  `pendingOutgoing` entry has settled. Three signals rather than one
+  because no single one of them is reliable on its own.
 
 ---
 
@@ -269,21 +284,24 @@ bf3ad28 (handler + fee preview + spent-output filter) and b2ec790
 
 **Hardest case.** Sender and receiver run an interactive ceremony where
 they each contribute signing material before the kernel can be
-finalized. v0.3 ships both directions of the ceremony — sender-driven
-**send** (S1→S2→S3) and receiver-driven **invoice** (I1→I2→I3) — plus a
-compact-binary slatepack codec so we interop with external `grin-wallet`
-and Grim users, not only other Smirk wallets.
+finalized. Both directions of the ceremony exist: sender-driven **send**
+(S1→S2→S3) and receiver-driven **invoice** (I1→I2→I3), plus a
+paste-any-slatepack inbox that dispatches on leg (S1 / I1 / S2 / I2),
+`cancelGrinSend`, and a compact-binary slatepack codec so we interop
+with external `grin-wallet` and Grim users, not only other Smirk
+wallets.
 
 ### Send (sender-driven, S1→S2→S3)
 
 1. **PREPARE (S1)** — sender picks inputs (Pedersen commitments + their
    blinding factors), computes change blind, computes `sender_blind_excess
-   = Σoutputs − Σinputs − offset` (sign convention fix in c78aff0;
-   cross-validated against `grin_wallet_libwallet` 5.4.0), creates the
-   kernel nonce, and emits the S1 slate via `grin_create_send_transaction`.
+   = Σoutputs − Σinputs − offset` (cross-validated against
+   `grin_wallet_libwallet` 5.4.0), creates the kernel nonce, and emits
+   the S1 slate via `grin_create_send_transaction`.
 2. **HAND-OFF** — S1 is wrapped in a slatepack (`SlatepackBin` v1.0 →
-   ASCII armor `BEGINSLATEPACK. … . ENDSLATEPACK.`). User copies it out
-   of band (Smirk-to-Smirk relay auto-detect is Phase 3.3).
+   ASCII armor `BEGINSLATEPACK. … . ENDSLATEPACK.`). The leg travels
+   over Nostr NIP-59 gift-wrap, manual copy/paste, or a same-instance
+   backend relay.
 3. **SIGN (S2 — receiver)** — receiver pastes S1, runs
    `grin_sign_incoming_send_slate` which adds their output (Pedersen
    commit + Bulletproof), their partial sig, and pubkeys. Returns S2 as
@@ -291,13 +309,17 @@ and Grim users, not only other Smirk wallets.
 4. **FINALIZE (S3 — sender)** — sender pastes S2, runs
    `grin_finalize_send_slate` which verifies the receiver's partial,
    aggregates partials → final Schnorr signature, verifies the kernel
-   sig against `(sum_of_commitments − offset_G)`, assembles
-   broadcastable TX bytes via `grin_slate_to_transaction_bytes`.
-5. **BROADCAST** — `api.broadcastGrinTransaction(txHex)`. Kernel excess
-   from the final slate doubles as the on-chain identifier shown in the
-   "Done" screen — `https://grinexplorer.net/kernel/${excess_hex}`.
+   sig against `(sum_of_commitments − offset_G)`, and returns both the
+   wire bytes and `tx_json`, the JSON-shaped Transaction.
+5. **BROADCAST** — `chainProviders.grin().broadcast({ tx })`, backed by
+   `api.broadcastGrinTransaction({ tx })`, where `tx` is the `tx_json`
+   from `grin_finalize_send_slate`. Grin's `/v2/foreign
+   push_transaction` takes the JSON Transaction object, not wire-format
+   hex. Kernel excess from the final slate doubles as the on-chain
+   identifier shown in the "Done" screen —
+   `https://grincoin.org/kernel/${kernelExcess}`.
 
-### Invoice (receiver-driven, I1→I2→I3) — Phase 3.2
+### Invoice (receiver-driven, I1→I2→I3)
 
 Same primitives, inverse direction. Receiver picks an amount, runs
 `grin_create_invoice` to emit I1 (which carries the receiver's output
@@ -317,7 +339,12 @@ packages/extension/src/popup/grin-flows.ts  — extension orchestrator:
   startGrinSend / processGrinS2 / cancelGrinSend
   startGrinInvoice / signGrinInvoice / processGrinI2 / signIncomingGrinSlate
   armorSlate / dearmorSlate / inspectSlatepack
-  calcGrinFee — BASE_FEE × max(1, 4×outputs − inputs + kernels)
+  calcGrinFee — (inputs×1 + outputs×21 + max(1, kernels)×3) × 500_000
+                nanogrin, matching grin_core::global::DEFAULT_ACCEPT_FEE_BASE
+  resolveGrinFee(total, amount, numInputs) — decides fee vs change:
+                a surplus above the 2-output fee produces a change
+                output, otherwise the surplus is folded into the fee
+                and no change output is emitted
 packages/ui/src/components/SendWizard.tsx  — Grin Exchange step
 packages/ui/src/components/GrinRequestWizard.tsx  — invoice wizard
 ```
@@ -339,61 +366,43 @@ against `grin_wallet_libwallet` 5.4.0 as a dev-dep oracle). See
   Wizard state lives in session storage via `useWizard<GrinFields>`;
   resuming the wizard re-renders the Exchange step with the same
   pre-built S1 + same sender context.
-- **Payment proofs** — Rust + WASM support shipped (ed25519 receipt
-  over `(amount, kernel_commitment, sender_address)`); not yet
-  surfaced in UI. Phase 3.5.
-- **NRD kernels (relative timelocks)** — primitives shipped; not used
-  for normal sends in v0.3. Reserved for swap-refund paths in v0.4+.
-- **Slate expiry** — Phase 3.5 adds 1h warning + 24h drop with a Cancel
-  affordance per pending exchange.
+- **Payment proofs** — Rust + WASM support exists (ed25519 receipt
+  over `(amount, kernel_commitment, sender_address)`); not surfaced in
+  the UI.
+- **NRD kernels (relative timelocks)** — primitives exist; not used for
+  normal sends. Reserved for swap-refund paths.
+- **Slate expiry** — `cancelGrinSend` frees a pre-broadcast exchange's
+  reserved inputs; a reservation left alone ages out on the overlay's
+  backstop. A cancel after broadcast is refused, since freeing inputs
+  that are genuinely spent in-flight would let a later send build a
+  double-spend.
 
 ---
 
-## Build order — as shipped
-
-1. **BTC + LTC** — shipped 2026-05-11 (ad46ce6, 0d29947, 20c510a, 9b4c395).
-2. **XMR + WOW** — shipped 2026-05-12 (bf3ad28 send-handler, b2ec790
-   Phase 2 reconciliation).
-3. **Grin Phase 1 (primitives)** — pre-existing; battery of cross-validation
-   tests added 2026-05-13 (c78aff0, 78aac0e, 4734707).
-4. **Grin Phase 2 (orchestrators)** — shipped 2026-05-13 (f46e96e, a61a620,
-   7e72f78 in Rust; 2a832ee binary slate codec; ef3bcdf wasm exposure;
-   f65440e TS wrappers).
-5. **Grin Phase 3.1 (SendWizard Exchange step + popup wiring)** —
-   shipped 2026-05-13 (0f21587).
-6. **Grin Phase 3.2 (invoice / Receive Request)** — in flight.
-7. **Grin Phase 3.3 (Inbox surface, Smirk-to-Smirk relay auto-detect)** — pending.
-8. **Grin Phase 3.4 (paste-incoming-slatepack)** — pending.
-9. **Grin Phase 3.5 (cancel + 1h/24h expiry)** — pending.
-10. **Grin Phase 4 (mainnet round-trip + interop test against grin-wallet CLI)** — pending.
-
 ## Review-and-confirm screen
 
-`SendWizard` currently goes amount → recipient → submit. v0.3 adds a
-review screen between "filled out" and "submit":
+`SendWizard` is four steps: asset → address → compose → review. The
+review step is read-only and shows Asset, Amount (or "Max (sweeps
+balance)"), To, and either a fee tier in sat/vB or an estimated network
+fee, then a single submit button:
 
 ```
 ┌─────────────────────────────┐
-│  Send  ↗                    │
+│  Review                     │
 ├─────────────────────────────┤
-│  0.0123 BTC                 │
-│  ≈ $1,247.83                │
+│  Asset:  Bitcoin (BTC)      │
+│  Amount: 0.0123 BTC         │
+│  To:     bc1q…7gm4          │
+│  Fee tier: normal (12 sat/vB) │
 ├─────────────────────────────┤
-│  To: bc1q…7gm4              │
-│  Fee: 1,420 sat (≈ $0.10)   │
-│  Total: 0.01231420 BTC      │
-├─────────────────────────────┤
-│  [ Cancel ]   [ Send 🔓 ]   │
+│         [ Send 🔓 ]         │
 └─────────────────────────────┘
 ```
 
-The 🔓 indicates this is the *crypto-execute* button — distinct from
-the wizard's previous "Next" buttons. Tap requires holding briefly
-(prevents accidental triple-tap on mobile). Per-asset variants:
-- BTC/LTC: shows sat/vB and confirmation ETA from fee tier.
-- XMR/WOW: shows ring size, decoy count, "private" badge.
-- Grin: shows "interactive — awaits recipient" instead of "send" since
-  the broadcast doesn't happen immediately.
+The 🔓 marks this as the *crypto-execute* button, distinct from the
+wizard's "Next" buttons. Grin takes an interactive Exchange step in
+place of the one-shot Review, because the broadcast cannot happen until
+the recipient returns a signed slatepack.
 
 ### Testing strategy: small mainnet amounts, no testnets
 

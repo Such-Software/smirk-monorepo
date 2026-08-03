@@ -12,7 +12,7 @@ The monorepo solves both. One `git clone`, one `make build`, byte-reproducible o
 
 ### `crates/monero-oxide/`
 
-A 19-crate vendored workspace — a fork of [monero-oxide](https://github.com/monero-oxide/monero-oxide) that adds Wownero transaction support alongside the original Monero support. All workspace members are listed in the flat root `Cargo.toml`; the inner workspace declaration was removed to comply with Cargo's nesting rules.
+An 18-crate vendored workspace: a fork of [monero-oxide](https://github.com/monero-oxide/monero-oxide) that adds Wownero transaction support alongside the original Monero support. All workspace members are listed in the flat root `Cargo.toml`; the inner workspace declaration was removed to comply with Cargo's nesting rules.
 
 - **Library names** (as you `use` them in Rust) are `monero_*` — `monero_oxide`, `monero_ed25519`, `monero_clsag`, etc.
 - **Crates.io package names** are `wownero-*` to avoid collision with the upstream packages.
@@ -89,6 +89,11 @@ Currently shipped:
 - **Crypto** — PBKDF2-SHA256 (WebCrypto, 600k iters) + XChaCha20-Poly1305 for at-rest seed encryption; secp256k1 ECDH for tip envelopes; BIP-137 Bitcoin message signing for `extensionRegister` proof-of-key-control.
 - **Address derivation + validation** — bech32 P2WPKH for BTC/LTC, Cryptonote (prefix + spend + view + Keccak checksum, Monero base58) for XMR/WOW, slatepack bech32 for Grin.
 - **HD wallet** — BIP39 mnemonic ↔ seed, BIP32 secp256k1 derivation for BTC/LTC, three derivation generations (v1 legacy / v2 buggy SLIP-10 / v3 Cake-compatible) for XMR/WOW so old wallets can be swept.
+- **Nostr identity plane**: seed-derived identities, an identity vault, NIP-05 resolution with TOFU pinning, NIP-07 provider plumbing, NIP-98 auth, NIP-59 gift-wrap.
+- **Messaging**: NIP-17 encrypted DMs behind a swappable transport seam.
+- **Payment transports**: Grin slatepack over the backend relay or over Nostr gift-wrap, plus the client-side pending overlay.
+- **Chain data plane**: a provider seam over the API, defaulting to the backend.
+- **v0.2 to v0.3 migration**: legacy-seed detect/decrypt and the legacy-cleanup fund-safety gate.
 - **Types** — `AssetType`, tip and key shapes used at the API surface.
 
 Chain-specific transaction crypto lives in `@smirk/wasm` (Rust). The wallet shells compose `@smirk/core` + `@smirk/wasm` + their own UI layer.
@@ -136,6 +141,26 @@ Transport-agnostic dapp injection layer. Wire protocol (JSON-RPC-shaped envelope
 ### `packages/desktop/` — `@smirk/desktop`
 
 Tauri 2.x desktop wallet shell (Windows/macOS/Linux, shipped v0.3.0) with an embedded dapp browser. Wraps the extension popup via a `chrome.*` shim (storage backed by `tauri-plugin-store`); each browser tab is a borderless `WebviewWindow` positioned over the wallet UI's frame slot.
+
+### `packages/ui/`: `@smirk/ui`
+
+Shared Preact components plus the theme registry, so every shell (extension, desktop, mobile) renders the same primitives. Components read chain facts from `@smirk/assets` instead of branching on asset id.
+
+### `packages/swap/`: `@smirk/swap`
+
+Swap orchestration behind one `Swap` interface. Ships `ThorchainSwap` and `TrocadorSwap`; the UI talks to a `Swap` and never to a specific aggregator.
+
+### `packages/dapp-browser/`: `@smirk/dapp-browser`
+
+Embedded-browser shell abstraction: `DappBrowserController`, navigation / tab / history types, bookmarks, and a `MockController` for tests. Platform implementations live in the shells (`packages/desktop/` for Tauri).
+
+### `packages/keymap/`: `@smirk/keymap`
+
+Cross-platform keyboard-shortcut registry: the canonical action set plus per-platform bindings. Each shell dispatches on `actionsFromEvent(event, platform)` in one keydown handler rather than scattering listeners.
+
+### `packages/e2e/`: `@smirk/e2e`
+
+Playwright end-to-end suite that drives the real extension UI against a running backend. It has no `build` script, so `make libs` skips it, and it runs out of band from the unit gate.
 
 ### Planned (not yet populated)
 
@@ -193,11 +218,15 @@ A fresh clone has only `origin`; add the other two if you'll be doing subtree sy
 ## Build orchestration
 
 ```bash
-make build       # cargo build --release --workspace + wasm-bindgen
-make test        # cargo test --workspace
+make build       # Rust workspace + WASM bundle + TypeScript workspace
+make test        # cargo test --workspace, then npm test across packages/*
 make check       # fast cargo check (no binaries)
 make wasm        # just the WASM bundle
-make clean       # wipe target/, pkg/, node_modules/
+make wasm-smoke  # runtime smoke test against the Node WASM build
+make libs        # shared TS libraries, in derived topological order
+make ext-chrome  # loadable Chrome MV3 build at packages/extension/dist/
+make ext-firefox # same dist/, Firefox manifest
+make clean       # wipe target/, pkg/, dist/, node_modules/
 ```
 
 `make wasm` runs `cargo build -p smirk-wasm --target wasm32-unknown-unknown --release` (with `--remap-path-prefix` so the build is byte-reproducible across checkouts), then `wasm-bindgen --target no-modules` against the output, then a `crates/smirk-wasm/postprocess.mjs` pass. `no-modules` emits a self-contained IIFE that loads in any WebView (extension, Capacitor, Tauri) without bundler-specific plugins; `--target web` was dropped because wasm-bindgen emits unresolved `env` placeholder imports that no bundler resolves out of the box (see `docs/ARCHITECTURE.md` "Build-pipeline gotchas"). The postprocess step stubs those C `env` imports and appends an ESM re-export so `@smirk/wasm` can import the IIFE-bound symbol. The wasm-bindgen lib version in `Cargo.lock` and the installed `wasm-bindgen-cli` version must match exactly; CI installs the matching CLI version automatically, and locally you can run `cargo install -f wasm-bindgen-cli --version <version-from-Cargo.lock>` if you hit a version-skew error.

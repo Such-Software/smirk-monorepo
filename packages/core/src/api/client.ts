@@ -39,7 +39,7 @@ const RETRY_BASE_MS = 500;
 // `encrypted_key`, slatepacks, and view-key adjacent data. Browser console
 // is exposed to crash dumps, screen-share screenshots, and any other
 // extension with devtools access. For ad-hoc debugging use Chrome's
-// Network panel; never log the body here. (See docs/SECURITY_AUDIT.md.)
+// Network panel; never log the body here.
 
 /**
  * Base API client with bearer-token authentication. Subclassed by
@@ -210,7 +210,7 @@ export class ApiClient {
         return result;
       }
 
-      // Exponential backoff: 500ms, 1000ms, 2000ms.
+      // Exponential backoff between attempts: 500ms, then 1000ms.
       const delay = RETRY_BASE_MS * Math.pow(2, attempt);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }

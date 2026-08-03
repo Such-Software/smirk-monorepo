@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Derive the workspace build order TOPOLOGICALLY from the actual dependency
-// graph, so nobody ever hand-maintains a build list again (which drifted twice:
-// a missing @smirk/dapp-browser and @smirk/swap each broke clean-clone builds
-// while "working" locally only because stale dist/ happened to be on disk).
+// graph: a hand-maintained build list drifts, and a stale dist/ on disk hides
+// the breakage locally until someone builds a clean clone.
 //
 // Edges come from BOTH declared workspace deps AND real `import ... from '@scope/pkg'`
 // statements in each package's src/. Using imports (not just package.json) means

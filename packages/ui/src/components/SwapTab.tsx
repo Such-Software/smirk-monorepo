@@ -84,12 +84,11 @@ export interface SwapInFlight {
  * was destroyed (X-button cancel, popup-close-during-confirm,
  * browser restart). Built from the backend's `listSwaps` response.
  *
- * Pre-2026-06-13 the wallet had no consumer for `listSwaps` so any
- * cancel-and-no-recovery scenario stranded the user — they'd have
- * to hunt through their Trocador confirmation email for the
- * trade_id. The Recent-swaps section restores in-wallet recovery
- * without making the wizard "forward-only" (which would lose the
- * fast-path for users who just want to dismiss).
+ * Without this surface, a cancel-and-no-recovery scenario strands
+ * the user: the only route back to a live trade is the trade_id in
+ * a Trocador confirmation email. Recent swaps keeps recovery
+ * in-wallet without making the wizard "forward-only", which would
+ * lose the fast path for users who just want to dismiss it.
  */
 export interface SwapSummary {
   id: string;
@@ -220,7 +219,7 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     id: 'trocador',
     kind: 'CEX',
     name: 'Trocador',
-    blurb: 'Aggregator routing across 20+ providers. BTC, LTC, XMR; WOW/GRIN best-effort.',
+    blurb: 'Aggregator routing across 20+ providers. BTC, LTC and XMR.',
     status: 'active',
     // Ordered most-responsive first. Telegram bot is real-time, email
     // is hours-to-a-day, Matrix is a community channel (peer help),
@@ -242,7 +241,7 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     name: 'Native atomic swaps',
     blurb: 'Adaptor-signature P2P swaps. Grin↔BTC/LTC first, WOW↔XMR after.',
     status: 'coming_soon',
-    statusNote: 'v0.4 — see V0_3_PLAN.md "Beyond v0.3" roadmap.',
+    statusNote: 'Planned for v0.4.',
   },
   {
     id: 'p2p_nostr',

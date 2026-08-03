@@ -95,21 +95,19 @@ pub fn mnemonic_to_extended_private_key(mnemonic: &str) -> Result<ExtendedPrivat
 /// hash: this variant uses the BIP39 PBKDF2 seed (64 bytes) rather than
 /// the raw entropy (16 / 32 bytes).
 ///
-/// Why we still need this in v0.3: 4 users hold ~213 GRIN total in
-/// pre-2026-05-12-rotation outputs whose on-chain commitments were
-/// computed with the legacy blind derivation. v0.3's regular
-/// derivation produces different blinds → the inputs read as
-/// unspendable. This function gives the v3 wallet a fallback path
-/// (try v3, on commitment mismatch retry v1/v2) so legacy holders
-/// can spend without dropping back into v0.2.4.
+/// Why this still exists: outputs created before the derivation
+/// rotation have on-chain commitments computed with the legacy blind
+/// derivation. v0.3's regular derivation produces different blinds →
+/// those inputs read as unspendable. This function gives the v3 wallet
+/// a fallback path (try v3, on commitment mismatch retry v1/v2) so
+/// legacy holders can spend without dropping back into v0.2.4.
 ///
 /// # ⚠️ Sunset
 ///
-/// Plan: remove this function and the wallet-flows fallback wiring
-/// after **2026-11-15** (~6 months from the rotation). All affected
-/// users will have either spent their legacy outputs by then or
-/// surfaced support requests. Tracked in
-/// `docs/TECHNICAL_DEBT.md` (item to be added).
+/// Remove this function and the wallet-flows fallback wiring after
+/// **2026-11-15** (~6 months from the rotation), by which point
+/// affected users have either spent their legacy outputs or surfaced
+/// support requests.
 pub fn mnemonic_to_extended_private_key_legacy_bip39(
     mnemonic: &str,
 ) -> Result<ExtendedPrivateKey, String> {

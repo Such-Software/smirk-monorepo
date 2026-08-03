@@ -752,9 +752,9 @@ const applyFloor = applyRelayFloor;
  * Compute fee in atomic units for a tier rate.
  *
  * For BTC/LTC: rate is sat/vB, vsize is vbytes → fee = ceil(vsize × rate).
- * For XMR/WOW/Grin: until those send-handlers land, this same function
- * is called but the asset-specific rates / sizes need their own
- * estimator. For v0.3 BTC/LTC scope: this is correct.
+ * XMR/WOW/Grin never reach this estimator: `usesFeePicker` is UTXO-only,
+ * and their fee comes from `resolveSendFeeEstimate` and the send-handler
+ * at sign time.
  */
 function feeForTier(ratePerVb: number, sweep: boolean): number {
   return Math.ceil(estimateVsize(sweep ? 1 : 2) * ratePerVb);
@@ -1239,9 +1239,8 @@ function tierEta(tier: 'fast' | 'normal' | 'slow'): string {
  * a glance at the tier picker tells the user both rate + absolute fee
  * with units (e.g. `1.1 sat/vB · 120 lits`).
  *
- * Per-asset atomic-unit names are hardcoded here for v0.3 BTC/LTC.
- * Once XMR/WOW/Grin send-handlers land, the unit name belongs in the
- * `@smirk/assets` registry (alongside decimals, etc.).
+ * Per-asset atomic-unit names are hardcoded here for BTC/LTC; they
+ * belong in the `@smirk/assets` registry alongside decimals.
  */
 function formatFeeShort(atomicFee: number, asset: AssetDefinition): string {
   // Threshold: switch from atomic units to coin units when the fee

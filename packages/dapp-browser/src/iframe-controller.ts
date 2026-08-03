@@ -31,8 +31,7 @@
  * Page-script injection: cross-origin iframes don't allow parent-
  * side script injection (browser same-origin policy). The page is
  * expected to install `window.smirk` itself — typically via
- * `import { installSmirkPageApi } from '@such-software/smirk-dapp-api/page'` or
- * by including the standalone IIFE build as a `<script>`. The
+ * `import { installSmirkPageApi } from '@such-software/smirk-dapp-api'`. The
  * `setInitScripts` method here is therefore a no-op, present only
  * to satisfy the interface contract. See
  * [docs/DAPP_INTEGRATION.md](../../../docs/DAPP_INTEGRATION.md) for

@@ -124,26 +124,6 @@ export function signMessageWithUnlocked(
   return { message, signatures };
 }
 
-/**
- * Resolve the wallet's default (account 0) Nostr identity for signing.
- *
- * Prefers the cached derived keypair (`wallet.keys.nostr`), which survives a
- * "stay unlocked for N hours" session-cache restore, so nostr/chat signing
- * keeps working after the mnemonic + seed were dropped from the cache
- * (2026-06-13 hardening). Falls back to deriving from the mnemonic on a fresh
- * unlock, and returns `null` only when neither is available. The identity's
- * `account` field is cosmetic for signing (`nostrIdentityFromPrivkey` recomputes
- * npub/pubkey from the private key), so account-0 caching matches the
- * hardcoded account-0 behaviour of the old mnemonic path.
- */
-/**
- * Schnorr-sign an arbitrary Nostr event AS an already-resolved identity (NIP-98
- * login, kind-1 notes, …). The caller (execute-approval) resolves WHICH identity
- * the origin acts as — account-0, a per-origin compartmentalized identity, or a
- * vault burner/imported — via `resolveNostrIdentityForOrigin`, keeping this a pure,
- * storage-free signer. `null` means the identity couldn't be produced (e.g. a
- * per-origin/vault key on a warm resume) → re-unlock.
- */
 /** NIP-98 HTTP-auth event kind. Signing one is handing over a bearer credential. */
 const NIP98_HTTP_AUTH_KIND = 27235;
 
@@ -188,6 +168,14 @@ function assertNotSelfAuthToken(event: UnsignedNostrEvent): void {
   }
 }
 
+/**
+ * Schnorr-sign an arbitrary Nostr event AS an already-resolved identity (NIP-98
+ * login, kind-1 notes, …). The caller (execute-approval) resolves WHICH identity
+ * the origin acts as — account-0, a per-origin compartmentalized identity, or a
+ * vault burner/imported — via `resolveNostrIdentityForOrigin`, keeping this a pure,
+ * storage-free signer. `null` means the identity couldn't be produced (e.g. a
+ * per-origin/vault key on a warm resume) → re-unlock.
+ */
 export function signNostrEventWith(
   identity: NostrIdentity | null,
   event: UnsignedNostrEvent,

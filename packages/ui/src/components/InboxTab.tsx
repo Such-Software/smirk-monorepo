@@ -97,8 +97,8 @@ export interface InboxTabProps {
   /** Manual refresh handler. The shell already polls on a 30s cadence;
    *  this lets the user trigger an immediate fetch. */
   onRefresh?: () => void;
-  /** Tapping a pending_to_sign item: shell routes to the paste-incoming
-   *  wizard (Phase 3.4) pre-populated with the item's slatepack. */
+  /** Tapping a pending_to_sign item: shell routes to
+   *  `GrinPasteIncomingWizard` pre-populated with the item's slatepack. */
   onOpenIncomingSign: (item: InboxItemPendingToSign) => void;
   /** Tapping a pending_to_finalize item: shell routes back into the
    *  SendWizard Exchange step with the relay's S2 ready to paste. */

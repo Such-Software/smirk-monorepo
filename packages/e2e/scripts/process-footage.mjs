@@ -15,15 +15,13 @@
  *   - accompanied by a chapter list of the marker offsets, so an editor can jump
  *     straight to the money moment.
  *
- * STORAGE CONTRACT (docs/engineering/developer-workstations.md): everything here
- * writes to `~/Build/smirk-monorepo/e2e/...`, which is machine-local and
- * disposable. Nothing is written to `~/Seafile/Marketing Media` automatically,
- * because rule 5 says only APPROVED deliverables belong there. Use `--promote`
- * once you have watched a clip and want to keep it.
+ * STORAGE CONTRACT: everything here writes under `~/Build/smirk-monorepo/e2e/`,
+ * which is machine-local and disposable. Nothing is promoted automatically:
+ * `--promote` copies a clip you have watched to `FOOTAGE_PROMOTE_DIR`.
  *
  * Usage:
  *   node scripts/process-footage.mjs                # trim + name into ~/Build
- *   node scripts/process-footage.mjs --promote      # copy approved clips to Seafile
+ *   node scripts/process-footage.mjs --promote      # copy approved clips to FOOTAGE_PROMOTE_DIR
  *   node scripts/process-footage.mjs --pad-ms 750   # padding around the marked region
  */
 
@@ -35,7 +33,7 @@ import { execFileSync } from 'node:child_process';
 const BUILD = join(homedir(), 'Build', 'smirk-monorepo', 'e2e');
 const VIDEO_DIR = process.env.CAPTURE_VIDEO_DIR ?? join(BUILD, 'videos');
 const OUT_DIR = join(BUILD, 'footage');
-const MARKETING = join(homedir(), 'Seafile', 'Marketing Media', 'smirk-wallet', 'e2e-clips');
+const MARKETING = process.env.FOOTAGE_PROMOTE_DIR ?? join(BUILD, 'approved');
 
 const args = process.argv.slice(2);
 const PROMOTE = args.includes('--promote');

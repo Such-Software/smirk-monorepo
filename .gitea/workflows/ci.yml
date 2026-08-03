@@ -2,25 +2,20 @@ name: CI (Gitea)
 
 # The real CI gate for this repo.
 #
-# GitHub Actions is disabled at the Such-Software ORG level, deliberately: code
-# lives on GitHub but builds run here, on the Builds runners (see
-# ~/src/docs/infra/git-hosting-and-lfs.md and .gitea/workflows/desktop-build.yml).
+# GitHub Actions is disabled at the org level, deliberately: code lives on
+# GitHub but builds run here (see .gitea/workflows/desktop-build.yml). So this
+# file, not `.github/workflows/ci.yml`, is where the correctness gates execute:
+# rust check / test / clippy, the wasm build, the topological TS build,
+# typecheck, unit tests, the API check, the secret scan, and the dependency
+# audit.
 #
-# The consequence nobody had noticed is that only the DESKTOP build was ported.
-# `.github/workflows/ci.yml` still carried every correctness gate (rust check /
-# test / clippy, the wasm build, the topological TS build, typecheck, unit tests,
-# and the dependency audit) and none of them had run for the whole v0.3.0 cycle,
-# because the workflow they live in cannot execute. A green-looking release was
-# gated on nothing. This file is that workflow, ported to run where CI actually
-# lives.
+# Keep this in sync with .github/workflows/ci.yml, or delete that one. Two
+# copies of a gate, one of which cannot run, produces a green-looking release
+# gated on nothing.
 #
-# Keep this in sync with .github/workflows/ci.yml, or delete that one. Two copies
-# of a gate, one of which cannot run, is exactly how this happened.
-#
-# `runs-on: ubuntu-latest` is the label the linux-beast runner actually
-# advertises (see the matrix in desktop-build.yml). A bare `linux` label queues
-# forever with no runner and no error, which is indistinguishable from a broken
-# runner: run 823 sat queued until the label was corrected.
+# `runs-on: ubuntu-latest` is the label this instance's Linux runner advertises
+# (see the matrix in desktop-build.yml). A label no runner claims queues forever
+# with no error, which is indistinguishable from a broken runner.
 
 on:
   push:

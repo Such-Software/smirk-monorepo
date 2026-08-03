@@ -21,13 +21,14 @@ import { BackendRoute } from './backend';
 
 /**
  * The auto-lock dropdown options. `0` = lock immediately on popup close
- * (safe default). `-1` = never auto-lock. Positive = minutes.
+ * (safe default). Positive = minutes, clamped to `AUTO_LOCK_MAX_MINUTES`;
+ * there is no "never" value.
  *
- * When non-zero, the popup persists the unlocked mnemonic into
- * `chrome.storage.session` for the chosen duration. That's a
- * convenience-vs-security tradeoff with explicit user opt-in — the
- * 2026-05-10 audit's "do not persist seed material" rule applies to
- * the *default* behavior, which we keep at `0` (immediate).
+ * When non-zero, the popup persists the unlocked wallet's derived keys and
+ * addresses into `chrome.storage.session` for the chosen duration. The
+ * mnemonic is never cached, so the "do not persist seed material" rule holds
+ * at every setting; the convenience-vs-security tradeoff here is only over
+ * how long usable keys stay resident.
  */
 const AUTO_LOCK_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 0, label: 'Immediately (most secure)' },
@@ -151,10 +152,12 @@ function AssetsVisibilityPanel({
 /**
  * Settings tab router.
  *
- * Two sub-routes today:
+ * Sub-routes:
  *   - `settings`            — the main Settings page (SettingsStub)
  *   - `settings/sent-tips`  — cross-asset Sent Tips list with
  *                             inline Clawback + Discard Draft actions.
+ *   - `settings/nostr`      (the Nostr identity vault)
+ *   - `settings/backend`    (backend selection)
  *
  * Per-asset history already surfaces sent-tip rows inline in
  * AssetDetailScreen; this is the cross-asset surface — find a
@@ -913,9 +916,9 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
               lineHeight: 1.4,
             }}
           >
-            ⚠ While unlocked, your seed phrase is held in browser session
-            storage. Only choose a non-immediate option on devices you
-            trust physically.
+            ⚠ While unlocked, this device keeps your derived keys in browser
+            session storage (never your recovery phrase). Only choose a
+            non-immediate option on devices you trust physically.
           </p>
         )}
         {browserController && (

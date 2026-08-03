@@ -1,7 +1,9 @@
 /**
  * Swap bookkeeping endpoints (Trocador). The extension talks to
- * api.trocador.app directly for the actual quote/create/status calls
- * (V0_3_PLAN.md Decision 2, client-direct architecture). These
+ * api.trocador.app directly for the actual quote/create/status calls:
+ * the client-direct architecture of Decision 2 in the backend
+ * repository's v0.3 plan, which keeps this backend out of the swap
+ * money flow and out of a money-transmitter posture. These
  * methods touch our own backend's persistence so the user's swap
  * history survives across devices and the backend webhook receiver
  * has somewhere to write updates into.

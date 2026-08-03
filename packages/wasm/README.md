@@ -35,7 +35,7 @@ await initialize();
 // fetches & instantiates the .wasm next to the loader
 
 const address = grin.slatepackAddress(mnemonic, 0, 'mainnet');
-const xmrTx   = monero.constructTransaction(...);
+const xmrTx   = monero.signTransaction(JSON.stringify(params));
 ```
 
 ## Use — Node / restricted-fetch environments
@@ -44,20 +44,29 @@ const xmrTx   = monero.constructTransaction(...);
 import { initialize, grin } from '@smirk/wasm';
 import { readFileSync } from 'fs';
 
-const wasmBytes = readFileSync('node_modules/@smirk/wasm/pkg/smirk_wasm_bg.wasm');
+// Path relative to the monorepo root; `make wasm` produces it.
+const wasmBytes = readFileSync('crates/smirk-wasm/pkg/smirk_wasm_bg.wasm');
 await initialize(wasmBytes);
 ```
 
 The mobile WebView's restricted fetch behaviour also goes through
 the explicit-bytes path.
 
+The package publishes only `dist/` and `src/`, so the `.wasm` is not
+inside the installed package: a consuming app resolves or bundles those
+bytes itself.
+
 ## Namespaces
 
 | Namespace | Coverage                                                       |
 |-----------|----------------------------------------------------------------|
-| `grin`    | Slatepack address derivation, slate construction, sweeps       |
-| `monero`  | Address derivation, ringct tx construction, output decoding    |
-| `wownero` | Reuses `monero.*` shapes (delta is on the chain side, not crypto) |
+| `grin`    | Slatepack address derivation, slate + invoice ceremonies, slatepack codec, vouchers |
+| `monero`  | Address validation, key-image derivation, fee estimation, ringct tx signing |
+| `bitcoin` | BTC + LTC address derivation (BIP84 / BIP86) and PSBT build, sign, extract |
+
+There is no `wownero` namespace: `coin: "xmr" | "wow"` in the signing
+params selects Monero or Wownero, since the delta is on the chain side,
+not the crypto.
 
 Initialisation is idempotent — every shell can call it on boot
 without coordinating with the others.

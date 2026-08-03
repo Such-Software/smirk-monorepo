@@ -129,11 +129,11 @@ export function NostrIdentityRoute({
   };
 
   // Everything server-derived on this screen (your handle, whether the account is
-  // linked) comes from this one call. It used to have no failure path at all, so an
-  // unauthenticated or failed /auth/me rendered *identically* to "account has no
-  // handle": a blank screen with no explanation. Track the outcome so the screen can
-  // say which it is — the difference matters, because one is fixed by re-unlocking
-  // and the other by claiming a name.
+  // linked) comes from this one call. Without a failure path, an unauthenticated or
+  // failed /auth/me renders *identically* to "account has no handle": a blank screen
+  // with no explanation. Track the outcome so the screen can say which it is; the
+  // difference matters, because one is fixed by re-unlocking and the other by
+  // claiming a name.
   useEffect(() => {
     let stale = false;
     void api
@@ -164,12 +164,11 @@ export function NostrIdentityRoute({
   /**
    * Ask for the password, VISIBLY.
    *
-   * `setShowUnlock(true)` alone is not enough and was the second half of the
-   * "button does nothing" report: the unlock field sits at the TOP of a long
-   * scrolling panel while the controls that need it are at the BOTTOM. When the
-   * field is already open, setting the flag again is a no-op, nothing moves, and
-   * `autoFocus` does not re-fire because the input never remounts. So the user
-   * presses the one button that matters and the screen is visibly inert.
+   * `setShowUnlock(true)` alone is not enough: the unlock field sits at the TOP
+   * of a long scrolling panel while the controls that need it are at the BOTTOM.
+   * When the field is already open, setting the flag again is a no-op, nothing
+   * moves, and `autoFocus` does not re-fire because the input never remounts,
+   * so the screen reads as inert.
    *
    * Scroll the field into view, focus it, and leave a note beside the control
    * that was pressed saying what it is waiting for.
@@ -271,10 +270,10 @@ export function NostrIdentityRoute({
 
   const onLinkActive = async () => {
     if (!vault) return;
-    // Warm resume drops the seed, and linking has to sign with account-0. This used
-    // to `return` silently (and the button was also rendered `disabled`), so the one
-    // control that activates your handle did nothing at all with nothing said. Prompt
-    // for the password instead, exactly as `commit` and `onPublishProfile` do.
+    // Warm resume drops the seed, and linking has to sign with account-0. Returning
+    // silently here would leave the one control that activates your handle doing
+    // nothing with nothing said. Prompt for the password instead, exactly as
+    // `commit` and `onPublishProfile` do.
     if (!mnemonic) {
       promptUnlock('Enter your password to link your identity.');
       return;
@@ -513,8 +512,8 @@ export function NostrIdentityRoute({
         </div>
       )}
 
-      {/* No handle is not the same as no answer. Previously both rendered as an empty
-          gap, which is what made "my handle is missing" impossible to act on. */}
+      {/* No handle is not the same as no answer. Rendering both as an empty gap makes
+          "my handle is missing" impossible to act on, so say which one it is. */}
       {!handle && meState !== 'loading' && (
         <div
           data-testid="nostr-handle-absent"
@@ -791,8 +790,9 @@ export function NostrIdentityRoute({
             <div data-testid="nostr-linked-badge" style={linkedBadge}>
               ✓ Your account is linked to your primary Nostr identity
             </div>
-            {/* Rendered unconditionally: gating this on `mnemonic` hid the control
-                outright on a warm resume. The handler prompts for the password. */}
+            {/* Rendered unconditionally: gating this on `mnemonic` would hide the
+                control outright on a warm resume. The handler prompts for the
+                password. */}
             <button data-testid="nostr-publish-profile" onClick={onPublishProfile} disabled={publishingProfile} style={{ ...smallBtn, alignSelf: 'flex-start' }}>
               {publishingProfile ? 'Publishing…' : 'Publish handle to Nostr'}
             </button>
@@ -804,8 +804,8 @@ export function NostrIdentityRoute({
             {busy === 'link' ? 'Linking…' : 'Link your identity to activate your handle'}
           </button>
         )}
-        {/* Shown at the control that was pressed. Without this the only feedback
-            was a field far above the fold, which read as a dead button. */}
+        {/* Shown at the control that was pressed. Without it the only feedback is a
+            field far above the fold, which reads as a dead button. */}
         {unlockPrompt && !mnemonic && (
           <div
             data-testid="nostr-unlock-prompt"

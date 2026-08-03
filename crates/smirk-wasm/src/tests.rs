@@ -2,9 +2,8 @@
 //!
 //! Run with: cargo test
 
-// `tests::tests` is the existing layout — kept for now so we don't
-// rename test paths during the CI greening. Refactor when we restructure
-// smirk-wasm tests for the post-port surface.
+// Nested `tests::tests` module: renaming it would change every test
+// path, so `clippy::module_inception` is allowed here.
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
@@ -132,9 +131,9 @@ mod tests {
     /// 32-byte key. If anyone ever reverts to a constant or deterministic
     /// value, this fails immediately.
     ///
-    /// Background: pre-2026-05-10 the production wallet shipped
+    /// Not hypothetical: an earlier implementation hardcoded
     /// `Zeroizing::new([0u8; 32])` here, breaking amount privacy on all
-    /// outgoing XMR/WOW transactions. See docs/MIGRATION_LOG.md or git log.
+    /// outgoing XMR/WOW transactions.
     #[test]
     fn test_outgoing_view_key_is_fresh_per_call() {
         use std::collections::HashSet;

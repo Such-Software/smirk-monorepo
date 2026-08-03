@@ -71,9 +71,11 @@ Code-signing on Windows requires an Authenticode cert from a CA
 Linux, AppImage signing is uncommon — most users verify the SHA256
 against the published value.
 
-If we get user demand for signed Windows builds, the workflow is
-ready to take the cert (uncomment the cert fields in the matrix and
-add `WINDOWS_CERTIFICATE` / `WINDOWS_CERTIFICATE_PASSWORD` secrets).
+Nothing is pre-wired for Windows signing today. If we get user demand
+for signed builds: add `WINDOWS_CERTIFICATE` and
+`WINDOWS_CERTIFICATE_PASSWORD` repository secrets, wire them into the
+`tauri-apps/tauri-action` step's `env` alongside the Apple variables,
+and set `bundle.windows.certificateThumbprint` in `tauri.conf.json`.
 
 ## Cutting a release
 
@@ -97,9 +99,13 @@ add `WINDOWS_CERTIFICATE` / `WINDOWS_CERTIFICATE_PASSWORD` secrets).
    push. Watch the Actions tab — the matrix takes ~30-45 minutes for
    the full three-platform build.
 6. **Verify** the published GitHub release has:
-   - macOS: `Smirk Wallet_0.3.1_universal.dmg`
-   - Windows: `Smirk Wallet_0.3.1_x64_en-US.msi`
-   - Linux: `smirk-wallet_0.3.1_amd64.AppImage`
+   - macOS: the signed + notarized `.app`, wrapped into a `.dmg` by
+     the build job's `hdiutil` step. Tauri's own `dmg` target is off
+     because `bundle_dmg.sh` needs a GUI session the daemon runner
+     lacks.
+   - Windows: the NSIS `-setup.exe`. `bundle.targets` is
+     `["appimage", "app", "nsis"]`, so no `.msi` is produced.
+   - Linux: the `.AppImage`
    - A `latest.json` file (the updater manifest, signed)
 7. **Smoke-test** each platform's binary by installing on a clean
    VM. Lock + unlock the wallet, send a tiny transaction, claim a

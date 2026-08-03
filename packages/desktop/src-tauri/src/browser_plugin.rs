@@ -173,16 +173,12 @@ struct BrowserPluginInner {
     /// route back into.
     pending_page_requests: HashMap<u64, String>,
     next_request_id: u64,
-    /// Webview labels that have already been `show()`n at least once.
-    /// `apply_rect` only calls `show()` on first application per tab
-    /// — repeating it on every Move/Resize tick is what causes the
-    /// WebKitGTK compositor surface to race itself into a black
-    /// state during a drag-resize (tauri-apps/wry#1727 family). On
-    /// `hide_frame` we DON'T clear this — the wallet uses hideFrame
-    /// to dismiss a tab visually while keeping it loaded; the next
-    /// `apply_rect` with a non-zero rect skips the show() but our
-    /// own hide_frame path explicitly toggles via the embedded
-    /// window's show() in the unhide branch.
+    /// Webview labels that have been `show()`n at least once. Recorded
+    /// for first-mount discovery only: `apply_rect` re-runs hide/show
+    /// on every application, because the hide is what reliably forces
+    /// WebKitGTK to re-issue `size_allocate` and recover its compositor
+    /// surface after a parent-window resize (tauri-apps/wry#1727
+    /// family).
     shown_tabs: std::collections::HashSet<String>,
 }
 

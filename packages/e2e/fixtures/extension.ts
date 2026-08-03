@@ -23,11 +23,10 @@ import { Footage } from './footage.js';
 export const CAPTURE_VIDEO = ['1', 'on', 'true', 'yes'].includes(
   (process.env.CAPTURE_VIDEO ?? '').toLowerCase(),
 );
-// Per the workstation storage contract (docs/engineering/developer-workstations.md):
-// regenerable output lives in `~/Build/<project>/...`, never in the worktree and
-// never written straight into the shared Seafile library. Raw captures are
-// intermediates; only APPROVED clips get promoted to `~/Seafile/Marketing Media`,
-// by a human, via `scripts/process-footage.mjs --promote`.
+// Captures are regenerable, so they land under `~/Build/smirk-monorepo/e2e/`,
+// never in the worktree. `CAPTURE_VIDEO_DIR` overrides. Raw captures are
+// intermediates; promote finished clips with `scripts/process-footage.mjs
+// --promote`, which a human runs after watching them.
 const VIDEO_DIR =
   process.env.CAPTURE_VIDEO_DIR ??
   join(homedir(), 'Build', 'smirk-monorepo', 'e2e', 'videos');

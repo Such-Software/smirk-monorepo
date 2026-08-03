@@ -6,13 +6,11 @@
  * from the Nostr identity (secp256k1/schnorr) — a separate curve on a separate,
  * disjoint HD path — so rotating the npub never orphans encrypted data.
  *
- * such-hq (2026-07-06) confirmed the asymmetric X25519 design over the symmetric
- * `encryptStorage`: writes are offline (seal to the pubkey, no wallet call), reads
- * are one `appSealOpen`/session, and multi-member is native (seal to each member).
- * See docs/private SESSION-PICKUP-2026-07-06.md §"Build spec" and
- * APP_SCOPED_E2EE_AND_PRIVACY.md.
+ * Asymmetric X25519 rather than the symmetric `encryptStorage`: writes are offline
+ * (seal to the pubkey, no wallet call), reads are one `appSealOpen` per session, and
+ * multi-member is native (seal to each member).
  *
- * Dapp-facing (wired in dapp-api next stage):
+ * Dapp-facing surface (`packages/dapp-api`):
  *   getAppEncryptionKey({ context? }) -> { publicKey (x25519 hex), scheme }
  *   appSealOpen({ sealed, context? })  -> { plaintext }
  */

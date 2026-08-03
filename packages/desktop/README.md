@@ -7,7 +7,7 @@ Smirk Wallet packaged as a native desktop app for macOS, Windows, and Linux.
 The desktop shell is intentionally thin. We wrap the same Preact wallet UI
 that the browser extension ships ([`packages/extension/src/popup`](../extension/src/popup))
 in a Tauri 2.x webview, with a small `chrome.*` compatibility shim
-([`src/chrome-shim.ts`](src/chrome-shim.ts)) that polyfills the four
+([`src/chrome-shim.ts`](src/chrome-shim.ts)) that polyfills the
 extension-API surfaces the popup uses:
 
 | Extension API              | Desktop polyfill                            |
@@ -45,20 +45,30 @@ extension-API surfaces the popup uses:
   Real enforcement returns with the transport work: once egress runs
   through Rust (`tauri-plugin-websocket` and an HTTP counterpart), the
   allowlist lives there, where it can be checked against the user's
-  configured backend instead of a compile-time constant. See
-  `docs/private/TRANSPORTS.md`.
+  configured backend instead of a compile-time constant.
 
 ## Development
 
 Prerequisites: Rust toolchain, Node 20+, `cargo install tauri-cli --version "^2"`.
 
+Linux also needs the WebKitGTK + soup development headers:
+`libwebkit2gtk-4.1-dev`, `libjavascriptcoregtk-4.1-dev`,
+`libsoup-3.0-dev`, `libxdo-dev`, `libayatana-appindicator3-dev`,
+`librsvg2-dev`, and `clang`. The clang requirement is ours, not
+Tauri's: the vendored secp256k1zkp compiles C to wasm32 via cc-rs,
+which needs a clang carrying the WebAssembly LLVM target.
+
 ```sh
 # From the monorepo root:
-make wasm                                # builds smirk-wasm pkg/
 npm install                              # workspace install
+make libs                                # smirk-wasm pkg/ + every @smirk/* lib
 cd packages/desktop
 npm run tauri:dev                        # launches dev window
 ```
+
+`make libs` is not optional. The `@smirk/*` manifests resolve to
+`dist/`, which is git-ignored, so on a fresh clone Vite cannot resolve
+the workspace imports until the libraries are built.
 
 The Vite dev server runs on port 1420; Tauri picks it up from
 `tauri.conf.json::build.devUrl`.
@@ -71,9 +81,12 @@ npm run tauri:build
 
 Outputs bundle artifacts to `src-tauri/target/release/bundle/`. Targets are
 read from `tauri.conf.json::bundle.targets` (currently
-`["appimage", "app", "dmg", "nsis"]` — produces `.app` + `.dmg` on macOS,
-`.msi` / `.exe` on Windows, `.AppImage` on Linux). `.deb` and `.rpm` are
+`["appimage", "app", "nsis"]`: a `.app` on macOS, an NSIS setup `.exe` on
+Windows, an `.AppImage` on Linux). `.deb` and `.rpm` are
 intentionally omitted; AppImage is the agreed Linux delivery format.
+`dmg` is omitted because Tauri's dmg bundler drives AppleScript /
+WindowServer, which a headless release runner does not have; the release
+workflow wraps the signed `.app` with `hdiutil` after the build instead.
 
 ## Signing & notarization
 

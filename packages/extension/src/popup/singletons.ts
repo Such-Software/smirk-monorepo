@@ -25,7 +25,9 @@ export const router = new RouteController(store);
  * browser restart, NEVER holds plaintext seed material (the seed is
  * XChaCha20-Poly1305 encrypted under a PBKDF2-stretched password before write).
  * On MV3 service-worker restart the in-memory unlocked state is lost and the user
- * re-enters their password. See docs/SECURITY_AUDIT.md for the rationale.
+ * re-enters their password: persisting the decrypted seed so it survived the
+ * restart would put plaintext key material on disk, which no amount of saved
+ * typing justifies.
  */
 export const walletKeystore = new WalletKeystore(new ChromeLocalStorage());
 

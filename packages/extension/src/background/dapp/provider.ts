@@ -7,9 +7,10 @@
  * **Why a public-cache instead of "share the unlocked wallet with the
  * SW".** The SW is an evictable, cross-process context. Keeping
  * seed bytes in `chrome.storage.session` for the SW to find on
- * respawn is exactly the audit-flagged anti-pattern the v0.3
- * security posture rejects (see
- * `smirk-monorepo/docs/SECURITY_AUDIT.md`). The popup is the trusted,
+ * respawn is exactly the anti-pattern the v0.3 security posture
+ * rejects: it leaves seed material in storage that outlives the
+ * foreground context the user authorized, readable by every SW
+ * respawn thereafter. The popup is the trusted,
  * user-foreground context — it holds the unlocked seed; the SW only
  * needs to answer a few cache-friendly questions about pubkeys and
  * addresses (which are not secret), and routes everything sensitive
@@ -54,10 +55,11 @@ export interface DappPublicCache {
   fingerprint: string;
   addresses: SmirkAddresses;
   publicKeys: SmirkPublicKeys;
-  /** Seed-derived Nostr public key (x-only hex) — the wallet's account-0 identity
-   *  today (per-origin / active-identity selection lands with the per-service work).
-   *  Public material — lets the dapp bridge answer getNostrPublicKey() without the
-   *  seed. Optional for backward compat with pre-nostr cache entries. */
+  /** Seed-derived account-0 Nostr public key (x-only hex). This is the FALLBACK
+   *  identity: an origin granted a specific identity carries it on
+   *  `OriginPermission.nostrPubkey`, which the wallet-handler prefers over this
+   *  field. Public material — lets the dapp bridge answer getNostrPublicKey()
+   *  without the seed. Optional for backward compat with pre-nostr cache entries. */
   nostrPublicKey?: string;
   /** Backend API base URL the wallet is pointed at, so a page can discover the
    *  user's chosen backend via getBackend(). Optional for backward compat. */
@@ -66,8 +68,10 @@ export interface DappPublicCache {
    *  "wallet is currently unlocked" signal — see file header. */
   unlockedAt: number;
   /**
-   * Unix ms when the session-cache auto-lock TTL expires. Set to
-   * `Number.MAX_SAFE_INTEGER` when the user picked "Never". Used by
+   * Unix ms when the session-cache auto-lock TTL expires, capped at
+   * `AUTO_LOCK_MAX_MINUTES` (24h) from the write; `Date.now()` when
+   * auto-lock is immediate, which makes the cache stale the moment it
+   * is written. There is no "Never" sentinel. Used by
    * the SW provider to detect "wallet was unlocked but the session
    * has since timed out and the popup hasn't been opened to clear
    * the cache". Per Finding 13 in the v0.3.0 pre-ship audit. Optional

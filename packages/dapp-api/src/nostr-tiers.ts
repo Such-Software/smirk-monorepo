@@ -1,9 +1,9 @@
 /**
- * Nostr event-kind risk tiers (P4, the money-tier session model). A Nostr
+ * Nostr event-kind risk tiers (the money-tier session model). A Nostr
  * signature is a credential, so which events a connected origin may sign WITHOUT
  * a fresh per-event prompt is a security decision, not a UX one.
  *
- *   - `money`             — value / authorization events (17, 30402, 22242). NEVER
+ *   - `money`             — value / authorization events (17, 27235, 30402, 22242). NEVER
  *                           auto-signed, NEVER session-grantable. Every one gets an
  *                           explicit, per-event approval with a strong warning.
  *   - `session-grantable` — high-volume, low-risk social events (1, 7, 1059). The

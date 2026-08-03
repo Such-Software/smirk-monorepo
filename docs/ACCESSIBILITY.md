@@ -29,9 +29,13 @@ Verify in code review for every interactive element.
 OS-respecting defaults:
 
 - iOS Dynamic Type, Android Font Scale — UI never overrides
-- `prefers-reduced-motion` — animations gated
-- `prefers-contrast` — contrast adjusted via theme tokens
-- `prefers-color-scheme` — handled by the theme system
+
+These three are commitments, not current behavior. No shipped component
+or theme reads them:
+
+- `prefers-reduced-motion`: gate animations
+- `prefers-contrast`: swap to high-contrast tokens
+- `prefers-color-scheme`: select the theme
 
 If an OS feature exists, we follow it. We do not override.
 
@@ -62,8 +66,10 @@ event severity:
 | Critical condition the user must know now | `assertive` (`role="alert"`) | Failed claim, lock-window violation, fund-loss-adjacent message. |
 | Modal opening that demands attention | `assertive` + focus management | Approval prompt opening. |
 
-**Never use `aria-live` directly on a component**; always route through
-`<LiveRegion>` so the politeness mapping is centralized.
+Until `<LiveRegion>` lands, components set `aria-live` directly:
+`FreshnessCue`, `UnifiedBalance`, and `OnboardingWizard` do. Once the
+component exists, every announcement routes through it so the politeness
+mapping stays in one place, and those three migrate.
 
 ### Dialog (modal)
 
@@ -84,8 +90,12 @@ Pattern: `role="tablist"` on the strip, `role="tab"` with
 `role="tabpanel"` element, arrow keys move focus between tabs, Home /
 End jump to first / last, Enter or Space activates focus-moved tab.
 
-`@smirk/ui`'s `BottomNav` and `BrowserTabStrip` implement this. Build
-new tab strips on those primitives.
+`@smirk/ui`'s `BottomNav` and `BrowserTabStrip` carry `role="tablist"`,
+`role="tab"`, and `aria-selected`. The rest of the pattern is not wired:
+no `aria-controls`, no roving tabindex, no arrow-key or Home / End
+movement, and `BrowserTabStrip`'s tabs are non-focusable `<div>`s.
+Neither is a finished tablist primitive; complete one before building
+new strips on it.
 
 ### Focus trap
 
@@ -103,20 +113,25 @@ chrome for screen-reader and keyboard users.
 
 ### Form fields
 
-Every input has an associated `<label>`, either wrapping the input or
-via `for=`. Error messages are wired via `aria-describedby` and use a
-live region. Validation state is communicated through both color AND
-text (color blindness).
+Every input MUST have an associated `<label>`, either wrapping the input
+or via `for=`. Error messages MUST be wired via `aria-describedby` and
+use a live region. Neither holds in `@smirk/ui` today: the labels that
+exist are siblings of their inputs, and `aria-describedby` is unused.
+Validation state is communicated through both color AND text (color
+blindness).
 
 ## Keyboard map
 
-Keyboard shortcuts are centralized in **`@smirk/keymap`** so the
-extension, desktop, and mobile builds map the same actions to
-platform-appropriate bindings. Adding a new shortcut means:
+**`@smirk/keymap`** defines the canonical action set and the
+per-platform bindings, so the extension, desktop, and mobile builds map
+the same actions to platform-appropriate keys. No shell consumes it yet:
+none of those builds binds a wallet shortcut today. Adding a new
+shortcut means:
 
 1. Adding an action to the `KeymapAction` enum.
 2. Adding per-platform bindings in the keymap manifest.
-3. Hooking the action in the consuming component via `useKeymap()`.
+3. Dispatching on `actionsFromEvent(event, platform)` in the consuming
+   shell's `keydown` handler.
 
 Never bind keys directly with `addEventListener('keydown', ...)` —
 that path leads to platform-divergent shortcuts and conflict bugs.
@@ -144,8 +159,9 @@ the word "Confirmed". An error icon AND red AND the word "Failed".
 }
 ```
 
-Components that introduce animation declare a reduced-motion
-variant in their CSS. No exceptions.
+Components that introduce animation MUST declare a reduced-motion
+variant in their CSS. Two shipped animations do not: the `FreshnessCue`
+pulse and the `OnboardingWizard` bounce.
 
 ### High contrast
 
@@ -155,16 +171,17 @@ variant in their CSS. No exceptions.
 }
 ```
 
-Every theme defines a high-contrast variant or documents the
-exception in its theme file.
+Every theme is required to define a high-contrast variant or document
+the exception in its theme file. None of the built-in themes does yet.
 
 ## Internationalization-ready labels
 
-All `aria-label`, `aria-describedby` targets, and error message strings
-go through `t()` (the i18n helper in `@smirk/core`). Even for
-English-only builds, the indirection is mandatory — adds zero runtime
-cost, makes the eventual Spanish / Japanese / etc. ship a translation
-task instead of a refactor.
+Labels are English literals today: `@smirk/core` ships no `t()` helper.
+When it lands, every `aria-label`, `aria-describedby` target, and error
+string routes through it, even for English-only builds. The indirection
+costs nothing at runtime and makes the eventual Spanish / Japanese ship
+a translation task instead of a refactor. The pattern below is the
+target, not an enforced rule.
 
 ```tsx
 // Required:
@@ -192,11 +209,17 @@ per-platform overrides, NOT in component code.
 
 ## Testing matrix
 
-### Automated (CI, every PR)
+### Automated (planned, not in CI yet)
+
+CI runs cargo check / test / clippy, the WASM build, the workspace
+build, `npm run typecheck --workspaces`, and `npm test --workspaces`
+(static-render component tests with no a11y assertions), plus npm and
+cargo audit. It runs no lint and no a11y step. The three checks below
+are the target:
 
 - **`eslint-plugin-jsx-a11y`** — catches the structural problems
   (`role="button"` on a div, missing `alt`, click-without-keypress,
-  etc.). See "Toolchain — to be added" below.
+  etc.). See the Toolchain section below.
 - **`@axe-core/preact`** in component tests — runtime checks (contrast,
   focus order, ARIA validity). One axe assertion per significant
   interactive component.
@@ -219,8 +242,8 @@ under each of:
 Plus keyboard-only navigation (no mouse / no touch) on extension +
 desktop builds.
 
-Findings get recorded in `docs/ACCESSIBILITY_LOG.md`: public,
-transparent, dated.
+Findings are recorded in a public, dated `docs/ACCESSIBILITY_LOG.md`
+once the first screen-reader pass runs.
 
 ## Contribution checklist
 

@@ -3,12 +3,11 @@
  * (checkRestore + PoW + extensionRegister) inside the offscreen
  * document so popup close can't abort it mid-flight.
  *
- * Why this exists alongside the simpler `pow-solve` handler: when
- * just PoW ran in the background, the *register* step was still
- * popup-resident. A popup that died mid-solve would never make the
- * register call, and the popup that came back would have to redo
+ * Why the whole bootstrap runs here rather than only the PoW solve:
+ * with the register step popup-resident, a popup that died mid-solve
+ * never made the register call, and the popup that came back redid
  * everything from scratch (new challenge, new solve, new tokens).
- * Moving the full bootstrap here means the tokens land in
+ * Running the full bootstrap here means the tokens land in
  * `chrome.storage.session` regardless of which popup (if any) is
  * open when the solve completes — `jobs.list({ dedupKey })` on
  * remount returns the completed job's result and the popup is
@@ -26,10 +25,8 @@
  * `@smirk/core::solvePowChallenge` (with our abort signal threaded
  * in) rather than duplicating the altcha-lib invocation here. That
  * keeps the `{ challenge, solution }` envelope shape locked in
- * exactly one place — a duplicated solve here previously regressed
- * to shipping a bare `Solution` and surfaced as production HTTP 422
- * 'altcha_solution: missing field `challenge`' on every wallet
- * registration on 2026-06-11. See the audit at that date.
+ * exactly one place. A bare `Solution` is rejected by the backend
+ * with HTTP 422 'altcha_solution: missing field `challenge`'.
  */
 
 import { api, solvePowChallenge } from '@smirk/core';

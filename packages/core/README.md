@@ -49,10 +49,11 @@ import { createKeystore, unlockKeystore } from '@smirk/core';
 import { SmirkApi, bootstrapAuth } from '@smirk/core';
 
 const api = new SmirkApi();
-const wallet = await createKeystore({ mnemonic, password, storage });
+const keystore = await createKeystore(mnemonic, password);
+const wallet = await unlockKeystore(keystore, password);
 const bootstrap = await bootstrapAuth(api, wallet);
 ```
 
 ## License
 
-MIT OR Apache-2.0.
+MIT.

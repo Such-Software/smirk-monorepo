@@ -19,7 +19,7 @@ the previous one to be green before it's worth running.
                           ▲
                 Layer 1 — Unit tests + WASM smoke
               ┌────────────────────────────────────────┐
-              │  cargo test --workspace                │
+              │  cargo test --workspace --lib          │
               │  Node smoke harness against every      │
               │  WASM export                           │
               └────────────────────────────────────────┘
@@ -27,21 +27,28 @@ the previous one to be green before it's worth running.
 
 ## Layer 1: unit tests + WASM smoke (every commit)
 
-**Status: active.** Runs in CI on every push.
+**Status: active.** The Rust unit tests run in CI on every push
+(`.gitea/workflows/ci.yml`, `cargo test --workspace --lib`). The WASM
+smoke is a local gate only: no workflow runs it, and `make test` does
+not include it.
 
 ### Rust unit tests
 
-`make rust-test` runs `cargo test --workspace`. Each crate has its own
-test module per file. Current state (as of 2026-05-13):
+`cargo test --workspace --lib` runs the unit tests; this is the CI gate.
+`make rust-test` runs the unqualified `cargo test --workspace`, which
+additionally pulls in vendored monero-oxide integration tests that
+require a local monerod on 127.0.0.1:18081. Each crate has its own
+test module per file:
 
 | Crate | Test count | Coverage focus |
 |---|---|---|
 | `crates/monero-oxide/` | upstream tests + Smirk additions | RctType variants (incl. Wownero), address codecs, ringct ops |
-| `crates/grin-ext/` (unit) | 121 | seed derivation, bip32, secp256k1, switch-commitment blind derivation, slatepack address, Schnorr (single + multi-party + adaptor), slate v4 (JSON + binary), Pedersen, Bulletproofs, kernels (incl. NRD), slatepack codec (armor + bin + age encryption), 6 wallet orchestrators, payment proofs |
-| `crates/grin-ext/` (integration) | 8 | cross-validation against `grin_wallet_libwallet` 5.4.0 — see Layer 2 below |
+| `crates/grin-ext/` (unit) | 137 | seed derivation, bip32, secp256k1, switch-commitment blind derivation, slatepack address, Schnorr (single + multi-party + adaptor), slate v4 (JSON + binary), Pedersen, Bulletproofs, kernels (incl. NRD), slatepack codec (armor + bin + age encryption), 6 wallet orchestrators, payment proofs |
+| `crates/grin-ext/tests/grin_wallet_compat.rs` | 12 | cross-validation against `grin_wallet_libwallet`, see Layer 2 below |
+| `crates/grin-ext/tests/grin_recovery_vectors.rs` | 6 | output recovery from depth-3, depth-4 and legacy proof builders, both switch types, plus wrong-seed and mismatched-commitment negatives |
 | `crates/btc-ext/` | active | BIP84/BIP86 derivation, PSBT build + sign + extract, fee estimation |
 | `crates/secp256k1zkp/` | upstream tests | covered via `cargo test`; mostly the C lib's own self-tests |
-| `crates/smirk-wasm/` | 10 | exposed Monero/Wownero/Grin functions |
+| `crates/smirk-wasm/` | 28 | exposed Monero/Wownero/Grin functions, subaddress derivation and key-image guards, atomic-amount string deserialization, outgoing view-key freshness |
 | `crates/swap-core/` | 1 | placeholder |
 
 **Conventions per module:**
@@ -73,7 +80,7 @@ Runs via `make wasm-smoke` (which builds the Node-target bundle first).
   `libsecp256k1-zkp`'s `malloc` path, which Node's `--target nodejs`
   WASM loader can't satisfy (eager import resolution; no host malloc
   in Node's WebAssembly env). The browser's `--target no-modules`
-  build (active since 2026-05-11) ships an `env`-stub postprocess
+  build ships an `env`-stub postprocess
   (`crates/smirk-wasm/postprocess.mjs`) that satisfies these imports
   at instantiate time, but the Node target uses a different glue
   format that bypasses the postprocess. Native unit tests in
@@ -84,8 +91,10 @@ Runs via `make wasm-smoke` (which builds the Node-target bundle first).
 ## Layer 2: cross-implementation interop (per release candidate)
 
 **Status: active for Grin; planned for other chains.** The
-grin-ext crate runs the official `grin_wallet_libwallet` 5.4.0 +
-`grin_keychain` 5.3.3 as **dev-dependencies** and cross-validates
+grin-ext crate runs `grin_wallet_libwallet` (a pinned rev of the
+jwinterm/grin-wallet fork, resolving to 5.4.0-alpha.1) and
+`grin_keychain` (declared 5.3.3, resolving to 5.4.0) as
+**dev-dependencies** and cross-validates
 load-bearing primitives + full ceremony round-trips against them. This
 catches a class of bug that internal tests can't: a sign convention or
 serialization choice that's internally consistent but doesn't match
@@ -97,19 +106,40 @@ example caught: c78aff0 — `sender_blind_excess` returned
 passed because both sides used the same wrong convention, but a real
 mainnet broadcast would have failed at kernel verification.
 
-### Grin cross-validation tests (8 today)
+### Grin cross-validation tests (12 today)
 
 `crates/grin-ext/tests/grin_wallet_compat.rs`:
 
-1. `sender_blind_excess` sign convention matches `grin_wallet_libwallet`
-2-6. `derive_blind` byte-equivalent with `grin_keychain::ExtKeychain::derive_key`
-   across 5 cases (different paths, both switch types)
-7. Full S1→S2→S3 round-trip: our slate fed through the reference's
-   verifier produces a valid aggregate signature against the kernel
-   commitment derived from the on-chain outputs/inputs
-8. Full I1→I2→I3 round-trip: same, inverse direction
-   Plus binary slate round-trip (`SlatepackBin` codec ↔ reference's `v4_bin`)
-   and `random_secret_nonce` distribution sanity check.
+- `sender_blind_excess` sign convention matches `grin_wallet_libwallet`
+- `derive_blind` byte-equivalent with `grin_keychain::ExtKeychain::derive_key`
+  across 5 cases (different paths, both switch types)
+- Depth-3 and depth-4 derivations diverge, which is what makes the
+  depth-3 fallback in `derive_input_blind_with_fallback` mandatory
+- `pubkey_to_commitment` agrees with `secp256k1zkp::Commitment::from_pubkey`,
+  the conversion grin-wallet uses to build the final kernel excess
+- `partial_sign` matches `grin_aggsig::sign_single`
+- `identify_output` recovers the child index from a commitment + value,
+  the enabler for stateless scan-based spend
+- A slate from `sender_init_s1` parses in
+  `grin_wallet_libwallet::Slate::deserialize_upgrade` with fields intact
+- `create_send_transaction` builds a full S1 slate the reference accepts,
+  parsing inputs, change output and sender participant correctly
+- Full S1→S2→S3 round-trip: our slate fed through the reference's
+  verifier produces a valid aggregate signature against the kernel
+  commitment derived from the on-chain outputs/inputs
+- Full I1→I2→I3 round-trip: same, inverse direction
+- Binary slate round-trip (`SlatepackBin` codec ↔ reference's `v4_bin`)
+- `random_secret_nonce` distribution sanity check
+
+`crates/grin-ext/tests/grin_recovery_vectors.rs` adds 6 more, the
+acceptance gate for seed-only output recovery. Commitments and
+bulletproofs are built with grin's own `ProofBuilder` /
+`LegacyProofBuilder` and `ExtKeychain`, then `recover_output` must
+return the exact value and the exact `Identifier` byte for byte:
+depth-3 (Grim) v3, depth-4 (Smirk) v3, depth-4
+`SwitchCommitmentType::None`, the legacy builder, plus negatives for a
+wrong seed and a mismatched commitment. Self-generated proofs would be
+circular, so the proofs come from grin's reference code.
 
 Dev-deps don't ship in the production WASM bundle — `grin_wallet_libwallet`
 is a `[dev-dependencies]` entry, used by `cargo test` only.
@@ -148,19 +178,31 @@ Once slate construction lands, the test infrastructure to add:
 ### Manual fixture cross-check
 
 For features where automated cross-impl testing is infeasible (e.g. UI
-flows in grin-wallet GUI), we keep a small `docs/MANUAL_TESTS.md`
-with reproducible steps + expected outcomes. Updated when bugs are
-found, run by hand before each release.
+flows in grin-wallet GUI), the check is run by hand before each release
+and recorded here.
 
 Currently captured: the slatepack address derivation manually verified
 against Grim GUI for the standard zero-entropy BIP39 mnemonic.
+Live-network round-trips follow the procedure in `docs/SEND_FLOW.md`,
+"Testing strategy: small mainnet amounts, no testnets".
 
 ## Layer 3: end-to-end test matrix (pre-release)
 
-**Status: harness in place.** The TypeScript packages now exist —
-`packages/extension/` (the production extension) and `packages/e2e/`
-(the end-to-end harness) — so this matrix runs before each public
-release:
+**Status: harness in place.** `packages/extension/` is the production
+extension and `packages/e2e/` the end-to-end harness, so this matrix
+runs before each public release.
+
+Automated: `npm run e2e -w @smirk/e2e` builds the extension
+(`packages/e2e/scripts/build-extension.sh`) and runs the Playwright
+specs in `packages/e2e/tests/` against `BACKEND_URL`. CI runs the suite
+in `.github/workflows/e2e.yml` (tier A: no secrets, no funded wallets,
+every PR) and `.github/workflows/e2e-full.yml`. Run it via the package
+scripts. A bare `--reporter=<x>` on the CLI replaces the configured
+reporter list and drops the skip guard, so a run that skips every spec
+exits 0; if you must override, keep
+`--reporter=list,./skip-guard-reporter.ts`.
+
+The rest of this section is what stays hand-run.
 
 ### Per-asset send / receive
 
@@ -212,6 +254,8 @@ For each of `BTC | LTC | XMR | WOW | GRIN`:
 
 ## Adding tests
 
+### Rust
+
 When you add a public function, add at least:
 1. One round-trip test (if applicable)
 2. One golden-vector test if the function is deterministic, with the
@@ -222,3 +266,17 @@ When you add a public function, add at least:
 If the function is exposed to JS via `crates/smirk-wasm/`, add a smoke
 call to `scripts/wasm-smoke.mjs` so the export is validated end-to-end
 through wasm-bindgen.
+
+### TypeScript
+
+Tests live next to the code they cover as `src/**/*.test.ts`
+(`.test.tsx` as well in `@smirk/ui`) and run under `node --test` with
+`tsx`. Drop a new file beside the module and it is picked up
+automatically; there is nothing to register. Run one package with
+`npm test -w @smirk/<pkg>`. The quoted glob is expanded by `node --test`
+rather than the shell, so it needs the Node version CI pins (22).
+
+The unit gate runs the eight packages listed explicitly in
+`.gitea/workflows/ci.yml`; add new packages to that list. They are
+listed rather than filtered because npm has no workspace exclusion and
+`@smirk/e2e` needs a browser and a backend, so it belongs to Layer 3.

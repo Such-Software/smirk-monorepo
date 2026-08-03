@@ -17,9 +17,10 @@ commitments. A real mainnet broadcast would have failed.)
 ## Strategy
 
 Cross-validate every load-bearing primitive against the **official
-`grin_wallet_libwallet`** reference implementation. The reference is
-included as a dev-dependency at
-`../../../grin-wallet/libwallet` (see `Cargo.toml::dev-dependencies`).
+`grin_wallet_libwallet`** reference implementation. The reference is a
+pinned public git dev-dependency (see `Cargo.toml::dev-dependencies`),
+so the workspace resolves from a clean clone with no sibling checkout
+required.
 
 For each primitive we own:
 
@@ -52,8 +53,8 @@ listed under `[dev-dependencies]`, not `[dependencies]`.
 - **Wire-level bugs in slatepack ASCII armor**: the armor codec is
   tested separately in `slatepack::tests`.
 - **Network-relay / mempool propagation bugs**: those need a real
-  testnet / mainnet round-trip and live in
-  `docs/SEND_FLOW.md`'s manual test plan.
+  mainnet round-trip; see `docs/SEND_FLOW.md`, "Testing strategy: small
+  mainnet amounts, no testnets".
 - **Subtle nonce-reuse bugs**: we test with deterministic nonces
   to get reproducible fixtures; the production code uses fresh OS
   randomness. The "fresh nonce per slate" invariant is verified by
@@ -80,15 +81,8 @@ fn our_slate_v4_parses_in_grin_wallet() {
 }
 ```
 
-## Adding `grin-wallet` to your local clone
+## The reference dependency
 
-```sh
-cd ~/src
-git clone https://github.com/mimblewimble/grin-wallet
-# Cargo.toml expects it at ../../../grin-wallet relative to grin-ext
-# i.e. /home/jw/src/grin-wallet/ when smirk-monorepo is at /home/jw/src/smirk-monorepo/
-```
-
-If the reference path differs in your setup, edit the dev-dependency
-path in `Cargo.toml` — but don't commit that change, since CI / other
-maintainers depend on the canonical layout.
+No local setup is required: `cargo test -p grin-ext` fetches the pinned
+reference automatically. To move the pin, bump the `rev` in
+`Cargo.toml::dev-dependencies`.

@@ -5,8 +5,7 @@
  * roughly: imports → module-level singletons → `App` component →
  * routed sub-screens (Home, Send, Receive, Tip, Asset Detail, Inbox,
  * Settings) → onboarding / lock-screen renderers. Splitting it into
- * per-screen files is tracked for a v0.3.x refactor — see
- * `docs/V0_3_PLAN.md`.
+ * per-screen files is a pending refactor.
  *
  * **Where to look:**
  *
@@ -223,26 +222,13 @@ async function sweepStaleGrinWizards(): Promise<void> {
 }
 
 /**
- * Pull the user's pending Grin slatepacks from the relay and shape them
- * for the InboxTab component. Shared by the 30-second poll loop and the
- * manual refresh handler in InboxRouter.
- */
-/**
- * Pull recent tip recipients from the current session's sent-tips
- * history. Sorts newest-first and dedupes by platform+username so the
- * TipMaker's chip row stays tight even when a user has tipped @bob 12
- * times.
- *
- * Returns [] when session isn't loaded yet — TipMaker just renders
- * without the "Recent" row in that case.
+ * Recent tip recipients for TipMaker's chip row. Always empty: there is no
+ * per-session sent-tips cache to read from, and TipMaker renders without the
+ * "Recent" row.
  */
 function recentTipRecipients(
   session: WalletSession | null,
 ): RecentRecipient[] {
-  // Future: pull from `session.sentTips` once we cache them. For now
-  // start empty; the TipMaker renders fine without recents and the
-  // user can type the username directly. Populated in the next commit
-  // when we wire api.getSentSocialTips on bootstrap.
   void session;
   return [];
 }
@@ -598,35 +584,11 @@ function allAttemptedBalancesFailed(
 
 
 
-// ============================================================================
-// Balance snapshot cache.
-//
-// On popup reload the user previously stared at blank rows for ~10–20s
-// while we re-bootstrapped and re-fetched balances from every chain.
-// The data is *already* present — it just got dropped because the
-// popup process was killed. Cache the last successful (balances,
-// prices) tuple in chrome.storage.session so the next popup open
-// renders cached values instantly, with a "refreshing" indicator
-// while the background fetch repopulates fresh numbers. Stale-while-
-// revalidate, identical to how the bootstrap cache speeds up auth.
-//
-// Trade-offs:
-//   - Same chrome.storage.session backing as the bootstrap cache;
-//     auto-cleared on browser close. No persistent state.
-//   - Keyed by wallet fingerprint so account switching never shows
-//     the previous wallet's numbers.
-//   - 10 min TTL: long enough that a rapid reopen-after-close is
-//     instant, short enough that a user returning from lunch sees
-//     "loading" instead of trusting half-hour-old numbers.
-// ============================================================================
-
-// v1 → v2: BigInt fields explicitly stringified before storage. Brave's
-// chrome.storage.session is documented to support structured clone but
-// silently stringifies BigInts in practice — on read the values come
-// back as strings, then mix with freshly-fetched BigInts on the next
-// refresh and throw "Cannot mix BigInt and other types" deep in the
-// fiat-aggregation / comparison paths (`b.pending > 0n` etc). Explicit
-// string ⇄ BigInt at the boundary side-steps the ambiguity entirely.
+// The balance snapshot cache lives in `./balance-snapshot.ts`. BigInt fields
+// are stringified at the storage boundary because some builds (Brave) silently
+// stringify BigInt in chrome.storage.session: a revived string mixed with a
+// freshly-fetched BigInt throws "Cannot mix BigInt and other types" deep in the
+// fiat-aggregation and comparison paths (`b.pending > 0n`).
 
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
@@ -1955,7 +1917,8 @@ function HomeRouter({
    *  claim banner for the subset where funding has matured; Inbox
    *  owns the full list + per-tip rows. */
   tips: InboxTipItem[];
-  /** Reserved — pull-to-refresh on Home will call this. Header refresh button uses it directly. */
+  /** Refresh balances + prices. Used by the header refresh button, after a send
+   *  and after a tip claim, and threaded into the asset-detail screen. */
   onRefresh: () => Promise<void>;
   /** Claim a tip from an asset-detail row. Threaded through to
    *  `AssetDetailRoute` so the per-row Claim button fires the same
@@ -2096,7 +2059,6 @@ function HomeRouter({
           // Build the exclude-set from existing pendingOutgoing
           // entries for this asset so the handler doesn't pick an
           // input we just spent before LWS/Electrum has reflected it.
-          // (Phase 2C piece 1: mempool double-spend prevention.)
           const excludeInputs = recentlySpentInputs(
             sessionState.pendingOutgoing ?? [],
             fields.fromAssetId,
@@ -3224,19 +3186,6 @@ if (import.meta.env.VITE_SMIRK_RELEASE === 'true') {
       'wallet wiring before shipping. (See docs/SECURITY_AUDIT.md M2.)',
   );
 }
-
-/**
- * Per-asset address validation dispatcher.
- *
- * Returns `null` if `addr` decodes correctly for the given asset (bech32
- * prefix + checksum for BTC/LTC; Cryptonote varint prefix + Keccak-256
- * checksum for XMR/WOW; Grin bech32 + 32-byte ed25519 payload for Grin
- * slatepack), or a short user-facing string describing why it failed.
- *
- * Validators live in `@smirk/core/address`; their regression tests in
- * `packages/core/src/__tests__/address.test.ts` cover round-trip,
- * single-char tampering, wrong-network rejection, and malformed input.
- */
 
 
 // ============================================================================

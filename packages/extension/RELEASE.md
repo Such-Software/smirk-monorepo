@@ -81,7 +81,13 @@ git archive --format=zip --output=packages/extension/releases/smirk-wallet-sourc
             smirk-wallet-source-v0.3.0.zip \
     > SHA256SUMS-v0.3.0.txt )
 
-# 6. Tag + push: tag the EXACT commit the uploaded zips were built from
+# 6. Commit the checksum file: it is the in-repo release record. Only a text
+#    file under releases/ changes, so the tagged tree still builds the shipped
+#    bytes.
+git add packages/extension/releases/SHA256SUMS-v0.3.0.txt
+git commit -m "chore: record v0.3.0 extension checksums"
+
+# 7. Tag + push: tag the EXACT commit the uploaded zips were built from
 git tag v0.3.0
 git push origin main v0.3.0
 ```
@@ -148,7 +154,17 @@ mandatory.
    source.
 
    ```
-   Reproducible build instructions (Linux/macOS, Node 20+):
+   Reproducible build instructions (Linux/macOS, Node 20+, Rust stable):
+
+   # Prerequisites. The extension embeds a WebAssembly bundle compiled from the
+   # Rust sources in crates/, so the build needs a Rust toolchain. v0.3.0 was
+   # built with rustc 1.95.0; another rustc yields functionally-equivalent but
+   # not byte-identical wasm.
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   rustup target add wasm32-unknown-unknown
+   # The wasm-bindgen CLI must match the version in Cargo.lock (0.2.121 for
+   # v0.3.0); a version mismatch fails the build.
+   cargo install wasm-bindgen-cli --version 0.2.121
 
    unzip smirk-wallet-source-v0.3.0.zip -d smirk
    cd smirk
@@ -219,13 +235,13 @@ runs without a real upload, so users don't get downgraded silently.
 ## Artifact retention
 
 Release zips are **build artifacts and are not committed** to the repo:
-they were removed from tracking and git-ignored, so a fresh clone has an
-empty (or absent) `releases/` working directory. Never assume the zips
-are present in the tree.
+`packages/extension/releases/*.zip` is git-ignored, so a fresh clone carries
+`releases/SHA256SUMS-vX.Y.Z.txt` and no zips. Never assume the zips are
+present in the tree.
 
-The audit trail is therefore the **published `SHA256SUMS`** (in the
-GitHub release notes), not the zips themselves. Anyone rebuilds from the
-tagged source and content-compares against the checksummed upload (see
-"Verify reproducibility" above); the checksums pin exactly what was
-shipped at each tagged version. Keep old `SHA256SUMS-vX.Y.Z.txt` in the
+The audit trail is the **`SHA256SUMS` file**, committed under `releases/` and
+published in the GitHub release notes. Anyone rebuilds from the tagged source
+and content-compares against the checksummed upload (see "Verify
+reproducibility" above); the checksums pin exactly what was shipped at each
+tagged version. Keep old `SHA256SUMS-vX.Y.Z.txt` in the tree and in the
 release notes indefinitely.

@@ -1,10 +1,13 @@
 /**
  * Nostr MessagingProvider — the default adapter.
  *
- * NIP-17 private DMs over NIP-59 gift-wrap, using nostr-tools' vetted `nip17`
- * (which builds the kind-14 rumor, seals it kind-13, gift-wraps it kind-1059, and
- * — critically for cross-wallet/Goblin interop — binds + verifies the seal author
- * to the rumor author). Relay I/O via `SimplePool` (browser global WebSocket).
+ * NIP-17 private DMs over NIP-59 gift-wrap. Sending uses nostr-tools' vetted
+ * `nip17` (kind-14 rumor, kind-13 seal, kind-1059 gift-wrap), which keeps the
+ * wire format compatible with other wallets and Goblin. Receiving does NOT use
+ * nostr-tools' `unwrapEvent`: it goes through {@link unwrapDmSecurely}, which
+ * verifies the seal signature and binds the seal author to the rumor author,
+ * the anti-impersonation check nostr-tools omits. Relay I/O via `SimplePool`
+ * (browser global WebSocket).
  */
 
 import { SimplePool } from 'nostr-tools/pool';

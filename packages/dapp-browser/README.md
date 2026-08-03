@@ -49,9 +49,9 @@ await browser.close();
 ```
 
 In production code, swap `MockController` for `TauriBrowserController`
-(desktop — ships v0.3.0, in `@smirk/desktop`) or
-`CapacitorBrowserController` (mobile — planned v0.4). The interface
-is the same.
+(desktop, in `@smirk/desktop`), `IframeBrowserController` (shipped
+here, used on Linux desktop), or `CapacitorBrowserController` (mobile,
+planned v0.4). The interface is the same.
 
 ## Public surface
 
@@ -66,7 +66,8 @@ is the same.
 | `HistoryStore`, `InMemoryHistoryStore` | Persistence interface + default in-memory impl. |
 | `BookmarkStore`, `InMemoryBookmarkStore` | Same shape for bookmarks. |
 | `MockController` | Headless `DappBrowserController` impl for tests and dev. |
-| `NotSupportedError`, `UnknownTabError` | Named errors callers can branch on. |
+| `IframeBrowserController`, `IframeControllerOptions`, `InlineModeController` | Iframe-backed impl for platforms where native-webview-per-tab is unreliable (Linux desktop). DOM-free itself; `@smirk/ui`'s `IframeBrowserContent` renders the iframes. |
+| `NotSupportedError`, `UnknownTabError`, `makeTabId` | Named errors callers can branch on, plus the `TabId` brander. |
 
 ## Implementing a new controller
 
@@ -102,13 +103,16 @@ The full conventions live in
 
 ```sh
 npm run typecheck -w @smirk/dapp-browser
+npm run test -w @smirk/dapp-browser
 ```
 
-There are no runtime tests in this package — by design, since it's
-all types and a single in-memory impl. Add tests when adding logic
-that has branches worth exercising (e.g. a non-trivial history
-adapter). Vitest is the project standard; place test files as
-siblings to the code (`controller.ts` → `controller.test.ts`).
+Tests run under `node --test` (`node:test` + `node:assert/strict`) and
+live in `src/__tests__/`. `conformance.ts` there exports the shared
+`DappBrowserController` contract suite that every controller impl
+runs, alongside impl-specific tests for `MockController` and
+`IframeBrowserController`. A new impl adds its own file and calls the
+conformance suite with a factory, so drift between impls is caught at
+the test boundary.
 
 ## License
 

@@ -2,7 +2,7 @@
   "name": "@smirk/keymap",
   "version": "0.3.0",
   "private": true,
-  "description": "Cross-platform keyboard-shortcut registry. Defines the canonical action set (focus-url-bar, new-tab, lock-wallet, etc.) and the per-platform bindings (Mac Cmd, Win/Linux Ctrl, mobile gestures). Consumers bind via useKeymap() rather than addEventListener, so shortcuts stay consistent across extension/desktop/mobile.",
+  "description": "Cross-platform keyboard-shortcut registry. Defines the canonical action set (focus-url-bar, new-tab, lock-wallet, etc.) and the per-platform bindings (Mac Cmd, Win/Linux Ctrl, mobile gestures). Consumers dispatch on actionsFromEvent(event, platform) in one keydown handler per shell rather than scattering addEventListener calls, so shortcuts stay consistent across extension/desktop/mobile.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

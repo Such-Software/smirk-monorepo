@@ -4,8 +4,9 @@
  * Audit finding: keystore.ts header used to claim mnemonics were
  * never persisted, but the session-cache flow wrote them to
  * chrome.storage.session via the SessionCacheEntry shape. The fix
- * dropped the mnemonic from the cache shape entirely (Approach B —
- * see workflow rationale at docs/SECURITY_LOG.md 2026-06-13). These
+ * dropped the mnemonic from the cache shape entirely (Approach B;
+ * the workflow rationale lives in the maintainer's internal
+ * security log, which is not part of this repository). These
  * tests pin the resulting behaviour so a future commit can't
  * accidentally re-introduce the plaintext mnemonic.
  */

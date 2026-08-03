@@ -360,8 +360,8 @@ async function dispatchInner<M extends SmirkMethod>(
         );
       }
       const params = req.params as { event: SmirkNostrUnsignedEvent };
-      // Money-tier session model (P4): a Nostr signature is a credential. Money
-      // events (17/30402/22242) ALWAYS get an explicit per-event prompt and can
+      // Money-tier session model: a Nostr signature is a credential. Money
+      // events (17/27235/30402/22242) ALWAYS get an explicit per-event prompt and can
       // never be session-covered; low-tier events (notes/reactions/gift-wraps)
       // may be covered by an active session grant so the wallet auto-signs. The
       // tier + coverage are computed HERE (the enforcement point) — a money kind
@@ -463,7 +463,7 @@ async function dispatchInner<M extends SmirkMethod>(
       // NIP-07 DM crypto: low-tier, requires the Nostr scope (same one-time grant
       // as getNostrPublicKey). Runs silently once granted — a per-call prompt on
       // every DM decrypt would be unusable (matches Goblin's session model, where
-      // 1/7/1059 are session-grantable and only 17/30402/22242 are money-tier).
+      // 1/7/1059 are session-grantable and only 17/27235/30402/22242 are money-tier).
       // No LOCKED pre-check — the approval popup unlocks first, then runs
       // the crypto in its unlocked context. Scope gated below.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);

@@ -1,6 +1,6 @@
 # smirk-wasm
 
-Monero/Wownero transaction construction for browser extensions, compiled to WebAssembly.
+Monero/Wownero, Grin, and Bitcoin/Litecoin cryptographic operations for browser extensions, compiled to WebAssembly.
 
 ## Overview
 
@@ -25,7 +25,7 @@ Wownero transactions are fully supported with the following differences from Mon
 | Commitment Format | Full commitment | C/8 (scaled by INV_EIGHT) |
 | Network Prefix | `4` (mainnet) | `Wo` (mainnet) |
 
-The signing implementation handles these differences automatically based on the `network` parameter.
+The signing implementation handles these differences automatically based on the `coin` parameter (`"xmr"` or `"wow"`), independently of `network`.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ The signing implementation handles these differences automatically based on the 
 │                     │     │                     │
 │  ┌───────────────┐  │     │  ┌───────────────┐  │
 │  │  smirk-wasm   │  │     │  │     LWS       │  │
-│  │  (~165KB)     │  │     │  │  (Monero)     │  │
+│  │               │  │     │  │  (Monero)     │  │
 │  │               │  │     │  │               │  │
 │  │ - Keys        │◄─┼─────┼──┤ - Outputs     │  │
 │  │ - Signing     │  │     │  │ - Decoys      │  │
@@ -64,22 +64,31 @@ cargo install wasm-bindgen-cli
 
 ### Build
 
+`make wasm` from the monorepo root is the preferred entry point: it also
+sets the `--remap-path-prefix` flags that keep the wasm reproducible.
+
 ```bash
 # Quick build (uses build.sh)
 ./build.sh
 
-# Or manually:
-cargo build --target wasm32-unknown-unknown --release
-wasm-bindgen --target web --out-dir pkg \
+# Or manually, from the monorepo root:
+cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
+wasm-bindgen --target no-modules --out-dir crates/smirk-wasm/pkg \
   target/wasm32-unknown-unknown/release/smirk_wasm.wasm
+node crates/smirk-wasm/postprocess.mjs
 ```
+
+The `postprocess.mjs` step is not optional: it stubs the broken
+`require("env")` C-import placeholders and appends
+`export { wasm_bindgen };` so `@smirk/wasm` can import the IIFE-bound
+symbol as a plain ES module export.
 
 ### Output
 
 After building:
 - `pkg/smirk_wasm.js` - JavaScript module
 - `pkg/smirk_wasm.d.ts` - TypeScript definitions
-- `pkg/smirk_wasm_bg.wasm` - WebAssembly binary (~380KB)
+- `pkg/smirk_wasm_bg.wasm` - WebAssembly binary
 
 ## Testing
 
@@ -99,21 +108,29 @@ python3 -m http.server 8080
 # Open http://localhost:8080/test.html
 ```
 
+`test.html` predates the `--target no-modules` switch and still imports the
+`--target web` ESM shape (`import init, { ... }`), so it does not load the
+bundle `build.sh` emits. Rebuild with `--target web` to use it, or drive the
+shipped bundle the way `packages/wasm/src/index.ts` does.
+
 ## Usage
 
 ```javascript
-import init, {
-  test,
-  version,
-  validate_address,
-  estimate_fee,
-  sign_transaction,
-  compute_key_image
-} from './pkg/smirk_wasm.js';
+import { wasm_bindgen } from './pkg/smirk_wasm.js';
 
 async function main() {
-  // Initialize WASM
-  await init();
+  // Loads and instantiates the WASM, then attaches every export to the
+  // `wasm_bindgen` function object.
+  await wasm_bindgen();
+
+  const {
+    test,
+    version,
+    validate_address,
+    estimate_fee,
+    sign_transaction,
+    compute_key_image
+  } = wasm_bindgen;
 
   // Verify loaded
   console.log(test()); // "smirk-wasm ready"
@@ -232,7 +249,12 @@ Builds and signs a transaction.
       public_key: string,  // hex
       tx_pub_key: string,  // hex
       index: number,       // output index in tx
-      global_index: number // global output index
+      global_index: number,// global output index
+      height: number,      // block height; required
+      subaddr_index?: {    // omit only for primary-address outputs
+        major: number,
+        minor: number
+      }
     },
     decoys: [{             // XMR: 15 decoys (ring 16), WOW: 21 decoys (ring 22)
       global_index: number,
@@ -246,9 +268,17 @@ Builds and signs a transaction.
   fee_mask: number,
   view_key: string,        // hex, 64 chars
   spend_key: string,       // hex, 64 chars
-  network: "mainnet" | "testnet" | "stagenet" | "wownero"
+  network: "mainnet" | "testnet" | "stagenet", // default "mainnet"
+  coin: "xmr" | "wow"      // default "xmr"; selects RCT type and ring size
 }
 ```
+
+`subaddr_index` is what folds the subaddress spend secret into the key
+offset. Omit it on an output received on a subaddress and the key image
+will not match on-chain.
+
+`coin` is independent of `network`. Omit it for a Wownero transaction and
+the tx is built with Monero's RCT type and 15-decoy ring.
 
 **Returns:**
 ```typescript
@@ -280,6 +310,7 @@ This uses `monero-oxide`'s `Point::biased_hash` for the `Hp()` operation, which 
 smirk-wasm/
 ├── Cargo.toml
 ├── build.sh
+├── postprocess.mjs     # Required patch step on the no-modules output
 ├── README.md
 ├── test.html
 └── src/
@@ -290,6 +321,9 @@ smirk-wasm/
     ├── output.rs       # Output derivation (key_offset, commitment_mask)
     ├── transaction.rs  # Transaction parsing
     ├── signing.rs      # Transaction signing
+    ├── bitcoin.rs      # BTC/LTC address derivation + PSBT build/sign/extract
+    ├── grin/           # Grin slate ceremonies, slatepack codec, kernels, vouchers
+    ├── wasm_libc_shim.rs # malloc/free shims for the vendored secp256k1-zkp C code
     └── tests.rs        # Unit tests
 ```
 

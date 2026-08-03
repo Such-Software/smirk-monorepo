@@ -1,6 +1,6 @@
 /**
- * Money-tier session model (P4). The load-bearing property: money-tier kinds
- * (17/30402/22242) are NEVER session-covered and NEVER persisted into a session,
+ * Money-tier session model. The load-bearing property: money-tier kinds
+ * (17/27235/30402/22242) are NEVER session-covered and NEVER persisted into a session,
  * even if a stale or hostile session lists them. Low-tier kinds (1/7/1059) are.
  */
 import { test } from 'node:test';

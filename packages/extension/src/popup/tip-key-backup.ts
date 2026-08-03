@@ -1,5 +1,5 @@
 /**
- * Local IndexedDB-backed backup of per-tip private keys.
+ * Local `chrome.storage.local` backup of per-tip private keys.
  *
  * **Why this exists.** The v0.3 two-phase tip-creation flow already
  * persists each tip's encrypted key on the backend BEFORE the sender

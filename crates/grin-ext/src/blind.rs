@@ -60,10 +60,10 @@ pub fn sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
 /// slate participant data; aggregating `xs_sender + xs_receiver` must
 /// equal the kernel excess public key for kernel verification to pass.
 ///
-/// Pre-2026-05-13: this function returned `inputs − outputs − offset`,
-/// the negation of the correct value. Sign was undetected because the
-/// only non-balanced test happened to flip its own labels. Caught by
-/// preparing to build the Grin send-handler on top of the function.
+/// Do not negate this. Returning `inputs − outputs − offset` still passes
+/// every balanced test, so the regression is invisible unless a
+/// non-balanced case is checked. `sender_blind_excess_uses_outputs_minus_inputs`
+/// pins the convention.
 ///
 /// Returns 32 bytes ready to use as a secret scalar.
 pub fn sender_blind_excess(
@@ -129,10 +129,9 @@ mod tests {
     #[test]
     fn sender_blind_excess_uses_outputs_minus_inputs() {
         // The convention is `outputs - inputs - offset`. With outputs=10,
-        // inputs=0, offset=3 the result is 10 - 0 - 3 = 7. Pre-2026-05-13
-        // the implementation returned `inputs - outputs - offset` which
-        // would produce the curve-order-mod negation; this test fixes the
-        // convention so the value at index 31 reads as expected.
+        // inputs=0, offset=3 the result is 10 - 0 - 3 = 7. The negated
+        // convention would produce the curve-order-mod negation instead;
+        // this test pins the sign so the value at index 31 reads as expected.
         let inputs = vec![s(0)];
         let outputs = vec![s(10)];
         let offset = s(3);

@@ -215,21 +215,18 @@ export async function bootstrapAuth(
 
   api.setAccessToken(result.data.accessToken);
 
-  // Register the user's bech32 Grin slatepack address into `wallets`
-  // so the relay's address-match join (`recipient_address IN (SELECT
-  // address FROM wallets WHERE user_id = $1 AND asset = 'grin')`)
-  // finds them. XMR/WOW get their `wallets` row inserted during
-  // NOTE 2026-05-17: Grin re-registration moved out of bootstrap.
-  // `wallet.addresses.grin` here comes from @smirk/core's deriveGrinKey
-  // (custom `SHA256(master || "smirk:grin:v1")`), which does NOT match
-  // the canonical grin-wallet/Grim derivation that `@smirk/wasm`'s
-  // `slatepack_address` produces. Registering the legacy address
-  // meant senders encrypted to a pubkey the receiver's wasm-derived
-  // secret couldn't decrypt — every Smirk→Smirk Grin send failed
-  // with "age decrypt: No matching keys found".
-  //
-  // The popup now re-registers via `canonicalGrinSlatepackAddress`
-  // after wasm init. See [popup/index.tsx] mount effect.
+  // Grin slatepack registration deliberately does NOT happen here.
+  // A `wallets` row is what the relay's address-match join
+  // (`recipient_address IN (SELECT address FROM wallets WHERE user_id
+  // = $1 AND asset = 'grin')`) and address→user lookup match on, but
+  // `wallet.addresses.grin` is @smirk/core's legacy `SHA256(master ||
+  // "smirk:grin:v1")` derivation, which does NOT match the canonical
+  // grin-wallet/Grim address `@smirk/wasm`'s `slatepack_address`
+  // produces. Registering the legacy value made senders encrypt to a
+  // pubkey the receiver's wasm-derived secret could not decrypt, so
+  // every Smirk-to-Smirk Grin send failed with "age decrypt: No
+  // matching keys found". The popup registers the canonical address
+  // after wasm init (packages/extension/src/popup/index.tsx).
 
   return {
     userId: result.data.user.id,
@@ -252,19 +249,20 @@ export async function bootstrapAuth(
  * NOTE: For XMR/WOW, the spent-output set returned by the LWS is
  * server-claimed and unverified. A malicious LWS could over-report
  * spent (under-reporting our balance), but cannot under-report spent
- * (over-reporting our balance) without knowing our spend key. Wiring
- * the WASM key-image verification path to filter `spent_outputs` is
- * tracked in `docs/TECHNICAL_DEBT.md` (legacy code path exists in
- * `smirk-extension/src/lib/balance.ts`).
+ * (over-reporting our balance) without knowing our spend key. The
+ * wallet filters `spent_outputs` by recomputing each key image with
+ * the spend key when a `verifyKeyImage` implementation is injected
+ * (see `FetchBalancesOptions.verifyKeyImage`); without one it falls
+ * back to trusting the server's list.
  */
 export interface AssetBalance {
   /** Spendable right now: total received − verified spent − locked. */
   confirmed: bigint;
   /**
-   * Incoming, not-yet-mineable balance — server-reported mempool amount
-   * plus client-side `pendingOutgoing` reconciliation (Phase 2b). For
-   * CryptoNote chains this is purely incoming; outgoing is tracked
-   * separately by `pendingOutgoing` once Phase 2b lands.
+   * Incoming, not-yet-mineable balance: the server-reported mempool
+   * amount. For CryptoNote chains this is purely incoming; outgoing is
+   * tracked separately by `pendingOutgoing` and reconciled through
+   * `verifiedSpentInputs`.
    */
   pending: bigint;
   /**

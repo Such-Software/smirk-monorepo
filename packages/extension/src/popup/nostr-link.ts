@@ -25,11 +25,11 @@ import {
 import { nip05HomeDomain } from './nip05';
 
 /**
- * Why this reports instead of just succeeding quietly: the common failure is not an
+ * Reports an outcome rather than succeeding quietly: the common failure is not an
  * exception, it is `username == null` (this account never claimed a handle), which
- * used to return here indistinguishably from success. The Settings button therefore
- * spun and stopped with no output, reading as a dead control. Callers that genuinely
- * do not care (the onboarding path) still ignore the value.
+ * is otherwise indistinguishable from success. With nothing to report, the Settings
+ * button spins and stops with no output, reading as a dead control. Callers that
+ * genuinely do not care (the onboarding path) ignore the value.
  */
 export type PublishNip05Result =
   | { ok: true; nip05: string }

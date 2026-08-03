@@ -10,14 +10,14 @@ name: Desktop build (Gitea)
 # the GitHub API, so here we just build, sign, and upload artifacts.
 #
 # ── SETUP (one-time) ──────────────────────────────────────────────────────────
-# 1. Runner labels: `runs-on` below matches the Builds runners — linux-beast
-#    (label `ubuntu-latest`) and mac-mini-m2 (label `macos-latest`).
-#    (Windows is stubbed under `include:` for when hashbags-win-runner returns.)
+# 1. Runner labels: `runs-on` resolves from the matrix; `ubuntu-latest` and
+#    `macos-latest` are the labels this instance's Linux and macOS runners
+#    advertise. The Windows leg is stubbed under `include:` and only builds
+#    when a runner claims the `windows` label.
 # 2. Action fetching: the runner must resolve `uses:` actions from GitHub, i.e.
 #    act_runner config `[default_actions_url] = https://github.com` (the default).
-# 3. Secrets: set them with ~/keys/suchsoftware/set-gitea-desktop-secrets.sh
-#    (prints lengths + HTTP statuses only). Without them the Linux job still
-#    ships (no signing needed); the macOS job ships UNSIGNED/ad-hoc.
+# 3. Secrets: set the APPLE_* repository secrets listed below. Without them the
+#    Linux job still ships (no signing needed); the macOS job ships UNSIGNED/ad-hoc.
 #    macOS codesign (Developer ID Application cert):
 #      APPLE_CERTIFICATE            base64 of developer_id.p12
 #      APPLE_CERTIFICATE_PASSWORD

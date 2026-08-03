@@ -1,7 +1,8 @@
 //! Adaptor signatures and atomic swap state machine.
 //!
-//! Stub crate — populated during v0.4 work. See `docs/V0_3_PLAN.md` in the
-//! backend repo for the multi-release roadmap. The shape this crate will take:
+//! Stub crate: native adaptor-signature swaps land in v0.4. See
+//! `docs/swap-core.md` for the planned shape and the prerequisites.
+//! The shape this crate will take:
 //!
 //! - `adaptor` — Schnorr adaptor signature primitives (secp256k1 for v0.4,
 //!   ed25519 for v0.6).

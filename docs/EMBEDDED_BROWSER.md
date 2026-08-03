@@ -69,12 +69,12 @@ the browser there. The extension uses only `@such-software/smirk-dapp-api`.
               └──────────┬───────────┘  └──────────┬───────────┘
                          │ wallet RPC              │ wallet RPC
                          ▼                         ▼
-                    ┌─────────────────────────────────────┐
+                    ┌───────────────────────────────────────────────────┐
    wallet handling  │  @such-software/smirk-dapp-api                    │
-   (unchanged)      │    installSmirkApi (page side)      │
-                    │    createWalletHandler (wallet side)│
-                    │    protocol / permissions / approval│
-                    └─────────────────────────────────────┘
+   (unchanged)      │    installSmirkApi (page side)                    │
+                    │    createWalletHandler (wallet side)              │
+                    │    protocol / permissions / approval              │
+                    └───────────────────────────────────────────────────┘
 ```
 
 ## Package boundaries — what belongs where
@@ -124,7 +124,7 @@ Answers: *"What does the URL bar / tab strip / chrome look like?"*
 Contains:
 
 - `BrowserShell` — composes URL bar + tab strip + frame area
-- `BrowserUrlBar`, `BrowserTabStrip`, `BrowserActions`
+- `BrowserUrlBar`, `BrowserTabStrip`, `IframeBrowserContent`
 - React props are typed against `DappBrowserController` (the interface,
   not any specific implementation)
 
@@ -158,19 +158,21 @@ This is intentional — keeps `dapp-browser` ignorant of `dapp-api`, and
 // in packages/desktop/src/dapp/tauri-browser-controller.ts; the
 // future mobile shell will mirror the shape against a
 // `CapacitorBrowserController`.
-import { getPageApiInjectionScript, createWalletHandler } from '@such-software/smirk-dapp-api';
-import { TauriBrowserController } from './tauri-browser-controller';
+import { getPageApiInjectionScript, createWalletHandler, type SmirkWireRequest } from '@such-software/smirk-dapp-api';
+import { TauriBrowserController, TAURI_DAPP_RPC_EVENT } from './tauri-browser-controller';
 
 const browserController = new TauriBrowserController();
-const pageApiScript = getPageApiInjectionScript();
+const pageApiScript = getPageApiInjectionScript({
+  transport: { kind: 'tauri', event: TAURI_DAPP_RPC_EVENT },
+});
 await browserController.setInitScripts([pageApiScript]);
 
 const handler = createWalletHandler({ provider, permissions, approval });
 
 // Platform-specific dispatcher: ~30 LOC.
 // Hooks the page's `window.smirk.X()` postMessage → walletHandler.dispatch.
-browserController.onPageRequest(async (request, origin) => {
-  return await handler(request, origin);
+browserController.setPageRequestHandler(async ({ request, origin }) => {
+  return await handler(request as SmirkWireRequest, { origin });
 });
 ```
 
@@ -249,7 +251,14 @@ Focus events. We tried the multi-webview-per-window API
 first but wry packs `add_child`'d webviews into the parent's
 `GtkBox` on Linux/WebKitGTK, silently ignoring our positioning.
 The stable per-tab `WebviewWindow` approach gives pixel-perfect
-positioning on every platform from one code path.
+positioning on macOS and Windows.
+
+Linux takes a second path. WebKitGTK loses its compositor surface on
+parent-window resize (tauri-apps/tauri#7537, tauri-apps/wry#1727) and
+paints the embedded WebView black until the tab is destroyed, so Linux
+runs `IframeBrowserController`, which renders one `<iframe>` per tab
+inside the wallet webview. `packages/desktop/src/main.ts` picks the
+controller at boot.
 
 ## Conventions
 
@@ -300,8 +309,9 @@ public-facing and read by people who didn't write it.
 - **Re-export from `index.ts`.** Each package has exactly one entry,
   `src/index.ts`, that re-exports the public surface. Internal types
   are not re-exported.
-- **Tests are siblings.** `controller.ts` has `controller.test.ts`
-  next to it. Don't grow a parallel `__tests__/` directory.
+- **Tests live in `src/__tests__/`.** One file per module under test
+  (`controller.ts` → `__tests__/controller.test.ts`), plus shared
+  suites such as `__tests__/conformance.ts`.
 
 ### Error handling
 

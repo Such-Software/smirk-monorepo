@@ -36,13 +36,14 @@ the transport adapter and the wallet glue.
 
 ## Transports
 
-Three variants ship today, picked by the platform shell:
+Two variants ship today (`postMessage`, `tauri`), picked by the platform shell; the
+`capacitor` variant is defined on the page side and awaits its mobile shell:
 
 | Variant       | Page side                   | Wallet side                  |
 |---------------|-----------------------------|------------------------------|
 | `postMessage` | iframe / cross-window pages | extension content + SW       |
 | `tauri`       | `window.__TAURI__.event`    | desktop's `browser_plugin.rs`|
-| `capacitor`   | `window.SmirkBrowserBridge` | mobile's native plugin       |
+| `capacitor`   | `window.SmirkBrowserBridge` | mobile's native plugin (planned, v0.4) |
 
 See `src/page-api-script.ts` for the IIFE that bootstraps
 `window.smirk` against the chosen transport.
@@ -82,6 +83,15 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
 | `signNostrEvent`       | ✓ — NIP-98 login, notes; prompts per signature       |
 | `getAppEncryptionKey`  | ✓ — app-scoped x25519 sealing key (see below)        |
 | `appSealOpen`          | ✓ — open a `crypto_box_seal` addressed to that key   |
+| `nostrEncrypt`         | ✓: NIP-44 (default) / NIP-04 DM encrypt; prompts on the origin's first crypto call, silent after |
+| `nostrDecrypt`         | ✓: inverse of `nostrEncrypt`                        |
+
+### NIP-07 provider at `window.nostr`
+
+`installSmirkApi` also installs a standard NIP-07 provider at `window.nostr`
+(`getPublicKey`, `signEvent`, `nip44`, `nip04`, `getRelays`), backed by the same
+methods as `window.smirk`. It is skipped when another signer has already claimed the
+property, so an installed Alby or nos2x stays primary.
 
 ### App-scoped end-to-end encryption
 
@@ -93,8 +103,10 @@ public key** unique to the calling origin. Seal data to it with libsodium
 import sodium from 'libsodium-wrappers';
 await sodium.ready;
 
-const { publicKey } = await window.smirk.getAppEncryptionKey('notes');
-const sealed = sodium.crypto_box_seal(sodium.from_string('secret'), sodium.from_hex(publicKey));
+await window.smirk.connect();  // the e2ee scope sits on top of a connection
+const key = await window.smirk.getAppEncryptionKey('notes');
+if (!key) throw new Error('user declined the private-storage grant');
+const sealed = sodium.crypto_box_seal(sodium.from_string('secret'), sodium.from_hex(key.publicKey));
 // store `sealed` server-side ...
 
 const plaintext = await window.smirk.appSealOpen(sealed, 'notes'); // Uint8Array

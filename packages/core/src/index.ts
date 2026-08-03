@@ -21,7 +21,12 @@
  * compose `@smirk/core` + `@smirk/wasm` + their own UI layer.
  */
 
-export const CORE_PACKAGE_VERSION = '0.0.1';
+/**
+ * Reported by the extension background worker in its version response. Kept in
+ * step with this package's `package.json` version by hand: `scripts/bump-version.mjs`
+ * does not rewrite it.
+ */
+export const CORE_PACKAGE_VERSION = '0.3.0';
 
 // API client
 export * from './api';

@@ -2,12 +2,14 @@
  * Common swap-orchestration types.
  *
  * The wallet UI talks to a `Swap` regardless of whether the underlying
- * mechanism is an aggregator (THORChain in v0.3) or a peer-to-peer
+ * mechanism is a CEX aggregator (Trocador in v0.3) or a peer-to-peer
  * adaptor-signature flow (v0.4+ for Grin↔BTC/LTC, v0.6+ for WOW↔XMR).
  *
- * Implementations live in sibling modules (`./thorchain`, eventually
- * `./native`). Consumers should import the `Swap` interface and the
- * common value types from this barrel.
+ * Implementations live in sibling modules: `./trocador` (the shipping
+ * aggregator client), `./thorchain` (interface shape only, every method
+ * throws `not_implemented`), and eventually `./native`. Consumers should
+ * import the `Swap` interface and the common value types from this
+ * barrel.
  */
 
 import type { AssetId } from '@smirk/assets';

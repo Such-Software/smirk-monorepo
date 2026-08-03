@@ -3,8 +3,7 @@
 Playwright drives the **real MV3 browser extension** (headless Chromium) against a
 **running backend**. This is the release gate: it exercises the actual popup +
 background service worker + offscreen document as a user would, catching
-extension↔backend integration bugs that unit tests can't see. (It has already
-caught three — see _Bugs this suite caught_ below.)
+extension↔backend integration bugs that unit tests can't see.
 
 ## Run it
 
@@ -15,7 +14,8 @@ npx playwright install chromium
 # 1. a backend must be up. Default target: http://127.0.0.1:8080/api/v1
 #    (a local smirk-backend-core). Point elsewhere with BACKEND_URL.
 
-# 2. the funded smoke seeds must be sourced (returning-user specs skip without them)
+# 2. the funded smoke seeds must be sourced; without them the returning-user
+#    specs skip, and the skip guard fails the run
 set -a; source packages/smoke-tests/secrets/smoke-mnemonics.env; set +a   # SMOKE_ALICE_MNEMONIC, …
 
 # 3. build the extension against that backend, then run
@@ -41,7 +41,8 @@ you rebuild** — the extension bundles ui's `dist/`, not its source.
 | `HEADED` | _(unset)_ | `1` → visible browser |
 | `CAPTURE_VIDEO` | _(unset)_ | `1`/`on` records EVERY test (not just failures) for demo capture; see below |
 | `CAPTURE_VIDEO_DIR` | `packages/e2e/videos/` | where recordings land |
-| `CAPTURE_VIDEO_W` / `CAPTURE_VIDEO_H` | `420` / `900` | capture viewport (mobile-portrait default) |
+| `CAPTURE_VIDEO_W` / `CAPTURE_VIDEO_H` | `500` / `900` | capture viewport (mobile-portrait default). Width must stay >= 481px: below that breakpoint `styles.css` locks the popup to 380x600, so the capture letterboxes with the bottom nav stranded |
+| `E2E_MIN_EXECUTED` | `21` | floor on how many tests must actually run; below it the skip guard fails the run |
 
 ## Two hard rules (learned the hard way)
 
@@ -61,17 +62,30 @@ you rebuild** — the extension bundles ui's `dist/`, not its source.
 Some scenarios need a specific backend config. Rather than hard-code an
 assumption, they read `GET /capabilities` (`fixtures/capabilities.ts`) and
 `test.skip` when the running instance doesn't match — so **one suite run adapts
-to whatever backend is up**:
+to whatever backend is up**.
 
-| spec | runs only when |
+**A skip is not a pass.** `skip-guard-reporter.ts` fails the run when a spec
+skips without being listed in `EXPECTED_SKIPS`, and fails again when fewer than
+`E2E_MIN_EXECUTED` (21) tests actually execute. Only these are excused:
+
+| excused spec | reason |
 | --- | --- |
-| `pay-to-register` | `registration.payment_required === true` |
-| `create-new-wallet` | `payment_required === false && invite_required === false` |
-| `nostr-identity` | `features.nostr_identity === true` |
-| `restore-with-height` | branches on `restore.policy` |
+| `feed` | backend must advertise the Nostr feed capability |
+| `pay-to-register` | needs a payment-gated backend (`registration.payment_required`) |
+| `nostr-identity` | needs `FEATURE_NOSTR_IDENTITY=true` |
+| `federation-backend-switch` | needs a SECOND independent backend (`FED_BACKEND_URL`) with its own DB and peppers; a mock proves nothing about federation |
+| `comms-roundtrip` | needs a REAL relay (`messaging.relay_url` + `features.nostr_relay`). Never aim it at production: the feed half publishes a public note |
 
-`pay-to-register` and `create-new-wallet` are **mirror images** (payment gate
-on vs off), so at most one runs per config; the other skips cleanly.
+Every other conditional spec must run. `create-new-wallet` and
+`restore-with-height` are conditional but **not** excused, so a backend that
+gates them fails the run rather than skipping quietly. `create-new-wallet`
+additionally refuses to run against a shared or production backend unless you
+set `ALLOW_PROD_WRITES=1`, since it writes a real user row.
+
+**`--reporter=<x>` on the CLI replaces the config's whole reporter list and
+silently drops the guard**, so the run reports its skips and exits 0. Use
+`npm test`, or keep the guard explicitly:
+`--reporter=list,./skip-guard-reporter.ts`.
 
 ## Scenarios
 
@@ -95,16 +109,23 @@ on vs off), so at most one runs per config; the other skips cleanly.
 | `balance-freshness-cue` | the freshness affordance escalates on **sustained** refresh failure (quiet, then amber >30s, then red >60s) and clears once a refresh succeeds | alice seed |
 | `send-fee-btc` | regression guard: against a **namespaced** backend the BTC/LTC fee estimate populates the Compose fee tiers so "Continue to review" enables | alice seed |
 | `dapp-payment` | drives the **real** dapp payment popup: a shop calls `requestPayment` with a human decimal (`"9"` WOW); approval shows `9 WOW`, never "atomic units" | alice seed |
-| `messaging-inbox-identity` | Nostr identity overhaul nav smoke (daemon-free): the identity switcher + messaging→Inbox merge (Phases 4-6) | alice seed |
+| `messaging-inbox-identity` | Nostr identity overhaul nav smoke (daemon-free): the identity switcher and the messaging-into-Inbox merge | alice seed |
 | `tip-claim` | claim a **public** (URL-shared) tip end to end via the real Inbox → "+ Paste tip link" entry point | alice seed |
 | `tip-grin-share` | create a **public Grin voucher** tip and land on the success screen in its `shareUrlPending` state | alice seed, grin on |
+| `comms-roundtrip` | a DM survives a full seal → publish → subscribe → unseal round trip on a real relay, and posting rights come from the server (`can_post_general`), not a client re-derivation | alice seed, `features.nostr_relay` + `messaging.relay_url`; feed half also needs `features.feed` |
+| `federation-backend-switch` | the wallet accepts an arbitrary operator's URL, the switch is durable, and it never silently falls back to the built-in default | `FED_BACKEND_URL` (a second independent backend) |
+| `fiat-balance` | the Home fiat headline shows a number, not the "—" not-available or "…" loading placeholder | alice seed, `features.prices` |
+| `first-launch-exposure` | regression guard: a cold first launch contacts **zero** network endpoints before the user asks for anything | — |
+| `identity-handle` | the identity screen's link/publish controls are never silent no-ops on a warm resume, where the seed is deliberately dropped | alice seed |
+| `migration-subaddress` | a v0.2.4 → v0.3 migration lands on a working subaddress wallet, so the backend provisions an already-registered LWS account | alice seed, wow on, `features.xmr_subaddr_provisioning` |
+| `subaddress-receive` | money gate G4: the wallet never displays an XMR/WOW subaddress the LWS was not told to scan, so keeping the primary address is a pass | alice seed, asset on, `features.xmr_subaddr_provisioning` |
 
 ## Demo capture (`CAPTURE_VIDEO`)
 
 `CAPTURE_VIDEO=1` (or `on`/`true`/`yes`) records **every** test's popup,
 approval window, and dapp page, not just failures, so an e2e run doubles as
 demo-clip capture. Recordings land in `CAPTURE_VIDEO_DIR` (default
-`packages/e2e/videos/`) at a **mobile-portrait** viewport (420×900, override with
+`packages/e2e/videos/`) at a **mobile-portrait** viewport (500×900, override with
 `CAPTURE_VIDEO_W` / `CAPTURE_VIDEO_H`). Default runs stay lean: on-failure only.
 
 ```bash
@@ -117,4 +138,4 @@ CAPTURE_VIDEO=1 npm run test -w @smirk/e2e -- dapp-payment   # just the payment 
 - **Real broadcast sends** and the **live pay-to-register settle** (pay an invoice
   → register) need the chain-daemon tunnels up. The suite currently reaches
   Send→Review and asserts the payment *gate*, not an on-chain broadcast.
-- **Tauri desktop** shell under Playwright (Phase 3).
+- **Tauri desktop** shell under Playwright.

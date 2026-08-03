@@ -38,8 +38,7 @@ export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
   //   - missing version: 2 or missing _noMnemonic brand
   //   - any payload that re-introduces a `mnemonic` field
   // Any rejection drops the stored entry; the user re-enters their
-  // password once. See keystore.ts SessionCachePayload + the
-  // 2026-06-13 SECURITY_LOG.md entry.
+  // password once. See keystore.ts SessionCachePayload.
   const entry = parseSessionCache(raw);
   if (!entry) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
@@ -80,8 +79,9 @@ export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
 
 /**
  * Persist the unlocked wallet's derived keys + addresses for
- * `minutes` of auto-unlock. Mnemonic is NEVER cached (2026-06-13
- * hardening — see keystore.ts file header + docs/SECURITY_LOG.md).
+ * `minutes` of auto-unlock. Mnemonic is NEVER cached, so a disclosure
+ * costs spend authority for the cache window and not the recovery
+ * phrase; the full threat model is in the keystore.ts file header.
  *
  * `minutes` is clamped to `[0, AUTO_LOCK_MAX_MINUTES]`. The legacy
  * "Never" sentinel (negative / MAX_SAFE_INTEGER) was dropped in

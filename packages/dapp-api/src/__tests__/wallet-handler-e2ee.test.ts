@@ -257,7 +257,7 @@ test('getNostrPublicKey: user rejecting the grant surfaces USER_REJECTED', async
   assert.equal(res.error?.code, 'USER_REJECTED');
 });
 
-// ── Money-tier session model (P4) ───────────────────────────────────────────
+// ── Money-tier session model ────────────────────────────────────────────────
 
 function signNostrApproval(): {
   handler: ApprovalHandler;

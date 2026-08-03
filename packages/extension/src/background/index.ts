@@ -1,14 +1,18 @@
 /**
  * Smirk background service worker.
  *
- * Two main jobs in v0.3 (more to come as flows port over):
+ * Four jobs:
  *   1. The dapp bridge — relays `window.smirk` calls from content
  *      scripts into the `@such-software/smirk-dapp-api` wallet-handler, which
  *      checks permissions and opens approval popups as needed.
- *   2. Generic SW commands (`PING`, future alarms, future
- *      notifications) — these live alongside the dapp bridge but
- *      never overlap (the dispatcher filters by message
- *      discriminator).
+ *   2. Generic service-worker commands (`PING`), which share the message
+ *      channel with the dapp bridge but never overlap: the dispatcher filters
+ *      by message discriminator and the PING listener is registered first so
+ *      it is never starved.
+ *   3. The jobs coordinator: the background job system (PoW solve, swap
+ *      polls), over message + Port listeners.
+ *   4. The DM watcher: an alarm-driven poll of the Nostr relay for encrypted
+ *      gift-wraps, raising notifications. No key here; the popup decrypts.
  *
  * MV3 service workers can't statically import WASM — `@smirk/wasm`
  * imports must stay dynamic (`await import('@smirk/wasm')`). When

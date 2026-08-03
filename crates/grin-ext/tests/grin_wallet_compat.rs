@@ -616,8 +616,7 @@ fn pubkey_to_commitment_matches_secp_from_pubkey() {
 
 /// Regression test that pins the depth-3-vs-depth-4 derivation
 /// discrepancy that left pre-2026-05 wallets' Grin outputs
-/// unspendable in v0.3 (see commit `fe5d3aa` diagnostic output for
-/// jwinterm's 195.944 GRIN).
+/// unspendable in v0.3.
 ///
 /// grin_keychain serializes an Identifier as `[depth_u8, u32; 4]`
 /// (17 bytes). The wallet's standard outputs use **depth=3**: path
@@ -644,7 +643,7 @@ fn depth_3_and_depth_4_derivations_diverge() {
     let keychain = ExtKeychain::from_seed(&seed, /* is_test */ false).unwrap();
 
     let path = [0u32, 0, 26, 0];
-    let amount = 195_944_000_000u64; // jwinterm's stuck output
+    let amount = 195_944_000_000u64; // non-round: the amount is bound into the blind by the switch commitment
 
     // Reference: depth=3, walks only m/0/0/26.
     let id_depth3 =

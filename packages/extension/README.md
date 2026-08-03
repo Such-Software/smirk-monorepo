@@ -14,22 +14,20 @@ it is frozen. New work happens here.
 - Per-asset send + receive: BTC, LTC, XMR, WOW, Grin (slatepack +
   encrypted Grin → Grin via address).
 - Social tipping (BTC/LTC/XMR/WOW/Grin) — two-phase create with
-  backend-side draft + client IndexedDB tip-key backup for recovery.
+  backend-side draft + client `chrome.storage.local` tip-key backup for
+  recovery.
 - Per-asset detail screen with price sparkline + activity history
   (chain transactions + sent tips with inline clawback).
-- `window.smirk` dapp injection: connect, signMessage (BTC + LTC),
-  isConnected, disconnect, getPublicKeys, getAddresses. Per-origin
-  permission store + standalone approval-popup window.
+- `window.smirk` dapp injection: connect, signMessage (BTC, LTC, XMR,
+  WOW, Grin), isConnected, disconnect, getPublicKeys, getAddresses,
+  requestPayment, claimPublicTip, getBackend, getNostrPublicKey,
+  signNostrEvent. Also a NIP-07 `window.nostr` provider backed by the
+  same Nostr scope. Per-origin permission store + standalone
+  approval-popup window.
 - Privacy: global toggle in Settings to disable `window.smirk` on
   websites (closes [smirk-extension#1](
   https://github.com/Such-Software/smirk-extension/issues/1)
   short-term ask).
-
-Tracked for v0.3.x / v0.4 follow-up:
-
-- `requestPayment` from dapp → wallet send-wizard handoff.
-- `claimPublicTip` via dapp.
-- `signMessage` for XMR / WOW / Grin (ed25519 path).
 
 ## Layout
 
@@ -56,18 +54,14 @@ The extension depends on the WASM bundle and the workspace TS packages
 all being built first. From the monorepo root:
 
 ```bash
-make wasm                                # crates/smirk-wasm/pkg/  (Rust → wasm-bindgen)
-npm install                              # workspace install
-npm run build -w @smirk/wasm
-npm run build -w @smirk/assets
-npm run build -w @smirk/core
-npm run build -w @such-software/smirk-dapp-api
-npm run build -w @smirk/ui
-npm run build:chrome -w @smirk/extension # or build:firefox
+npm install          # workspace install
+make ext-chrome      # or: make ext-firefox
 ```
 
-The `Makefile` at the monorepo root has shortcuts (`make ext-chrome`,
-`make ext-firefox`) that run these in order.
+The target depends on `make wasm` and then derives the topological build
+order from the real dependency graph via `scripts/build-workspaces.mjs`,
+so no hand-maintained package list can drift out of sync with the
+workspaces.
 
 Load the unpacked extension from `packages/extension/dist/`.
 
@@ -77,7 +71,7 @@ Load the unpacked extension from `packages/extension/dist/`.
   intentionally holds NO secrets at rest. The unlocked seed lives in
   the popup process; the SW reads a public-only cache the popup
   writes to `chrome.storage.local` on unlock. See
-  `src/background/dapp/provider.ts` and `docs/SECURITY_AUDIT.md`.
+  `src/background/dapp/provider.ts`.
 - **Dapp approval flow.** Sensitive ops (signMessage, requestPayment,
   claimPublicTip) round-trip through a `chrome.windows.create` popup
   window — the action popup closes on focus loss and would lose any

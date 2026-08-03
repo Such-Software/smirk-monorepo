@@ -225,8 +225,7 @@ export function createNip07Provider(transport: SmirkPageTransport): SmirkNostrPr
  *
  *  Pages that mount their detection listener AFTER our inject runs
  *  miss the dispatched event, so they MUST also do a sync presence
- *  check (`if (window.smirk) ...`). This is documented in the
- *  `smirk.d.ts` type file shipped to dapps. */
+ *  check (`if (window.smirk) ...`). */
 export function installSmirkApi(
   target: Window,
   transport: SmirkPageTransport,

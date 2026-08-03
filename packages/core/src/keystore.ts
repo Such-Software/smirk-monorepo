@@ -7,51 +7,42 @@
  * `PlatformStorage`, in-memory unlocked state lives on the `WalletKeystore`
  * instance.
  *
- * Threat model and design choices (informed by 2026-05-10 audit, see
- * `docs/SECURITY_AUDIT.md`; auto-unlock cache caveat documented in
- * `docs/SECURITY_LOG.md` 2026-06-13):
+ * Threat model and design choices:
  *
  * - **On-disk keystore is always encrypted.** The seed is encrypted
  *   under a PBKDF2-stretched password using XChaCha20-Poly1305 before
  *   being written to `storage.local`. No exceptions, no fallback,
  *   no plaintext on-disk path.
  * - **Auto-unlock cache (opt-in).** When the user picks an
- *   `autoLockMinutes > 0` setting, the unlocked wallet — including
- *   the plaintext mnemonic — is cached in `chrome.storage.session`
- *   so popup reopens (and SW restarts within the window) skip the
- *   password prompt. See `SESSION_CACHE_KEY` /
- *   `rebuildUnlockedFromMnemonic` below.
+ *   `autoLockMinutes > 0` setting, the derived leaf keys, addresses
+ *   and fingerprint (never the mnemonic, never the seed) are cached
+ *   in `chrome.storage.session` so popup reopens and SW restarts
+ *   inside the window skip the password prompt. See
+ *   `SESSION_CACHE_KEY` / `SessionCachePayload` /
+ *   `restoreUnlockedFromCache` below.
  *   - `chrome.storage.session` is **in-memory only** (never written
  *     to disk by Chrome) and is cleared automatically on browser
  *     close.
  *   - It is partitioned per extension ID by Chrome: another
  *     co-resident extension cannot read this extension's
  *     `storage.session`.
- *   - When the user picks "Never" — encoded as the
- *     `Number.MAX_SAFE_INTEGER` sentinel in `autoLockMinutes` — the
- *     cache lives until the browser process exits.
+ *   - The cache TTL is capped at `AUTO_LOCK_MAX_MINUTES` (24 hours).
+ *     Any stored preference above the cap, and any legacy negative
+ *     value, clamps to the cap on read.
  *   - When the user picks `autoLockMinutes === 0` ("require password
  *     every time"), the cache is **not** written and the legacy
  *     re-prompt-on-SW-restart behaviour applies.
  * - **Threat model for the auto-unlock cache.** The remaining
  *   exposure is process-memory disclosure: a debugger attached to the
  *   browser, OS-level malware with the right privileges, or a heap
- *   snapshot taken mid-flight can read the cached mnemonic. This is
+ *   snapshot taken mid-flight can read the cached derived keys: spend
+ *   authority for the cache window, not the recovery phrase. This is
  *   the same level of exposure as the popup's own in-memory unlocked
  *   state — i.e., we are not making the threat model worse than
  *   "the wallet is currently unlocked," we are *extending the
  *   duration* of that exposure window for the user's convenience.
  *   A co-resident malicious extension is **not** in scope for this
  *   cache (Chrome's per-extension partition blocks it).
- * - **Tracked for v0.3.x re-architecture.** Replace the mnemonic
- *   cache with a wrapped-key approach: the unlock ceremony derives
- *   a short-lived wrapping key, stores only the wrapped seed in
- *   `storage.session`, and the mnemonic string is dropped after
- *   keystore creation. The seed then never leaves the unlock
- *   ceremony, and a debugger-on-running-process attack recovers a
- *   wrapped blob plus an in-memory key — not the recovery phrase
- *   itself. See `docs/SECURITY_LOG.md` 2026-06-13 entry for the
- *   design sketch.
  * - PBKDF2 iterations default to `PBKDF2_ITERATIONS` (600_000).
  * - Decrypted secret buffers (seed bytes) are zeroed on `lock()` /
  *   `destroy()` before being released for GC. JS strings (the
@@ -293,16 +284,6 @@ export function deriveAddresses(keys: DerivedKeys): WalletAddresses {
 }
 
 /**
- * Rebuild a full `UnlockedWallet` directly from a mnemonic (skips PBKDF2
- * decryption). Used by the session-cache flow: when the user opts into
- * "stay unlocked for N minutes," we stash the plaintext mnemonic in
- * `chrome.storage.session` and reconstruct the wallet from it on popup
- * reopen without re-prompting the password.
- *
- * `fingerprint` is supplied separately so we don't need to recompute it
- * (the encrypted keystore already has it).
- */
-/**
  * Reconstruct an `UnlockedWallet` from cached leaf-key material, NO
  * mnemonic involved. Used by the session-cache flow: when the user
  * opts into "stay unlocked for N minutes," we stash the derived keys
@@ -315,9 +296,7 @@ export function deriveAddresses(keys: DerivedKeys): WalletAddresses {
  * signing, every Grin surface, Show Seed / Export Seed) must
  * gate-check and force a fresh password unlock.
  *
- * 2026-06-13 hardening: replaces `rebuildUnlockedFromMnemonic` which
- * required the mnemonic to be present in cache. The old function is
- * gone — call sites that referenced it are an audit finding.
+ * No mnemonic is ever cached, so a cache restore cannot produce one.
  */
 export function restoreUnlockedFromCache(args: {
   keys: DerivedKeys;

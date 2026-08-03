@@ -7,8 +7,9 @@ who want to import their funds into a non-Smirk wallet.
 
 Takes a 12-word BIP39 mnemonic and prints:
 
-- BTC + LTC: hex private keys + bech32 addresses (unchanged across
-  Smirk derivation generations — see "BTC/LTC are Smirk-specific" below)
+- BTC + LTC: hex private keys + bech32 addresses at all three derivation
+  generations (v1/v2 share a Smirk-specific path; v3 is standard BIP84:
+  see "BTC/LTC: pre-v0.3 wallets need the hex private key" below)
 - XMR + WOW: private spend key, private view key, public address, at
   all three derivation generations (v1, v2, v3)
 - Grin: slatepack address + private key, at all three generations
@@ -53,15 +54,16 @@ who skip the in-wallet migration before uninstalling will see "0 balance"
 in v0.3 because their funds are at different addresses.
 
 Rather than carrying v1/v2 derivation + sweep flows in the monorepo
-extension forever, we ship this one-time script as the recovery path.
-This decision was informed by the legacy v1/v2 migration population
-data (40 unmigrated users, <$50 total max exposure as of 2026-05-11).
+extension forever, we ship this one-time script as the recovery path:
+the affected population is small and shrinking.
 
 ## Usage
 
 ```bash
-# One-time setup: install monorepo deps (the script imports @smirk/core source via tsx)
+# One-time setup: install monorepo deps, then build the packages the
+# script imports (@smirk/core resolves to its dist/, which is not committed).
 npm install
+npm run build -w @smirk/assets -w @smirk/core
 
 # Piped seed input — keeps seed out of shell history.
 echo "twelve word phrase here" | npx tsx scripts/seed-to-keys/seed-to-keys.mjs
@@ -70,8 +72,9 @@ echo "twelve word phrase here" | npx tsx scripts/seed-to-keys/seed-to-keys.mjs
 npx tsx scripts/seed-to-keys/seed-to-keys.mjs
 ```
 
-The script uses `tsx` so it can import `@smirk/core` source directly
-without a build step — keeps the offline / air-gapped use case simple.
+The script uses `tsx` so it runs straight from source with no bundler,
+which keeps the offline / air-gapped use case simple. `@smirk/core`
+itself has to be built once.
 
 ## Security notes
 
@@ -86,8 +89,7 @@ without a build step — keeps the offline / air-gapped use case simple.
 ## Future: in-browser HTML version
 
 A single self-contained HTML page that does the same derivation in a
-browser sandbox would be friendlier for non-CLI users (and easier to
-DM to the 7 known WOW-balance-holders). Not yet built — the Node CLI
-covers the underlying logic; the HTML version is a packaging task that
-loads `@smirk/wasm` + `@smirk/core/hd` via a bundler. Tracked
-internally.
+browser sandbox would be friendlier for non-CLI users. Not yet built:
+the Node CLI covers the underlying logic; the HTML version is a
+packaging task that loads `@smirk/wasm` + `@smirk/core/hd` via a
+bundler.

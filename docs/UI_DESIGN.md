@@ -37,7 +37,12 @@ Top-level navigation is **verbs**, not **nouns**:
 | **Inbox**    | Slatepacks, swap rounds, incoming tips with notes, e2ee DMs   |
 | **Settings** | Wallet config, custom RPC servers, view-key export, seed      |
 
-Four tabs total. Per-asset detail (address, view key, per-chain
+Four tabs by default. Two more appear conditionally: **Feed** when
+the active backend advertises an operator feed, and **Browse** when
+the shell installs an embedded-browser controller. The extension
+popup sees the four.
+
+Per-asset detail (address, view key, per-chain
 history, RPC override) lives as a drill-down screen *from* Home, not
 as its own tab — modern wallet pattern (Phantom, Trust, Cake) where
 the asset list IS the wallet view.
@@ -175,24 +180,30 @@ swaps in v0.4+. Same UI surface, different backend. Aggregator
 (Trocador today; THORChain planned) vs Native (P2P) is a sub-toggle,
 not a separate tab.
 
-## Principle 5 — Tip Maker as a wizard, not a form
+## Principle 5 — Tip Maker as one screen, not a wizard
 
 Social tipping is the wallet's primary differentiator. The flow has
 to feel slick.
 
-A **two-step wizard** rather than a one-page form:
+**One compose screen** rather than a multi-step wizard: a
+platform-first gate buries the only interesting decision, which is
+who and how much.
 
-1. **Asset + Amount** — pick what to send and how much. Inline
-   conversion to the user's reference fiat. Clear indicator of what
-   this tip will look like to the recipient (encrypted-to-key vs
-   public link).
-2. **Generate** — produces the tip link with a copy button, share
-   sheet (mobile), and QR code. Makes it satisfying to actually
-   create a tip.
+- **To**: recipient field with autocomplete from recent tips.
+- **Amount**: free entry plus quick-amount chips when a fiat
+  denomination is set.
+- **Asset**: a chip that cycles; defaults to the last asset used for
+  that recipient, falling back to the largest balance.
+- **Public link** and **anonymous** are checkboxes, properties of a
+  tip rather than separate flows.
 
-Pending tips (funded but unclaimed) live in the Activity tab with a
-prominent **Clawback** button. Unclaimed tips are the user's funds in
-limbo; recovering them shouldn't take three taps.
+Submission hands off to a result view carrying the share URL and a
+copy button, so creating a tip stays satisfying.
+
+Pending tips (funded but unclaimed) live in the Sent Tips screen,
+reached from Settings or from the ready-to-share banner on Home, with
+a prominent **Clawback** button. Unclaimed tips are the user's funds
+in limbo; recovering them shouldn't take three taps.
 
 ## Principle 6 — Asset registry, not hardcoded chains
 
@@ -203,7 +214,7 @@ two for ERC-20 tipping, possibly Beam or MWC for the Grin family.
 The wallet has to scale to this without a flag day. Concretely:
 
 ```ts
-// packages/core/src/assets/types.ts (sketch)
+// Shape sketch; the shipped registry is packages/assets/src/types.ts
 export interface AssetDefinition {
   id: string;                      // 'btc', 'ltc', 'xmr', 'wow', 'grin'
   displayName: string;             // 'Bitcoin', ...
@@ -230,6 +241,11 @@ export interface AssetDefinition {
   // Reserved for future flags as new chain capabilities surface
 }
 ```
+
+The shipped definition differs on three points: icons resolve through
+`iconKey`, swap capability is `swapRoutes`, and derive / validate /
+sign live in `@smirk/wasm` and `@smirk/core` rather than on the
+definition, which stays pure data.
 
 Adding asset N+1 is then **additive**: register the definition, drop
 in the icon, plug in the derive/sign functions, done. UI components
@@ -332,7 +348,7 @@ fiat conversion happens at the display layer only. Asset registry
 provides decimals, price feed provides USD-per-asset, denomination
 picker translates. No floating-point on consensus-critical values.
 
-## Principle 9 — Themable surface, registry-driven (added 2026-05-11)
+## Principle 9 — Themable surface, registry-driven
 
 The wallet ships with a theme registry in `@smirk/ui/themes/` that mirrors
 the asset-registry pattern from Principle 6. A theme is pure data:
@@ -387,7 +403,7 @@ storage tier.
 hardcoded `rgba(255,...)` inline styles to `var(--smirk-*)` consumption.
 ActionButton, Button, BalanceCard, UnifiedBalance, BottomNav, HomeTab,
 SendWizard's Grin Exchange affordance, and GrinRequestWizard pull from
-tokens as of 2026-05-13; the older portions of SendWizard, ReceiveScreen,
+tokens; the older portions of SendWizard, ReceiveScreen,
 OnboardingWizard, LockScreen, and the settings page still carry inline
 styles. Touch as you go — no big-bang sweep planned.
 
@@ -418,6 +434,10 @@ styles. Touch as you go — no big-bang sweep planned.
 └─────────────────────────────────────────────────────────┘
 ```
 
+The box shows the default four. Feed slots in before Settings when
+the backend advertises one, and Browse appends when the shell
+installs an embedded-browser controller.
+
 Asset detail (balance, address, view key, per-chain history, RPC
 override) is a drill-down screen *from* Home — tap any asset row.
 
@@ -437,32 +457,34 @@ Preact components in `packages/ui/` keep visual consistency.
 
 ## Status
 
-Direction set 2026-05-08. As of 2026-07-09:
-
 - **Principle 1 (action-centric)** — shipped. Bottom nav has Home /
   Swap / Inbox / Settings; Home leads with UnifiedBalance + ActionRow
   (Tip · Send · Receive · Swap); asset picker is a sub-step inside Send
   and Receive flows.
 - **Principle 2 (no vault split)** — shipped. Asset list is flat.
-- **Principle 3 (Unified Inbox)** — partial. Inbox tab placeholder
-  exists; Grin Phase 3.3 populates it with pending exchanges +
-  Smirk-to-Smirk relay auto-detect. The public social-tips
-  receive/claim surface shipped in v0.3.0, and Grin public tips shipped
-  this session; the still-future pieces are the unified-inbox
-  auto-detect that folds tips and messages into one item list, and
-  free-form e2ee DMs (v0.4+).
+- **Principle 3 (Unified Inbox)** — partial. The Inbox ships two item
+  families: Grin slatepacks awaiting sign or finalize, and incoming
+  social tips split into waiting-for-confirmations and ready-to-claim
+  with a one-tap sweep. Public social tips work on all five assets,
+  Grin included. Swap rounds and free-form e2ee DMs (v0.4+) are still
+  future.
 - **Principle 4 (Swap top-level)** — Trocador is the shipped swap
   aggregator; THORChain and native (P2P) swaps deferred to v0.4+.
-- **Principle 5 (Tip Maker wizard)** — pending; immediate next track
-  after Grin Phase 4.
+- **Principle 5 (Tip Maker)** — shipped as `TipMaker`, the
+  single-screen composer described above. Clawback for unclaimed tips
+  lives in `SentTipsScreen`, reached from Settings or the
+  ready-to-share banner on Home.
 - **Principle 6 (asset registry)** — shipped via `@smirk/assets` (44
-  unit tests, zero hardcoded chain branches in UI).
+  unit tests). Three chain-id branches remain in UI code:
+  `SendWizard`'s manual-slatepack toggle and its Broadcast-vs-Sent
+  headline, and `InboxTab`'s slow-claim notice. They should key off
+  registry data instead: `addressKind === 'interactive'` for the Grin
+  cases, `family.family === 'cryptonote'` for the claim notice.
 - **Principle 7 (granular connection grants)** — pending; deferred to
   v0.4 dapp work.
 - **Principle 8 (unified balance + denomination + hide)** — shipped via
   `UnifiedBalance` + tri-state pending/locked rendering.
 - **Principle 9 (themable surface)** — shipped; 7 themes registered.
 
-Send is end-to-end on all 5 assets (Grin via the interactive Exchange
-step shipped in Phase 3.1). Migration debt for inline-styled components
-tracked above.
+Send is end-to-end on all 5 assets, Grin via the interactive Exchange
+step. Migration debt for inline-styled components tracked above.

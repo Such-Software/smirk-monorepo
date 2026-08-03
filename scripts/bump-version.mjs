@@ -39,7 +39,7 @@ const MANIFEST_TARGETS = ['packages/extension/manifest.json'];
 
 // Rust crates intentionally skipped — they're never published. If
 // a future release needs Cargo in lockstep, add their Cargo.toml here
-// and extend bumpCargoToml.
+// and add a Cargo-aware bump alongside `bumpJsonTargets`.
 const CARGO_TARGETS = [];
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;

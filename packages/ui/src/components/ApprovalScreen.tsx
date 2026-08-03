@@ -713,12 +713,11 @@ function NostrCryptBody({ op }: { op: 'encrypt' | 'decrypt' }) {
 }
 
 function AssetChip({ asset }: { asset: ApprovalAsset }) {
-  // Use the accent color for asset chips so they're high-contrast
-  // against every theme background (light, dark, retro). Earlier
-  // version used `--smirk-surface-2` (no such token → grey fallback)
-  // with inherited foreground — rendered light-grey-on-white text on
-  // light themes and grey-on-white in the dark Smirk theme, which
-  // is exactly the bad-contrast state shown in the bug screenshot.
+  // Use the accent color for asset chips so they stay high-contrast
+  // against every theme background (light, dark, retro). Do NOT use
+  // `--smirk-surface-2`: it is not a real token, so it falls back to
+  // grey with inherited foreground, which renders light-grey-on-white
+  // on light themes and grey-on-white in the dark Smirk theme.
   return (
     <span
       style={{

@@ -197,14 +197,8 @@ check('grin_slatepack_pack_plain + unpack', () => {
 check('grin_slatepack_encrypt + decrypt', () => {
   // ed25519 keypair from a known seed
   const sk = '2a'.repeat(32);
-  // For the smoke we need the matching pk; derive via grin_derive_keys is wrong (different scheme)
-  // — but we just need any valid ed25519 pubkey for the smoke. Use a deterministic value
-  // by encrypting + decrypting through the same path: use the slatepack_address derivation
-  // is not exposed here. Skip pk derivation — encrypt to a random valid x25519 point
-  // is impractical here. Instead: smoke-test by checking that calling the function
-  // doesn't crash with a reasonable input. For a real round-trip we have unit tests.
-  // We just check encrypt produces non-empty output.
-  // Use a generic-ish 32-byte ed25519 pubkey — needs to decompress to a valid point.
+  // Encrypt to a fixed valid ed25519 public key (the base point Y) and assert
+  // non-empty output. Round-trip coverage lives in the crate unit tests.
   const pk = '5866666666666666666666666666666666666666666666666666666666666666'; // ed25519 base point Y
   const payload = 'cafe';
   const ct = mod.grin_slatepack_encrypt(payload, pk);

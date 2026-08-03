@@ -1,9 +1,12 @@
 //! Schnorr signature scheme over secp256k1, matching Grin's `aggsig` module.
 //!
 //! Grin uses a Schnorr variant (predates BIP-340) implemented in
-//! libsecp256k1-zkp's `aggsig` module. The single-signer case is what we
-//! implement here; multi-party aggregation lands in a future commit when
-//! v0.4 swap work needs it.
+//! libsecp256k1-zkp's `aggsig` module. This module covers the single-signer
+//! case plus the multi-party aggregation primitives (`partial_sign` /
+//! `partial_verify` / `aggregate_partials` / `final_signature`) and the
+//! adaptor-signature helpers. No production path calls the multi-party or
+//! adaptor primitives yet; the two-party adaptor round-trip is quarantined
+//! (see the ignored test at the bottom of this file).
 //!
 //! ## Algorithm
 //!
@@ -811,9 +814,9 @@ mod tests {
     /// pass the round-trip yet — needs the BIP340 challenge tweak for
     /// `R = R_total_no_t + T` plus correct signer-share book-keeping
     /// across the adaptor / non-adaptor split. Fixing this is a
-    /// pre-requisite for v0.4's Grin↔BTC atomic swap (see
-    /// `docs/V0_3_PLAN.md` Beyond-v0.3 roadmap), not a v0.3 wallet
-    /// blocker — no production code path calls this primitive yet.
+    /// pre-requisite for v0.4's Grin↔BTC atomic swap, not a v0.3
+    /// wallet blocker: no production code path calls this primitive
+    /// yet.
     /// Re-enable when the v0.4 swap-core work starts.
     #[test]
     #[ignore = "v0.4 adaptor-signature WIP — quarantined; see test docstring"]

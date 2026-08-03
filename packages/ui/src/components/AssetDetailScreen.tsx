@@ -743,9 +743,9 @@ function TxRow({
   // inline action is showing (HTML forbids nested buttons).
   // Clawback eligibility mirrors SentTipsScreen.tsx — kept in sync
   // by audit comment, not by a shared helper, because the row shapes
-  // differ. 2026-06-13 audit additions: `funding_mismatch` (sender
+  // differ. `funding_mismatch` is eligible (sender
   // funded LESS than declared; clawback recovers the underfunded
-  // amount), and `cancelled` WHEN hasLocalBackup (tip-draft GC may
+  // amount), as is `cancelled` WHEN hasLocalBackup (tip-draft GC may
   // flip a funded-but-not-attached draft to `cancelled` after the
   // 7-day window; local backup still holds the spend key).
   const showTipSentActions =
@@ -1023,9 +1023,9 @@ function tipStatusLabel(status: string): string {
     case 'clawed_back':
       return 'clawed back';
     case 'funding_mismatch':
-      // 2026-06-13 tip-system audit: distinct copy makes the
-      // recovery path obvious vs a generic "pending" / "cancelled".
-      // Paired with the clawback affordance added in showTipSentActions.
+      // Distinct copy makes the recovery path obvious vs a generic
+      // "pending" / "cancelled". Paired with the clawback affordance
+      // in showTipSentActions.
       return 'underfunded';
     default:
       return status;

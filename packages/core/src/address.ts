@@ -29,10 +29,8 @@ const NETWORKS = {
   //   XMR mainnet: address=18 (0x12), integrated=19 (0x13), subaddress=42 (0x2A)
   //   WOW mainnet: address=4146 (0x1032), integrated=4148 (0x1034),
   //                subaddress=12208 (0x2FB0)
-  // Empirically verified 2026-05-12: a WOW subaddress straight from Stack
-  // Wallet (`WW3pXrjga...CCM5ge`) decodes to varint prefix 12208 — the
-  // previous constants `integratedPrefix: 4147` and `subaddressPrefix:
-  // 6810` were both wrong and silently failed every WOW subaddress send.
+  // The WOW values are confirmed against a real Stack Wallet subaddress
+  // (`WW3pXrjga...CCM5ge`), whose varint prefix decodes to 12208.
   xmr: { addressPrefix: 18, integratedPrefix: 19, subaddressPrefix: 42 },
   wow: { addressPrefix: 4146, integratedPrefix: 4148, subaddressPrefix: 12208 },
 } as const;

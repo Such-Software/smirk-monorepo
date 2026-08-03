@@ -5,8 +5,7 @@
  * path m/44'/1237'/<account>'/0/0. The hardened ACCOUNT index is the rotation
  * counter: account 0 is the default identity; advancing it produces a fresh,
  * seed-recoverable, externally-unlinkable npub (the account is hardened, so leaf
- * keys cannot be linked even with a leaked xpub). See docs/private IDENTITY_PHASE1
- * and P2P_VALUE_PROTOCOL for the rationale.
+ * keys cannot be linked even with a leaked xpub).
  *
  * The npub is a standard NIP-19 bech32 encoding of the x-only (schnorr) pubkey,
  * so it interoperates with any Nostr client (e.g. Goblin). This is the identity
@@ -233,7 +232,7 @@ function nostrEventIdHex(
 /**
  * Finalize + schnorr-sign an arbitrary Nostr event (NIP-01) with the identity:
  * stamp pubkey + created_at (now when omitted), compute the id, sign it. The
- * general primitive general dapp signing (NIP-98 login, kind-1 notes) builds on.
+ * general primitive that dapp signing (NIP-98 login, kind-1 notes) builds on.
  */
 export function signNostrEvent(
   unsigned: UnsignedNostrEvent,

@@ -16,9 +16,9 @@ exchange.
 
 | Implementation | Kind         | Status                                            |
 |----------------|--------------|---------------------------------------------------|
-| `ThorchainSwap`| aggregator   | quote / start / status — implementation in flight |
+| `ThorchainSwap`| aggregator   | stub: `supports()` only; every call throws `not_implemented` |
 | `TrocadorSwap` | aggregator   | quote / start / status against trocador.app       |
-| `NativeSwap`   | adaptor sigs | planned v0.4 (Grin ↔ BTC/LTC, WOW ↔ XMR)          |
+| `NativeSwap`   | adaptor sigs | planned: Grin ↔ BTC/LTC in v0.4, WOW ↔ XMR in v0.6 |
 
 Aggregator implementations call out to a third-party service for
 the route + escrow address. Native implementations will run the
@@ -28,17 +28,22 @@ crypto in-wallet via `swap-core` (Rust) exposed through
 ## Use
 
 ```ts
-import { ThorchainSwap } from '@smirk/swap';
+import { TrocadorSwap } from '@smirk/swap';
 
-const swap = new ThorchainSwap();
+const swap = new TrocadorSwap({ apiKey: TROCADOR_API_KEY });
 if (swap.supports('btc', 'ltc')) {
   const quote = await swap.quote({
     fromAsset: 'btc',
     toAsset: 'ltc',
     fromAmount: '100000',          // atomic units (sats)
-    toAddress: 'ltc1q...',
   });
-  const started = await swap.start({ quote, toAddress: 'ltc1q...' });
+  // `start` needs both: where the output lands, and where the
+  // provider returns funds if the trade fails.
+  const started = await swap.start({
+    quote,
+    toAddress: 'ltc1q...',
+    refundAddress: 'bc1q...',
+  });
   // Wallet sends `quote.fromAmount` to `started.depositAddress`,
   // then polls `swap.status(started.id)` until terminal state.
 }

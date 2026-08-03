@@ -10,8 +10,6 @@
  * these with their own platform-specific wiring (storage, navigation,
  * icon assets, fiat-rate fetching) but share the visual surface.
  *
- * Skeleton today — components fill in as the redesign work progresses.
- *
  * @example
  * ```tsx
  * import { BalanceCard, ActionButton, ActionRow, formatAmount } from '@smirk/ui';
@@ -34,8 +32,6 @@
  * }
  * ```
  */
-
-export const UI_PACKAGE_VERSION = '0.0.1';
 
 // ----- Components -----
 export { ActionButton, ActionRow } from './components/ActionButton';

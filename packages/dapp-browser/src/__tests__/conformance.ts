@@ -3,8 +3,9 @@
  *
  * Exercises the entire `DappBrowserController` interface against a
  * factory provided by the caller. The same suite is reused by each
- * platform implementation's test file (Mock, Tauri, Capacitor) so
- * that drift between impls is caught at the test boundary.
+ * platform implementation's test file (Mock, Iframe today) so that
+ * drift between impls is caught at the test boundary. Native-platform
+ * controllers should register it too.
  *
  * Pass a factory that returns a fresh, *un-opened* controller. The
  * suite calls `open()` / `close()` itself so that lifecycle invariants

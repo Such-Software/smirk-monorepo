@@ -233,11 +233,10 @@ function TipCard({
   // Clawback-eligible: any state where funds may be on-chain but not
   // claimed. Drafts have no on-chain funds → discard instead.
   //
-  // 2026-06-13 tip-system audit additions:
-  //   - `funding_mismatch`: sender funded LESS than declared. v0.3.0
+  //   - `funding_mismatch`: sender funded LESS than declared. The
   //     backend allows clawback (recovers the underfunded amount);
-  //     without this affordance the user saw a terminal-looking
-  //     state with no recovery path.
+  //     without this affordance the state looks terminal to the user,
+  //     with no recovery path.
   //   - `cancelled` WHEN hasLocalBackup: the tip-draft GC may flip
   //     a funded-but-not-attached draft to `cancelled` after the
   //     7-day window. The local backup still holds the spend key,

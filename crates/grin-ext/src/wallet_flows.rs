@@ -906,9 +906,8 @@ pub fn finalize_invoice(
 /// Without the depth-3 candidates, outputs created by external
 /// grin-wallet / Grim (which always serialize the default account at
 /// depth=3) appear at the right path in our DB but derive to the wrong
-/// blind — see `depth_3_and_depth_4_derivations_diverge` regression
-/// test. jwinterm's pre-2026-05 195.944 GRIN was the first user-visible
-/// case (2026-05-15).
+/// blind, which makes an otherwise-spendable balance unspendable. See
+/// the `depth_3_and_depth_4_derivations_diverge` regression test.
 ///
 /// On total miss: returns a diagnostic listing each attempted blind's
 /// computed commitment alongside the on-chain target so the surfaced

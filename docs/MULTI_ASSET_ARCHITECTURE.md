@@ -22,8 +22,9 @@ has:
   - `socialTipping` — show in the Tip composer
   - `defaultVisible` — included in new wallets' default visible set
 - **User visibility** layered on top — `ui.hiddenAssets: string[]`
-  in session state, surfaced through `visibleAssetIds(state, assets)`
-  in `@smirk/core/state/visibility`.
+  in session state, surfaced through `visibleAssetIds(state, assets, caps)`
+  in `@smirk/core/state/visibility`, which intersects the user's hidden-set with
+  the chains the connected instance advertises in `/capabilities`.
 
 This gives us **registry-driven feature inclusion** (capability flags)
 + **user-curated visibility** (hidden-set). Surfaces filter by both:
@@ -38,6 +39,12 @@ tables anywhere. Adding ETH eventually means one new file in
 `@smirk/assets/src/assets/eth.ts` with the flags set appropriately —
 *every existing UI surface that respects capability + visibility
 inherits the right behaviour for free*.
+
+One constraint sits outside the registry: `BackendCapabilities['chains']` is a
+fixed five-chain record and `capAllowsChain` indexes it unguarded, so an id the
+instance does not advertise throws inside `visibleAssetIds`. Adding ETH means the
+registry file, a widened `chains` record with a tolerant `capAllowsChain`, and
+the matching backend `/capabilities` field.
 
 ## The spaghetti we have NOT yet untangled
 
@@ -71,7 +78,10 @@ paint.
 ### Stage 1 (done in v0.3.0)
 
 - ✅ Capability flags on the registry.
-- ✅ `visibleAssetIds(state, assets)` as the sole visibility check.
+- ✅ `visibleAssetIds(state, assets, caps)` (and `isAssetVisible(state, id,
+  caps)`) as the sole visibility check: the user's hidden-set intersected with
+  the chains the connected instance advertises, permissive when capabilities are
+  unknown.
 - ✅ `fetchAllBalances` accepts `visibleAssetIds` to short-circuit
   hidden-asset round-trips.
 - ✅ All UI choosers (`SendWizard`, `ReceiveScreen`, `TipMaker`,

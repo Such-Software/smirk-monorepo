@@ -4,12 +4,12 @@ Smirk supports both Monero (XMR) and Wownero (WOW) through a single Rust + WASM 
 
 ## Crates
 
-- **`crates/monero-oxide/`** — vendored fork of [monero-oxide](https://github.com/monero-oxide/monero-oxide) with Wownero transaction support added in-tree. 19 sub-crates covering ed25519, ringct (CLSAG, MLSAG, Borromean, Bulletproofs+), wallet logic, address parsing, and protocol types.
+- **`crates/monero-oxide/`** — vendored fork of [monero-oxide](https://github.com/monero-oxide/monero-oxide) with Wownero transaction support added in-tree. 16 library sub-crates covering ed25519, ringct (CLSAG, MLSAG, Borromean, Bulletproofs+), wallet logic, address parsing, and protocol types (18 counting the two test crates under `crates/monero-oxide/tests/`; all of them are workspace members, listed at `Cargo.toml:6-28`).
 - **`crates/smirk-wasm/`** — wasm-bindgen wrapper. Exposes the Monero/Wownero functions to JavaScript as a single WASM bundle.
 
 ## Status
 
-**Working in production.** The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships this stack today; the v0.3 monorepo (`packages/extension`) consumes the same `crates/smirk-wasm` bundle (now `--target no-modules` per `ARCHITECTURE.md`). Wallet creation, balance display, key image computation, transaction signing, and broadcast are all live. 2026-05-10 OVK privacy fix (fresh per-tx `outgoing_view_key`) lives in `crates/smirk-wasm/src/signing.rs`.
+**Working in production.** The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships this stack today; the v0.3 monorepo (`packages/extension`) consumes the same `crates/smirk-wasm` bundle (now `--target no-modules` per `ARCHITECTURE.md`). Wallet creation, balance display, key image computation, transaction signing, and broadcast are all live. Every transaction is signed with a fresh `outgoing_view_key` drawn from `OsRng`, so the OVK cannot link transactions across sends (`crates/smirk-wasm/src/signing.rs`).
 
 ## Wownero differences from Monero
 
@@ -22,6 +22,28 @@ Three protocol-level differences are handled in `crates/monero-oxide/`:
 | Output commitment scaling | Stored as `C` | Stored as `C/8`, recovered via `scalarmult8(outPk)` |
 
 The `RctType` enum carries both variants; the consumer picks at runtime via the `coin: "xmr" | "wow"` field on transaction params.
+
+## Subaddresses
+
+Derivation lives in `packages/core/src/address.ts` and mirrors Monero's `get_subaddress`:
+
+```
+m = Hs("SubAddr\0" || a || major_LE || minor_LE)   // Hs = keccak256 mod l
+D = B + m·G                                        // subaddress public spend key
+C = a·D                                            // subaddress public view key
+address = base58(subaddressPrefix || D || C || checksum)
+```
+
+`a` is the private view key and `B` the public spend key. The subaddress prefix is 42 for XMR and 12208 for WOW. `(0, 0)` is the PRIMARY address, not a subaddress: passing it throws, so a caller cannot hand out the primary address as if it were fresh.
+
+**Spending a subaddress output is not flag-gated.** An LWS unspent output carries an optional `subaddr_index`, and that index must reach the signer verbatim:
+
+- It is folded into the key offset, so the recovered one-time key controls the output. Signing refuses to proceed when the derived key does not match, rather than producing a transaction the network rejects.
+- `derive_output_key_image` and `compute_key_image` both take optional `subaddr_major` / `subaddr_minor`. Absent (or `(0, 0)`) means the primary address and the payload is byte-identical to the pre-subaddress one. Supplying only one of the two is an error, not a fallback to the primary address.
+
+A client that builds an LWS payload and drops `subaddr_index` strands every output received on a subaddress: its key image will not match, and the funds are unspendable through that path.
+
+**Handing out fresh receive subaddresses IS gated**, behind the `ENABLE_SUBADDRESS_RECEIVE` client flag (default off, `packages/extension/src/popup/receive-subaddress-index.ts`).
 
 ## WASM API
 

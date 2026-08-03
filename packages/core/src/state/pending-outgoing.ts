@@ -13,12 +13,10 @@
  * fetch starts subtracting it through the verified-key-image / UTXO-
  * absent path. The age-out is a backstop, not the primary signal.
  *
- * Failure mode prevented: legacy commit 839e001 caused double-counting
- * when the client-side deduction stacked with backend's reflected
- * spend. We mitigate by clamping displayed available to ≥ 0 — any
- * brief overlap between "client subtracts pendingOutgoing" and
- * "LWS already reflects the spend" shows as 0 (correct under-display)
- * rather than negative.
+ * Displayed available is clamped to ≥ 0, so any brief overlap between
+ * the client-side pendingOutgoing subtraction and a spend the network
+ * already reflects shows as 0 (correct under-display) rather than a
+ * negative balance.
  */
 
 /**
@@ -111,8 +109,10 @@ export type PendingOutgoingContext =
  *   correct LWS state slightly early" vs "double-displayed balance
  *   sitting around indefinitely if scan never picks up". A user who
  *   sends and gets unlucky may see a brief flicker; cheaper than a
- *   stale ghost entry. Phase-2C will add input-key-image reconciliation
- *   so the age-out becomes a true backstop.
+ *   stale ghost entry. Input-key-image reconciliation
+ *   (`reconcilePendingOutgoing`) drops an entry as soon as the network
+ *   reflects its inputs as spent, so this age-out only backstops
+ *   entries that carry no `inputs`.
  * - **XMR** ~2-min blocks, 10-conf cushion → 20 min on-chain. 30 min
  *   gives the scanner room.
  * - **BTC/LTC** ~10 / ~2.5 min blocks, 1-conf shown as available →
@@ -242,7 +242,7 @@ export function expectedLockedChange(
  * entries for one asset. The send-handler subtracts this from the
  * spendable set before greedy selection — prevents picking an input
  * we just spent before LWS/Electrum has reflected it (the mempool
- * double-spend footgun from legacy commits 15661ba / a007700).
+ * double-spend footgun).
  *
  * Comparisons are case-insensitive on the key-image side (LWS returns
  * lowercase hex; we lowercase on insert as well) — caller can use
@@ -277,9 +277,9 @@ export function recentlySpentInputs(
  * Returns the kept entries. An entry without `inputs` (legacy v1
  * format) can't reconcile this way and falls back to timing age-out.
  *
- * Defense against double-counting (legacy commit `839e001`'s
- * scenario): once LWS reflects the spend, displayed-confirmed drops
- * naturally. If we also subtracted pendingOutgoing here the user
+ * Defense against double-counting: once LWS reflects the spend,
+ * displayed-confirmed drops naturally. If we also subtracted
+ * pendingOutgoing here the user
  * would see double-deduction (clamped to 0). Dropping the entry as
  * soon as we detect the spend keeps display = LWS state with no
  * artificial overlap window.

@@ -6,11 +6,13 @@
  * `solvePowChallenge(api)` once before submitting a registration; the
  * returned payload is the JSON the wallet posts back to the server.
  *
- * Why we always solve, even when the backend's `POW_REQUIRED=false`:
- * the gate ships gracefully (false by default during migration) so
- * v0.2.x clients keep working. v0.3.0 always sends a solution so
- * flipping the env var later is a one-step server change with zero
- * client-redeploy. The ~1-2s cost is invisible behind the existing
+ * When we solve. Only genuinely new wallets solve. Every bootstrap
+ * path (`bootstrapAuth`, the extension SW handler, the nostr
+ * bootstrap) skips the solve when `checkRestore` reports a known
+ * fingerprint, mirroring the backend's `is_returning_user` bypass.
+ * A new wallet always sends a solution even when the backend's
+ * `POW_REQUIRED=false`, so the operator can flip the env var with no
+ * client redeploy; the ~1-2s cost hides behind the existing
  * onboarding animations.
  *
  * Network failure handling: if the challenge fetch fails, the wallet

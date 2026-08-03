@@ -1,7 +1,7 @@
 # Paths omitted from `git archive` (the AMO / public source-release zip).
 # None of these are build inputs — verified that excluding them does not affect
 # `make wasm` or the npm extension build. Keeping them out avoids shipping
-# internal security docs, CI/ops details, the committed release binaries, and the
+# internal security docs, CI/ops details, release checksums, and the
 # real-money smoke harness in a public source submission.
 
 # Internal security docs now live in docs/private/ (git-ignored), so they are
@@ -14,9 +14,10 @@
 .github export-ignore
 .gitea  export-ignore
 
-# Committed release artifacts (binaries) — otherwise the source zip embeds a
-# copy of itself + the built extensions. Kept tracked as an audit trail, but
-# never shipped inside the source archive.
+# Release directory: the zips are git-ignored build artifacts, so the only
+# tracked file here is SHA256SUMS, which is the audit trail. It stays out of
+# the archive because it lists that archive's own hash; its home is the
+# published release notes.
 packages/extension/releases export-ignore
 
 # Internal real-money end-to-end tip harness (not an npm workspace; not needed

@@ -159,8 +159,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   {
     action: 'wallet:lock',
     label: 'Lock wallet',
-    // Shifted to avoid collision with the host browser's bookmark
-    // shortcut (Cmd+D).
+    // Shifted: unshifted Cmd/Ctrl+L is the address-bar binding above.
     bindings: [...desktopTrio('l', true), ...extensionTrio('L')],
   },
   {

@@ -9,7 +9,7 @@
  * | LTC   | `m/84'/2'/0'/0/0`        | secp256k1, BIP84 native-segwit  |
  * | XMR   | `m/44'/128'/0'/0/0`      | secp256k1 → mod l (Cake-compat) |
  * | WOW   | `m/44'/2086'/0'/0/0`     | secp256k1 → mod l               |
- * | Grin  | (separate — see below)   | ed25519 over `grin-ext` HMAC    |
+ * | Grin  | (separate — see below)   | ed25519 over legacy `SHA256(master + "smirk:grin:v1")` |
  *
  * BTC/LTC switched from `m/44'/coin'/...` to `m/84'/coin'/...` on
  * 2026-05-11 — the older path produced P2WPKH bech32 addresses at a
@@ -166,7 +166,7 @@ export function computeSeedFingerprint(mnemonic: string, passphrase = ''): strin
  *   derivation, where the leaf key is then reduced mod ℓ).
  * - `84` — BIP84 native-segwit path (used by BTC/LTC since 2026-05-11,
  *   replacing the earlier non-standard `BIP44 path + P2WPKH encoding`
- *   combination — see `docs/SEND_FLOW.md` § "BTC/LTC are Smirk-specific"
+ *   combination — see `docs/SEND_FLOW.md` § "BTC/LTC standardization to BIP84"
  *   for the migration record).
  */
 function deriveSecp256k1Key(

@@ -11,9 +11,10 @@ interface ImportMetaEnv {
   readonly VITE_SMIRK_RELEASE?: string;
   /**
    * Trocador affiliate API key (set at build time). Ships in the
-   * bundle by design (client-direct architecture, V0_3_PLAN.md
-   * Decision 2). When unset, the SwapTab disables the Trocador entry
-   * with a "key missing" status rather than 401-ing at runtime.
+   * bundle by design: the extension calls api.trocador.app directly,
+   * so the backend never proxies user money. When unset, the SwapTab
+   * disables the Trocador entry with a "key missing" status rather
+   * than 401-ing at runtime.
    */
   readonly VITE_TROCADOR_API_KEY?: string;
   /**
