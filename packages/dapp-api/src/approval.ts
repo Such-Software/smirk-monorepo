@@ -138,6 +138,11 @@ export type ApprovalRequest =
       peer: string;
       /** The input: plaintext (encrypt) or ciphertext (decrypt). */
       data: string;
+      /** True on this origin's FIRST crypto call, which prompts. The nostr scope
+       *  covers encrypt/decrypt as well as npub disclosure, so a site that only
+       *  ever asked to "recognize you" could otherwise decrypt every message
+       *  addressed to that identity without the user ever seeing a prompt. */
+      firstGrant?: boolean;
     };
 
 /** Approval result. Each non-rejected branch carries the computed

@@ -10,6 +10,7 @@ import {
   LEGACY_WALLET_KEY,
   type SessionCachePayload,
   type UnlockedWallet,
+  type LegacySweepResult,
 } from '@smirk/core';
 import { storage, walletKeystore, sessionStorage } from './singletons';
 import { cacheActiveNostrKeyForSession, clearCachedActiveNostrKey } from './nostr-vault';
@@ -124,21 +125,44 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
  * non-fatal: any failure just retries on the next unlock — the seed is already
  * safe in the v0.3 keystore, this only relocates coins.
  */
-export async function convergeLegacySweep(wallet: UnlockedWallet): Promise<void> {
+/** What the sweep actually did, per asset, so callers can tell the user the
+ *  truth instead of a fixed sentence. `null` = the sweep did not run at all. */
+export interface LegacySweepSummary {
+  btc: LegacySweepResult | null;
+  ltc: LegacySweepResult | null;
+  /** True when any asset actually broadcast a sweep on THIS call. */
+  anySwept: boolean;
+  /** True when the attempt threw, so nothing is known and it will retry. */
+  errored: boolean;
+}
+
+export async function convergeLegacySweep(
+  wallet: UnlockedWallet,
+): Promise<LegacySweepSummary> {
+  // Returns a summary rather than void: the migration done-screen used to state
+  // "Funds swept to your new BTC/LTC addresses" unconditionally, including when
+  // the broadcast failed, when there was nothing to sweep, and when the sweep
+  // never ran because the seed was absent. Telling someone their money moved
+  // when it did not is the worst kind of wrong, so the caller now gets facts.
+  const out: LegacySweepSummary = { btc: null, ltc: null, anySwept: false, errored: false };
   try {
     // Only migrated-from-v0.2 wallets can have legacy m/44' funds.
     const legacy = await storage.get(LEGACY_WALLET_KEY);
-    if (!legacy) return;
+    if (!legacy) return out;
     // Need the phrase to derive the m/44' key; a session-cache restore drops
     // it — the sweep then retries after a full password unlock.
-    if (!wallet.mnemonic) return;
+    if (!wallet.mnemonic) return out;
     for (const asset of ['btc', 'ltc'] as const) {
       const r = await sweepLegacyBtcLtc(asset, wallet, storage);
+      out[asset] = r;
       if (r.status === 'swept') {
+        out.anySwept = true;
         console.info(`[smirk] swept legacy ${asset} → m/84'`, r.txid);
       }
     }
   } catch (e) {
+    out.errored = true;
     console.warn('[smirk] legacy BTC/LTC sweep failed (retries next unlock)', e);
   }
+  return out;
 }

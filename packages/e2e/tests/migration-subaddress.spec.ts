@@ -104,7 +104,13 @@ test('a migrated v0.2.4 wallet can issue per-payment subaddresses', async ({
   await expect(done, 'migration never reached the done screen').toBeVisible({
     timeout: 90_000,
   });
-  await expect(page.locator('#root')).toContainText(/swept/i);
+  // Deliberately NOT asserting the word "swept": the done screen used to claim
+  // funds moved unconditionally, including on a failed broadcast, so asserting
+  // it pinned the lie. Assert the screen reports SOMETHING about the legacy
+  // funds, whichever of the outcomes actually happened.
+  await expect(page.locator('#root')).toContainText(
+    /swept|already moved|needed moving|could not be moved/i,
+  );
   await expect(page.locator('#root')).toContainText(/npub|Nostr identity/i);
   footage.mark('migration-complete', 'reseal + BTC/LTC sweep + Nostr identity done');
   await done.click();

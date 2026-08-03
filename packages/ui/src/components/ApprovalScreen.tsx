@@ -153,7 +153,10 @@ export type ApprovalApproval =
  *  still renders (unlock is enforced upstream); it just self-approves on mount. */
 function isAutoApprove(request: ApprovalRequest): boolean {
   if (request.kind === 'appSealOpen') return true;
-  if (request.kind === 'nostrCrypt') return true;
+  // NOT unconditional: the first crypto call for an origin prompts, so the user
+  // learns the scope covers reading their messages, not just disclosing an npub.
+  // Subsequent calls run silently (a prompt per DM decrypt is unusable).
+  if (request.kind === 'nostrCrypt') return !request.firstGrant;
   if (request.kind === 'appEncKey') return !request.firstGrant;
   // A Nostr signature auto-approves ONLY when an active session covers its kind.
   // The handler sets sessionCovered=false for money-tier, so those always prompt.
@@ -524,6 +527,15 @@ function NostrGrantBody({
       <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
         The site is requesting your public Nostr key (npub) so it can recognize
         you. This reveals an identity to the site — it can never move funds.
+      </p>
+      {/* Say what the scope ACTUALLY grants. It also covers NIP-04/44
+          encrypt/decrypt, which runs without a further prompt, so a granted site
+          can decrypt any message addressed to this identity. The previous copy
+          described identity disclosure only, which understated it. */}
+      <p style={{ margin: 0, fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
+        It also lets the site encrypt and decrypt messages <em>as</em> this
+        identity, without asking again. Use a private identity if you would
+        rather it could not read messages sent to your main one.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <button type="button" style={optStyle(!perOrigin)} onClick={() => onToggle(false)}>

@@ -22,7 +22,10 @@ export interface MigrationWizardProps {
    * bootstrap (auth + identity link). Rejects on a wrong password (the wizard
    * surfaces it and lets the user retry) or a migration failure.
    */
-  onMigrate: (password: string) => Promise<void>;
+  /** Runs the migration. The string it resolves with (if any) describes what
+   *  actually happened to the legacy BTC/LTC funds, and is shown verbatim on the
+   *  done screen. Returning nothing falls back to a claim-free message. */
+  onMigrate: (password: string) => Promise<string | void>;
   /** Finish — flip the shell to the unlocked wallet. */
   onDone: () => void;
   /** Optional doge-PoW image shown during the bootstrap `onMigrate` runs. */
@@ -37,13 +40,16 @@ export function MigrationWizard({
   const [step, setStep] = useState<Step>('intro');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  /** What the shell reported about the legacy BTC/LTC sweep, shown on `done`. */
+  const [sweepSummary, setSweepSummary] = useState<string | null>(null);
 
   const runMigrate = async () => {
     if (!password) return;
     setError(null);
     setStep('migrating');
     try {
-      await onMigrate(password);
+      const summary = await onMigrate(password);
+      setSweepSummary(typeof summary === 'string' && summary ? summary : null);
       setStep('done');
     } catch (e) {
       setError(
@@ -169,7 +175,10 @@ export function MigrationWizard({
             You're on v0.3 😏
           </h1>
           <p style={{ margin: 0, fontSize: 14, color: 'var(--smirk-fg-muted)' }}>
-            Funds swept to your new BTC/LTC addresses. You've got a Nostr
+            {/* Never claim the money moved unless it did. This said "Funds swept
+                to your new BTC/LTC addresses" unconditionally, including when the
+                broadcast failed and when there was nothing to sweep. */}
+            {sweepSummary ?? 'Your wallet is upgraded.'} You've got a Nostr
             identity now (npub), derived from your seed.
           </p>
           <div

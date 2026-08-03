@@ -31,6 +31,10 @@ export interface OriginPermission {
    *  `getNostrPublicKey` answers from the stored grant instead of the single-value
    *  cache, and the signer resolves the right key. Absent = legacy grant → account-0. */
   nostrPubkey?: string;
+  /** Set once the user has been shown that the nostr scope also covers
+   *  encrypt/decrypt. Until then the first crypto call prompts, so the scope is
+   *  not silently broader than the consent copy described. */
+  nostrCryptSeen?: boolean;
   /** Whether the origin may derive its app-scoped e2ee key(s) and ask the wallet
    *  to open boxes sealed to them. A one-time disclosure grant: the key is
    *  origin-bound and unlinkable to identity, so once granted, derive/open need

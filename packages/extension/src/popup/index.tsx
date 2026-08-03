@@ -1477,9 +1477,23 @@ function App() {
           } catch (e) {
             console.warn('[smirk] linkNostr during migration failed', e);
           }
-          // Sweep legacy m/44' BTC/LTC funds to the new m/84' addresses so the
-          // "funds swept" done screen is truthful. Non-fatal + idempotent.
-          await convergeLegacySweep(wallet);
+          // Sweep legacy m/44' BTC/LTC funds to the new m/84' addresses, then
+          // report what actually happened. The done screen used to assert
+          // "Funds swept" regardless of outcome; it now says only what is true.
+          const sweep = await convergeLegacySweep(wallet);
+          const moved = (['btc', 'ltc'] as const).filter(
+            (a) => sweep[a]?.status === 'swept',
+          );
+          if (sweep.errored) {
+            return 'Your old BTC/LTC funds could not be moved just yet; the wallet will retry automatically.';
+          }
+          if (moved.length) {
+            return `Funds swept to your new ${moved.map((a) => a.toUpperCase()).join(' and ')} address${moved.length > 1 ? 'es' : ''}.`;
+          }
+          if (sweep.btc?.status === 'already-swept' || sweep.ltc?.status === 'already-swept') {
+            return 'Your old BTC/LTC funds were already moved across.';
+          }
+          return 'No old BTC/LTC funds needed moving.';
         }}
         onDone={refresh}
       />

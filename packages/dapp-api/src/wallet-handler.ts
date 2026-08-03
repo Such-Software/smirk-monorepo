@@ -481,6 +481,12 @@ async function dispatchInner<M extends SmirkMethod>(
         ciphertext?: string;
       };
       const data = (op === 'encrypt' ? params.plaintext : params.ciphertext) ?? '';
+      // Prompt on this origin's FIRST crypto call. The nostr scope is granted
+      // under copy about disclosing an npub, but it also authorizes decrypting
+      // anything this identity can open, and that ran with no prompt at all.
+      // One prompt on first use makes the real scope visible; later calls stay
+      // silent so DM decryption is usable.
+      const firstCrypt = !perm.nostrCryptSeen;
       const decision = await deps.approval({
         kind: 'nostrCrypt',
         origin,
@@ -489,7 +495,13 @@ async function dispatchInner<M extends SmirkMethod>(
         scheme: params.scheme ?? 'nip44',
         peer: params.peer,
         data,
+        firstGrant: firstCrypt,
       });
+      if (decision.approved && firstCrypt) {
+        // Remember that the user has now seen what the scope covers. `set` is an
+        // upsert that preserves grantedAt, so this does not look like a re-grant.
+        await deps.permissions.set({ ...perm, nostrCryptSeen: true });
+      }
       if (!decision.approved) {
         throw new HandlerError('USER_REJECTED', 'User declined the encryption request');
       }
