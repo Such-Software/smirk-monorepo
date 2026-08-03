@@ -50,6 +50,7 @@ smirk-monorepo/
 │   ├── desktop/       @smirk/desktop      : Tauri shell
 │   ├── e2e/           @smirk/e2e          : Playwright end-to-end suite
 │   └── smoke-tests/   @smirk/smoke-tests  : two-wallet mainnet harness
+│                       (git-ignored: holds funded wallets, absent from a public clone)
 └── crates/
     ├── smirk-wasm/    : Rust→WASM crypto facade (XMR/WOW/BTC/LTC signing, Grin)
     ├── grin-ext/      : Grin / Mimblewimble protocol, 6 wallet orchestrators, slate v4 (JSON+bin), cross-validated against grin-wallet

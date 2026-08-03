@@ -85,8 +85,11 @@ Runs via `make wasm-smoke` (which builds the Node-target bundle first).
   at instantiate time, but the Node target uses a different glue
   format that bypasses the postprocess. Native unit tests in
   `crates/grin-ext/src/bulletproof.rs::tests` cover them.
-- A future browser-based harness (puppeteer / playwright) would close
-  this gap; not built yet.
+- The browser-based Playwright harness DOES close this gap and is built:
+  `packages/e2e` drives the real extension in Chromium against a running
+  backend, so the WASM paths Node cannot load are exercised where they
+  actually ship. Run it with `npm test -w @smirk/e2e`. See
+  `packages/e2e/README.md`; it is the client release gate, not an aspiration.
 
 ## Layer 2: cross-implementation interop (per release candidate)
 

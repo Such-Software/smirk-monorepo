@@ -22,10 +22,14 @@ cd "$ROOT"
 BACKEND_URL="${VITE_SMIRK_BACKEND_URL:-http://127.0.0.1:8080/api/v1}"
 API_STYLE="${VITE_SMIRK_API_STYLE:-namespaced}"
 
-echo "[e2e] building workspace libs (assets → core → ui)…"
-npm run build -w @smirk/assets --if-present
-npm run build -w @smirk/core --if-present
-npm run build -w @smirk/ui --if-present
+# Derive the build order from the real dependency graph rather than listing it.
+# This used to hand-maintain "assets, core, ui" and silently omitted @smirk/wasm,
+# @such-software/smirk-dapp-api, @smirk/dapp-browser, @smirk/swap and
+# @smirk/keymap — five of the eight libs. It happened to work on a warm tree
+# where those dist/ dirs already existed, and fails on a clean clone, which is
+# the case that matters for a new contributor or a fresh CI runner.
+echo "[e2e] building workspace libs (derived order)…"
+node scripts/build-workspaces.mjs libs
 
 echo "[e2e] building extension → packages/extension/dist"
 echo "[e2e]   VITE_SMIRK_BACKEND_URL=$BACKEND_URL"

@@ -16,7 +16,13 @@ npx playwright install chromium
 
 # 2. the funded smoke seeds must be sourced; without them the returning-user
 #    specs skip, and the skip guard fails the run
+# NOTE: packages/smoke-tests/ is git-ignored and is NOT in a public clone — it
+# holds funded mainnet wallets. If you have it (Such Software internal):
 set -a; source packages/smoke-tests/secrets/smoke-mnemonics.env; set +a   # SMOKE_ALICE_MNEMONIC, …
+# If you do NOT, export your own funded BIP39 mnemonics instead. The specs read
+# SMOKE_ALICE_MNEMONIC / SMOKE_BOB_MNEMONIC / SMOKE_CAROL_MNEMONIC and skip
+# cleanly when they are unset, so the suite still runs, it just proves less:
+#   export SMOKE_ALICE_MNEMONIC="your twelve or twenty four words …"
 
 # 3. build the extension against that backend, then run
 npm run e2e -w @smirk/e2e            # = build:ext (ui+ext) + playwright test
@@ -25,9 +31,11 @@ npm run test -w @smirk/e2e
 HEADED=1 npm run test -w @smirk/e2e  # watch it drive a visible window
 ```
 
-`build:ext` (`scripts/build-extension.sh`) compiles the workspace libs
-(`@smirk/assets` → `@smirk/core` → `@smirk/ui`) then `vite build`s the extension
-with the backend baked in. **Editing a testid in `@smirk/ui` has no effect until
+`build:ext` (`scripts/build-extension.sh`) compiles the workspace libs in the
+order derived from the dependency graph (`scripts/build-workspaces.mjs`, which
+currently resolves to assets → wasm → core → dapp-api → dapp-browser → swap → ui
+→ keymap) then `vite build`s the extension with the backend baked in. The order
+is derived rather than listed so it cannot drift as packages are added. **Editing a testid in `@smirk/ui` has no effect until
 you rebuild**: the extension bundles ui's `dist/`, not its source.
 
 ### Env

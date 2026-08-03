@@ -15,8 +15,18 @@ change index. Two opt-in paths relax that, both shipped dark: BTC/LTC
 fresh receive plus `/1/j` change addresses behind
 `ENABLE_BTCLTC_FRESH_ADDRS` (default off, `@smirk/core/utxo-addressbook`),
 and XMR/WOW subaddress receive behind `ENABLE_SUBADDRESS_RECEIVE`
-(default off, `popup/receive-subaddress-index.ts`). The v3 leaf paths
-are fixed:
+(default off, `popup/receive-subaddress-index.ts`).
+
+The subaddress path needs BOTH sides: the client flag above AND the instance
+advertising `features.xmr_subaddr_provisioning` in `/capabilities`, which in turn
+requires its monero-lws/wownero-lws to run with `--max-subaddresses` above zero
+(it defaults to 0, disabling subaddresses entirely). With the flag on and the
+capability off the wallet keeps the primary address rather than issuing one the
+LWS was never told to scan, which is the fail-closed behaviour money gate G4
+requires: funds sent to an unprovisioned index are invisible and unspendable
+until someone provisions that range and rescans.
+
+The v3 leaf paths are fixed:
 
 | Asset | Path                  | Encoding   | External-wallet import |
 |-------|-----------------------|------------|-----------------------|
