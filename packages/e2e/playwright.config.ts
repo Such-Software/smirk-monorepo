@@ -28,6 +28,13 @@ export default defineConfig({
   // `skip-guard` fails the run when specs skip without an expected reason, or
   // when overall coverage collapses. Without it the suite can report
   // "2 passed, 23 skipped" and exit 0. A skip is not a pass.
+  // WARNING: `--reporter=<x>` on the CLI REPLACES this whole list, which
+  // silently drops the skip guard. A local `npx playwright test --reporter=line`
+  // therefore reports "28 passed, 8 skipped" and exits 0 even when specs that
+  // should have run were quietly excused. That happened during development of
+  // this very suite, so use `npm test` (no --reporter) or, if you must override,
+  // keep the guard: `--reporter=list,./skip-guard-reporter.ts` (which is what
+  // the CI workflows do).
   reporter: [['list'], ['html', { open: 'never' }], ['./skip-guard-reporter.ts']],
   use: {
     trace: 'retain-on-failure',

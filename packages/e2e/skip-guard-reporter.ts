@@ -20,6 +20,12 @@ import type { Reporter, TestCase, TestResult, FullResult } from '@playwright/tes
  * Specs allowed to skip, and why. Keyed by a substring of the test file path.
  * These are environment-conditional by design, not by neglect.
  */
+/**
+ * NOTE: this reporter only runs when it is REGISTERED. Passing `--reporter=line`
+ * replaces the config's reporter list and disables the guard entirely, so the
+ * run reports skips and exits 0. Prefer `npm test`; if you override the
+ * reporter, include `./skip-guard-reporter.ts` explicitly.
+ */
 const EXPECTED_SKIPS: { match: string; reason: string }[] = [
   {
     match: 'feed.spec',
@@ -32,6 +38,14 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
   {
     match: 'nostr-identity.spec',
     reason: 'requires FEATURE_NOSTR_IDENTITY=true on the backend under test',
+  },
+  {
+    match: 'federation-backend-switch.spec',
+    reason:
+      'needs a SECOND independent backend (FED_BACKEND_URL) with its own DB and ' +
+      'peppers — a mock would prove nothing about federation. Belongs in CI tier B. ' +
+      'Note it also has a known navigation bug (the popup does not route by URL ' +
+      'hash), so expect work beyond just providing the instance',
   },
   {
     match: 'comms-roundtrip.spec',
