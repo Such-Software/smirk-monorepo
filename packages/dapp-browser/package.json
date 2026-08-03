@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx src/__tests__/mock-controller.test.ts src/__tests__/iframe-controller.test.ts src/__tests__/history.test.ts src/__tests__/bookmarks.test.ts",
+    "test": "node --test --import tsx 'src/**/*.test.ts'",
     "clean": "rm -rf dist"
   },
   "dependencies": {},
