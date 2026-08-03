@@ -8,7 +8,7 @@ patterns, and the contribution workflow.
 If you're adding a new component, screen, or interaction, read this
 once and refer to it on every PR. The patterns referenced here
 (dialog, tablist, live region, focus trap) are documented in full
-exactly once — use them by name, don't reinvent them per component.
+exactly once: use them by name, don't reinvent them per component.
 
 ## Standards baseline
 
@@ -28,7 +28,7 @@ Verify in code review for every interactive element.
 
 OS-respecting defaults:
 
-- iOS Dynamic Type, Android Font Scale — UI never overrides
+- iOS Dynamic Type, Android Font Scale: UI never overrides
 
 These three are commitments, not current behavior. No shipped component
 or theme reads them:
@@ -44,7 +44,7 @@ If an OS feature exists, we follow it. We do not override.
 These patterns are referenced by name throughout the codebase. The
 canonical spec lives here. Component-level docs say
 *"Implements the [tablist pattern](docs/ACCESSIBILITY.md#tablist)"*
-and link back — they do not re-document the pattern.
+and link back; they do not re-document the pattern.
 
 ### Semantic HTML first
 
@@ -61,7 +61,7 @@ event severity:
 | Event class | Politeness | Example |
 | ----------- | ---------- | ------- |
 | Background refresh, no user action needed | `off` (silent) | Polled balance update. |
-| Confirmation of user action | `polite` | "Send broadcast — txid abc…". |
+| Confirmation of user action | `polite` | "Send broadcast: txid abc…". |
 | Progress through a long operation | `polite` + step labels | "Building sweep… Broadcasting… Confirming…" |
 | Critical condition the user must know now | `assertive` (`role="alert"`) | Failed claim, lock-window violation, fund-loss-adjacent message. |
 | Modal opening that demands attention | `assertive` + focus management | Approval prompt opening. |
@@ -80,8 +80,8 @@ trigger element on close.
 A `<Dialog>` component (planned for `@smirk/ui`) will implement this.
 Build new modal interactions on top of `<Dialog>`. If you find
 yourself wiring
-focus manually, you're either extending `<Dialog>` (good — submit a
-PR) or duplicating it (bad — use the component).
+focus manually, you're either extending `<Dialog>` (good: submit a
+PR) or duplicating it (bad: use the component).
 
 ### Tablist
 
@@ -133,7 +133,7 @@ shortcut means:
 3. Dispatching on `actionsFromEvent(event, platform)` in the consuming
    shell's `keydown` handler.
 
-Never bind keys directly with `addEventListener('keydown', ...)` —
+Never bind keys directly with `addEventListener('keydown', ...)`:
 that path leads to platform-divergent shortcuts and conflict bugs.
 
 ## Color, theme, motion
@@ -142,7 +142,7 @@ that path leads to platform-divergent shortcuts and conflict bugs.
 
 WCAG AA: **4.5:1 for text**, **3:1 for large text and UI components**.
 AAA: 7:1 for text. Themes will be checked in CI via a planned
-`packages/ui/src/themes/__tests__/contrast.test.ts` — a theme that
+`packages/ui/src/themes/__tests__/contrast.test.ts`: a theme that
 fails AA must either be fixed or accompanied by an HC ("High
 Contrast") sibling variant.
 
@@ -217,14 +217,14 @@ build, `npm run typecheck --workspaces`, and `npm test --workspaces`
 cargo audit. It runs no lint and no a11y step. The three checks below
 are the target:
 
-- **`eslint-plugin-jsx-a11y`** — catches the structural problems
+- **`eslint-plugin-jsx-a11y`**: catches the structural problems
   (`role="button"` on a div, missing `alt`, click-without-keypress,
   etc.). See the Toolchain section below.
-- **`@axe-core/preact`** in component tests — runtime checks (contrast,
+- **`@axe-core/preact`** in component tests: runtime checks (contrast,
   focus order, ARIA validity). One axe assertion per significant
   interactive component.
 - **Theme contrast tests** in
-  `packages/ui/src/themes/__tests__/contrast.test.ts` — every theme
+  `packages/ui/src/themes/__tests__/contrast.test.ts`: every theme
   satisfies WCAG AA or has a documented HC variant.
 
 ### Manual (pre-release, every minor version)
@@ -267,7 +267,7 @@ checklist. The short version, for reference:
       through `<LiveRegion>`.
 - [ ] axe-core sweep added to the component's tests.
 
-## Toolchain — tracked for v0.3.x
+## Toolchain: tracked for v0.3.x
 
 v0.3.0 ships the conventions and the static patterns above; the
 following supporting toolchain is the next pass. Tracked here so it
@@ -278,9 +278,9 @@ doesn't drift; each item should land in its own PR:
   warrant their own design pass.
 - **`@axe-core/preact`** as a monorepo dev dep with example test in
   `packages/ui/src/components/browser/__tests__/a11y.test.ts`.
-- **`<LiveRegion>` component** in `@smirk/ui` — central live-region
+- **`<LiveRegion>` component** in `@smirk/ui`: central live-region
   router with politeness-level mapping.
-- **`<Dialog>` component** in `@smirk/ui` — focus trap +
+- **`<Dialog>` component** in `@smirk/ui`: focus trap +
   return-focus pattern.
 - **`useFocusTrap()` hook** in `@smirk/ui`.
 - **`<SkipLink>` component** for the desktop wallet shell.
@@ -298,4 +298,4 @@ mention the standards we target. We document our gaps, we publish the
 SR test log, we accept community-reported accessibility issues
 through the same channel as security issues. A wallet that
 non-disabled users can't tell is accessible is one that disabled
-users can use — which is the point.
+users can use, which is the point.

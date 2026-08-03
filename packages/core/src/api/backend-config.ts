@@ -1,10 +1,10 @@
 /**
- * Durable backend selection — which smirk-backend the wallet talks to.
+ * Durable backend selection: which smirk-backend the wallet talks to.
  *
  * The wallet is backend-agnostic: the default public instance (api.smirk.cash),
  * a self-hosted smirk-backend-core, or another operator's. The chosen backend is
- * stored durably (e.g. chrome.storage.local) so EVERY JS context — background
- * service worker, offscreen runner, popup — reads the same value at boot and
+ * stored durably (e.g. chrome.storage.local) so EVERY JS context (background
+ * service worker, offscreen runner, popup) reads the same value at boot and
  * re-applies it on change. Auth (JWT) is per-backend, so switching clears the
  * token and the shell re-bootstraps against the new backend.
  */
@@ -46,7 +46,7 @@ export async function clearBackendConfig(storage: PlatformStorage): Promise<void
 
 /**
  * Point the shared `api` singleton at `cfg`. Clears the access token because a
- * JWT minted by one backend is meaningless to another — the shell re-bootstraps
+ * JWT minted by one backend is meaningless to another; the shell re-bootstraps
  * auth against the new backend after this.
  */
 export function applyBackendConfig(cfg: {

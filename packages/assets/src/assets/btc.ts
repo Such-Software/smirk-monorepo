@@ -1,10 +1,10 @@
 import type { AssetDefinition } from '../types';
 
 /**
- * Bitcoin — UTXO, native segwit by default, taproot opt-in.
+ * Bitcoin: UTXO, native segwit by default, taproot opt-in.
  *
  * Smirk supports BTC mainnet and testnet (testnet for dev / staging
- * only — no production tipping). Default address kind is P2WPKH
+ * only: no production tipping). Default address kind is P2WPKH
  * (BIP84) so users get short, modern segwit addresses. P2TR (BIP86)
  * is supported via the asset's address-type picker; once Schnorr-
  * signed taproot tipping has more wallet support we'll consider
@@ -12,7 +12,7 @@ import type { AssetDefinition } from '../types';
  *
  * Ring-CT and slate considerations don't apply (UTXO chain).
  *
- * Confirmations: 0 — we treat first-seen as good for tipping.
+ * Confirmations: 0; we treat first-seen as good for tipping.
  * Backend's mempool tracking handles double-spend monitoring.
  */
 export const btc: AssetDefinition = {

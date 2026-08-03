@@ -49,7 +49,7 @@ export interface ChainCapabilities {
   /** ring-CT: a view key is required to read balances/outputs. */
   requiresViewKey: boolean;
   /** ring-CT (registerLws): the server must know the account before it can
-   *  serve its data. Grin does NOT require this on v3 — its key registration
+   *  serve its data. Grin does NOT require this on v3: its key registration
    *  (POST /keys) is discovery-only, not a precondition for the rewind scan. */
   requiresRegistration: boolean;
   /** ring-CT: spends need decoy/ring members (getRandomOutputs). */
@@ -57,7 +57,7 @@ export interface ChainCapabilities {
   /** grin: seed-only recovery via view-key rewind scan (`scan`). */
   hasRecoveryScan: boolean;
   /** grin (legacy): whether outputs live in a server-side store with a
-   *  lock/spend lifecycle. Always false on v3 — the client owns output state
+   *  lock/spend lifecycle. Always false on v3: the client owns output state
    *  and reads it from `scan` each call. */
   serverSideOutputStore: boolean;
 }
@@ -91,7 +91,7 @@ export interface UtxoChainProvider extends BaseChainProvider {
   /**
    * UTXOs across several owned addresses. Each returned {@link UtxoEntry} is
    * TAGGED with its owning `address` + `masterPath` (the path re-attached
-   * client-side from `refs`, never server-derived — money gate G9).
+   * client-side from `refs`, never server-derived; money gate G9).
    */
   listOutputsMulti(refs: UtxoAddressRef[]): Promise<ApiResponse<UtxoListing>>;
   /** Aggregate history across several owned addresses. */

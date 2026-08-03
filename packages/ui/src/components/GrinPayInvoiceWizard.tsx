@@ -1,5 +1,5 @@
 /**
- * GrinPayInvoiceWizard — payer-side flow for an inbound I1 invoice.
+ * GrinPayInvoiceWizard: payer-side flow for an inbound I1 invoice.
  *
  * The receiver (somewhere else) generated an invoice I1 asking us for
  * `amount` GRIN. We pay it: lock our inputs, sign as I2, hand the
@@ -9,13 +9,13 @@
  * Four steps because spending money requires an explicit consent gate
  * the receive-flow doesn't need:
  *
- *   step 0: Paste — textarea + optional clipboard auto-fill.
- *   step 1: Confirm — show "You're paying N GRIN" with fee + slate
+ *   step 0: Paste. Textarea + optional clipboard auto-fill.
+ *   step 1: Confirm. Show "You're paying N GRIN" with fee + slate
  *           details. User clicks "Pay" to authorize. This is the
  *           crypto-execute gate.
- *   step 2: Reply — auto-signs on entry; displays I2 with copy /
+ *   step 2: Reply. Auto-signs on entry; displays I2 with copy /
  *           relay-post affordance.
- *   step 3: Done — confirmation.
+ *   step 3: Done. Confirmation.
  *
  * State persists under `wizards['grin-pay-invoice']`.
  */
@@ -36,7 +36,7 @@ export interface GrinPayInvoiceFields extends Record<string, unknown> {
   /** Backend relay id when the I1 came from a `pending_to_sign` Inbox
    *  row. The popup posts I2 back via signGrinSlatepack when set. */
   relayId?: string;
-  /** Cached inspection of the I1 — amount + fee shown on the confirm
+  /** Cached inspection of the I1: amount + fee shown on the confirm
    *  step without re-parsing on every render. */
   inspectedAmount?: number;
   inspectedFee?: number;
@@ -59,7 +59,7 @@ export type GrinPayInvoiceSignOutcome =
 
 export interface GrinPayInvoiceWizardProps {
   assetId: string;
-  /** Inspect the pasted I1 — return amount/fee/slate id for the
+  /** Inspect the pasted I1: return amount/fee/slate id for the
    *  confirm step. Implemented in the shell because slate parsing
    *  needs the wasm bundle. */
   onInspect: (i1Armored: string) =>

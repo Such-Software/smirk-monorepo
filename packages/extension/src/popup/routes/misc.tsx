@@ -40,7 +40,7 @@ export function ScanProgressBanner({
   refreshedAt: Date | null;
 }) {
   // Tick a counter every second so the "Xs ago" string updates even
-  // when the underlying balances haven't refreshed yet. Lightweight —
+  // when the underlying balances haven't refreshed yet. Lightweight:
   // a single integer setState per popup.
   const [, setNowTick] = useState(0);
   useEffect(() => {

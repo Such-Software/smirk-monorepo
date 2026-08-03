@@ -1,20 +1,20 @@
 /**
- * @smirk/core — wallet core library.
+ * @smirk/core: wallet core library.
  *
  * Shared TypeScript code consumed by the browser extension, mobile app,
  * and desktop app. Houses:
  *
- * - **API client** — full-fat client for the Smirk backend
+ * - **API client**: full-fat client for the Smirk backend
  *   (`auth`, `keys`, `tips`, `social`, `wallet/utxo`, `wallet/lws`,
  *   `grin/relay`, `prices`).
- * - **Crypto** — local seed encryption (PBKDF2 + XChaCha20-Poly1305),
+ * - **Crypto**: local seed encryption (PBKDF2 + XChaCha20-Poly1305),
  *   tip envelope encryption (secp256k1 ECDH), Bitcoin message signing
  *   (BIP-137).
- * - **Shared types** — asset enums, tip and key shapes used at the API
+ * - **Shared types**: asset enums, tip and key shapes used at the API
  *   surface.
  *
  * Chain-specific transaction crypto lives in `@smirk/wasm` (Rust).
- * `@smirk/core` deliberately doesn't import any wasm module — it stays
+ * `@smirk/core` deliberately doesn't import any wasm module: it stays
  * importable from any context (browser, service worker, Node, Deno).
  *
  * The wallet shells (`@smirk/extension`, `@smirk/mobile`, etc.)
@@ -68,7 +68,7 @@ export * from './hd';
 // BTC/LTC HD gap-limit address book (Lane 5, gated behind ENABLE_BTCLTC_FRESH_ADDRS)
 export * from './utxo-addressbook';
 
-// Wallet keystore — encrypted-at-rest seed + unlock state machine
+// Wallet keystore: encrypted-at-rest seed + unlock state machine
 export * from './keystore';
 
 // Bootstrap flows: auth + balances (combines keystore with the API client)

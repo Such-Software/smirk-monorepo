@@ -1,7 +1,7 @@
 import type { AssetDefinition } from '../types';
 
 /**
- * Monero — CryptoNote chain, RingCT type 6 (`ClsagBulletproofPlus`),
+ * Monero: CryptoNote chain, RingCT type 6 (`ClsagBulletproofPlus`),
  * 16-member rings.
  *
  * 12 atomic-units-per-XMR decimal places (1 XMR = 1e12 piconero).
@@ -39,7 +39,7 @@ export const xmr: AssetDefinition = {
     mainnet: {
       name: 'mainnet',
       bip44CoinType: 128,
-      // v3 derivation path — see packages/core/src/hd.ts:
+      // v3 derivation path; see packages/core/src/hd.ts:
       // BIP32 secp256k1 leaf at m/44'/128'/0'/0/0, reduced mod l.
       // v1 + v2 paths are kept in code for legacy-wallet sweep but
       // are not part of the canonical asset definition.

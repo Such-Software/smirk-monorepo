@@ -61,7 +61,7 @@ use tauri::{
 };
 use url::Url;
 
-/// Width of a "0×0" tab — Tauri/wry on some platforms rejects truly
+/// Width of a "0×0" tab: Tauri/wry on some platforms rejects truly
 /// zero-sized windows, so we floor at 1px. Visually still invisible.
 const MIN_SIZE: f64 = 1.0;
 
@@ -77,11 +77,11 @@ fn webview_label_for(tab_id: &str) -> String {
     format!("smirk-browser-{}", tab_id)
 }
 
-/// Snapshot event name — matches `EVT_SNAPSHOT` in
+/// Snapshot event name: matches `EVT_SNAPSHOT` in
 /// `packages/desktop/src/dapp/tauri-browser-controller.ts`.
 const EVT_SNAPSHOT: &str = "smirk:browser:snapshot";
 
-/// Page-request event name — page-side `window.smirk.X()` calls
+/// Page-request event name: page-side `window.smirk.X()` calls
 /// surface here and the wallet UI handler answers via the
 /// `smirk_browser_respond_page_request` command. Matches
 /// `EVT_PAGE_REQUEST` on the TS side.
@@ -145,7 +145,7 @@ pub struct BrowserFrameRect {
 }
 
 // ======================================================================
-// Plugin state — managed by Tauri as State<BrowserPluginState>.
+// Plugin state: managed by Tauri as State<BrowserPluginState>.
 // ======================================================================
 
 /// Lives for the duration of the app. Single mutex guards the entire
@@ -183,7 +183,7 @@ struct BrowserPluginInner {
 }
 
 // ----------------------------------------------------------------------
-// Pure mutation API — drives the in-memory state machine without any
+// Pure mutation API: drives the in-memory state machine without any
 // Tauri / webview side effects. Commands delegate to these methods and
 // then perform the webview-side work; tests exercise them directly.
 // ----------------------------------------------------------------------
@@ -257,7 +257,7 @@ impl BrowserPluginInner {
     }
 
     /// Snapshot the current state for emission to the wallet UI.
-    /// `None` if no active tab — the wallet UI drops snapshots
+    /// `None` if no active tab; the wallet UI drops snapshots
     /// without an active tab.
     fn snapshot(&self) -> Option<BrowserSnapshot> {
         let active_tab = self.active_tab.as_ref()?.clone();
@@ -284,7 +284,7 @@ impl BrowserPluginInner {
 }
 
 // ----------------------------------------------------------------------
-// Webview-side helpers — pure functions that interact with the live
+// Webview-side helpers: pure functions that interact with the live
 // Tauri webview graph. Kept separate from `BrowserPluginInner` so the
 // state-machine tests stay testable without a Tauri app.
 // ----------------------------------------------------------------------
@@ -293,7 +293,7 @@ impl BrowserPluginInner {
 /// only: a failed emit (typically because the main window is closing
 /// mid-update) logs and returns. We don't propagate the error
 /// because the command path that triggered the snapshot is itself
-/// already at a "we changed state, here's an update" stage —
+/// already at a "we changed state, here's an update" stage;
 /// callers can't meaningfully act on the emit failure.
 fn push_snapshot<R: Runtime>(app: &AppHandle<R>, state: &BrowserPluginInner) {
     if let Some(snap) = state.snapshot() {
@@ -347,7 +347,7 @@ fn apply_rect<R: Runtime>(
     // Linux/WebKitGTK positioning sequence is order-sensitive. wry
     // packs each top-level WebviewWindow's webview into a GtkBox
     // (NOT a GtkFixed), so `set_size` only resizes the outer
-    // gtk::Window — the inner WebView widget's drawing area never
+    // gtk::Window; the inner WebView widget's drawing area never
     // gets a corresponding `size_allocate` call. The accelerated
     // compositor then has a stale surface size and renders pure
     // black on the next repaint. Forcing GTK to re-map (`show_all`
@@ -355,8 +355,8 @@ fn apply_rect<R: Runtime>(
     // recovery; the trick is to do it WITHOUT teleporting the
     // window to its GTK default position (0,0 screen coords).
     //
-    // The order below — set_size while hidden, then show, then
-    // set_position — does exactly that: the size update is applied
+    // The order below (set_size while hidden, then show, then
+    // set_position) does exactly that: the size update is applied
     // to the GtkWindow before the X11 remap, so when show() runs
     // GTK allocates the inner widget at the right dimensions, and
     // the subsequent set_position pins the now-correctly-sized
@@ -474,7 +474,7 @@ pub async fn smirk_browser_new_tab<R: Runtime>(
         &label,
         WebviewUrl::External(parsed),
     )
-    // Borderless + non-resizable + not on taskbar — the embedded
+    // Borderless + non-resizable + not on taskbar: the embedded
     // browser tab is a child window we composite over the wallet,
     // not an independently movable OS window.
     .decorations(false)
@@ -484,7 +484,7 @@ pub async fn smirk_browser_new_tab<R: Runtime>(
     .visible(false)
     // Don't steal focus from the wallet on creation.
     .focused(false)
-    // Initial size — apply_rect will override on the wallet's
+    // Initial size: apply_rect will override on the wallet's
     // first setFrameRect call.
     .inner_size(MIN_SIZE, MIN_SIZE);
 
@@ -527,7 +527,7 @@ pub async fn smirk_browser_new_tab<R: Runtime>(
         let _ = apply_rect(&app, &label, &rect);
     }
 
-    // Per-webview RPC listener — page-side `window.smirk.X()` calls
+    // Per-webview RPC listener: page-side `window.smirk.X()` calls
     // emit `smirk:dapp:rpc` from inside this webview; we forward
     // them to the wallet UI as `smirk:browser:page-request` and
     // track the requestId so the response routes back.
@@ -654,7 +654,7 @@ pub async fn smirk_browser_reload<R: Runtime>(
     // `location.reload()` from page context dispatches through the
     // live navigation pipeline and bypasses the compositor-level
     // dead path. Same outcome on macOS/Windows. Surface recovery
-    // (hide → show → reposition) lives in `apply_rect`, not here —
+    // (hide → show → reposition) lives in `apply_rect`, not here:
     // calling it from reload teleports the embedded window to GTK
     // default position (0,0) because the cached frame rect doesn't
     // get re-applied in this codepath.
@@ -718,12 +718,12 @@ pub async fn smirk_browser_respond_page_request<R: Runtime>(
 }
 
 // ----------------------------------------------------------------------
-// Command-side helpers (Tauri-aware — separate from the pure inner
+// Command-side helpers (Tauri-aware, separate from the pure inner
 // methods on `BrowserPluginInner` so the state-machine tests stay
 // runtime-free).
 // ----------------------------------------------------------------------
 
-/// Look up the webview a navigation command should drive — the
+/// Look up the webview a navigation command should drive: the
 /// passed tab if any, otherwise the active tab. Returns an error
 /// if neither resolves to a live webview.
 fn resolve_webview<R: Runtime>(
@@ -756,7 +756,7 @@ fn classify_security_state(url: &str) -> SecurityState {
 }
 
 // ----------------------------------------------------------------------
-// Page-RPC bridge — receive the page's `window.smirk.X()` call and
+// Page-RPC bridge: receive the page's `window.smirk.X()` call and
 // forward to the wallet UI; route the response back.
 // ----------------------------------------------------------------------
 
@@ -860,7 +860,7 @@ fn now_ms() -> u64 {
 }
 
 // ======================================================================
-// Plugin entry — call from main.rs `Builder::default().setup(...)` to
+// Plugin entry: call from main.rs `Builder::default().setup(...)` to
 // register state + commands. Marker for the unused Wry import.
 // ======================================================================
 
@@ -882,7 +882,7 @@ pub fn manage_state<R: Runtime>(_app: &AppHandle<R>) -> BrowserPluginState {
 /// webview-per-window after the Linux/WebKitGTK issue).
 pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
     let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
-        // This should never fire — Tauri creates the main window
+        // This should never fire: Tauri creates the main window
         // before `setup` is invoked. If it ever does, embedded
         // browser tabs will still work but won't reposition when
         // the wallet moves. Caller (main.rs) is expected to call
@@ -897,7 +897,7 @@ pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     main.on_window_event(move |event| match event {
         tauri::WindowEvent::Moved(_) => {
-            // Window MOVE only — `apply_rect` will set_position to
+            // Window MOVE only: `apply_rect` will set_position to
             // follow but set_size with the unchanged cached
             // dimensions, which is cheap and safe.
             reposition_active_tab(&app);
@@ -929,7 +929,7 @@ pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
             }
         }
         tauri::WindowEvent::CloseRequested { .. } => {
-            // Each browser tab is its own `WebviewWindow` — closing
+            // Each browser tab is its own `WebviewWindow`; closing
             // the wallet alone would orphan them as floating OS
             // windows (a visible glitch where the embedded page
             // hovers on screen with no wallet behind it). Destroy
@@ -947,7 +947,7 @@ pub fn install_window_follow<R: Runtime>(app: &AppHandle<R>) {
 ///
 /// Iterates the labels stored in plugin state (rather than scanning
 /// every `app.webview_windows()`) so the close is deterministic
-/// against whatever tabs the state machine knows about — a tab
+/// against whatever tabs the state machine knows about: a tab
 /// already destroyed via `close_tab` is a no-op via the get-by-label
 /// guard.
 fn close_all_browser_tabs<R: Runtime>(app: &AppHandle<R>) {
@@ -985,7 +985,7 @@ fn reposition_active_tab<R: Runtime>(app: &AppHandle<R>) {
 fn _wry_marker(_: &AppHandle<Wry>) {}
 
 // ======================================================================
-// Tests — pure state-machine behaviour. Webview integration is
+// Tests: pure state-machine behaviour. Webview integration is
 // out-of-scope here (requires a running Tauri app) and is exercised by
 // the manual smoke test on packaged builds.
 // ======================================================================
@@ -1131,7 +1131,7 @@ mod tests {
         let mut inner = fresh();
         let a = inner.new_tab(None);
         inner.close_tab(&a);
-        // The plugin (intentionally) does NOT auto-reopen — that's
+        // The plugin (intentionally) does NOT auto-reopen; that's
         // handled by the TS-side controller. Just confirm we cleared
         // the active pointer.
         assert!(inner.active_tab.is_none());

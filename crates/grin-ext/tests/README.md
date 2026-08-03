@@ -2,8 +2,8 @@
 
 This crate implements the Grin slate / slatepack / kernel ceremony from
 scratch (not a fork). The unit tests in `src/**/tests` verify internal
-correctness — given inputs we control, do our functions produce the
-output we expect? — but they can't catch **protocol mismatch** bugs: a
+correctness (given inputs we control, do our functions produce the
+output we expect?), but they can't catch **protocol mismatch** bugs: a
 sign convention that's internally consistent but doesn't match what
 the Grin network requires when verifying the on-chain kernel commitment.
 
@@ -34,7 +34,7 @@ For each primitive we own:
    commitment), cross-check it against our crate's derivation.
 
 Tests live in `tests/grin_wallet_compat.rs`. They're behind the default
-dev-profile compile but excluded from release wasm builds — the dep is
+dev-profile compile but excluded from release wasm builds: the dep is
 listed under `[dev-dependencies]`, not `[dependencies]`.
 
 ## What this catches

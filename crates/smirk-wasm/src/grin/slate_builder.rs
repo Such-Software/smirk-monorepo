@@ -1,4 +1,4 @@
-//! Slate construction ceremonies — standard (S1→S2→S3) and invoice
+//! Slate construction ceremonies: standard (S1→S2→S3) and invoice
 //! (I1→I2→I3).
 //!
 //! Each function is a thin JSON wrapper around the corresponding
@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 use super::build_kernel_features;
 
 // =============================================================================
-// Standard flow — sender-driven (S1 → S2 → S3)
+// Standard flow: sender-driven (S1 → S2 → S3)
 // =============================================================================
 
 /// Build the sender's S1 slate.
@@ -21,10 +21,10 @@ use super::build_kernel_features;
 ///
 /// `kernel_kind` is one of `"plain"`, `"coinbase"`, `"height_locked"`, `"nrd"`.
 /// `lock_height` and `relative_height` are required for the corresponding
-/// kernel kinds. `slate_id` is the caller-supplied slate UUID — pass a
+/// kernel kinds. `slate_id` is the caller-supplied slate UUID: pass a
 /// fresh v4 UUID string (e.g. `crypto.randomUUID()` in the browser).
 //
-// Wasm-bindgen exports take all params positionally — the JS side calls
+// Wasm-bindgen exports take all params positionally: the JS side calls
 // this as `grin_sender_init_s1(...9 args...)`. Folding into a struct
 // would force the JS caller to build an object literal, which doesn't
 // improve the call site for a one-shot init function. Allow the wide
@@ -153,7 +153,7 @@ pub fn grin_receiver_round_s2(
 ///
 /// Returns JSON: `{ "slate_json": "...", "final_signature_hex": "..." }`.
 //
-// Wasm-bindgen positional-arg surface — see `grin_sender_init_s1` for
+// Wasm-bindgen positional-arg surface; see `grin_sender_init_s1` for
 // rationale on the wide signature.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
@@ -217,12 +217,12 @@ pub fn grin_sender_finalize_s3(
 }
 
 // =============================================================================
-// Invoice flow — receiver-driven (I1 → I2 → I3)
+// Invoice flow: receiver-driven (I1 → I2 → I3)
 // =============================================================================
 
 /// Receiver-init for an invoice flow: receiver creates the slate first.
 //
-// Wasm-bindgen positional-arg surface — see `grin_sender_init_s1` for
+// Wasm-bindgen positional-arg surface; see `grin_sender_init_s1` for
 // rationale on the wide signature.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]

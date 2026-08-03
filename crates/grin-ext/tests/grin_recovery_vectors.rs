@@ -10,7 +10,7 @@
 //! Why this is the gate: the recovery math is correctness-critical. If the
 //! blake2b argument order, the compressed-pubkey serialization, or the
 //! message parsing is wrong, recovery silently returns nothing (no crash,
-//! no error — just a zero balance). Self-generated proofs would be circular
+//! no error, just a zero balance). Self-generated proofs would be circular
 //! (proving our code agrees with itself). These proofs come from grin's
 //! reference code, so passing them proves we agree with grin.
 //!
@@ -29,7 +29,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha512;
 type HmacSha512 = Hmac<Sha512>;
 
-/// Fixed test seed — arbitrary but deterministic. Mirrors what
+/// Fixed test seed: arbitrary but deterministic. Mirrors what
 /// `grin-ext`'s seed module produces from a real mnemonic; here we feed the
 /// raw seed bytes directly so both sides share the same master key.
 const SEED: [u8; 32] = [
@@ -103,7 +103,7 @@ fn identifier_bytes(depth: u8, d0: u32, d1: u32, d2: u32, d3: u32) -> [u8; 17] {
     id
 }
 
-/// TIER 1a — depth-3 / Grim (the "Carol" case).
+/// TIER 1a: depth-3 / Grim (the "Carol" case).
 ///
 /// Build a depth-3 path `[0, 0, n]` with a Carol-like amount, create a REAL
 /// v3 rangeproof + commitment with grin's ProofBuilder, then assert
@@ -113,7 +113,7 @@ fn tier1a_depth3_grim_v3_builder() {
     let keychain = ExtKeychain::from_seed(&SEED, false).expect("keychain");
     let ext = ext_key_from_seed(&SEED);
 
-    let amount: u64 = 12_345_678_900; // 12.3456789 GRIN — Carol-like
+    let amount: u64 = 12_345_678_900; // 12.3456789 GRIN, Carol-like
     let n_child: u32 = 7;
     let id = ExtKeychain::derive_key_id(3, 0, 0, n_child, 0);
     let switch = SwitchCommitmentType::Regular;
@@ -147,7 +147,7 @@ fn tier1a_depth3_grim_v3_builder() {
     );
 }
 
-/// TIER 1b — depth-4 / Smirk v3.
+/// TIER 1b: depth-4 / Smirk v3.
 ///
 /// Same as 1a but with a depth-4 path via the v3 ProofBuilder. Assert exact
 /// value + depth=4 path.
@@ -188,7 +188,7 @@ fn tier1b_depth4_smirk_v3_builder() {
     );
 }
 
-/// TIER 1b' — depth-4 with switch = None (the v3 message also encodes the
+/// TIER 1b': depth-4 with switch = None (the v3 message also encodes the
 /// switch type; this guards against assuming Regular).
 #[test]
 fn tier1b_depth4_switch_none() {
@@ -213,7 +213,7 @@ fn tier1b_depth4_switch_none() {
     assert_eq!(recommit, commit);
 }
 
-/// TIER 1c — legacy builder.
+/// TIER 1c: legacy builder.
 ///
 /// A vector built with grin's LegacyProofBuilder. Assert the legacy nonce
 /// path (legacy_root_hash, not rewind_hash) recovers it, with depth forced
@@ -255,7 +255,7 @@ fn tier1c_legacy_builder() {
     );
 }
 
-/// NEGATIVE — a proof created for a DIFFERENT seed must return None.
+/// NEGATIVE: a proof created for a DIFFERENT seed must return None.
 ///
 /// Proves no false positives: the rewind nonce won't match, OR (if it
 /// somehow rewinds) the recomputed commitment won't match the on-chain one.
@@ -285,12 +285,12 @@ fn negative_wrong_seed_returns_none() {
     );
 }
 
-/// NEGATIVE 2 — recovery is for the RIGHT commitment only. A proof rewound
+/// NEGATIVE 2: recovery is for the RIGHT commitment only. A proof rewound
 /// against a *mismatched* commitment must return None: even though the
 /// rewind nonce is derived from the (wrong) commitment, the recomputed
 /// commitment from the recovered path won't equal the supplied one.
 ///
-/// (Note: recovery deliberately does NOT validate range-proof soundness —
+/// (Note: recovery deliberately does NOT validate range-proof soundness;
 /// that's `bullet_proof_verify`'s job. Ownership discovery is rewind +
 /// commitment-recompute. So we test the discovery boundary, not soundness.)
 #[test]

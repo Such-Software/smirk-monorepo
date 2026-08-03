@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test';
  * The MV3 extension runs in a persistent Chromium context with a background
  * service worker, so scenarios are stateful and must not run in parallel within
  * a project. One worker, no retries by default (a flaky E2E is a bug to fix, not
- * paper over). `BACKEND_URL` targets the instance under test — default is the
+ * paper over). `BACKEND_URL` targets the instance under test; default is the
  * local smirk-backend-core.
  */
 // CAPTURE_VIDEO=1|on records EVERY test's video + screenshots (not just failures) so an

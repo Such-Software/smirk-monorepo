@@ -30,7 +30,7 @@
 //!
 //! ## Wire format note
 //!
-//! This implementation produces a self-consistent (sign, verify) pair —
+//! This implementation produces a self-consistent (sign, verify) pair:
 //! signatures we generate verify with our verify function. Byte-for-byte
 //! interop with `grin-wallet`-produced signatures is **not yet verified**
 //! against fixture signatures; that's a TODO before any Grin transaction
@@ -51,7 +51,7 @@ use zeroize::Zeroize;
 /// verifier reconstructs R from its X coordinate by picking the QR
 /// branch (`secp256k1_ge_set_xquad` in the C lib), then requires
 /// `sG - eP` to have Y QR. So signers must use a nonce whose R has
-/// Y QR — if not, negate the nonce.
+/// Y QR; if not, negate the nonce.
 fn pubkey_y_is_qr(compressed: &[u8]) -> bool {
     let Ok(pk) = PublicKey::from_sec1_bytes(compressed) else {
         return false;
@@ -162,7 +162,7 @@ pub fn sign<R: RngCore + CryptoRng>(
     msg: &[u8; MSG_LEN],
 ) -> Result<Signature, String> {
     // Sample a non-zero scalar as the secret nonce. Retry if we hit the
-    // zero scalar (probability ~2^-256 — never happens in practice).
+    // zero scalar (probability ~2^-256, never happens in practice).
     let mut nonce_bytes = [0u8; 32];
     loop {
         rng.try_fill_bytes(&mut nonce_bytes).map_err(|e| format!("rng: {e}"))?;
@@ -244,7 +244,7 @@ fn check_with_r(
 /// parity byte and feed only the 32-byte X-coordinate, matching Grin's
 /// `secp256k1_compute_sighash_single` (see
 /// `secp256k1-zkp/src/modules/aggsig/main_impl.h:42-58`):
-/// - hash = SHA256 (NOT Blake2b — we had this wrong before, which is
+/// - hash = SHA256 (NOT Blake2b: we had this wrong before, which is
 ///   why local self-verify passed but grin's aggsig verifier always
 ///   rejected with "IncorrectSignature" / "some kind of keychain
 ///   error" on broadcast)
@@ -263,7 +263,7 @@ fn challenge_hash(
         ));
     }
     let mut hasher = Sha256::new();
-    hasher.update(&r_compressed[1..]); // X only — strip parity byte
+    hasher.update(&r_compressed[1..]); // X only: strip parity byte
     hasher.update(p_compressed); // full compressed (with prefix)
     hasher.update(msg);
     let out = hasher.finalize();
@@ -294,13 +294,13 @@ fn scalar_from_bytes(bytes: &[u8; 32]) -> Option<Scalar> {
 //   s_i     = k_i + e * x_i                  (each participant computes own partial)
 //   s_total = s_1 + s_2 + ... + s_n          (sum of partials, scalar add mod n)
 //
-// Final aggregate signature is `(R_total, s_total)` — the same shape and
+// Final aggregate signature is `(R_total, s_total)`, the same shape and
 // verification equation as a single-signer Schnorr against public key
 // P_total. So verifying the final aggregate uses the same `verify` we
 // already have, with `public_key_compressed = P_total`.
 //
 // This is plain (non-MuSig) Schnorr aggregation. Grin doesn't use MuSig's
-// key-coefficient tweaks — participant authentication happens at a layer
+// key-coefficient tweaks; participant authentication happens at a layer
 // above (via the slate exchange protocol).
 
 /// Add two compressed secp256k1 public keys via curve point addition.
@@ -463,7 +463,7 @@ pub fn aggregate_partials(partials: &[[u8; 32]]) -> Result<[u8; 32], String> {
 /// `R_total` and the aggregated scalar `s_total`.
 ///
 /// The result verifies as a single-signer Schnorr signature against the
-/// aggregate public key `P_total` — pass it to [`verify`] with `P_total` as
+/// aggregate public key `P_total`; pass it to [`verify`] with `P_total` as
 /// `public_key_compressed`.
 pub fn final_signature(public_nonce_total: &[u8; 33], aggregate_s: &[u8; 32]) -> Signature {
     // No parity adjustment needed here. The MuSig convention handles
@@ -516,7 +516,7 @@ pub fn final_signature(public_nonce_total: &[u8; 33], aggregate_s: &[u8; 32]) ->
 // adaptor variants; we work in pure Rust over `k256`.
 //
 // The "verify" side of an adaptor partial is exactly the same shape as a
-// normal partial-verify — just with `R_total_eff` (which already contains T)
+// normal partial-verify, just with `R_total_eff` (which already contains T)
 // in the challenge. So we expose the adaptor variants as thin wrappers that
 // build R_total_eff from R_total + T and delegate to `partial_sign` /
 // `partial_verify`. The new operations are `complete_adaptor` and
@@ -528,7 +528,7 @@ pub fn final_signature(public_nonce_total: &[u8; 33], aggregate_s: &[u8; 32]) ->
 /// [`complete_adaptor`] it becomes a valid broadcastable partial.
 ///
 /// `public_nonce_total_no_t` is the sum of all participants' individual
-/// nonces — withOUT T mixed in. The function adds T internally to compute
+/// nonces, withOUT T mixed in. The function adds T internally to compute
 /// the offset challenge; this matches the canonical adaptor-sig math
 /// where the published signature's nonce is `(R_total_no_t + T)`.
 ///
@@ -551,7 +551,7 @@ pub fn adaptor_partial_sign(
 }
 
 /// Verify an adaptor partial signature. Verifies exactly the same way as
-/// a regular partial — `s_prime · G == R_i + e · P_i` with the
+/// a regular partial: `s_prime · G == R_i + e · P_i` with the
 /// challenge `e = blake2b32((R_total_no_t + T) || P_total || msg)`.
 ///
 /// A valid result means: this partial WILL complete to a valid normal
@@ -610,7 +610,7 @@ pub fn extract_adaptor_secret(
 mod tests {
     use super::*;
 
-    /// Test secret + nonce vector — both deterministic non-zero scalars.
+    /// Test secret + nonce vector: both deterministic non-zero scalars.
     const SK: [u8; 32] = [
         0x43, 0x03, 0xf9, 0x02, 0x3f, 0x1b, 0x99, 0xad,
         0xcc, 0xf5, 0x5b, 0xbb, 0x3a, 0xb0, 0xe3, 0xdc,
@@ -811,7 +811,7 @@ mod tests {
     /// This is the cryptographic core of the v0.4 atomic-swap protocol.
     ///
     /// **Quarantined for v0.3.** The two-party aggregation path doesn't
-    /// pass the round-trip yet — needs the BIP340 challenge tweak for
+    /// pass the round-trip yet: needs the BIP340 challenge tweak for
     /// `R = R_total_no_t + T` plus correct signer-share book-keeping
     /// across the adaptor / non-adaptor split. Fixing this is a
     /// pre-requisite for v0.4's Grin↔BTC atomic swap, not a v0.3
@@ -844,7 +844,7 @@ mod tests {
         )
         .unwrap();
 
-        // Alice verifies Bob's adaptor partial — confirms it WILL complete
+        // Alice verifies Bob's adaptor partial: confirms it WILL complete
         // to a valid partial, without learning t.
         let ok = adaptor_partial_verify(
             &s_b_prime, &r_b, &p_b, &r_total_no_t, &p_total, &big_t, &msg,
@@ -853,7 +853,7 @@ mod tests {
         assert!(ok, "Alice must accept Bob's adaptor partial");
 
         // Alice produces her own NORMAL partial. Both sides use the same
-        // effective R_total = R_total_no_t + T in the challenge — Alice
+        // effective R_total = R_total_no_t + T in the challenge; Alice
         // does this via the same adaptor_partial_sign helper (with her
         // own keys, no t needed for signing).
         let s_a = adaptor_partial_sign(
@@ -861,7 +861,7 @@ mod tests {
         )
         .unwrap();
 
-        // Time passes — Bob spends the OTHER chain's UTXO, revealing t.
+        // Time passes: Bob spends the OTHER chain's UTXO, revealing t.
         // Alice (or any watcher) now completes Bob's adaptor partial.
         let s_b_completed = complete_adaptor(&s_b_prime, &t).unwrap();
 
@@ -902,7 +902,7 @@ mod tests {
         let big_t = pubkey_for(&t);
         let msg = [42u8; 32];
 
-        // Single-signer adaptor — R_total_no_t is just R, P_total is just P.
+        // Single-signer adaptor: R_total_no_t is just R, P_total is just P.
         let s_prime =
             adaptor_partial_sign(&sk, &nonce, &r, &p, &big_t, &msg).unwrap();
 

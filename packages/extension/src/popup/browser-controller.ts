@@ -8,7 +8,7 @@ export type BrowserControllerGlobal = Parameters<
   typeof import('@smirk/ui').BrowserShell
 >[0]['controller'];
 
-// Imported as a type only — the actual class lives in
+// Imported as a type only: the actual class lives in
 // `@smirk/dapp-browser` and is instantiated by `@smirk/desktop`'s
 // `main.ts`. BrowseTab only needs the structural shape (the
 // `inlineMode` brand + `dispatchPageMessage` / `getReloadGen` /
@@ -17,7 +17,7 @@ export type BrowserControllerGlobal = Parameters<
 export type IframeBrowserController = import('@smirk/dapp-browser').IframeBrowserController;
 
 // Read the embedded-browser controller the desktop shell installed on
-// boot. `undefined` on extension builds — the BottomNav and routing
+// boot. `undefined` on extension builds; the BottomNav and routing
 // branch on this. The narrow inline cast is the only place in the
 // extension that touches the global; downstream code uses
 // `browserController` instead.

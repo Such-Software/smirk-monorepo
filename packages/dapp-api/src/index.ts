@@ -1,15 +1,15 @@
 /**
- * @such-software/smirk-dapp-api — transport-agnostic dapp-injection layer.
+ * @such-software/smirk-dapp-api: transport-agnostic dapp-injection layer.
  *
  * Three layers:
- *   1. Protocol (protocol.ts) — JSON-RPC-shaped wire types shared by
+ *   1. Protocol (protocol.ts): JSON-RPC-shaped wire types shared by
  *      page-side and wallet-side. Single source of truth for what
  *      `window.smirk` can do.
- *   2. Page-side (page-api.ts) — `installSmirkApi(window, transport)`
+ *   2. Page-side (page-api.ts): `installSmirkApi(window, transport)`
  *      defines `window.smirk`. Transport is platform-supplied:
  *      postMessage for browser/Capacitor, Tauri event bridge for
  *      desktop.
- *   3. Wallet-side (wallet-handler.ts) — `createWalletHandler({...})`
+ *   3. Wallet-side (wallet-handler.ts): `createWalletHandler({...})`
  *      returns a dispatcher that consumes wire requests, runs
  *      permission checks + approval prompts, and produces wire
  *      responses. Pluggable provider / permissions / approval

@@ -3,12 +3,12 @@
  * {@link resolveNip05} with two protections against the "follow the key, not the
  * name" threat where a compromised or hostile domain substitutes a different key:
  *
- *   - TOFU key-pinning — the FIRST time a name resolves, its pubkey is pinned
+ *   - TOFU key-pinning: the FIRST time a name resolves, its pubkey is pinned
  *     (persisted). On a later resolve, if the name maps to a DIFFERENT key, the
- *     result is flagged `keyChanged` and the new key is NOT auto-accepted — the
+ *     result is flagged `keyChanged` and the new key is NOT auto-accepted; the
  *     caller must warn the user and `confirmPin` before trusting it. This turns a
  *     silent key swap into a visible, user-gated event.
- *   - Short-TTL memory cache — avoids re-fetching the well-known on every send/DM
+ *   - Short-TTL memory cache: avoids re-fetching the well-known on every send/DM
  *     (each fetch is a fresh substitution window + latency).
  *
  * Pure over injected dependencies: a persistent pin store, the fetch impl, the
@@ -25,7 +25,7 @@ export interface Nip05PinStore {
 
 export type Nip05CachedResult =
   | { ok: true; resolution: Nip05Resolution; keyChanged: false; firstSeen: boolean }
-  /** The name resolved to a DIFFERENT key than previously pinned — do NOT trust
+  /** The name resolved to a DIFFERENT key than previously pinned; do NOT trust
    *  without user confirmation (call {@link Nip05Resolver.confirmPin}). */
   | { ok: true; resolution: Nip05Resolution; keyChanged: true; pinnedPubkeyHex: string }
   | { ok: false; error: Nip05Error };
@@ -36,7 +36,7 @@ export interface Nip05Resolver {
     identifier: string,
     opts?: { homeDomain?: string; force?: boolean },
   ): Promise<Nip05CachedResult>;
-  /** Accept a changed key (user confirmed) — re-pins + drops the cache entry. */
+  /** Accept a changed key (user confirmed): re-pins + drops the cache entry. */
   confirmPin(identifier: string, pubkeyHex: string, opts?: { homeDomain?: string }): Promise<void>;
 }
 
@@ -78,7 +78,7 @@ export function createNip05Resolver(deps: {
 
       const pinned = await deps.pins.get(key);
       if (pinned && pinned !== res.resolution.pubkeyHex) {
-        // Key changed since first-seen — surface it; do NOT cache or re-pin.
+        // Key changed since first-seen: surface it; do NOT cache or re-pin.
         return { ok: true, resolution: res.resolution, keyChanged: true, pinnedPubkeyHex: pinned };
       }
       if (!pinned) await deps.pins.set(key, res.resolution.pubkeyHex); // TOFU

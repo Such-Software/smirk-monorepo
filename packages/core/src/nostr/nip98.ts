@@ -84,7 +84,7 @@ export function payloadHashHex(body: string | Uint8Array): string {
  * byte-for-byte match the server's `request_descriptor` (smirk-backend-core
  * `core::crypto::nip98`): method (upper) ⏎ path ⏎ sorted query ⏎ hex(sha256(body)).
  * `path` is the ABSOLUTE path the server sees (e.g. `/api/v1/auth/nostr/link`), a
- * fixed cross-impl contract — NOT derived from the client base URL.
+ * fixed cross-impl contract, NOT derived from the client base URL.
  */
 export function requestDescriptor(
   method: string,
@@ -97,7 +97,7 @@ export function requestDescriptor(
   return `${method.toUpperCase()}\n${path}\n${canonicalQuery}\n${bodyHash}`;
 }
 
-/** Hex sha256 of a request descriptor — the value bound in the `payload` tag. */
+/** Hex sha256 of a request descriptor: the value bound in the `payload` tag. */
 export function descriptorSha256(descriptor: string): string {
   return toHex(sha256(new TextEncoder().encode(descriptor)));
 }
@@ -111,7 +111,7 @@ export interface SignedActionParams {
   purpose: string;
   /** Server-issued single-use nonce (the `challenge` tag). */
   challenge: string;
-  /** `descriptorSha256(requestDescriptor(...))` — the `payload` tag. */
+  /** `descriptorSha256(requestDescriptor(...))`: the `payload` tag. */
   payloadSha256Hex: string;
   /** Unix seconds; defaults to now. Injectable for tests. */
   createdAt?: number;

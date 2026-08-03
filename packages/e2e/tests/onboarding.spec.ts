@@ -1,7 +1,7 @@
 import { test, expect } from '../fixtures/extension.js';
 
 /**
- * Phase 0 — the foundation smoke: prove Playwright can actually load and drive
+ * Phase 0, the foundation smoke: prove Playwright can actually load and drive
  * the real MV3 extension. A fresh profile has no wallet, so the popup must land
  * on the onboarding flow. Everything else (import → unlock → balances → sends)
  * builds on this loading + selector-reachability working at all.

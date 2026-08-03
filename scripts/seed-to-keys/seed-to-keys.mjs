@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 /**
- * seed-to-keys.mjs — standalone recovery tool for legacy Smirk wallets.
+ * seed-to-keys.mjs: standalone recovery tool for legacy Smirk wallets.
  *
  * Runs via `tsx` so it can import from `@smirk/core` source directly
  * without a build step. Run as `node --import tsx scripts/seed-to-keys/seed-to-keys.mjs`
@@ -16,7 +16,7 @@
  * (Cake/grin-wallet compatible) derivation. Users on v1/v2 from the
  * legacy `smirk-extension` who skip the in-wallet migration before
  * uninstalling will see "0 balance" in v0.3. This script lets them
- * recover their funds from the seed alone — no Smirk infrastructure
+ * recover their funds from the seed alone: no Smirk infrastructure
  * needed.
  *
  * Usage:
@@ -26,7 +26,7 @@
  * Security:
  * - Never accept the seed as a command-line argument (it would land in
  *   shell history). Use stdin only.
- * - Run on a trusted, offline machine if you can — this script does
+ * - Run on a trusted, offline machine if you can; this script does
  *   not phone home, but a compromised machine sees the seed regardless.
  * - The output contains private keys. Clear scrollback / close the
  *   terminal after you've recorded what you need.
@@ -53,7 +53,7 @@ async function readSeedFromStdin() {
     for await (const chunk of process.stdin) chunks.push(chunk);
     return Buffer.concat(chunks).toString('utf8').trim();
   }
-  // Interactive mode: prompt with hidden echo (best-effort — not all
+  // Interactive mode: prompt with hidden echo (best-effort: not all
   // terminals support this; the user is warned).
   console.error(
     'Enter your 12-word recovery phrase (input is visible — clear scrollback after):',
@@ -80,7 +80,7 @@ function renderVersion(version, keys) {
         : '(legacy — BTC/LTC Smirk-specific BIP44 path + P2WPKH; XMR/WOW custom SHA256 v1)';
   console.log(`\n=== Derivation v${version} ${label} ===\n`);
 
-  // BTC + LTC — v1 and v2 share the legacy Smirk-specific path (BIP44 +
+  // BTC + LTC: v1 and v2 share the legacy Smirk-specific path (BIP44 +
   // P2WPKH encoding, unique to Smirk pre-2026-05-11); v3 is standard BIP84
   // that any wallet's seed import reproduces. Print both per version so
   // users on legacy wallets see where their funds actually are.
@@ -90,7 +90,7 @@ function renderVersion(version, keys) {
   console.log(`LTC private key:    ${hex(keys.ltc.privateKey)}`);
   console.log('');
 
-  // XMR / WOW — view + spend keys plus address
+  // XMR / WOW: view + spend keys plus address
   console.log(`XMR address:        ${xmrAddress(keys.xmr.publicSpendKey, keys.xmr.publicViewKey)}`);
   console.log(`XMR private spend:  ${hex(keys.xmr.privateSpendKey)}`);
   console.log(`XMR private view:   ${hex(keys.xmr.privateViewKey)}`);
@@ -100,7 +100,7 @@ function renderVersion(version, keys) {
   console.log(`WOW private view:   ${hex(keys.wow.privateViewKey)}`);
   console.log('');
 
-  // Grin — slatepack address (= pubkey) + secret
+  // Grin: slatepack address (= pubkey) + secret
   console.log(`GRIN slatepack:     ${grinSlatpackAddress(keys.grin.publicKey)}`);
   console.log(`GRIN private key:   ${hex(keys.grin.privateKey)}`);
 }

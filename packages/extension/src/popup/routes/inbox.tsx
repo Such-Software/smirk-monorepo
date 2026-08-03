@@ -12,12 +12,12 @@ import { cancelInboxItem } from '../inbox-actions';
 import { MessagesRoute } from './messages';
 
 /**
- * InboxPasteRouter — universal paste-and-dispatch screen.
+ * InboxPasteRouter: universal paste-and-dispatch screen.
  *
  * One textarea. User pastes a slatepack of any sta (S1/S2/I1/I2/S3/I3);
  * the shell's onDispatch inspects the slate, seeds the appropriate
  * wizard slot, and navigates there. The user never has to know what
- * kind of slatepack they have — they just paste once.
+ * kind of slatepack they have; they just paste once.
  */
 export function InboxPasteRouter({
   onReadClipboard,
@@ -32,7 +32,7 @@ export function InboxPasteRouter({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Accept a slatepack OR a goblin:/nostr: pay-link — the shell's onDispatch
+  // Accept a slatepack OR a goblin:/nostr: pay-link; the shell's onDispatch
   // routes a pay-link to a pre-filled Send flow, a slatepack to the right wizard.
   const looksDispatchable = (s: string): boolean => {
     const t = s.trimStart();
@@ -163,7 +163,7 @@ export function InboxPasteRouter({
 }
 
 /**
- * PasteTipLinkScreen — entry point for public tips shared as a URL.
+ * PasteTipLinkScreen: entry point for public tips shared as a URL.
  *
  * Public tips never land in the received-tips list because they're
  * not addressed to a specific username; the URL fragment is the only
@@ -392,7 +392,7 @@ export function InboxRouter({
 }: {
   wallet: UnlockedWallet;
   /** Backend user UUID from `bootstrap.userId`. Required for Grin API
-   *  calls — the local seed fingerprint won't parse as a UUID
+   *  calls: the local seed fingerprint won't parse as a UUID
    *  server-side. */
   userId: string;
   inbox: { items: InboxItem[]; loading: boolean; error: string | null };
@@ -412,7 +412,7 @@ export function InboxRouter({
   ) => {
     await store.update((s) => {
       s.wizards['grin-paste-incoming'] = {
-        step: 1, // skip the Paste step — already have S1
+        step: 1, // skip the Paste step (already have S1)
         startedAt: Date.now(),
         fields: {
           armoredIncoming: slatepack,
@@ -451,13 +451,13 @@ export function InboxRouter({
   // overlay reserves this send's inputs + change index AT BUILD TIME
   // (startGrinSend), so cancelling the row must ALSO free those reserved inputs
   // or they stay excluded from selection until the 7-day age-out (stuck funds).
-  // cancelInboxItem does exactly that — it calls the overlay's pre-broadcast
+  // cancelInboxItem does exactly that; it calls the overlay's pre-broadcast
   // remove() (which refuses to free an already-broadcast tx's inputs) before
   // cancelling on the transport. (The old custodial
   // unlockGrinOutputs/updateGrinTransaction calls hit dead v3 endpoints and are
   // gone.)
   const handleCancel = async (item: InboxItem) => {
-    // Don't silently swallow — if we can't cancel this row (backend ownership
+    // Don't silently swallow: if we can't cancel this row (backend ownership
     // check, or a Nostr gift-wrap that won't send) the user sees nothing happen
     // and the row sticks around forever. Surface the failure so they can act on
     // it. Routes over the item's transport: a Nostr item (relayId packs the

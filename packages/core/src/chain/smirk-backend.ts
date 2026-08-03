@@ -57,7 +57,7 @@ const GRIN_CAPS: ChainCapabilities = {
   feeModel: 'formula',
   requiresViewKey: false,
   // v3 grin key registration is discovery-only (POST /keys), not required to
-  // read balance — scan works from the rewind_hash alone.
+  // read balance: scan works from the rewind_hash alone.
   requiresRegistration: false,
   hasDecoys: false,
   hasRecoveryScan: true,

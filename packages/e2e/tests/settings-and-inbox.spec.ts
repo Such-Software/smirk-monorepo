@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * Settings + Inbox nav smoke — daemon-free.
+ * Settings + Inbox nav smoke: daemon-free.
  *
  * Two independent, no-daemon nav checks that each of the two lower
  * tabs renders its surface once we're on an unlocked Home. Neither
@@ -13,8 +13,8 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *     (packages/extension/src/popup/index.tsx). Its root renders an
  *     `<h2>Settings</h2>` heading and an "Auto-lock wallet after"
  *     control whose "Immediately" option carries a stable testid
- *     (`settings-autolock-immediately`). We assert on both — a stable
- *     heading + a concrete affordance — so the check fails loudly if
+ *     (`settings-autolock-immediately`). We assert on both (a stable
+ *     heading + a concrete affordance) so the check fails loudly if
  *     the Settings surface stops rendering.
  *   - Inbox tab → the shared InboxTab component
  *     (packages/ui/src/components/InboxTab.tsx). Its root carries
@@ -24,7 +24,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *
  * Auth: we import alice (already-registered) via the shared
  * `importAndUnlock` helper, which returns once a REAL backend balance
- * (WOW 19.79) renders on Home — proving auth WITHOUT waiting on the
+ * (WOW 19.79) renders on Home, proving auth WITHOUT waiting on the
  * bootstrap `/auth/extension` POST. That POST fires from the
  * extension's OFFSCREEN document, whose network is invisible to
  * Playwright's page/context response listeners, so any
@@ -46,7 +46,7 @@ test('Settings tab renders the settings surface', async ({ context, extensionId 
 
   // ---- Auth/onboarding: import alice (already-registered) ----
   // Returns once authenticated; auth is proven by alice's real backend
-  // balance (WOW 19.79) rendering on Home — never by an offscreen
+  // balance (WOW 19.79) rendering on Home, never by an offscreen
   // /auth/extension wait.
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
 
@@ -57,7 +57,7 @@ test('Settings tab renders the settings surface', async ({ context, extensionId 
   await page.getByTestId('nav-tab-settings').click();
 
   // The SettingsStub heading + the "Immediately" auto-lock option
-  // confirm the settings surface rendered. Pure UI assertion — no
+  // confirm the settings surface rendered. Pure UI assertion: no
   // daemon, no offscreen network.
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({
     timeout: 30_000,
@@ -80,7 +80,7 @@ test('Inbox tab renders the inbox surface', async ({ context, extensionId }) => 
 
   // The InboxTab root container + its heading confirm the inbox surface
   // rendered. The "To sign" / "To finalize" sections always render
-  // (empty for alice — no pending Grin exchanges or tips), so we assert
+  // (empty for alice: no pending Grin exchanges or tips), so we assert
   // on them too for a resilient, daemon-free check.
   await expect(page.getByTestId('inbox-tab')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();

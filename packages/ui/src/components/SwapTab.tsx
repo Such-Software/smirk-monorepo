@@ -1,16 +1,16 @@
 /**
- * SwapTab — top-level Swap surface for the wallet.
+ * SwapTab: top-level Swap surface for the wallet.
  *
  * Two concerns in one tab:
  *
- *   1. **Provider list** — every swap route we surface, each labeled
+ *   1. **Provider list**: every swap route we surface, each labeled
  *      [CEX] or [DEX] so the user can see the trust model at a glance.
  *      Single scrollable list rather than two sub-tabs because (a) the
  *      list is shorter than a screen on every form factor, (b) mobile
  *      doesn't love nested tab bars, and (c) hiding DEX entries behind
  *      a tab when most of them are "coming soon" makes them feel
  *      forgotten instead of telegraphed.
- *   2. **Active provider wizard** — once the user picks an active
+ *   2. **Active provider wizard**: once the user picks an active
  *      provider, the list collapses and that provider's wizard takes
  *      over the tab. v0.3 wires only the Trocador CEX wizard; every
  *      other entry is `coming_soon` or `paused` with status copy.
@@ -21,7 +21,7 @@
  * navigate twice. New providers slot in by extending PROVIDERS.
  *
  * Cross-platform: zero platform-specific imports. State persists via
- * `useWizard('swap-trocador')` which uses the @smirk/core store —
+ * `useWizard('swap-trocador')` which uses the @smirk/core store;
  * the same primitive backs the extension popup, Tauri desktop, and
  * Capacitor mobile.
  *
@@ -44,7 +44,7 @@ import { formatAmountWithTicker, formatAmount } from '../format';
  *  serialization to chrome.storage / IndexedDB / wherever the platform
  *  persists session state.
  *
- *  Critically — `tradeId` (Trocador's `trade_id` from /new_rate) lives
+ *  Critically, `tradeId` (Trocador's `trade_id` from /new_rate) lives
  *  here so the Confirm step can finalize the same draft after a
  *  popup-close mid-wizard, without re-quoting and risking a stale rate. */
 export interface SwapQuoteSummary {
@@ -131,7 +131,7 @@ export interface SwapTabProps {
    *  + amount. Consumer routes; we just fire the intent. */
   onOpenSend: (deposit: SwapInFlight) => void;
   /** Refresh status of an in-flight swap. Polled on a ~10s cadence
-   *  on the Status step. Optional — consumers that haven't wired the
+   *  on the Status step. Optional: consumers that haven't wired the
    *  backend's GET /api/v1/swaps/:id can omit and the user gets a
    *  static last-known-status display. */
   onTrocadorFetchStatus?: (id: string) => Promise<SwapInFlight>;
@@ -145,19 +145,19 @@ export interface SwapTabProps {
   resolveAddress?: (assetId: string) => string | null;
   /**
    * Validate an address against an asset id. Same shape as the
-   * SendWizard's `validateAddress` — returns `null` if valid, a
+   * SendWizard's `validateAddress`: returns `null` if valid, a
    * short human-readable error if not. Called on Confirm in the
    * QuoteStep so a user pasting a BTC address into an XMR receive
    * field (or holding a stale refund address from a previous
    * quote with a different from-asset) doesn't ship a /new_trade
    * call that the provider may silently accept and refund to a
-   * wrong-network address — irrecoverable. Optional only for
+   * wrong-network address: irrecoverable. Optional only for
    * back-compat; consumers SHOULD wire it.
    */
   validateAddress?: (assetId: string, address: string) => string | null;
   /**
    * Pull the user's recent swaps from the backend. Shown above the
-   * provider list when the wizard is inactive — gives any swap whose
+   * provider list when the wizard is inactive: gives any swap whose
    * wizard state was destroyed (X-button cancel, popup-close during
    * confirm, browser restart) a "Resume" affordance instead of
    * stranding the user. Optional only for back-compat; consumers
@@ -166,7 +166,7 @@ export interface SwapTabProps {
   onListRecentSwaps?: () => Promise<SwapSummary[]>;
   /**
    * Resume a backend-known swap in the wizard. The consumer is
-   * responsible for the store write — rehydrate the wizard with
+   * responsible for the store write: rehydrate the wizard with
    * `inFlight` set + `step=3` so the user lands directly on
    * StatusStep with live polling. SwapTab fires this on a recent-
    * swap row click; consumer's job to map SwapSummary onto the
@@ -184,7 +184,7 @@ interface SupportContact {
   /** "support@trocador.app", "@TrocadorSupportBot", etc. */
   label: string;
   /** Where clicking lands the user. `mailto:`, `https:`, `tg:`, `matrix:`,
-   *  `xmpp:` — anything the platform's url handler can resolve. */
+   *  `xmpp:` (anything the platform's url handler can resolve). */
   href: string;
 }
 
@@ -199,7 +199,7 @@ interface ProviderCard {
   /** Provider's support channels, displayed in StatusStep failure
    *  states and via the "Provider support" affordance on active cards.
    *  Stack Wallet feedback: 95% of swap support burden comes from
-   *  swap failures the wallet can't fix — pushing those to the
+   *  swap failures the wallet can't fix; pushing those to the
    *  provider's channels with the trade_id in hand makes the user's
    *  next step obvious AND lets us not be in the middle of it. */
   support?: ReadonlyArray<SupportContact>;
@@ -212,7 +212,7 @@ interface ProviderCard {
 
 /** Single source of truth for what the user sees on the Swap tab.
  *  Adding a provider is one entry here + (if active) wiring a wizard
- *  branch below. Keep ordering meaningful — actives first within each
+ *  branch below. Keep ordering meaningful: actives first within each
  *  category, then coming-soon, then paused. */
 const PROVIDERS: ReadonlyArray<ProviderCard> = [
   {
@@ -223,7 +223,7 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     status: 'active',
     // Ordered most-responsive first. Telegram bot is real-time, email
     // is hours-to-a-day, Matrix is a community channel (peer help),
-    // X is slow + public — try in that order when you're stuck.
+    // X is slow + public; try in that order when you're stuck.
     support: [
       { label: '@TrocadorSupportBot on Telegram', href: 'https://t.me/TrocadorSupportBot' },
       { label: 'support@trocador.app', href: 'mailto:support@trocador.app' },
@@ -288,7 +288,7 @@ interface TrocadorFields extends Record<string, unknown> {
   /**
    * Set after step 0 advances to step 1 (quote returned). Widened
    * with `| undefined` so the wizard's `patchFields` can explicitly
-   * clear it via `{ quote: undefined }` on the re-quote path —
+   * clear it via `{ quote: undefined }` on the re-quote path:
    * `exactOptionalPropertyTypes` doesn't let an `optional T` accept
    * undefined.
    */
@@ -299,7 +299,7 @@ interface TrocadorFields extends Record<string, unknown> {
    * The from-asset id the QuoteStep auto-filled `refundAddress`
    * against. Used to detect the "back to PairStep, switch
    * fromAsset, re-quote" loop in which the persisted refundAddress
-   * is for the OLD fromAsset's network — a refund to that address
+   * is for the OLD fromAsset's network: a refund to that address
    * routes funds to oblivion. Cleared on user edit, compared on
    * mount; mismatch nukes refundAddress so it re-fills fresh.
    * Pre-2026-06-13 the autofill was mount-only with no re-trigger.
@@ -326,7 +326,7 @@ export function SwapTab(props: SwapTabProps) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <SwapHeader />
-        {/* Recent swaps surface — surfaces any swap whose wizard
+        {/* Recent swaps surface: surfaces any swap whose wizard
             state was destroyed but whose backend row is still
             non-terminal (or recently completed). The user can
             re-enter the StatusStep from here. Pre-2026-06-13 the
@@ -362,7 +362,7 @@ export function SwapTab(props: SwapTabProps) {
   const trocadorCard = PROVIDERS.find((p) => p.id === 'trocador')!;
   // Step-aware cancel. When the wizard already holds a real Trocador
   // trade (step ≥ 2 and a non-terminal inFlight), destroying the
-  // wizard state strands the user — no recovery surface for the
+  // wizard state strands the user: no recovery surface for the
   // trade_id, no breadcrumb back to the deposit address. Confirm
   // before deleting, and tell the user the swap still continues at
   // the provider. The Recent-swaps surface (when wired) will
@@ -375,7 +375,7 @@ export function SwapTab(props: SwapTabProps) {
   const cancel = () => {
     if (stepFromFields >= 2 && inFlight && inFlightNonTerminal) {
       // window.confirm in a popup is jank but it's available and
-      // blocks the click — adequate for v0.3.0 ship. A future fix
+      // blocks the click: adequate for v0.3.0 ship. A future fix
       // can drop in an in-tree modal that matches the wallet's
       // visual language.
       const ok = window.confirm(
@@ -444,7 +444,7 @@ function RecentSwaps({
     };
   }, [onList]);
   if (err) {
-    // Don't block the provider list on a backend hiccup — silently
+    // Don't block the provider list on a backend hiccup: silently
     // hide the section and log. The user can still create a fresh
     // swap; the resume affordance is best-effort.
     console.warn('[swap] RecentSwaps fetch failed', err);
@@ -609,7 +609,7 @@ function ProviderRow({
         </div>
       )}
       {/* Support contacts deliberately NOT rendered on the entry-point
-          card — pre-quote is the wrong moment to surface "where to
+          card: pre-quote is the wrong moment to surface "where to
           file a complaint." StatusStep does the heavy lift on
           failed/refunded states where the contacts are actually
           actionable, with the trade_id in hand. */}
@@ -757,7 +757,7 @@ function TrocadorWizard(props: TrocadorWizardProps) {
             // "Send to deposit address" view as if nothing happened. If
             // they bail on the Send wizard the status page just shows
             // "waiting for deposit" until Trocador's quote-validity
-            // window expires — same terminal we already handle.
+            // window expires: same terminal we already handle.
             props.onOpenSend(fields.inFlight!);
             setStep(3);
           }}
@@ -771,7 +771,7 @@ function TrocadorWizard(props: TrocadorWizardProps) {
           provider={props.provider}
           {...(props.onFetchStatus ? { onFetchStatus: props.onFetchStatus } : {})}
           onUpdate={(next) => {
-            // Merge — `next` from the direct-Trocador fallback path
+            // Merge: `next` from the direct-Trocador fallback path
             // carries empty fromAsset/toAsset/etc. (Trocador's /trade
             // response doesn't echo them in a stable shape). Without
             // merging, the empty strings overwrite the persisted
@@ -1020,7 +1020,7 @@ function QuoteStep({
   resolveAddress?: (assetId: string) => string | null;
   validateAddress?: (assetId: string, address: string) => string | null;
   onPatch: (p: Partial<TrocadorFields>) => void;
-  /** Called when the user wants a fresh quote — either explicitly via
+  /** Called when the user wants a fresh quote: either explicitly via
    *  the "Quote expired — re-quote" CTA or implicitly when the wizard
    *  needs to bounce back to step 0. Consumer clears `quote` and
    *  resets step so PairStep can re-fetch. */
@@ -1036,7 +1036,7 @@ function QuoteStep({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 1Hz tick so the "Quote valid for Ns" countdown actually ticks.
-  // The countdown was computed at render time only — nothing else
+  // The countdown was computed at render time only: nothing else
   // triggers re-renders on this step, so it sat frozen at whatever
   // it was when the user arrived. useState + setInterval is the
   // minimum-overhead way to force a re-render every second.
@@ -1049,7 +1049,7 @@ function QuoteStep({
   const expired = secondsLeft === 0;
 
   // Wallet-owned addresses for the from / to assets. Used to
-  // pre-fill the refund (almost always the user's own address —
+  // pre-fill the refund (almost always the user's own address;
   // there's rarely a separate refund channel) and to surface a
   // one-tap "use my address" on the receive input.
   const myFromAddress = resolveAddress?.(quote.fromAsset) ?? null;
@@ -1061,19 +1061,19 @@ function QuoteStep({
   // auto-filled for a DIFFERENT from-asset. Case (b) is the silent
   // funds-loss bug pre-2026-06-13: the user reached QuoteStep with
   // fromAsset=BTC (BTC address auto-fills), back-navigated to
-  // PairStep, changed fromAsset to XMR, re-quoted — and the stale
+  // PairStep, changed fromAsset to XMR, re-quoted, and the stale
   // BTC refund address survived because the original effect only
   // fired once per mount with an empty-check that the persisted
   // value defeated. On a refund event the provider would then send
   // XMR to a BTC address. We rebind the autofill to `quote.fromAsset`
   // and track which asset the autofill was sourced for. The user can
-  // still type a custom value freely — `refundAddressAutoFilledFor`
+  // still type a custom value freely: `refundAddressAutoFilledFor`
   // gets cleared when they edit so the rebind doesn't stomp their
   // explicit choice.
   useEffect(() => {
     if (myFromAddress && refundAddressAutoFilledFor !== quote.fromAsset) {
       // Either no autofill has happened yet, or it was for a previous
-      // from-asset — refresh.
+      // from-asset: refresh.
       if (
         !refundAddress ||
         (refundAddressAutoFilledFor &&
@@ -1106,7 +1106,7 @@ function QuoteStep({
     // the to-asset network or the user is sending funds to a place
     // they can't receive at; the refund address must match the
     // from-asset network or any refund event is irrecoverable. Pre-
-    // 2026-06-13 the QuoteStep did neither check — the SendWizard
+    // 2026-06-13 the QuoteStep did neither check: the SendWizard
     // had `validateAddress` but the swap surface ignored it.
     if (validateAddress) {
       const toErr = validateAddress(quote.toAsset, trimmedTo);
@@ -1121,7 +1121,7 @@ function QuoteStep({
       }
     }
     // Last-second expiry check between the click and the network
-    // round-trip — a `setBusy(true)` race could otherwise let an
+    // round-trip: a `setBusy(true)` race could otherwise let an
     // expired quote through and the wizard advances to DepositStep
     // with a stale rate. Trocador is the server-side authority but
     // the wallet should refuse to call /new_trade with what it
@@ -1228,7 +1228,7 @@ function QuoteStep({
           onInput={(e) =>
             onPatch({
               refundAddress: (e.target as HTMLInputElement).value,
-              // User edited — drop the autofill provenance so the
+              // User edited: drop the autofill provenance so the
               // mount effect doesn't stomp their explicit choice on
               // the next re-quote.
               refundAddressAutoFilledFor: undefined,
@@ -1254,7 +1254,7 @@ function QuoteStep({
         When the quote has expired, the CTA flips to "Quote expired
         — re-quote" and routes to the parent's re-quote handler
         (clears quote + step=0). Pre-2026-06-13 the expired button
-        kept its `onClick=handleConfirm` and stayed disabled — the
+        kept its `onClick=handleConfirm` and stayed disabled: the
         label promised an action and the button refused. The
         chevron back-arrow in the header was the only escape and
         users didn't read it as "restart the quote".
@@ -1321,7 +1321,7 @@ function DepositStep({
             /new_trade. A user who hands off to Send, closes the
             popup, and broadcasts hours later may land at a stale
             trade that the provider refuses to honor at the quoted
-            rate — refund flow at best, off-quote forced fill at
+            rate: refund flow at best, off-quote forced fill at
             worst. The warning is generic because Trocador doesn't
             return an explicit deposit_window field. */}
         <div
@@ -1371,7 +1371,7 @@ function StatusStep({
   onReset,
 }: {
   swap: SwapInFlight;
-  /** The active provider's card — used to pull support contacts +
+  /** The active provider's card: used to pull support contacts +
    *  public trade URL into the status display. */
   provider: ProviderCard;
   onFetchStatus?: (id: string) => Promise<SwapInFlight>;
@@ -1381,7 +1381,7 @@ function StatusStep({
   // Ref-based polling so the interval doesn't restart on every
   // parent render. Pre-2026-06-13 the effect deps included
   // `onUpdate` and `onFetchStatus`, both inline closures recreated
-  // on each TrocadorWizard render — sibling state changes (balance
+  // on each TrocadorWizard render: sibling state changes (balance
   // refresh, theme apply) tore down the 10s timer and started a
   // fresh one, perpetually delaying the first poll. Reading the
   // latest callbacks from refs lets the timer survive renders and
@@ -1405,7 +1405,7 @@ function StatusStep({
         const next = await fetcher(swap.id);
         if (alive) onUpdateRef.current(next);
       } catch {
-        // Transient — retry next tick.
+        // Transient: retry next tick.
       }
     };
     const handle = window.setInterval(() => void tick(), 10_000);
@@ -1418,7 +1418,7 @@ function StatusStep({
   const from = mustGetAsset(swap.fromAsset);
   const to = mustGetAsset(swap.toAsset);
   const terminal = swap.state.state !== 'pending';
-  // "Bad outcome" — refund or failure. Stack Wallet's support data
+  // "Bad outcome": refund or failure. Stack Wallet's support data
   // says ~95% of swap support tickets come from these states; surface
   // the provider's channels prominently so the user's next step is
   // obvious and we're not in the middle of it.
@@ -1476,7 +1476,7 @@ function StatusStep({
         </Row>
       </div>
 
-      {/* Provider support panel — shown prominently on failed/refunded
+      {/* Provider support panel: shown prominently on failed/refunded
           states, and as a compact footer otherwise. Reaching the
           provider with the trade_id in hand is the single most useful
           thing the user can do when a swap goes sideways. */}
@@ -1543,7 +1543,7 @@ function StatusStep({
 }
 
 /** Defensive parse of an atomic-units string into BigInt. Returns
- *  null when the input doesn't parse — most commonly when a
+ *  null when the input doesn't parse: most commonly when a
  *  decimal-string slipped past a backend/SDK boundary that was
  *  supposed to do the decimal→atomic conversion. Pre-2026-06-13 a
  *  bare BigInt() call here would throw on Trocador's "0.025…"
@@ -1577,7 +1577,7 @@ function statusLabel(state: SwapInFlight['state'], toAssetId: string): string {
       // `state.toAmount` is an atomic-units string from the
       // underlying Trocador response; format with the to-asset's
       // decimals so the user sees "0.0139 LTC" instead of
-      // "139900946". Defensive parse — a decimal-string here used
+      // "139900946". Defensive parse: a decimal-string here used
       // to white-screen the wizard before the 2026-06-13 backend
       // decimal→atomic conversion fix.
       const parsed = safeAtomicBigInt(state.toAmount, 'completed.toAmount');
@@ -1640,7 +1640,7 @@ function addrLabelRowStyle(): preact.JSX.CSSProperties {
   };
 }
 
-/** Subtle accent-colored text button — used for "Use my address"
+/** Subtle accent-colored text button: used for "Use my address"
  *  affordances. Quiet enough not to fight the primary CTA but
  *  obvious enough that the user notices the shortcut exists. */
 function inlineLinkBtn(): preact.JSX.CSSProperties {

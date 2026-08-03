@@ -74,7 +74,7 @@ pub use grin::{
     grin_finalize_send_slate, grin_identify_output, grin_random_secret_nonce,
     grin_sign_incoming_send_slate, grin_sign_invoice, grin_slate_v4_from_bin_hex,
     grin_slate_v4_to_bin_hex,
-    // Voucher tx — non-interactive UTXO transfer for social tipping.
+    // Voucher tx: non-interactive UTXO transfer for social tipping.
     grin_create_grin_voucher, grin_sweep_grin_voucher,
 };
 pub use keys::derive_key_image;

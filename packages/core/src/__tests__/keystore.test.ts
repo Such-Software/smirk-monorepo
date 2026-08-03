@@ -2,7 +2,7 @@
  * Keystore tests: round-trip encrypt/decrypt, wrong-password rejection,
  * fingerprint stability, address derivation, state-machine transitions.
  *
- * These tests use a fixed BIP39 mnemonic (the Trezor test vector — public
+ * These tests use a fixed BIP39 mnemonic (the Trezor test vector: public
  * value, no real funds) plus a low PBKDF2 iteration count so the test
  * suite stays fast. Production uses 600_000 iterations; the iteration
  * count is configurable on `createKeystore` so we can drop it for tests.

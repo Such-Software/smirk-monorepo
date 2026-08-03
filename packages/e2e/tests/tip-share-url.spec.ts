@@ -1,7 +1,7 @@
 import { test, expect } from '../fixtures/extension.js';
 
 /**
- * Feature: tips — create a social-tip draft and surface the shareable claim URL.
+ * Feature: tips. Create a social-tip draft and surface the shareable claim URL.
  *
  * Drives the REAL TipMaker UI (packages/ui/src/components/TipMaker.tsx) end to
  * end: import alice → Home → Tip → compose a PUBLIC BTC tip → submit → assert
@@ -10,12 +10,12 @@ import { test, expect } from '../fixtures/extension.js';
  *
  * Why BTC + public:
  *   - "Public" (the `tip-public-toggle`) is what makes the flow mint a share
- *     URL at all — targeted tips notify the recipient via the bot and never
+ *     URL at all; targeted tips notify the recipient via the bot and never
  *     surface a link (dispatchSocialTip → shareUrl:null for !isPublic).
  *   - BTC/LTC are 0-conf, so `dispatchSocialTip` (extension/src/popup/tip-handler.ts)
  *     returns `shareUrlPending:false` and the URL is live immediately. XMR/WOW/
  *     Grin return `shareUrlPending:true` and would only render the
- *     "waiting for funding to confirm" state, not the URL — a weaker assertion.
+ *     "waiting for funding to confirm" state, not the URL: a weaker assertion.
  *
  * Determinism: the two-phase create (POST /tips/social) + attach-funding
  * (POST /tips/social/<id>/attach-funding) and the on-chain funding broadcast
@@ -25,8 +25,8 @@ import { test, expect } from '../fixtures/extension.js';
  * the locally-generated URL-fragment key (tip-handler.ts::buildShareUrl), so
  * stubbing the backend still exercises the real URL-composition + success UI.
  *
- * The wallet's own BTC balance is NOT stubbed — it comes from the funded alice
- * wallet via the backend — because TipMaker's client-side "Insufficient
+ * The wallet's own BTC balance is NOT stubbed (it comes from the funded alice
+ * wallet via the backend) because TipMaker's client-side "Insufficient
  * balance" gate compares the typed amount against session balance. A tiny
  * amount (2000 sat) keeps us well inside the funded wallet's BTC.
  */
@@ -37,12 +37,12 @@ const PASSWORD = 'e2e-test-password-123';
 // Deterministic stand-ins the stubbed backend hands back.
 const TIP_ID = '11111111-2222-4333-8444-555555555555';
 // A plausible confirmed UTXO on alice's BTC address. Segwit (P2WPKH) signing
-// only needs txid/vout/value — no prev-tx — so a fabricated outpoint signs
+// only needs txid/vout/value (no prev-tx), so a fabricated outpoint signs
 // fine and lets the funding tx build without a live node.
 const FAKE_UTXO = {
   txid: 'a'.repeat(64),
   vout: 0,
-  value: 200_000, // 0.002 BTC — dwarfs the 2000-sat tip + fee
+  value: 200_000, // 0.002 BTC: dwarfs the 2000-sat tip + fee
   height: 800_000,
 };
 const FAKE_BROADCAST_TXID = 'b'.repeat(64);
@@ -155,7 +155,7 @@ test('public BTC tip → success screen surfaces the shareable claim URL', async
 
   // Public tip: on a public-only backend the composer already defaults to a
   // public share-URL tip (the targeted toggle is hidden, since the backend can't
-  // serve targeted tips), so there's nothing to flip — the flow mints a share URL
+  // serve targeted tips), so there's nothing to flip: the flow mints a share URL
   // and drops the recipient input out of the box.
 
   // Force the funding asset to BTC so the URL is live immediately
@@ -177,7 +177,7 @@ test('public BTC tip → success screen surfaces the shareable claim URL', async
 
   const shareUrl = page.getByTestId('tip-share-url');
   await expect(shareUrl).toBeVisible();
-  // URL shape: https://smirk.cash/tip/<tipId>#<urlFragmentKey> — the tip_id is
+  // URL shape: https://smirk.cash/tip/<tipId>#<urlFragmentKey>; the tip_id is
   // the backend's, the fragment is the client-minted claim key.
   await expect(shareUrl).toContainText(`smirk.cash/tip/${TIP_ID}`);
   await expect(shareUrl).toContainText('#');

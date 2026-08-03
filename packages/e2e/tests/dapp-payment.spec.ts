@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * Dapp payment popup e2e — the exact flow the "Cannot convert 9.0000 to a BigInt" bug
+ * Dapp payment popup e2e: the exact flow the "Cannot convert 9.0000 to a BigInt" bug
  * slipped through (there was NO test that drove the payment approval popup).
  *
  * A dummy shop calls `window.smirk.requestPayment` with a HUMAN decimal amount ("9"
@@ -99,13 +99,13 @@ test('dapp payment popup shows the human amount (decimal->atomic, no BigInt cras
     await approval.getByRole('button', { name: 'Unlock' }).click();
   }
 
-  // 6. The confirmation shows the HUMAN amount, converted — never "9.0000 (atomic units)"
+  // 6. The confirmation shows the HUMAN amount, converted: never "9.0000 (atomic units)"
   //    and never the BigInt crash.
   await expect(approval.locator('body')).toContainText('9 WOW', { timeout: 20_000 });
   await expect(approval.locator('body')).not.toContainText('atomic units');
   await expect(approval.locator('body')).not.toContainText('Cannot convert');
   footage.mark('dapp-approval-shown', 'in-page payment request rendered with human amount');
 
-  // 7. Deny (a real WOW broadcast needs funds/node — out of scope for this popup test).
+  // 7. Deny (a real WOW broadcast needs funds/node, out of scope for this popup test).
   await approval.getByRole('button', { name: 'Deny' }).click();
 });

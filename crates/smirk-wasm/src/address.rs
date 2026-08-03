@@ -48,7 +48,7 @@ fn validate_wownero_address(address: &str) -> Result<AddressInfo, String> {
     //
     // TODO: Wownero testnet validation. Wownero shares the standard prefix
     // (4146) between mainnet and testnet, so prefix alone can't
-    // disambiguate — would need a leading-character or version-byte
+    // disambiguate; would need a leading-character or version-byte
     // check. Until we have testnet support in the wallet, mainnet-only
     // is acceptable.
     let (network, is_subaddress, has_payment_id) = match prefix {

@@ -1,10 +1,10 @@
 /**
- * App-scoped e2ee encryption key (X25519) — the dapp e2ee primitive.
+ * App-scoped e2ee encryption key (X25519): the dapp e2ee primitive.
  *
  * A deterministic, seed-derived X25519 keypair a dapp can use for server-can't-read
  * storage, WITHOUT the seed (or the private key) ever leaving the wallet. Distinct
- * from the Nostr identity (secp256k1/schnorr) — a separate curve on a separate,
- * disjoint HD path — so rotating the npub never orphans encrypted data.
+ * from the Nostr identity (secp256k1/schnorr), a separate curve on a separate,
+ * disjoint HD path, so rotating the npub never orphans encrypted data.
  *
  * Asymmetric X25519 rather than the symmetric `encryptStorage`: writes are offline
  * (seal to the pubkey, no wallet call), reads are one `appSealOpen` per session, and
@@ -25,7 +25,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { mnemonicToSeed } from '../hd';
 
 /**
- * BIP-85 purpose (`83696'`) + app-encryption segment (`3'`) — disjoint from the
+ * BIP-85 purpose (`83696'`) + app-encryption segment (`3'`): disjoint from the
  * wallet chains (`44'`/`84'`), the Nostr identity (`44'/1237'`), and the reserved
  * storage(`1'`)/login(`2'`) segments. A leaked app xpub cannot walk siblings; app
  * keys are mutually unlinkable and unlinkable to identity (all segments hardened).
@@ -39,7 +39,7 @@ export const APP_ENC_SCHEME = 'x25519-sealedbox' as const;
 
 /** A seed-derived, app-scoped X25519 keypair. The private key stays in core. */
 export interface AppEncryptionKey {
-  /** X25519 public key, 32-byte hex — what a dapp seals to. */
+  /** X25519 public key, 32-byte hex: what a dapp seals to. */
   publicKeyHex: string;
   /** X25519 secret key (32 bytes). Never crosses a wire; opens sealed boxes. */
   privateKey: Uint8Array;
@@ -89,7 +89,7 @@ export function appEncPath(domainScope: string, context = ''): string {
  * Deterministic across devices/reinstalls from the seed; independent of Nostr
  * identity rotation; recoverable (re-derived on demand, nothing stored maps
  * origin → key). `domainScope` is the wallet-verified origin (or a user-confirmed
- * federation root) — the HANDLER supplies it; never a page-supplied string.
+ * federation root); the HANDLER supplies it, never a page-supplied string.
  */
 export function deriveAppEncryptionKey(
   mnemonic: string,
@@ -140,7 +140,7 @@ function cryptoBoxBeforenm(shared: Uint8Array): Uint8Array {
 }
 
 /**
- * Open a libsodium `crypto_box_seal` given the recipient's X25519 secret key —
+ * Open a libsodium `crypto_box_seal` given the recipient's X25519 secret key:
  * the pure primitive, no derivation. Byte-exact with libsodium (KAT'd in
  * `app-enc-seal.test.ts`); throws on a bad tag (wrong key / tampered box).
  *
@@ -163,7 +163,7 @@ export function sealOpen(recipientSecretKey: Uint8Array, sealed: Uint8Array): Ui
 }
 
 /**
- * Open a libsodium `crypto_box_seal` addressed to the app-scoped key — the read
+ * Open a libsodium `crypto_box_seal` addressed to the app-scoped key: the read
  * side of the dapp envelope. Re-derives the key from the seed (the private key
  * never leaves the wallet), then opens. `sealed` is the raw envelope bytes; the
  * dapp-api transport layer owns base64/hex framing. Returns the raw plaintext

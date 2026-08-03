@@ -1,23 +1,23 @@
 /**
- * OnboardingWizard — first-run flow: create or import a wallet.
+ * OnboardingWizard, first-run flow: create or import a wallet.
  *
  * Steps:
  *   0. Welcome:    Create new | Import existing
- *   1a (create).   Show generated mnemonic — user writes it down
- *   1b (import).   Warning screen — Smirk only restores Smirk-created seeds
- *   1b'.           12 numbered word boxes — paste-fills all at once
+ *   1a (create).   Show generated mnemonic: user writes it down
+ *   1b (import).   Warning screen: Smirk only restores Smirk-created seeds
+ *   1b'.           12 numbered word boxes: paste-fills all at once
  *   2 (create).    Verify by re-entering N random words
  *   3.             Set password (twice)
  *   4.             onComplete(mnemonic, password) seals the keystore
- *   5 (optional).  Set up Smirk — handle reservation + privacy toggle
- *   6.             onFullyDone — caller refreshes wallet state, shows Home
+ *   5 (optional).  Set up Smirk: handle reservation + privacy toggle
+ *   6.             onFullyDone: caller refreshes wallet state, shows Home
  *
  * The setup step (5) only renders if the caller wires `reserveSmirkName`
  * AND/OR `setInjectEnabled`. Existing callers that don't pass these
  * skip straight from 4 to 6 with no behavior change.
  *
  * In-progress mnemonic state lives in `useState` only. NOT persisted via
- * `useWizard` — that would write the unencrypted mnemonic to
+ * `useWizard`: that would write the unencrypted mnemonic to
  * `chrome.storage.session`, the legacy pattern flagged in the
  * 2026-05-10 audit. Closing the popup mid-flow drops the half-generated
  * seed; the user re-does onboarding. UX cost we accept.
@@ -31,7 +31,7 @@ import { BackendPicker, type BackendProbeInfo } from './BackendPicker';
 /**
  * One linked third-party social (Telegram, Discord, Matrix, …).
  * Mirrors `LinkedSocialAccount` from `@smirk/core` so we don't
- * import that here — keeps `@smirk/ui` API-free. Caller projects
+ * import that here: keeps `@smirk/ui` API-free. Caller projects
  * the backend response into this shape.
  */
 export interface ExistingSocial {
@@ -63,7 +63,7 @@ export interface OnboardingWizardProps {
   /**
    * Persist the wallet AND bootstrap (auth + token) so the optional
    * setup step has a JWT for backend calls. Caller wires this to
-   * `walletKeystore.createWallet` + `bootstrapAuth`. May throw —
+   * `walletKeystore.createWallet` + `bootstrapAuth`. May throw:
    * the wizard surfaces the error and lets the user retry the password.
    *
    * `gate` carries a registration-gate credential when the backend requires one
@@ -95,19 +95,19 @@ export interface OnboardingWizardProps {
    * Reserve a Smirk @handle. If omitted, the handle row in the
    * setup step doesn't render. The caller is expected to have a
    * valid auth token before the setup step runs (i.e., onComplete
-   * also bootstraps). Should throw with a user-friendly message
-   * — the wizard surfaces it inline and keeps the field editable.
+   * also bootstraps). Should throw with a user-friendly message:
+   * the wizard surfaces it inline and keeps the field editable.
    */
   reserveSmirkName?: (handle: string) => Promise<void>;
   /**
    * Identity the imported wallet already owns on the backend (Smirk
    * handle + linked third-party socials). Set when the caller's
-   * `onComplete` resolves a prior identity — typical on import to a
+   * `onComplete` resolves a prior identity, typical on import to a
    * fresh device. The setup step renders a "Welcome back" panel
    * summarising what carries over instead of the reserve-handle
    * prompt. Omit on create or when both lookups returned empty.
    *
-   * `linkedSocials` is treated as opaque rows by the wizard — caller
+   * `linkedSocials` is treated as opaque rows by the wizard: caller
    * passes whatever platforms the backend reports, including future
    * ones (Matrix, Bluesky, etc.) without a wizard update.
    */
@@ -123,7 +123,7 @@ export interface OnboardingWizardProps {
   /**
    * URL the consumer serves the "doge mining" animated WebP from.
    * Drawn during the PoW solve in the submitting step. Falls back
-   * to a bouncing 🐕 emoji when omitted — for hosts that don't ship
+   * to a bouncing 🐕 emoji when omitted, for hosts that don't ship
    * the asset (tests, Storybook).
    *
    * Why a URL prop rather than a bundled import: `@smirk/ui` stays
@@ -161,7 +161,7 @@ export interface OnboardingWizardProps {
    * successful capabilities read). When explicitly `false`, the wizard refuses to
    * proceed past the password step: it must NOT fall back to the `free` path and
    * commit a durable keystore on a gated backend whose gate it simply hasn't
-   * learned yet — that bricks onboarding. Omitted/undefined preserves the
+   * learned yet; that bricks onboarding. Omitted/undefined preserves the
    * legacy behavior for hosts that don't gate on capabilities.
    */
   registrationResolved?: boolean;
@@ -188,7 +188,7 @@ export interface OnboardingWizardProps {
    * wallet bypasses every gate server-side, so when this resolves true the wizard
    * skips the gate step entirely (a re-import has no invite code and needs no
    * payment). Only consulted when a gate is present. Failures are treated as
-   * "new" (the gate applies) — the backend is the safety net either way.
+   * "new" (the gate applies); the backend is the safety net either way.
    */
   isReturningWallet?: (mnemonic: string) => Promise<boolean>;
   class?: string;
@@ -264,13 +264,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
 
   // The setup step renders only when the caller wired at least one
   // post-create action. Old callers that didn't pass either callback
-  // skip straight to 'done' — no UI change for them.
+  // skip straight to 'done': no UI change for them.
   const hasSetupStep = Boolean(props.reserveSmirkName ?? props.setInjectEnabled);
 
   const finishSetup = async () => {
     setStep({ kind: 'done' });
     // Defer to the next tick so the "Wallet ready." status renders
-    // briefly before the parent un-renders us — avoids a flash of
+    // briefly before the parent un-renders us: avoids a flash of
     // empty space if the parent refresh is synchronous.
     setTimeout(() => {
       void props.onFullyDone?.();
@@ -306,7 +306,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // absent policy) registers immediately; a gate routes to its step first.
   const handleSubmit = async (mnemonic: string, password: string, isImport: boolean) => {
     // Fail closed: when the caller gates on a capabilities read that has NOT
-    // resolved, do not default to the free path — a gated backend would get a
+    // resolved, do not default to the free path: a gated backend would get a
     // committed keystore that can never finish registering. Make the user retry
     // instead of bricking the wallet. `undefined` keeps the legacy behavior.
     if (props.registrationResolved === false) {
@@ -737,7 +737,7 @@ function VerifyMnemonic({
  * fills only that box.
  *
  * Smirk only generates 12-word phrases, so we don't accept 24-word
- * imports — keeping the surface tight on what the wallet actually
+ * imports: keeping the surface tight on what the wallet actually
  * produces.
  */
 const IMPORT_WORD_COUNT = 12;
@@ -1036,7 +1036,7 @@ function SmirkSetup({
   >({ kind: 'idle' });
   // Default ON to match the inject-policy default (closes the
   // fingerprinting issue's short-term ask while preserving dapp
-  // interop out of the box — see background/dapp/inject-policy.ts).
+  // interop out of the box; see background/dapp/inject-policy.ts).
   const [injectEnabled, setInjectEnabledState] = useState(true);
 
   // Client-side handle validation mirrors the backend rules
@@ -1066,7 +1066,7 @@ function SmirkSetup({
 
   const submitAndContinue = async () => {
     // Always persist the inject choice (default ON unchanged is
-    // still a write — keeps the storage value in sync with what
+    // still a write: keeps the storage value in sync with what
     // the user just saw).
     if (setInjectEnabled) {
       try {
@@ -1259,7 +1259,7 @@ function SmirkSetup({
  *
  * The linked-socials list is rendered generically: one row per
  * platform with a small platform-tag and the username. No per-
- * platform special-casing — adding a new platform (Matrix, Bluesky,
+ * platform special-casing: adding a new platform (Matrix, Bluesky,
  * etc.) is a backend ship with zero UI changes here.
  */
 function WelcomeBackPanel({ identity }: { identity: ExistingIdentity }) {
@@ -1316,7 +1316,7 @@ function WelcomeBackPanel({ identity }: { identity: ExistingIdentity }) {
 
 function LinkedSocialRow({ social }: { social: ExistingSocial }) {
   // Show the platform name in title-case, the username, and a small
-  // verified/pending badge. No platform-specific glyphs — the wallet
+  // verified/pending badge. No platform-specific glyphs: the wallet
   // doesn't bundle social-network logos and the row stays compact.
   const label =
     social.platform.length > 0
@@ -1524,7 +1524,7 @@ function PaymentStep({
         const inv = await begin();
         if (cancelled) return;
         // Returning wallet: the backend bypassed the gate and `begin` already
-        // completed registration — finish without showing a pay screen.
+        // completed registration; finish without showing a pay screen.
         if ('alreadyRegistered' in inv) {
           setStatus('settled');
           onDone();
@@ -1563,7 +1563,7 @@ function PaymentStep({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      /* clipboard blocked — the text is selectable regardless */
+      /* clipboard blocked: the text is selectable regardless */
     }
   };
 
@@ -1716,7 +1716,7 @@ function FullPageStatus({ children }: { children: ComponentChildren }) {
 }
 
 /**
- * `PowSubmittingStatus` — what the user stares at while
+ * `PowSubmittingStatus`: what the user stares at while
  * `props.onComplete` does its three things:
  *   1. Encrypts the seed under the user's password
  *   2. Solves the ALTCHA proof-of-work challenge the backend issues
@@ -1725,7 +1725,7 @@ function FullPageStatus({ children }: { children: ComponentChildren }) {
  *
  * Renders a bouncing doge with doge-meme phrases cycling underneath.
  * The fact that PBKDF2 is *actually* compute-bound makes the dancing
- * doge legitimate — the page isn't pretending to work; it really is
+ * doge legitimate: the page isn't pretending to work; it really is
  * grinding hashes. Better than a static "Loading…" both for honesty
  * and for telling people what proof-of-work even is.
  *
@@ -1754,7 +1754,7 @@ function PowSubmittingStatus({ dogeImageUrl }: { dogeImageUrl?: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Doge-meme palette — these are the canonical comic-sans-rainbow
+  // Doge-meme palette: these are the canonical comic-sans-rainbow
   // colours the meme uses. One per phrase, cycling with the same
   // index so each new phrase gets its own colour.
   const palette = [
@@ -1889,7 +1889,7 @@ const bodyTextStyle = {
  * Pick `count` distinct random indices in `[0, total)`. Used to choose
  * which words to ask the user to retype during seed verification.
  *
- * `Math.random` is fine here — these positions get shown to the user;
+ * `Math.random` is fine here: these positions get shown to the user;
  * they are *not* key material.
  */
 function pickRandomIndices(total: number, count: number): number[] {

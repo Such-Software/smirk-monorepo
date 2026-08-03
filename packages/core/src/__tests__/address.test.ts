@@ -1,8 +1,8 @@
 /**
  * Address-validator regression tests.
  *
- * Covers the validators added in 2026-05-10 audit fix M3 — XMR, WOW,
- * Grin slatepack — plus the existing BTC/LTC ones for completeness.
+ * Covers the validators added in 2026-05-10 audit fix M3 (XMR, WOW,
+ * Grin slatepack) plus the existing BTC/LTC ones for completeness.
  *
  * Test vectors:
  *  - The XMR / WOW vectors are obtained by encoding random 32-byte
@@ -97,7 +97,7 @@ test('isValidGrinSlatepackAddress: round-trips a self-encoded address', () => {
 });
 
 test('isValidGrinSlatepackAddress: rejects bech32 with non-grin hrp', () => {
-  // A valid bech32 with a different hrp must not pass — even if the
+  // A valid bech32 with a different hrp must not pass, even if the
   // payload length matches.
   assert.equal(
     isValidGrinSlatepackAddress(
@@ -123,7 +123,7 @@ test('cross-asset rejection — each validator only accepts its own family', () 
   const wow = wowAddress(SPEND, VIEW);
   const grin = grinSlatpackAddress(fixedBytes(5));
 
-  // BTC bech32 (synthesized — must round-trip via @scure/base if needed
+  // BTC bech32 (synthesized: must round-trip via @scure/base if needed
   // to test BTC, but for this matrix it's enough to confirm the
   // Cryptonote / Grin validators reject obvious BTC strings).
   const btcLike = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq';
@@ -154,7 +154,7 @@ test('cross-asset rejection — each validator only accepts its own family', () 
 // ============================================================================
 //
 // Reference vectors generated from the vendored monero-oxide `ViewPair`
-// (crates/monero-oxide/.../wallet/src/view_pair.rs `subaddress`) — the same
+// (crates/monero-oxide/.../wallet/src/view_pair.rs `subaddress`), the same
 // library the wallet trusts for signing. Emitter (run once, then reverted):
 //   let spend = curve25519_dalek::Scalar::from_bytes_mod_order([9u8; 32]);
 //   let view  = curve25519_dalek::Scalar::from_bytes_mod_order([7u8; 32]);

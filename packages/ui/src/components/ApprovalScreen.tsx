@@ -1,5 +1,5 @@
 /**
- * ApprovalScreen — the wallet-side UI for every dapp prompt.
+ * ApprovalScreen: the wallet-side UI for every dapp prompt.
  *
  * Single component, switches on `request.kind` internally so each
  * platform shell can mount one screen and let it render whatever the
@@ -8,7 +8,7 @@
  *
  * **Trust posture.** Every field we render that came from the page
  * (origin, siteName, favicon, message, address, amount) gets shown
- * as inert text — never injected as HTML, never made interactive.
+ * as inert text: never injected as HTML, never made interactive.
  * The dapp doesn't get to style or animate the prompt. We do
  * surface the origin prominently because the user's mental model for
  * "should I approve this" is rooted in "do I trust this origin", not
@@ -16,7 +16,7 @@
  *
  * **Async approve handler.** The platform shell does the actual work
  * (sign a message, broadcast a payment) AFTER the user clicks
- * Approve — we show a spinner during that work so the user gets
+ * Approve; we show a spinner during that work so the user gets
  * feedback when crypto / network calls take a moment. If the
  * handler throws, we surface the error and let the user retry or
  * deny.
@@ -27,7 +27,7 @@ import type { ComponentChildren } from 'preact';
 import { Button } from './Button';
 
 /** Asset id the dapp protocol exchanges. Mirrors `SmirkAsset` from
- *  `@such-software/smirk-dapp-api` — declared inline so this UI package doesn't
+ *  `@such-software/smirk-dapp-api`: declared inline so this UI package doesn't
  *  reach into the protocol package directly. */
 export type ApprovalAsset = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
 
@@ -38,7 +38,7 @@ export interface ApprovalOrigin {
   favicon?: string;
 }
 
-/** Discriminated request shape — must match `ApprovalRequest` from
+/** Discriminated request shape: must match `ApprovalRequest` from
  *  `@such-software/smirk-dapp-api` so platform shells can pass it through. */
 export type ApprovalRequest =
   | {
@@ -82,7 +82,7 @@ export type ApprovalRequest =
       /** Risk tier of the event kind. `money` shows a strong warning + no session
        *  option; `session-grantable` may offer "remember for this session". */
       tier?: 'money' | 'session-grantable' | 'default';
-      /** True when an active session already covers this kind — auto-approve. */
+      /** True when an active session already covers this kind: auto-approve. */
       sessionCovered?: boolean;
     }
   | {
@@ -90,7 +90,7 @@ export type ApprovalRequest =
       origin: ApprovalOrigin;
       domainScope: string;
       context: string;
-      /** True on the origin's first e2ee use — shows the disclosure and asks
+      /** True on the origin's first e2ee use: shows the disclosure and asks
        *  for a click. False = re-derive under an existing grant (auto-approves). */
       firstGrant: boolean;
     }
@@ -118,7 +118,7 @@ export interface ApprovalScreenProps {
   /** Called when the user confirms. For `connect`, the chosen
    *  subset of assets is passed; for everything else the platform
    *  shell already has the request params and does the work
-   *  internally. Resolves when the work is done — the screen
+   *  internally. Resolves when the work is done; the screen
    *  shows a spinner in the meantime. May throw, in which case the
    *  screen surfaces the error and stays open so the user can retry
    *  or deny. */
@@ -129,7 +129,7 @@ export interface ApprovalScreenProps {
   /**
    * Format an atomic-units amount into a display string with the
    * correct decimals/ticker for the asset. Injected so this UI
-   * package doesn't depend on `@smirk/assets`. Optional — falls back
+   * package doesn't depend on `@smirk/assets`. Optional: falls back
    * to "<atomic> (atomic units)" when missing.
    */
   formatAmount?: (asset: string, atomic: string) => string;
@@ -150,7 +150,7 @@ export type ApprovalApproval =
 
 /** Kinds the wallet resolves WITHOUT a fresh user click. `appSealOpen`, a
  *  re-derive `appEncKey` (firstGrant === false), and `nostrCrypt` (NIP-07 DM
- *  encrypt/decrypt) all run under an already-granted scope on low-risk data — a
+ *  encrypt/decrypt) all run under an already-granted scope on low-risk data; a
  *  per-call prompt would be friction with no security value (Goblin's model too:
  *  DM crypto is session-grantable; only money-tier events prompt). The screen
  *  still renders (unlock is enforced upstream); it just self-approves on mount. */
@@ -175,7 +175,7 @@ export function ApprovalScreen({
 }: ApprovalScreenProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // "Remember for this session" toggle — only meaningful for a session-grantable
+  // "Remember for this session" toggle: only meaningful for a session-grantable
   // Nostr signature. Ignored for every other kind (and for money-tier, which the
   // body never offers it for).
   const [grantForSession, setGrantForSession] = useState(false);
@@ -188,7 +188,7 @@ export function ApprovalScreen({
     setError(null);
     try {
       await onApprove(approval);
-      // Caller is responsible for window.close — we don't presume.
+      // Caller is responsible for window.close; we don't presume.
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Operation failed');
       setBusy(false);
@@ -209,7 +209,7 @@ export function ApprovalScreen({
   }, [request]);
 
   return (
-    // Natural-height stack — let content size to its actual size.
+    // Natural-height stack: let content size to its actual size.
     // Earlier this used `minHeight: 100vh` with a `flex:1` spacer to
     // pin actions to the bottom; in the chrome.windows.create popup
     // (640px tall, much taller than the prompt body) the spacer

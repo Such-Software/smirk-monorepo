@@ -1,8 +1,8 @@
 /**
- * `@smirk/core/state` — session state, route persistence, wizard scaffold.
+ * `@smirk/core/state`: session state, route persistence, wizard scaffold.
  *
  * "Session" semantics differ per platform (extension popup-close,
- * mobile backgrounding, desktop window-close) — see
+ * mobile backgrounding, desktop window-close); see
  * [`./session-state.ts`] for the lifetime model.
  *
  * Framework-agnostic. Reactive UI bindings (Preact hooks like

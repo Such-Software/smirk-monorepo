@@ -3,23 +3,23 @@
  *
  * Mirror of `tip-handler.ts` (sender side). The flow:
  *
- *   1. Call `api.claimSocialTip(tipId)` — backend marks the tip as
+ *   1. Call `api.claimSocialTip(tipId)`: backend marks the tip as
  *      'claiming' and returns the sender's `encrypted_key` + the
  *      `tip_address` to sweep.
  *   2. Decrypt `encrypted_key` with the recipient's BTC private key.
- *      Same ECIES scheme `tip-handler.ts` uses to encrypt — BTC
+ *      Same ECIES scheme `tip-handler.ts` uses to encrypt: BTC
  *      pubkey is the universal encryption target across all five
  *      assets, because every Smirk wallet has one. (The recipient
  *      might not even have a balance for the tip's asset yet; the
  *      sweep CREATES the first receive.)
  *   3. Per-asset sweep into the recipient's own wallet address:
- *        BTC/LTC — raw-key P2WPKH sweep via @scure/btc-signer
- *        XMR/WOW — RingCT sweep via WASM, using tip's view+spend
+ *        BTC/LTC:  raw-key P2WPKH sweep via @scure/btc-signer
+ *        XMR/WOW:  RingCT sweep via WASM, using tip's view+spend
  *                  keys to scan + spend the tip-address outputs
- *        Grin    — voucher sweep via WASM (the encrypted payload is
+ *        Grin:     voucher sweep via WASM (the encrypted payload is
  *                  JSON metadata, not a key)
- *   4. `api.confirmTipSweep(tipId, txid)` — transitions the tip from
- *      'claiming' to 'claimed'. Best-effort — if it fails the funds
+ *   4. `api.confirmTipSweep(tipId, txid)`: transitions the tip from
+ *      'claiming' to 'claimed'. Best-effort: if it fails the funds
  *      are already swept; user just sees the tip stuck in 'claiming'.
  *
  * **Why decryption always uses BTC.** See encryption side in
@@ -59,7 +59,7 @@ import { nip05HomeDomain } from './nip05';
 
 /**
  * Unwrap the `{success, data?, error?}` envelope every monero-namespaced
- * wasm function returns. Mirrors `parseWasmResult` in send-handler.ts —
+ * wasm function returns. Mirrors `parseWasmResult` in send-handler.ts:
  * the call boundary type is `string` (JSON), the actual payload lives
  * inside `.data`. Direct `JSON.parse(...).toLowerCase()`-style usage
  * blows up because the parsed value is the envelope object, not the
@@ -90,7 +90,7 @@ export interface ClaimResult {
    *  already know the asset id from the inbox item; this field is a
    *  best-effort echo for parity. */
   assetId?: ClaimAsset;
-  /** Atomic amount swept, in the asset's smallest unit. Optional —
+  /** Atomic amount swept, in the asset's smallest unit. Optional:
    *  set by `claimPublicTip` so the post-claim toast can show what
    *  the user received without a second fetch. */
   amountAtomic?: bigint;
@@ -102,7 +102,7 @@ export interface ClaimError {
 export type ClaimOutcome = ClaimResult | ClaimError;
 
 /**
- * Top-level orchestrator. Wired to InboxTab's onClaimTip callback —
+ * Top-level orchestrator. Wired to InboxTab's onClaimTip callback:
  * one call per "Claim" tap. The popup adapter is responsible for
  * surfacing the error (or refreshing the balance + inbox on success);
  * this function just runs the steps and reports the outcome.
@@ -113,7 +113,7 @@ export async function claimSocialTip(
   tipId: string,
   asset: ClaimAsset,
 ): Promise<ClaimOutcome> {
-  // Step 1: backend claim — returns encrypted_key + tip_address.
+  // Step 1: backend claim returns encrypted_key + tip_address.
   const claim = await api.claimSocialTip(tipId);
   if (claim.error || !claim.data) {
     return { ok: false, error: claim.error ?? 'Backend rejected claim' };
@@ -175,8 +175,8 @@ export async function claimSocialTip(
   // pre-ship audit: 3x exponential backoff so a transient failure
   // doesn't leave the backend stuck at `claiming` while the funds
   // are already moved on-chain. Still don't surface an error on
-  // total failure — the on-chain sweep is the source of truth and
-  // backend reconciliation can happen later — but log so support
+  // total failure (the on-chain sweep is the source of truth and
+  // backend reconciliation can happen later), but log so support
   // can detect the desync if it ever lands in prod. Targeted tips
   // don't race (one recipient), so we ignore the response data.
   void (await confirmSweepWithRetry(tipId, sweep.txid));
@@ -192,7 +192,7 @@ export async function claimSocialTip(
  *
  * Returns the response data on success so callers (specifically the
  * public-tip race detection) can inspect `sweep_txid` for race
- * resolution. Returns `null` on total failure — funds are already
+ * resolution. Returns `null` on total failure: funds are already
  * on-chain at that point; caller should not block on this.
  */
 async function confirmSweepWithRetry(
@@ -219,7 +219,7 @@ async function confirmSweepWithRetry(
       );
     }
   }
-  // All retries exhausted. The on-chain sweep already moved funds —
+  // All retries exhausted. The on-chain sweep already moved funds;
   // backend will reconcile via its own poller or manual cleanup.
   // Surface a console error so support can find it in logs.
   console.error(
@@ -235,13 +235,13 @@ async function confirmSweepWithRetry(
  *
  * Critical bug context: v0.3 originally implemented clawback as a
  * pure backend status flip (`status='clawed_back'`) with NO on-chain
- * sweep. That left the on-chain funds orphaned at the tip address —
+ * sweep. That left the on-chain funds orphaned at the tip address:
  * marked recovered server-side, actually unrecoverable. Mirrors the
  * v0.2.4 logic: decrypt the locally-stored key material with the
  * wallet's BTC key, sweep the tip's on-chain UTXOs / commitments
  * back into the sender's wallet, THEN mark the backend.
  *
- * Reuses the same per-asset sweepers as the recipient claim flow —
+ * Reuses the same per-asset sweepers as the recipient claim flow:
  * for BTC/LTC/XMR/WOW the on-chain action is identical (sweep tip
  * address → wallet), only the destination differs (here = sender,
  * for claim = recipient, but both come from `wallet`).
@@ -256,7 +256,7 @@ async function confirmSweepWithRetry(
  * directing the user to re-import the original seed, since the tip
  * private key is what the backend's `clawback_social_tip` lacks.
  *
- * Note: caller must `removeTipKeyBackup(tipId)` on success — left
+ * Note: caller must `removeTipKeyBackup(tipId)` on success, left
  * to the caller so the UI layer controls the local-state lifecycle.
  */
 export async function clawbackSocialTip(
@@ -264,7 +264,7 @@ export async function clawbackSocialTip(
   userId: string,
   tipId: string,
 ): Promise<ClaimOutcome> {
-  // 1. Look up the local backup. Without it we can't sweep — the
+  // 1. Look up the local backup. Without it we can't sweep: the
   //    backend never stored the per-tip private key.
   const backup = await getTipKeyBackup(tipId);
   if (!backup) {
@@ -276,7 +276,7 @@ export async function clawbackSocialTip(
   }
 
   // 2. Decrypt the stored key material with the wallet's BTC key
-  //    (symmetric — see `tip-key-backup.ts::deriveStorageKey`).
+  //    (symmetric: see `tip-key-backup.ts::deriveStorageKey`).
   let keyMaterial: Uint8Array;
   try {
     keyMaterial = decryptTipKeyBackup(backup, wallet.keys.btc.privateKey);
@@ -326,7 +326,7 @@ export async function clawbackSocialTip(
   if (!sweep.ok) return sweep;
 
   // 4. Best-effort: mark the backend as clawed_back. If this fails
-  //    the funds are already on-chain back in the wallet — the
+  //    the funds are already on-chain back in the wallet: the
   //    failure mode is the row staying as 'pending' server-side;
   //    a subsequent retry of the same clawback would attempt a
   //    re-sweep, see "No UTXOs at tip address", and the user can
@@ -344,7 +344,7 @@ export async function clawbackSocialTip(
 }
 
 /**
- * Claim a public (URL-shared) tip — companion to `claimSocialTip`
+ * Claim a public (URL-shared) tip: companion to `claimSocialTip`
  * for the targeted case. The big differences:
  *
  *   - **Tip discovery** is via `getPublicSocialTip(tipId)` (no auth
@@ -355,7 +355,7 @@ export async function clawbackSocialTip(
  *     The server never sees the fragment key; it lives only in the
  *     URL after `#`.
  *   - **Recipient is the caller**. We sweep to whichever asset the
- *     tip is denominated in on the calling wallet — same `wallet`
+ *     tip is denominated in on the calling wallet: same `wallet`
  *     argument as the targeted flow.
  *
  * Per-asset sweep + post-confirm steps are identical to the
@@ -395,7 +395,7 @@ export async function claimPublicTip(
     return { ok: false, error: 'Tip has no on-chain address' };
   }
 
-  // Step 2: decrypt with the URL fragment key. Symmetric — no
+  // Step 2: decrypt with the URL fragment key. Symmetric: no
   // BTC private-key derivation, just the bytes from after the `#`.
   let decrypted: Uint8Array;
   try {
@@ -411,7 +411,7 @@ export async function claimPublicTip(
   }
 
   // Step 3: claim server-side to flip status pending → claiming.
-  // Returns the same encrypted_key (we already decrypted it) — we
+  // Returns the same encrypted_key (we already decrypted it); we
   // only care that the call succeeds. Same idempotency contract as
   // the targeted flow.
   const claim = await api.claimSocialTip(tipId);
@@ -419,7 +419,7 @@ export async function claimPublicTip(
     return { ok: false, error: claim.error ?? 'Backend rejected claim' };
   }
 
-  // Step 4: per-asset sweep — identical to the targeted flow.
+  // Step 4: per-asset sweep, identical to the targeted flow.
   const asset = t.asset as ClaimAsset;
   let sweep: ClaimOutcome;
   try {
@@ -446,7 +446,7 @@ export async function claimPublicTip(
   if (!sweep.ok) return sweep;
 
   // Step 5: confirm sweep on backend. Best-effort with race detection.
-  // Public tips can have multiple URL-holders racing — the backend
+  // Public tips can have multiple URL-holders racing: the backend
   // records the FIRST sweep_txid to confirm and ignores subsequent
   // calls (first-wins idempotency). If the returned sweep_txid
   // doesn't match ours, we lost the race: our tx is in the mempool
@@ -460,7 +460,7 @@ export async function claimPublicTip(
     // Our own broadcast may still confirm on-chain (mempool race
     // could flip either way), but the backend's view is decided.
     // Per Finding 10 in the v0.3.0 pre-ship audit: the loser's
-    // broadcast is already in the mempool — if it wins the
+    // broadcast is already in the mempool; if it wins the
     // network-level race (RBF, miner preference, our tx happens to
     // be in a more profitable block), the funds STILL arrive in
     // their wallet via the normal balance scan. The backend
@@ -589,7 +589,7 @@ async function sweepUtxo(
   const feeRates = await chainProviders.utxo(asset).estimateFee();
   const tiers = feeRates.data?.model === 'rate-estimate' ? feeRates.data : undefined;
   // Relay-floored, degrading to the shared fallback when the estimate is
-  // unavailable — an at-floor estimate (1.0 sat/vB) would make the sweep tx
+  // unavailable: an at-floor estimate (1.0 sat/vB) would make the sweep tx
   // "rejected by network rules" (same bug that broke tip funding), and a missing
   // estimate must not strand a claimable tip. See resolveFeeRateOrFallback.
   const feeRate = resolveFeeRateOrFallback(tiers?.normal);
@@ -641,7 +641,7 @@ async function sweepUtxo(
 }
 
 // @scure/btc-signer ships NETWORK = bitcoin mainnet. Litecoin needs
-// its own network struct — values from grsbit / litecoin-core.
+// its own network struct: values from grsbit / litecoin-core.
 const LTC_NETWORK = {
   bech32: 'ltc',
   pubKeyHash: 0x30,
@@ -656,14 +656,14 @@ const LTC_NETWORK = {
 /**
  * Sweep a CryptoNote tip. The decrypted payload is the tip's 32-byte
  * private spend key. We derive the matching view key (Smirk
- * convention: view = sha256(spend) — see sender side in
+ * convention: view = sha256(spend); see sender side in
  * `tip-handler.ts::generateXmrWowTipKeys`), scan the tip address
  * for unspent outputs via LWS, then build + sign a RingCT sweep with
  * the WASM signer.
  *
  * Recipient address is the user's own wallet receive address for
  * the asset. The protocol-required 2nd output (RingCT minimum) goes
- * back to the tip address as zero-value padding — fine, the tip
+ * back to the tip address as zero-value padding; fine, the tip
  * address has no further use after this sweep.
  */
 async function sweepXmrWow(
@@ -700,7 +700,7 @@ async function sweepXmrWow(
   }
 
   // Filter out outputs LWS already flags as spent against the tip's
-  // spend key (defensive — a retry of a partial claim could see
+  // spend key (defensive: a retry of a partial claim could see
   // outputs the server has already noticed got spent).
   type Out = (typeof outputs)[number];
   const spendable: Out[] = [];
@@ -730,7 +730,7 @@ async function sweepXmrWow(
     // bug) from "every output was actually spent" (benign retry).
     // Earlier these collapsed into the same misleading "already
     // spent" message even when the actual cause was a wasm-shape
-    // mismatch — wasted debug cycles on a non-existent on-chain
+    // mismatch: wasted debug cycles on a non-existent on-chain
     // issue.
     if (skippedDueToComputeError > 0 && skippedDueToComputeError === outputs.length) {
       return {
@@ -760,7 +760,7 @@ async function sweepXmrWow(
   }
   const sweepAmount = total - feeAtomic;
 
-  // Decoy fetch — ring-size − 1 per input. WOW ringSize=22, XMR=16.
+  // Decoy fetch: ring-size − 1 per input. WOW ringSize=22, XMR=16.
   const ringSize = asset === 'wow' ? 22 : 16;
   const decoysNeeded = (ringSize - 1) * spendable.length;
   const decoysResp = await chainProviders.lws(asset).getRandomOutputs(decoysNeeded);
@@ -823,7 +823,7 @@ async function sweepXmrWow(
     };
   }
 
-  // Best-effort LWS cleanup — deactivate the tip address now that
+  // Best-effort LWS cleanup: deactivate the tip address now that
   // it'll never receive again. Server resource hygiene, not safety.
   chainProviders.lws(asset).deactivateAccount(tipAddress).catch((e) => {
     console.warn('[tip-claim xmr/wow] deactivateLws failed', e);
@@ -835,7 +835,7 @@ async function sweepXmrWow(
 /**
  * Derive the tip's private VIEW key from its private SPEND key.
  *
- * Smirk uses `view = scalar_reduce(sha256(spend))` — the SHA-256
+ * Smirk uses `view = scalar_reduce(sha256(spend))`: the SHA-256
  * output is interpreted as a little-endian 256-bit integer and
  * reduced mod the ed25519 group order `ℓ`. The reduced scalar is
  * re-serialized as 32 LE bytes; that's what the sender registers
@@ -846,7 +846,7 @@ async function sweepXmrWow(
  * `sha256(spend)` unreduced. For sha256 outputs that happen to
  * exceed `ℓ` (~12% of random keys) the unreduced bytes don't match
  * what the daemon has stored, and `get_unspent_outs` 500s instead
- * of returning the tip's UTXO set — leaving recipients unable to
+ * of returning the tip's UTXO set, leaving recipients unable to
  * claim. Empirically reproduced on two consecutive WOW tips that
  * both had `sha256(spend) > ℓ`.
  */
@@ -885,7 +885,7 @@ function scalarToBytes(scalar: bigint): Uint8Array {
 // ============================================================================
 
 /**
- * Wire format the sender writes when encrypting a Grin tip — see
+ * Wire format the sender writes when encrypting a Grin tip; see
  * `tip-handler.ts::GrinVoucherEncryptionData`. Field names MUST
  * match the sender exactly: the JSON is read straight out of the
  * encrypted payload, no normalization. A name mismatch surfaces as
@@ -908,14 +908,14 @@ interface GrinVoucherPayload {
 
 /**
  * Sweep a Grin voucher into the recipient's own keychain. Unlike
- * BTC/LTC/XMR/WOW, the decrypted payload is NOT a private key —
+ * BTC/LTC/XMR/WOW, the decrypted payload is NOT a private key:
  * it's a JSON blob describing a voucher output the sender created
  * (commitment, blinding factor, range-proof, amount). We import that
  * output via `grin.sweepGrinVoucher`, which builds a 1-input /
  * 1-output kernel where the new output is at the recipient's next
  * free Grin path. The wasm result carries both `tx_bytes_hex` (binary
  * wire format) AND `tx_json` (the JSON shape the broadcast endpoint
- * accepts) — we forward the latter to the backend unchanged.
+ * accepts); we forward the latter to the backend unchanged.
  */
 async function sweepGrin(
   decryptedJson: Uint8Array,
@@ -942,7 +942,7 @@ async function sweepGrin(
     extended_private_key_hex: string;
   };
 
-  // The claimer mints one new output (the swept value) — reserve a fresh BIP32
+  // The claimer mints one new output (the swept value); reserve a fresh BIP32
   // child index for it. v3 has no server output store, so the index counter is
   // client-owned in the pending overlay. Seed it from a scan first (recognizes
   // the highest on-chain index) so we never reuse an index and produce a
@@ -950,7 +950,7 @@ async function sweepGrin(
   void userId; // v3 is non-custodial: no server output store keyed by user.
   // Use THE shared overlay singleton (not a fresh instance) so this claim's
   // child-index reservation serializes against the always-on ~30s balance
-  // reconcile and any concurrent send/receive — a private overlay here would
+  // reconcile and any concurrent send/receive: a private overlay here would
   // race the reconcile and could rewind the counter (duplicate commitment →
   // fund loss). The overlay's per-storage-key global lock backstops this even so.
   const overlay = grinOverlay;
@@ -969,7 +969,7 @@ async function sweepGrin(
   // ATOMICALLY reserve the claimer output's index (read-and-increment in one
   // serialized step) so a concurrent mint flow can't be handed the same index →
   // duplicate commitment → fund loss. A reserved index that ends up unused (e.g.
-  // the sweep build/broadcast fails below) is simply skipped — harmless.
+  // the sweep build/broadcast fails below) is simply skipped (harmless).
   const nextChild = await overlay.reserveNextChildIndex();
   const claimerPath: [number, number, number, number] = [0, 0, nextChild, 0];
 
@@ -978,7 +978,7 @@ async function sweepGrin(
   // voucher sweep is always 1 input, 1 output, 1 kernel:
   //   (1 + 21·1 + 3·1) × 500_000 = 12_500_000 nanogrin
   // Earlier this was hard-coded to 4_000_000 (the deprecated
-  // legacy formula) — node rejects with "Low fee transaction".
+  // legacy formula); node rejects with "Low fee transaction".
   // Mirrors `tip-handler.ts::createGrinTip::calcFee` and
   // `grin-flows.ts::calcGrinFee`.
   const fee = (1 + 21 * 1 + 3 * 1) * 500_000;
@@ -1016,7 +1016,7 @@ async function sweepGrin(
   // Broadcast the sweep tx. Backend reads only `{ tx }` on v3 (no server output
   // store). wasm tx_json is typed `unknown` because the JSON.parse boundary
   // doesn't carry a schema; the wasm side always emits a JSON object
-  // (Transaction body) — see serialize_voucher_tx_json in
+  // (Transaction body); see serialize_voucher_tx_json in
   // crates/grin-ext/src/voucher.rs.
   const sweepSlateId = uuidV4();
   const broadcast = await chainProviders.grin().broadcast({
@@ -1030,13 +1030,13 @@ async function sweepGrin(
   }
 
   // Show the swept value as pending incoming until scan confirms it on chain.
-  // The claimer output's index was already reserved atomically above — do NOT
+  // The claimer output's index was already reserved atomically above; do NOT
   // bump again here or it would double-advance and skip an index.
   await overlay.addPending(sweepSlateId, {
     incoming: { commit: result.output.commitment_hex, value: voucher.amount - fee },
   });
 
-  // Use the kernel excess as the txid for UI display — Grin txs
+  // Use the kernel excess as the txid for UI display: Grin txs
   // don't have stable txids the way UTXO chains do, but the kernel
   // excess is unique per kernel and is what the explorer indexes on
   // (e.g., https://grincoin.org/kernel/<excess>).
@@ -1044,7 +1044,7 @@ async function sweepGrin(
 }
 
 /** Mint an RFC 4122 v4 UUID. Mirrors `randomBytesHexUuidLike` in
- *  tip-handler.ts — the backend's `broadcast_grin_transaction`
+ *  tip-handler.ts: the backend's `broadcast_grin_transaction`
  *  parses `slate_id` as `uuid::Uuid` and rejects anything else. */
 function uuidV4(): string {
   const bytes = randomBytes(16);

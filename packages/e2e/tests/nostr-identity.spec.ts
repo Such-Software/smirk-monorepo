@@ -3,7 +3,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
 
 /**
- * nostr-identity — Settings → Nostr identities (the P2 multi-identity switcher).
+ * nostr-identity: Settings → Nostr identities (the P2 multi-identity switcher).
  *
  * Drives the REAL extension UI against the local smirk-backend-core:
  *   1. import alice via onboarding → authenticated returning user
@@ -14,7 +14,7 @@ import { getCapabilities } from '../fixtures/capabilities.js';
  *
  * Auth signal (WHY the helper, not a response wait): bootstrap-auth
  * (POST /auth/extension) fires from the extension's OFFSCREEN document, whose
- * network is INVISIBLE to Playwright — `waitForResponse` there always times out.
+ * network is INVISIBLE to Playwright; `waitForResponse` there always times out.
  * `importAndUnlock` detects auth by a real backend balance rendering on Home
  * (alice's WOW 19.79). Any response we assert on must originate from the POPUP.
  *

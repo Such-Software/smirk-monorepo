@@ -78,7 +78,7 @@ test('store subscribers fire on cross-context writes (via shared storage)', asyn
   const a = new SessionStateStore(storage);
   const b = new SessionStateStore(storage);
 
-  // Event microtask handling needs an explicit yield — wait for the
+  // Event microtask handling needs an explicit yield: wait for the
   // subscriber callback before asserting.
   let bSeen: string | null = null;
   const seen = new Promise<string>((resolve) => {
@@ -105,7 +105,7 @@ test('store update is serialized — 50 concurrent updates all land', async () =
   // concurrent `update()` calls each `load()`-ed the same cached
   // state, mutated independent JSON-deep-cloned drafts, and the
   // later `save()` clobbered the earlier write. The Trocador
-  // "Open Send → pre-filled" handler hit this — its prefill write
+  // "Open Send → pre-filled" handler hit this: its prefill write
   // raced with the trocador-wizard step write and the prefill
   // disappeared, sending the user to PICK A COIN instead of
   // Compose. The Promise-chain mutex in `update()` makes every
@@ -204,7 +204,7 @@ test('migrate: registered migration runs', () => {
 });
 
 test('migrate: missing migration falls back to defaults', () => {
-  // version 999 — no migration path. Resets rather than corrupting state.
+  // version 999: no migration path. Resets rather than corrupting state.
   const migrated = migrate({ version: 999, weirdField: true });
   assert.deepEqual(migrated, DEFAULT_SESSION_STATE);
 });
@@ -290,7 +290,7 @@ test('wizard: start is idempotent — does not overwrite existing state', async 
   // `useEffect([])` on mount. The first render sees `active=false`
   // because session-state load is async; without idempotency, that
   // mount-time call would overwrite the persisted state with a
-  // fresh step-0 — losing wizard progress across popup close+reopen.
+  // fresh step-0, losing wizard progress across popup close+reopen.
   const store = new SessionStateStore(new InMemoryStorage());
   const w = new Wizard<TipFields>(store, 'tip-maker', {});
   await w.start();
@@ -352,7 +352,7 @@ test('wizard: state survives across store instances (popup close + reopen sim)',
   await wA.next();
   a.destroy();
 
-  // New store instance — same storage. Mimics popup close + reopen.
+  // New store instance, same storage. Mimics popup close + reopen.
   const b = new SessionStateStore(storage);
   const wB = new Wizard<TipFields>(b, 'tip-maker', {});
   const snap = await wB.snapshot();

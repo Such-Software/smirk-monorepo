@@ -1,4 +1,4 @@
-//! Slate v4 compact binary serialization — the format slatepacks carry
+//! Slate v4 compact binary serialization: the format slatepacks carry
 //! when interoperating with external Grin wallets (grin-wallet CLI,
 //! Niffler, Wallet 13 etc.).
 //!

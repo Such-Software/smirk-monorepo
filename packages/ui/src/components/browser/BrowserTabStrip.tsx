@@ -1,12 +1,12 @@
 // @jsxRuntime automatic
 // @jsxImportSource preact
 /**
- * `BrowserTabStrip` — horizontal tab strip with close affordances.
+ * `BrowserTabStrip`: horizontal tab strip with close affordances.
  *
  * Renders the list of tabs as a row, highlights the active tab, and
  * exposes per-tab close + a trailing "new tab" button. When only one
  * tab exists the strip collapses to a single-row "current page"
- * affordance with no close button — keeps the chrome lean for the
+ * affordance with no close button: keeps the chrome lean for the
  * common single-tab case.
  *
  * Like `BrowserUrlBar`, the component is presentational and stateless;
@@ -27,7 +27,7 @@ export interface BrowserTabStripProps {
 
   /**
    * Collapse to single-row indicator (no tabs visible) when only one
-   * tab exists. Defaults to true — most users on small windows don't
+   * tab exists. Defaults to true: most users on small windows don't
    * need a one-tab strip eating vertical space.
    */
   readonly collapseSingleTab?: boolean;
@@ -89,7 +89,7 @@ function TabPill(props: TabPillProps): JSX.Element {
       role="tab"
       aria-selected={props.active}
       onClick={(e) => {
-        // Don't fire onSelect when the click was on the close button —
+        // Don't fire onSelect when the click was on the close button;
         // the close button stops propagation, but be defensive in case
         // a future child blocks it.
         if ((e.target as HTMLElement).dataset.role === 'close') return;

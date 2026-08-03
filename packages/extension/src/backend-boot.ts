@@ -1,5 +1,5 @@
 /**
- * Backend selection at context boot — shared by every JS context (background
+ * Backend selection at context boot: shared by every JS context (background
  * service worker, offscreen runner, popup).
  *
  * The wallet is backend-agnostic: which smirk-backend it talks to is durable
@@ -44,7 +44,7 @@ const FALLBACK = DEFAULT_BACKEND;
  * re-bootstrap auth / refresh its UI.
  */
 export function bootBackendSelection(onChange?: () => void): void {
-  // (1) Immediate default — synchronous, so any request before the async read
+  // (1) Immediate default: synchronous, so any request before the async read
   // resolves still has a valid base URL.
   initSmirkApi({ baseUrl: FALLBACK.url, walletApiStyle: FALLBACK.apiStyle });
   // (2)+(3) Durable override + cross-context re-apply, both storage-backed.
@@ -53,7 +53,7 @@ export function bootBackendSelection(onChange?: () => void): void {
   // resolved backend in each job request (see `applyBackendToApi` in the runner
   // + the coordinator), so auth still targets the right backend. PROBE for the
   // API and return quietly instead of constructing `ChromeLocalStorage` (which
-  // throws) and logging the caught exception — surfacing a caught error to the
+  // throws) and logging the caught exception: surfacing a caught error to the
   // extension error console for a known-good path is just noise reviewers/users
   // shouldn't see.
   const chromeStorage = (
@@ -67,7 +67,7 @@ export function bootBackendSelection(onChange?: () => void): void {
   try {
     storage = new ChromeLocalStorage();
   } catch (e) {
-    // Storage was advertised but construction still failed — genuinely
+    // Storage was advertised but construction still failed: genuinely
     // unexpected. Keep the default; log at debug so it never hits the error
     // console during normal operation.
     console.debug('[backend-boot] storage init failed; using build default', e);

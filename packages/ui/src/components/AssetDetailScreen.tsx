@@ -1,12 +1,12 @@
 /**
- * AssetDetailScreen — per-asset drill-down landed from the Home asset row.
+ * AssetDetailScreen: per-asset drill-down landed from the Home asset row.
  *
  * Composition: BalanceCard (header) + inline-SVG sparkline strip +
  * action row + history list. Chain-shape-aware on the history rows
  * (UTXO / CryptoNote / Mimblewimble each have different field sets the
  * backend returns) but otherwise the same screen across all assets.
  *
- * Data is loaded by the shell — this component is presentational +
+ * Data is loaded by the shell; this component is presentational +
  * stateful only for the per-row tap (which delegates an explorer URL
  * back to the shell to open). No backend access.
  */
@@ -66,7 +66,7 @@ export type AssetDetailTxRow =
       counterparty: string;
       platform?: string;
       timestamp: string;
-      /** Server-side tip status — drives the action affordance:
+      /** Server-side tip status. Drives the action affordance:
        *   draft / cancelled → "Discard draft" (no funds moved)
        *   pending / pending_confirmation / claiming → "↩ Clawback"
        *   claimed / clawed_back → info-only badge
@@ -76,7 +76,7 @@ export type AssetDetailTxRow =
       fundingConfirmations?: number;
       confirmationsRequired?: number;
       /** True iff a local IndexedDB tip-key backup exists for this
-       *  tip — tagged with 🔐 so the user knows the recovery surface
+       *  tip, tagged with 🔐 so the user knows the recovery surface
        *  works even if the backend has lost the row. */
       hasLocalBackup?: boolean;
     }
@@ -88,7 +88,7 @@ export type AssetDetailTxRow =
       counterparty: string;
       platform?: string;
       timestamp: string;
-      /** Server-side tip status — drives the row's affordance:
+      /** Server-side tip status. Drives the row's affordance:
        *   pending / pending_confirmation → progress strip (X/Y confs)
        *   pending + confs ready          → primary "Claim" button
        *   claiming                       → "Claiming…" pill (no action)
@@ -105,7 +105,7 @@ export type AssetDetailTxRow =
       /**
        * In-flight outgoing tx that hasn't yet shown up in the regular
        * history feed (mempool or scan-lag). Driven by the
-       * `pendingOutgoing` session-state entries — the same source
+       * `pendingOutgoing` session-state entries, the same source
        * that drives the `↑ X sending` Home subline. Renders at the
        * top of Activity with a "pending" pill and context-specific
        * copy (vanilla send vs swap-deposit vs tip-fund).
@@ -116,7 +116,7 @@ export type AssetDetailTxRow =
       feeAtomic: bigint;
       recipient: string;
       submittedAt: string;
-      /** Optional context — drives the row's copy and tap-routing.
+      /** Optional context: drives the row's copy and tap-routing.
        *  Mirrors `@smirk/core`'s `PendingOutgoingContext`. */
       context?:
         | { kind: 'send' }
@@ -151,26 +151,26 @@ export interface AssetDetailScreenProps {
   loading?: boolean;
   /** Tap a tx row → open the chain-appropriate explorer URL. */
   onOpenExplorer?: (row: AssetDetailTxRow) => void;
-  /** Clawback an unclaimed sent tip — recovers funds to the sender.
+  /** Clawback an unclaimed sent tip: recovers funds to the sender.
    *  Surfaced as the per-row "↩ Clawback" button on tip-sent rows
    *  in pending / pending_confirmation / claiming status. */
   onTipClawback?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
-  /** Claim a received tip — sweeps the tip address into the user's
+  /** Claim a received tip: sweeps the tip address into the user's
    *  wallet. Surfaced as the primary "Claim" button on tip-received
    *  rows whose `fundingConfirmations >= confirmationsRequired`. */
   onTipClaim?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
-  /** Discard a draft sent tip — no funds moved, just cleans up the
+  /** Discard a draft sent tip: no funds moved, just cleans up the
    *  server-side draft row. Surfaced as "Discard draft" on tip-sent
    *  rows in draft status. */
   onTipDiscard?: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
   /** Called after a successful clawback/discard so the shell can
    *  refetch the history. */
   onTipActionDone?: () => void;
-  /** Send action — usually navigates to the send wizard pre-filled. */
+  /** Send action: usually navigates to the send wizard pre-filled. */
   onSend?: () => void;
-  /** Receive action — navigates to the receive screen. */
+  /** Receive action: navigates to the receive screen. */
   onReceive?: () => void;
-  /** Tip action — opens TipMaker pre-filled with this asset. */
+  /** Tip action: opens TipMaker pre-filled with this asset. */
   onTip?: () => void;
   /** Header back button. */
   onBack: () => void;
@@ -245,7 +245,7 @@ export function AssetDetailScreen({
       {/* Dedicated balance header. We DON'T reuse BalanceCard here
           because that variant runs a 3-column row (icon + name + amount)
           where the asset name competes with the amount on narrow popups
-          + pixel-font themes — long balances like XMR 8-decimal values
+          + pixel-font themes: long balances like XMR 8-decimal values
           got clipped with an ellipsis. On the asset-detail screen the
           asset name is already in the page header above, so the balance
           block can use the FULL width for the number + fiat. */}
@@ -258,7 +258,7 @@ export function AssetDetailScreen({
         {...(hidden ? { hidden } : {})}
       />
 
-      {/* Sparkline strip — inline SVG, no chart-lib dep. */}
+      {/* Sparkline strip: inline SVG, no chart-lib dep. */}
       {sparkline && sparkline.prices.length > 1 && (
         <Sparkline data={sparkline} />
       )}
@@ -343,7 +343,7 @@ export function AssetDetailScreen({
 }
 
 // ============================================================================
-// Sparkline — inline SVG, no axes, subtle min/max + change-pct.
+// Sparkline: inline SVG, no axes, subtle min/max + change-pct.
 // ============================================================================
 
 function Sparkline({ data }: { data: SparklinePoint }) {
@@ -371,7 +371,7 @@ function Sparkline({ data }: { data: SparklinePoint }) {
     data.changePct >= 0 ? 'var(--smirk-positive)' : 'var(--smirk-negative)';
   const changeSign = data.changePct >= 0 ? '+' : '';
   // Last sample = current spot. Without this the "-1.88%" reads as
-  // a percentage with no anchor — user had no idea what currency or
+  // a percentage with no anchor: user had no idea what currency or
   // base price the change was against. Format with sensible
   // significant figures for both micro-cap (sub-cent) and majors.
   const currentPrice = data.prices[data.prices.length - 1] ?? 0;
@@ -461,7 +461,7 @@ function Sparkline({ data }: { data: SparklinePoint }) {
 }
 
 // ============================================================================
-// Asset-detail balance — wide, full-width balance line + fiat subline.
+// Asset-detail balance: wide, full-width balance line + fiat subline.
 // Replaces the 3-col BalanceCard for this screen because the asset name
 // is already in the page header, so the balance gets all the horizontal
 // space + can't be clipped by pixel-theme font widths.
@@ -579,7 +579,7 @@ function AssetDetailBalance({
 }
 
 // ============================================================================
-// Action pill — compact send/receive/tip button row.
+// Action pill: compact send/receive/tip button row.
 // ============================================================================
 
 function ActionPill({
@@ -620,7 +620,7 @@ function ActionPill({
 }
 
 // ============================================================================
-// TxRow — discriminated by row kind. Common chrome: amount + arrow + meta.
+// TxRow: discriminated by row kind. Common chrome: amount + arrow + meta.
 // ============================================================================
 
 function TxRow({
@@ -722,10 +722,10 @@ function TxRow({
   const arrow = incoming ? '↙' : '↗';
 
   // A received tip is "ready to claim" once funding has buried.
-  // Mirrors the InboxTab logic — caller decides whether to wire
+  // Mirrors the InboxTab logic: caller decides whether to wire
   // `onTipClaim`; we only render the button if it's wired AND the
   // tip is in the right shape. Includes 'claiming' status because
-  // the backend's claim endpoint is idempotent for the same user —
+  // the backend's claim endpoint is idempotent for the same user:
   // when a previous sweep attempt failed client-side (LWS 500,
   // wallet locked, etc.) the tip stays in 'claiming' and the only
   // recovery path is retry. tip-received rows with a `claimed`
@@ -737,11 +737,11 @@ function TxRow({
     row.confirmationsRequired !== undefined &&
     row.fundingConfirmations >= row.confirmationsRequired;
 
-  // Inline action rows replace the chain-explorer click affordance —
+  // Inline action rows replace the chain-explorer click affordance:
   // tip-sent rows get Clawback / Discard, tip-received rows get Claim.
   // The row container becomes a non-clickable `<div>` whenever an
   // inline action is showing (HTML forbids nested buttons).
-  // Clawback eligibility mirrors SentTipsScreen.tsx — kept in sync
+  // Clawback eligibility mirrors SentTipsScreen.tsx: kept in sync
   // by audit comment, not by a shared helper, because the row shapes
   // differ. `funding_mismatch` is eligible (sender
   // funded LESS than declared; clawback recovers the underfunded
@@ -815,7 +815,7 @@ function TxRow({
           textAlign: 'left',
           width: '100%',
           // content-box default would push padding + border BEYOND the
-          // parent's 100% — triggers a horizontal scrollbar at the
+          // parent's 100%: triggers a horizontal scrollbar at the
           // popup shell level. border-box makes the row fit exactly.
           boxSizing: 'border-box',
         }}
@@ -824,7 +824,7 @@ function TxRow({
             arrow (↙ in / ↗ out); tips additionally get a 🎁 badge
             so they thread through the asset history visually while
             still standing out. Earlier the giftbox REPLACED the
-            arrow on tips, hiding the direction signal — split them
+            arrow on tips, hiding the direction signal; split them
             so users see both at a glance. */}
         <span
           style={{

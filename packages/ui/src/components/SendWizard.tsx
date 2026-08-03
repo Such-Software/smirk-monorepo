@@ -1,14 +1,14 @@
 /**
- * SendWizard — Send flow with a Compose step (amount / fee tier / Max
+ * SendWizard: Send flow with a Compose step (amount / fee tier / Max
  * sweep) and a separate Review step.
  *
  * Steps:
- *   0. Asset       — pick which coin to send.
- *   1. Address     — recipient address.
- *   2. Compose     — amount + balance display + Max button + fee tier
+ *   0. Asset       : pick which coin to send.
+ *   1. Address     : recipient address.
+ *   2. Compose     : amount + balance display + Max button + fee tier
  *                    picker. All inputs editable here.
- *   3. Review      — read-only summary; tapping Send commits.
- *   (4. Done       — success screen with txid.)
+ *   3. Review      : read-only summary; tapping Send commits.
+ *   (4. Done       : success screen with txid.)
  *
  * State persists via `@smirk/core`'s Wizard primitive, so closing the
  * popup mid-flow and reopening picks up where the user left off.
@@ -21,7 +21,7 @@
  * - **Sweep is explicit.** Tapping Max sets a `sweep: boolean` flag
  *   carried all the way through to the send-handler. The send-handler
  *   produces a 1-output tx with no change; source address ends at 0.
- *   Not inferred from "amount happens to equal balance" — deliberate.
+ *   Not inferred from "amount happens to equal balance": deliberate.
  * - **Review is read-only.** Compose is where you edit; Review is where
  *   you commit. Back from Review preserves Compose state.
  */
@@ -49,7 +49,7 @@ export interface SendFields extends Record<string, unknown> {
    * Ignored otherwise.
    */
   customFeeRate?: number;
-  /** True iff the Max button is active — sweep mode. */
+  /** True iff the Max button is active: sweep mode. */
   sweep?: boolean;
   /** Filled in after a successful broadcast; surfaced on the Done step. */
   lastTxid?: string;
@@ -64,13 +64,13 @@ export interface SendFields extends Record<string, unknown> {
 
   /** S1 slatepack armored string the user displays/copies to recipient. */
   grinArmoredOutgoing?: string;
-  /** Opaque sender context JSON — passed back to `onGrinFinalize`. */
+  /** Opaque sender context JSON: passed back to `onGrinFinalize`. */
   grinSenderContextJson?: string;
   /** Slate UUID for backend bookkeeping. */
   grinSlateId?: string;
   /** Backend relay entry id, set when recipient is a Smirk user. */
   grinRelayId?: string;
-  /** Serialized GrinUnspentOutput[] used to fund this send — needed at
+  /** Serialized GrinUnspentOutput[] used to fund this send: needed at
    *  finalize to build the broadcastable tx bytes. */
   grinSenderInputsJson?: string;
   /** Serialized GrinChangeOutputInfo, present iff this tx has change. */
@@ -87,7 +87,7 @@ export interface SendFields extends Record<string, unknown> {
    * Send was opened from a non-vanilla flow (Trocador swap deposit,
    * tip funding, etc.) so the resulting `pendingOutgoing` entry can
    * carry that origin through to the per-asset Activity row and the
-   * row's tap-routing. Optional — vanilla sends from the Home action
+   * row's tap-routing. Optional: vanilla sends from the Home action
    * bar leave this undefined and the popup treats them as
    * `{kind: 'send'}`. Stored as a plain object so it round-trips
    * through `chrome.storage.session` without bespoke serialization.
@@ -99,7 +99,7 @@ export interface SendFields extends Record<string, unknown> {
    * point (Trocador "Open Send → pre-filled", tip funding, etc.)
    * stashed the pendingContext above. The popup-level onSubmit
    * cross-checks this against the actual submitted fromAssetId +
-   * toAddress and drops the pendingContext on mismatch — that way
+   * toAddress and drops the pendingContext on mismatch; that way
    * a user who back-navigates and switches to an unrelated asset/
    * recipient doesn't end up with a vanilla send tagged as a swap-
    * deposit in Activity. Optional; absence means "no seed → no
@@ -128,7 +128,7 @@ export type SendSubmitResult =
        * Sum of input atomic amounts consumed by this tx. Lets the
        * popup compute the expected locked change (inputsTotal −
        * amount − fee) for CryptoNote/Grin during the in-flight
-       * window — displayed as a `🔒 X.XX locked` preview until LWS
+       * window, displayed as a `🔒 X.XX locked` preview until LWS
        * reflects the actual change output.
        */
       inputsTotalAtomic?: bigint;
@@ -171,7 +171,7 @@ export interface SendWizardProps {
 
   /**
    * Read the wallet's current confirmed balance for `assetId` in atomic
-   * units. Synchronous — popup-side pulls from session state.
+   * units. Synchronous: popup-side pulls from session state.
    */
   resolveBalance: (assetId: string) => bigint;
 
@@ -187,7 +187,7 @@ export interface SendWizardProps {
    * user-tunable fee picker (XMR/WOW/Grin).
    *
    * `options.sweep` lets the caller request a fee for "sweep N inputs"
-   * vs the default "1-input typical" estimate — sweep TXs with many
+   * vs the default "1-input typical" estimate: sweep TXs with many
    * inputs run noticeably larger and the fee scales linearly, so a
    * 1-input estimate underestimates by a significant margin for users
    * with fragmented balances. The shell looks up the actual spendable
@@ -275,7 +275,7 @@ export interface GrinBuildSlateResult {
   relay_id?: string;
   /** Actual fee committed to in the S1 slate, in atomic units. The
    *  Compose-step preview is an estimate; this is the real number
-   *  the receiver will see — exposed so the Share-slatepack view can
+   *  the receiver will see, exposed so the Share-slatepack view can
    *  confirm "you're about to send X with fee Y" before the sender
    *  hands the slatepack to the counterparty. */
   fee_atomic?: number;
@@ -285,7 +285,7 @@ export type GrinBuildSlateOutcome = GrinBuildSlateResult | { ok: false; error: s
 export interface GrinFinalizeResult {
   ok: true;
   slate_id: string;
-  /** 33-byte kernel commitment hex — Grin's analog of a txid. */
+  /** 33-byte kernel commitment hex: Grin's analog of a txid. */
   kernel_excess_hex: string;
 }
 export type GrinFinalizeOutcome = GrinFinalizeResult | { ok: false; error: string };
@@ -423,7 +423,7 @@ export function SendWizard(props: SendWizardProps) {
           />
         )}
 
-      {/* Step 3 — Grin: interactive Exchange step instead of one-shot Review.
+      {/* Step 3, Grin: interactive Exchange step instead of one-shot Review.
           Sender already chose amount + recipient. We build S1, show it to
           the user (clipboard / relay drop), wait for the recipient's S2,
           then finalize + broadcast. State persists in wizard.fields so a
@@ -536,7 +536,7 @@ export function SendWizard(props: SendWizardProps) {
 }
 
 // ============================================================================
-// Step 0 — Pick asset
+// Step 0: Pick asset
 // ============================================================================
 
 function PickAsset({
@@ -579,7 +579,7 @@ function PickAsset({
 }
 
 // ============================================================================
-// Step 1 — Recipient address
+// Step 1: Recipient address
 // ============================================================================
 
 function EnterAddress({
@@ -600,13 +600,13 @@ function EnterAddress({
   // Grin supports a no-address "manual slatepack" mode: sender builds
   // the S1, hands the armored blob to the receiver out-of-band (any
   // grin-wallet / Grim user can decode + sign it). For other chains
-  // address is always required — toggle is hidden.
+  // address is always required; toggle is hidden.
   const supportsManualSlatepack = assetId === 'grin';
   const [manualSlatepack, setManualSlatepack] = useState(false);
 
   const handleContinue = async () => {
     if (manualSlatepack) {
-      // Skip validation — emit empty string. Downstream handler treats
+      // Skip validation: emit empty string. Downstream handler treats
       // empty `toAddress` as "no recipient address; armor plain + skip
       // relay drop".
       onContinue('');
@@ -720,12 +720,12 @@ function EnterAddress({
 }
 
 // ============================================================================
-// Step 2 — Compose (amount + Max + fee tier)
+// Step 2: Compose (amount + Max + fee tier)
 // ============================================================================
 
 /**
  * Vsize estimator for fee preview. Mirrors `estimateVsize` in
- * `packages/extension/src/popup/send-handler.ts`. We assume 1 input —
+ * `packages/extension/src/popup/send-handler.ts`. We assume 1 input:
  * the typical case for Smirk's single-address scheme. The real
  * selection in the send-handler uses the actual input count; for the
  * Compose-screen fee preview, 1-input is a reasonable estimate.
@@ -739,7 +739,7 @@ function estimateVsize(numOutputs: number): number {
 /**
  * Network-relay floor for the standard fee tiers (Fast/Normal/Slow).
  * Now sourced from `@smirk/core` (`applyRelayFloor`) so every BTC/LTC
- * broadcast path — wizard, tip funding, tip-claim sweep, dapp — shares
+ * broadcast path (wizard, tip funding, tip-claim sweep, dapp) shares
  * one floor; see that module for the full rationale (1.0 sat/vB at the
  * relay minimum is rejected by public LTC Electrum servers).
  *
@@ -850,7 +850,7 @@ function Compose({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amountText, tier, customForPersist, sweep]);
 
-  // Load fee tiers on mount. Skip for non-UTXO assets — their fees
+  // Load fee tiers on mount. Skip for non-UTXO assets: their fees
   // come from the send-handler at sign-time, not a Compose-screen
   // picker.
   useEffect(() => {
@@ -876,7 +876,7 @@ function Compose({
   // normal sends we use the 1-input estimate (typical case for
   // Smirk's single-address scheme). For sweep mode we pass
   // `{ sweep: true }` so the shell sizes the estimate against the
-  // user's actual spendable-output count — wallets with fragmented
+  // user's actual spendable-output count; wallets with fragmented
   // balances would otherwise display a sweep amount that's larger
   // than what they actually receive after the per-input fee scaling.
   // Re-runs when `sweep` toggles so the displayed amount tracks the
@@ -884,7 +884,7 @@ function Compose({
   // Re-run on amount change so the resolver can size the estimate
   // against the actual amount (Grin needs real input count, which is a
   // function of the entered amount). Until the user has typed a parseable
-  // non-zero amount, leave the estimate null so the UI shows nothing —
+  // non-zero amount, leave the estimate null so the UI shows nothing;
   // previously we showed a phantom 1-input estimate before the user had
   // entered anything, which was misleading on inputs ≠ 1.
   const parsedAmountForEstimate = useMemo(
@@ -896,7 +896,7 @@ function Compose({
     let alive = true;
     setEstimatedFeeAtomic(null);
     // Don't ask the resolver for an estimate when there's nothing to
-    // estimate against. Sweep is a special case — it's "pay whatever
+    // estimate against. Sweep is a special case: it's "pay whatever
     // is spendable" and the resolver can size against full balance.
     if (!sweep && (parsedAmountForEstimate === null || parsedAmountForEstimate <= 0n)) {
       return;
@@ -910,7 +910,7 @@ function Compose({
         if (alive && fee !== null) setEstimatedFeeAtomic(fee);
       },
       () => {
-        // Swallow estimate failures — fall back to the generic
+        // Swallow estimate failures: fall back to the generic
         // "computed at send time" copy below. A failed estimate
         // shouldn't block the user from continuing.
       },
@@ -922,7 +922,7 @@ function Compose({
 
   // Selected rate for the standard tiers passes through `applyFloor` so
   // we never ship a rate at the protocol minimum that some nodes round
-  // up against. Custom is verbatim — explicit override.
+  // up against. Custom is verbatim: explicit override.
   const customRateNum = parseFloat(customRateText);
   const customRateValid =
     !isNaN(customRateNum) && customRateNum > 0 && customRateText.trim() !== '';
@@ -942,7 +942,7 @@ function Compose({
   //  - UTXO: fee comes from the user-picked tier (selectedFeeSat).
   //  - Non-UTXO (XMR/WOW): fee comes from the live estimate we
   //    fetched via resolveSendFeeEstimate. The estimate is for 1
-  //    input but the actual sweep may consume more — the handler
+  //    input but the actual sweep may consume more; the handler
   //    recomputes against real N and pays the difference out of the
   //    sweep amount, so the user receives slightly less than the
   //    preview if their wallet has many small outputs. Honest
@@ -1018,7 +1018,7 @@ function Compose({
         Balance: <strong>{formatAmount(balanceAtomic, assetId, 8)}</strong> {asset.ticker}
       </div>
 
-      {/* Amount field + Max. Max only renders for UTXO chains — for
+      {/* Amount field + Max. Max only renders for UTXO chains: for
           CryptoNote/Mimblewimble we don't know the fee at compose
           time so sweep is deferred to a Phase-2 handler. */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
@@ -1062,7 +1062,7 @@ function Compose({
 
       {validationError && <FieldError>{validationError}</FieldError>}
 
-      {/* Recipient — read-only here, tap to edit goes back. Empty
+      {/* Recipient: read-only here, tap to edit goes back. Empty
           string is the Grin "manual slatepack" sentinel; show a
           label instead of an empty value. */}
       <ReviewRow
@@ -1092,7 +1092,7 @@ function Compose({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {(['fast', 'normal', 'slow'] as const).map((t) => {
               const electrum = tiers[t];
-              // Display the floored rate — it's what the tx will use.
+              // Display the floored rate: it's what the tx will use.
               const displayRate =
                 electrum !== null && electrum !== undefined ? applyFloor(electrum) : null;
               const active = tier === t;
@@ -1156,7 +1156,7 @@ function Compose({
         )}
       </div>}
 
-      {/* Fee preview — only render once we have a real number. Before
+      {/* Fee preview: only render once we have a real number. Before
           the user has entered an amount the estimate is null (the
           shell can't size against zero inputs); rendering a phantom
           placeholder there is misleading on assets where input count
@@ -1270,7 +1270,7 @@ function truncateMiddle(s: string, max: number): string {
 }
 
 // ============================================================================
-// Step 3 — Review (read-only confirm)
+// Step 3: Review (read-only confirm)
 // ============================================================================
 
 function Review({
@@ -1309,7 +1309,7 @@ function Review({
   // is a constant 0 and can't gate the Send button. Track whether the
   // display estimate has settled so we don't let the user commit while
   // the review still reads "Estimating…". Falls back to settled after a
-  // timeout / on failure — the send-handler computes the real fee
+  // timeout / on failure; the send-handler computes the real fee
   // regardless, so a slow estimate must never permanently block Send.
   const [feeEstimatePending, setFeeEstimatePending] = useState(!usesFeePicker);
 
@@ -1350,10 +1350,10 @@ function Review({
     };
   }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep]);
 
-  // Re-fetch tiers on mount — rates may have shifted since Compose loaded
+  // Re-fetch tiers on mount: rates may have shifted since Compose loaded
   // them. Cheap insurance against signing a stale fee. (Skipped for
-  // custom tier — user explicitly set their rate; and for non-picker
-  // assets — their fee comes from the handler, not a tier.)
+  // custom tier: user explicitly set their rate; and for non-picker
+  // assets: their fee comes from the handler, not a tier.)
   useEffect(() => {
     if (!usesFeePicker || feeTier === 'custom') return;
     let alive = true;
@@ -1367,7 +1367,7 @@ function Review({
 
   // Same rate-resolution as Compose: standard tiers get the relay floor
   // (so 'normal' at 1.0 sat/vB displays + ships as 1.1); Custom is
-  // verbatim. For non-picker assets the rate is meaningless — the
+  // verbatim. For non-picker assets the rate is meaningless: the
   // dispatcher ignores feeRateSatPerVb for XMR/WOW/Grin.
   const electrumRate = feeTier === 'custom' ? null : (tiers?.[feeTier] ?? null);
   const rate: number | null = !usesFeePicker
@@ -1450,7 +1450,7 @@ function Review({
 // ============================================================================
 
 // ============================================================================
-// GrinExchange — interactive S1↔S2 step for Mimblewimble sends.
+// GrinExchange: interactive S1↔S2 step for Mimblewimble sends.
 // ============================================================================
 //
 // Replaces the one-shot Review step for Grin. Phases:
@@ -1494,7 +1494,7 @@ function GrinExchange(props: GrinExchangeProps) {
   const asset = mustGetAsset(props.assetId);
   const [building, setBuilding] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
-  // Synchronous re-entrancy guard. React state updates are batched —
+  // Synchronous re-entrancy guard. React state updates are batched:
   // two click events on the same tick both see `finalizing === false`
   // and both call onFinalize, producing a double-spend attempt against
   // the same locked inputs. The ref flips atomically inside the click
@@ -1515,7 +1515,7 @@ function GrinExchange(props: GrinExchangeProps) {
   }, [props.pastedS2]);
 
   // Trigger S1 build on first mount if we don't already have one.
-  // The wizard's state persists across popup close — if the user
+  // The wizard's state persists across popup close; if the user
   // already built S1 and closed the popup, we skip rebuilding.
   useEffect(() => {
     if (props.armoredOutgoing) return;
@@ -1571,7 +1571,7 @@ function GrinExchange(props: GrinExchangeProps) {
   // Same full-page treatment as the build phase so the UI is
   // unambiguously busy. Without this the only feedback during the
   // ~5s push_transaction → JSON-RPC roundtrip was the button text
-  // flipping to "Broadcasting…" — easy to miss, leading to second-
+  // flipping to "Broadcasting…": easy to miss, leading to second-
   // click confusion (the synchronous `finalizingRef` swallows the
   // second click but the user has no idea why it "didn't do
   // anything").
@@ -1617,7 +1617,7 @@ function GrinExchange(props: GrinExchangeProps) {
     <div>
       <StepTitle>Share slatepack</StepTitle>
 
-      {/* Fee/total summary — read-only confirmation that the built
+      {/* Fee/total summary: read-only confirmation that the built
           S1 matches what the user intended. Renders only once we
           have a real fee from the build step (compose preview was an
           estimate; this is the real number committed to the slate). */}
@@ -1669,7 +1669,7 @@ function GrinExchange(props: GrinExchangeProps) {
         </div>
       )}
 
-      {/* Action 1 — copy the slatepack out. Single-row card; the full
+      {/* Action 1: copy the slatepack out. Single-row card; the full
           hex is one click away ("Show") but doesn't dominate the
           screen by default. */}
       <div
@@ -1755,7 +1755,7 @@ function GrinExchange(props: GrinExchangeProps) {
         </button>
       </details>
 
-      {/* Action 2 — paste their response and broadcast. */}
+      {/* Action 2: paste their response and broadcast. */}
       <div
         style={{
           fontSize: 10,
@@ -1834,7 +1834,7 @@ function DoneStep({
       window.setTimeout(() => setCopied(false), 1400);
     });
   };
-  // Diagnostic — if we render the Done step without a txid, log so
+  // Diagnostic: if we render the Done step without a txid, log so
   // the next time this bug shows up we can read the cause from the
   // console rather than guess. The wizard's inner onSubmit only
   // patches `lastTxid` on result.ok, so an absent txid here means
@@ -1843,7 +1843,7 @@ function DoneStep({
   if (!txid && typeof console !== 'undefined') {
     console.warn('[smirk send] DoneStep rendered without txid', { assetId });
   }
-  // Grin-specific: the "sent" state really means "broadcast — kernel
+  // Grin-specific: the "sent" state really means "broadcast: kernel
   // is in the node's pool". On-chain confirmation takes ~10 minutes
   // (10 blocks at the conservative confirmation threshold). Make this
   // explicit so the user doesn't refresh-loop expecting an instant
@@ -1901,7 +1901,7 @@ function DoneStep({
           </div>
           {/* Click to copy. The data-no-uppercase attribute is the
               opt-out hook for pixel themes (DMG/Workbench) that
-              uppercase everything — the hex itself should stay
+              uppercase everything; the hex itself should stay
               mixed case so users can match against block explorers
               that round-trip it verbatim. */}
           <button

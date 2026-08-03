@@ -7,7 +7,7 @@
 //! We use the pure-Rust [`k256`] crate so the build compiles cleanly to
 //! `wasm32-unknown-unknown` without C bindings or extra setup steps. This
 //! is slower than `libsecp256k1` (the C implementation) for batch
-//! operations, but the wallet rarely runs hot paths — readability and
+//! operations, but the wallet rarely runs hot paths; readability and
 //! WASM portability beat raw throughput.
 
 use k256::elliptic_curve::sec1::ToEncodedPoint;
@@ -26,7 +26,7 @@ pub fn random_secret_nonce() -> [u8; 32] {
     loop {
         let mut bytes = [0u8; 32];
         OsRng.fill_bytes(&mut bytes);
-        // Reject if outside the valid scalar range — `NonZeroScalar`
+        // Reject if outside the valid scalar range: `NonZeroScalar`
         // rejects both zero and >= n; that's exactly what we want.
         if NonZeroScalar::try_from(bytes.as_slice()).is_ok() {
             return bytes;
@@ -41,7 +41,7 @@ pub fn random_secret_nonce() -> [u8; 32] {
 ///
 /// Returns an error if the secret key is zero or >= curve order. (HMAC-SHA512
 /// outputs are uniformly random; the probability of either failure mode is
-/// negligible — but we surface the error rather than silently producing an
+/// negligible, but we surface the error rather than silently producing an
 /// invalid key.)
 pub fn public_key_from_secret_key(secret_key: &[u8; 32]) -> Result<[u8; 33], String> {
     let scalar = NonZeroScalar::try_from(secret_key.as_slice())
@@ -70,7 +70,7 @@ mod tests {
         "4303f9023f1b99adccf55bbb3ab0e3dc05b8952a97b13e5c21b37fe76b51050e";
 
     /// Compressed secp256k1 pubkey for the secret above. Independently
-    /// computed via Node's `crypto` module — any compliant secp256k1
+    /// computed via Node's `crypto` module; any compliant secp256k1
     /// implementation must produce this value.
     const ZERO_ENTROPY_PUBKEY: &str =
         "039f74228227013bde4ede1307d5899f017cf3f8df2f2dcf12cb065576acbe0c5c";

@@ -1,5 +1,5 @@
 /**
- * `IframeBrowserContent` — renders the `<iframe>` elements managed by
+ * `IframeBrowserContent`: renders the `<iframe>` elements managed by
  * an `IframeBrowserController` and wires up the postMessage transport
  * between embedded pages and the wallet's RPC handler.
  *
@@ -13,7 +13,7 @@
  * Rendering model:
  *  - One `<iframe>` per tab, all mounted. Inactive tabs are
  *    `visibility: hidden` + `pointer-events: none` rather than
- *    `display: none` — `display: none` discards the iframe's
+ *    `display: none`; `display: none` discards the iframe's
  *    layout box and some browsers re-fire a navigation on the next
  *    mount, which would break "switch tab, come back" persistence.
  *  - The iframe's React key incorporates the controller's per-tab
@@ -65,7 +65,7 @@ export function IframeBrowserContent(
     return unsubscribe;
   }, [props.controller]);
 
-  // Global `message` listener — routes every page-side request that
+  // Global `message` listener: routes every page-side request that
   // matches our channel discriminator to the originating tab's
   // dispatch path. One listener for the whole component (rather than
   // one per iframe) keeps lifecycle simple: mount installs, unmount
@@ -114,7 +114,7 @@ export function IframeBrowserContent(
 
   if (!snapshot) return <></>;
 
-  // Garbage-collect refs for tabs that no longer exist — long-lived
+  // Garbage-collect refs for tabs that no longer exist; long-lived
   // sessions could otherwise accumulate stale entries that hold
   // freed DOM nodes (modern browsers null them, but the Map keys
   // would linger).

@@ -23,7 +23,7 @@
  */
 
 // ============================================================================
-// The registry of job kinds — extend this when adding new long-running flows
+// The registry of job kinds: extend this when adding new long-running flows
 // ============================================================================
 
 /**
@@ -41,7 +41,7 @@ export interface JobKindMap {
    * pipeline) executed in the background so popup close can't strand
    * a half-completed registration. Input includes the popup-computed
    * BIP-137 signature over `smirk-auth-${timestamp}` (which the SW
-   * can't sign — it doesn't see the unlocked-wallet private key).
+   * can't sign: it doesn't see the unlocked-wallet private key).
    * The handler does the rest: optional `checkRestore` for resume
    * heights, PoW solve, the `/auth/extension` POST. Output is the
    * access token + the `BootstrapAuthResult` shape the popup
@@ -91,7 +91,7 @@ export type JobInput<K extends JobKind> = JobKindMap[K]['input'];
 export type JobOutput<K extends JobKind> = JobKindMap[K]['output'];
 
 // ============================================================================
-// Job state — persisted to chrome.storage.session
+// Job state: persisted to chrome.storage.session
 // ============================================================================
 
 /** Lifecycle of a single job. */
@@ -106,7 +106,7 @@ export interface JobState<K extends JobKind = JobKind> {
   readonly id: string;
   readonly kind: K;
   /**
-   * Optional dedup key — if `start` is called with the same key
+   * Optional dedup key: if `start` is called with the same key
    * while a matching job is still running, the existing job's id is
    * returned instead of allocating a new one. Typical key for PoW:
    * the wallet fingerprint (no point solving two challenges for the
@@ -124,12 +124,12 @@ export interface JobState<K extends JobKind = JobKind> {
 }
 
 // ============================================================================
-// Handler contract — implemented in handlers/*.ts, dispatched from
+// Handler contract: implemented in handlers/*.ts, dispatched from
 // the offscreen runner
 // ============================================================================
 
 /**
- * Per-kind handler — pure async function from input to output. Runs
+ * Per-kind handler: pure async function from input to output. Runs
  * inside the offscreen document where Web Crypto and Workers are
  * available. The coordinator wraps it with persistence, cancellation,
  * and message dispatch; handlers stay narrow.
@@ -194,7 +194,7 @@ export type OffscreenJobRequest = {
   /**
    * The backend the SW is pointed at, forwarded so the offscreen (which can't
    * read chrome.storage to resolve the durable selection) auths against the SAME
-   * backend the user chose — not just the build default. See runner.ts.
+   * backend the user chose, not just the build default. See runner.ts.
    */
   backend?: { url: string; apiStyle: WalletApiStyle };
 };

@@ -1,5 +1,5 @@
 /**
- * `TauriBrowserController` — `DappBrowserController` implementation
+ * `TauriBrowserController`: `DappBrowserController` implementation
  * backed by Tauri 2.x webview windows.
  *
  * Each tab corresponds to a separate `WebviewWindow` created in the
@@ -10,18 +10,18 @@
  *
  * Lifecycle:
  *
- *  1. `setInitScripts` — caches the scripts on the JS side AND
+ *  1. `setInitScripts`: caches the scripts on the JS side AND
  *     forwards them to Rust so the plugin can apply them when it
  *     creates new webview windows.
- *  2. `open` — invokes `smirk_browser_open`, which allocates the
+ *  2. `open`: invokes `smirk_browser_open`, which allocates the
  *     initial webview window and emits the first state snapshot.
- *  3. `newTab` / `closeTab` / `switchTab` — round-trip through Rust
+ *  3. `newTab` / `closeTab` / `switchTab`: round-trip through Rust
  *     to manage webview window lifecycle.
- *  4. `navigate` / `goBack` / `goForward` / `reload` — round-trip
+ *  4. `navigate` / `goBack` / `goForward` / `reload`: round-trip
  *     through Rust to drive the webview's loader.
- *  5. `setFrameRect` — coalesced JS-side (we debounce rapid calls
+ *  5. `setFrameRect`: coalesced JS-side (we debounce rapid calls
  *     during resize) and pushed to Rust on the trailing edge.
- *  6. `setPageRequestHandler` — registers a listener for the Rust
+ *  6. `setPageRequestHandler`: registers a listener for the Rust
  *     plugin's `smirk:browser:page-request` event. Responses go back
  *     via `smirk_browser_respond_page_request`.
  *
@@ -203,8 +203,8 @@ export class TauriBrowserController implements DappBrowserController {
     // `WebviewWindow` race WebKitGTK's GL compositor surface
     // creation. Symptom is the embedded webview rendering as a
     // solid-black framebuffer until the tab is destroyed. 120 ms
-    // caps it at ~8/s during drag — well below the threshold the
-    // upstream issues (tauri#10011, tauri#13157) document — and the
+    // caps it at ~8/s during drag, well below the threshold the
+    // upstream issues (tauri#10011, tauri#13157) document, and the
     // trailing-edge call still fires within one perceptible delay
     // tick of the user releasing the mouse. The visible position
     // lag during the drag is acceptable for a wallet UI; the alter-
@@ -217,7 +217,7 @@ export class TauriBrowserController implements DappBrowserController {
       try {
         await invoke(CMD_SET_FRAME_RECT, { rect: next });
       } catch (e) {
-        // Repositioning failures are non-fatal — log + keep going.
+        // Repositioning failures are non-fatal: log + keep going.
         console.warn('[TauriBrowserController] setFrameRect failed:', e);
       }
     }, 120);

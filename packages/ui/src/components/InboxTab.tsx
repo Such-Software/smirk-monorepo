@@ -1,5 +1,5 @@
 /**
- * InboxTab — unified surface for everything that needs the user's
+ * InboxTab: unified surface for everything that needs the user's
  * attention (UI_DESIGN.md Principle 3).
  *
  * Two row families today:
@@ -11,7 +11,7 @@
  *     on-chain) and "Ready to claim" (the sender's broadcast has
  *     enough confirmations; one tap sweeps funds to our wallet).
  *
- * v0.4+ adds atomic-swap rounds and e2ee DMs — each ride the same
+ * v0.4+ adds atomic-swap rounds and e2ee DMs; each ride the same
  * envelope pattern, just different `kind` tags or a new prop array.
  *
  * Presentation-only: data + handlers are injected by the shell. The
@@ -33,7 +33,7 @@ const GRIN_ASSET_ID = 'grin';
 export interface InboxItemBase {
   /** Unique relay-side id, used by the shell to ack actions. */
   relayId: string;
-  /** Grin slate id — for cross-reference with the user's tx history. */
+  /** Grin slate id, for cross-reference with the user's tx history. */
   slateId: string;
   /** Counterparty user id (when known) or null for external wallets. */
   counterpartyUserId: string | null;
@@ -62,11 +62,11 @@ export type InboxItem = InboxItemPendingToSign | InboxItemPendingToFinalize;
  * Two surfaces, distinguished by whether `fundingConfirmations`
  * has reached `confirmationsRequired`:
  *
- *   - **Pending** — sender broadcast funding, chain is still
+ *   - **Pending**: sender broadcast funding, chain is still
  *     maturing. Renders with a confirmation progress strip.
- *   - **Claimable** — funding is buried, primary "Claim" action.
+ *   - **Claimable**: funding is buried, primary "Claim" action.
  *
- * `senderDisplay` is best-effort cosmetic — backend hides it if the
+ * `senderDisplay` is best-effort cosmetic; backend hides it if the
  * sender opted into anonymity. `assetId` is the canonical Smirk
  * asset id (`btc` / `ltc` / `xmr` / `wow` / `grin`), used to look
  * up display formatting + icons.
@@ -92,7 +92,7 @@ export interface InboxTabProps {
   tips?: InboxTipItem[];
   /** True while a fetch is in flight. Renders a subtle loading hint. */
   loading?: boolean;
-  /** Error string from the last fetch — surfaced if `items` is empty. */
+  /** Error string from the last fetch, surfaced if `items` is empty. */
   error?: string | null;
   /** Manual refresh handler. The shell already polls on a 30s cadence;
    *  this lets the user trigger an immediate fetch. */
@@ -113,7 +113,7 @@ export interface InboxTabProps {
    * Tapping Claim on a ready tip: shell runs the per-asset sweep
    * (decrypt encrypted_key with the wallet's BTC private key, then
    * sweep tip_address → user's receive address, then
-   * confirmTipSweep). Optional — omitted shells render tips as
+   * confirmTipSweep). Optional: omitted shells render tips as
    * informational rows with no claim button.
    */
   onClaimTip?: (item: InboxTipItem) => Promise<void> | void;
@@ -123,7 +123,7 @@ export interface InboxTabProps {
    * dispatches to the appropriate wizard (S1 → sign-as-receiver,
    * I1 → pay-invoice, S2 → finalize-send, I2 → finalize-invoice).
    * Required entry point for slatepacks that didn't arrive via the
-   * Smirk relay — i.e. external grin-wallet, Grim, or clipboard handoff.
+   * Smirk relay, i.e. external grin-wallet, Grim, or clipboard handoff.
    */
   /** Open the encrypted-DM surface, now merged into Inbox. */
   onOpenMessages?: () => void;
@@ -715,14 +715,14 @@ function timeAgo(iso: string): string {
 
 /**
  * Bucket a slatepack relay row by age:
- *   - `fresh`    (< 1h) — normal styling.
- *   - `stale`    (≥ 1h, < 24h) — yellow border + "Stale" pill. The
+ *   - `fresh`    (< 1h): normal styling.
+ *   - `stale`    (≥ 1h, < 24h): yellow border + "Stale" pill. The
  *                counterparty has gone quiet for an hour.
- *   - `expiring` (≥ 24h) — red border + "Expiring" pill, dimmed. The
+ *   - `expiring` (≥ 24h): red border + "Expiring" pill, dimmed. The
  *                backend drops the row at 7d; this is just a visual
  *                signal that the user might want to chase the
  *                counterparty or cancel manually.
- * Purely informational — nothing is auto-dropped here.
+ * Purely informational: nothing is auto-dropped here.
  */
 function ageBucket(iso: string): 'fresh' | 'stale' | 'expiring' {
   const t = Date.parse(iso);

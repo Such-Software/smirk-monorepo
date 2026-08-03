@@ -1,36 +1,36 @@
 /**
- * Grin wallet API methods — scan (balance + spendable UTXOs), broadcast,
+ * Grin wallet API methods: scan (balance + spendable UTXOs), broadcast,
  * address→user discovery, and the slatepack relay mailbox.
  *
  * Grin on the v3 backend is NON-CUSTODIAL and nearly stateless: there is NO
  * server-side output store, balance endpoint, history, or output
  * lock/spend/record lifecycle. The client owns output state; the backend only:
  *
- *   - `POST /wallet/grin/scan` — rewinds the UTXO set with the wallet's
+ *   - `POST /wallet/grin/scan`: rewinds the UTXO set with the wallet's
  *     `rewind_hash` (a view-only credential) and returns the matching outputs.
  *     Stores nothing. This is the SOURCE OF TRUTH for balance + spendable inputs.
- *   - `GET  /wallet/grin/height` — chain tip (for maturity math).
- *   - `POST /wallet/grin/broadcast {tx}` — relays a finalized tx to the node.
- *   - `GET  /wallet/grin/address/{addr}/user` — resolve a bech32 grin address to
+ *   - `GET  /wallet/grin/height`: chain tip (for maturity math).
+ *   - `POST /wallet/grin/broadcast {tx}`: relays a finalized tx to the node.
+ *   - `GET  /wallet/grin/address/{addr}/user`: resolve a bech32 grin address to
  *     its registered owner (user_id + npub) for send routing.
  *
  * The slatepack relay (`/wallet/grin/relay/*`) is a same-instance convenience
  * mailbox: instead of copy/pasting slatepacks out-of-band, the sender posts to
  * `relay/create` and the recipient pulls from `relay/pending`. The relay never
- * sees plaintext — slatepacks are encrypted to the recipient's slatepack
+ * sees plaintext: slatepacks are encrypted to the recipient's slatepack
  * address. v3 keys every entry on its `slate_id` and identifies the caller from
  * the bearer token.
  *
  * The custodial surface (getGrinUserBalance / getGrinOutputs / record / lock /
  * unlock / spend / recordGrinTransaction / updateGrinTransaction / scanUnspent /
- * registerGrinAddress) was deleted — those endpoints 404 on v3. Balance +
+ * registerGrinAddress) was deleted: those endpoints 404 on v3. Balance +
  * recovery now come from `scan`; address registration moved to `POST /keys`.
  */
 
 import { ApiClient, ApiResponse } from './client';
 
 /** A relay entry as the v3 backend returns it (keyed on `slate_id`, no row id).
- *  Internal to this adapter — callers see the mapped legacy shape. */
+ *  Internal to this adapter; callers see the mapped legacy shape. */
 interface GrinRelayEntryV3 {
   slate_id: string;
   sender_user_id: string;
@@ -218,7 +218,7 @@ export function createGrinMethods(client: ApiClient): GrinMethods {
     },
 
     async getGrinPendingSlatepacks(_userId) {
-      // The `_userId` arg is retained for signature compat but unused — v3
+      // The `_userId` arg is retained for signature compat but unused: v3
       // identifies the recipient from the bearer token.
       const res = await client.retryableRequest<{ relays: GrinRelayEntryV3[] }>(
         '/wallet/grin/relay/pending',

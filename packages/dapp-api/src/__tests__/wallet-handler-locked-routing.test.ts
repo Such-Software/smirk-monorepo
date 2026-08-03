@@ -10,7 +10,7 @@
  * handler (so the popup gets a chance to open) instead of returning LOCKED.
  *
  * Passive metadata reads (getPublicKeys / getAddresses / getBackend) have no
- * approval UI and are intentionally still LOCKED-gated — see the tail tests.
+ * approval UI and are intentionally still LOCKED-gated; see the tail tests.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -112,7 +112,7 @@ function recordingApproval(): { handler: ApprovalHandler; seen: ApprovalRequest[
   return { handler, seen };
 }
 
-/** Rejects everything — stands in for the user closing the popup. */
+/** Rejects everything: stands in for the user closing the popup. */
 const rejectAll: ApprovalHandler = async () => ({ approved: false });
 
 function req<M extends SmirkMethod>(method: M, params: SmirkMethodMap[M]['params']) {
@@ -145,7 +145,7 @@ test('connect: unlocked + already-authorized keeps the silent fast path (no prom
     approval: handler,
   });
   const res = await dispatch(req('connect', { assets: ['btc'] }), ORIGIN);
-  assert.equal(seen.length, 0); // no approval — served straight from cache
+  assert.equal(seen.length, 0); // no approval: served straight from cache
   assert.equal((res.result as { btc: string | null })?.btc, 'pub-btc');
 });
 

@@ -1,17 +1,17 @@
 /**
- * ClaimableTipsBanner — Home-tab affordance for tips that are ready
+ * ClaimableTipsBanner: Home-tab affordance for tips that are ready
  * to sweep into the wallet.
  *
  * Surfaces at the top of Home (via `HomeTab.topNotice`) so users
  * notice the money waiting for them without having to navigate into
  * the Inbox. Tapping the banner routes to the Inbox tab where the
- * existing claim UI lives — we don't duplicate per-tip Claim buttons
+ * existing claim UI lives; we don't duplicate per-tip Claim buttons
  * here on purpose: Home is balance-glanceable, Inbox is where you do
  * work.
  *
  * Single-tip case shows the asset + amount inline ("1 BTC tip waiting"),
  * multi-tip case rolls up to a count ("3 tips waiting"). Hidden when
- * `count === 0` — caller doesn't need a `count > 0` guard.
+ * `count === 0`, so the caller doesn't need a `count > 0` guard.
  */
 
 import type { JSX } from 'preact';
@@ -26,7 +26,7 @@ export interface ClaimableTipsBannerProps {
    * "1 tip waiting". Omit when `count !== 1`.
    */
   singleTip?: { assetId: string; amountAtomic: bigint };
-  /** Click handler — typically routes to the Inbox tab. */
+  /** Click handler: typically routes to the Inbox tab. */
   onView: () => void;
 }
 

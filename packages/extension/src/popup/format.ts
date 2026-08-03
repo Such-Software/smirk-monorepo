@@ -1,5 +1,5 @@
 /**
- * Pure formatting + parsing helpers for the popup — number/amount/time/string
+ * Pure formatting + parsing helpers for the popup: number/amount/time/string
  * conversions with no React and no module state. Extracted verbatim from index.tsx
  * so they can be unit-tested and reused without dragging the 7k-line entry point in.
  */
@@ -19,7 +19,7 @@ export function formatUsd(usd: number): string {
 
 /**
  * Parse a decimal string into atomic units using the asset's registered
- * decimals. Pure BigInt math — no floating point. Returns null on any malformed
+ * decimals. Pure BigInt math: no floating point. Returns null on any malformed
  * input (empty, non-numeric, too many fractional digits, or absurdly long).
  */
 export function parseAmount(assetId: string, text: string): bigint | null {
@@ -52,7 +52,7 @@ export function parseAmount(assetId: string, text: string): bigint | null {
 
 /**
  * Normalize a dapp payment-approval request's amount to atomic units. Dapps quote a
- * HUMAN decimal amount (e.g. "9" WOW) — website operators should not have to compute
+ * HUMAN decimal amount (e.g. "9" WOW); website operators should not have to compute
  * per-asset atomic units (8-12 decimals across chains), which is a foot-gun. The
  * wallet owns each asset's decimals and converts here, ONCE, so the confirmation
  * display and the executed transaction agree and `BigInt()` downstream never sees a
@@ -109,7 +109,7 @@ export function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
-/** A random base64url token of `byteLen` bytes — URL-safe (survives a passthrough
+/** A random base64url token of `byteLen` bytes, URL-safe (survives a passthrough
  *  round-trip without percent-encoding surprises). */
 export function randomToken(byteLen: number): string {
   const bytes = new Uint8Array(byteLen);

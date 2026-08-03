@@ -1,4 +1,4 @@
-//! Schnorr adaptor signatures — v0.4 atomic-swap building block.
+//! Schnorr adaptor signatures: v0.4 atomic-swap building block.
 //!
 //! An adaptor signature is an "incomplete" Schnorr signature whose
 //! completion requires a secret scalar `t`. A verifier can confirm that
@@ -102,7 +102,7 @@ pub fn grin_adaptor_complete(
 }
 
 /// Extract the adaptor secret `t` from a completed partial signature given
-/// the original adaptor partial. Used by atomic-swap watchers — once a
+/// the original adaptor partial. Used by atomic-swap watchers: once a
 /// counterparty publishes the completed signature on chain, the watcher
 /// recovers `t` and uses it to claim their side of the swap.
 #[wasm_bindgen]

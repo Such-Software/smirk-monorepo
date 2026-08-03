@@ -8,7 +8,7 @@
 //! the C source uses so clang's `--target=wasm32-unknown-unknown`
 //! compiles without `<string.h>` / `<stdlib.h>`. The README there said
 //! "malloc-using code paths are not exercised by Grin's BP / Pedersen /
-//! aggsig usage" — that was true for the native unit tests, false at
+//! aggsig usage"; that was true for the native unit tests, false at
 //! browser runtime: `bullet_proof_create` allocates a scratch space
 //! via `secp256k1_scratch_space_create` which calls `malloc`.
 //!
@@ -37,7 +37,7 @@ use std::ffi::c_void;
 /// Padding ahead of every allocation that stores the layout size.
 /// 16 bytes is plenty for an `usize` and keeps the user pointer
 /// 16-byte aligned, which is wider than the C99 minimum (8) and
-/// matches what most platforms hand out — defensive for any vector
+/// matches what most platforms hand out: defensive for any vector
 /// types the C lib might use under the hood.
 const HEADER_SIZE: usize = 16;
 const ALIGN: usize = 16;
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
     }
-    // malloc(0) sentinel — see above. Skipping dealloc is correct
+    // malloc(0) sentinel: see above. Skipping dealloc is correct
     // since we never alloc'd via the global allocator in that path.
     if ptr as usize == ALIGN {
         return;
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn free(ptr: *mut c_void) {
     dealloc(raw, layout);
 }
 
-/// C-equivalent calloc — zero-init buffer of `nmemb * size` bytes.
+/// C-equivalent calloc: zero-init buffer of `nmemb * size` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
     let total = nmemb
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
 }
 
 /// C-equivalent realloc. Allocate-copy-free rather than try to
-/// in-place resize — Rust's allocator doesn't expose a portable
+/// in-place resize: Rust's allocator doesn't expose a portable
 /// realloc on wasm32 and the C lib's realloc usage in Grin's BP path
 /// is rare enough that this is fine.
 #[no_mangle]
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_vo
     new_ptr
 }
 
-/// C `abort()` — never returns. We translate to a Rust panic that
+/// C `abort()`: never returns. We translate to a Rust panic that
 /// surfaces in the JS console as an unhandled exception.
 #[no_mangle]
 pub extern "C" fn abort() -> ! {
@@ -147,7 +147,7 @@ pub extern "C" fn abort() -> ! {
 /// `fprintf` is variadic in C but Rust's stable surface doesn't
 /// support `extern "C" fn …(...)`. We declare it with the first two
 /// fixed args only; the C ABI on wasm32 pushes any additional args
-/// to a stack the callee can ignore — since we never read them, no
+/// to a stack the callee can ignore; since we never read them, no
 /// harm. The linker resolves the symbol name (`fprintf`); the C
 /// compiler's signature mismatch is benign at the wasm-symbol level.
 #[no_mangle]

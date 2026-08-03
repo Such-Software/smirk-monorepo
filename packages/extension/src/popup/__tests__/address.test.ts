@@ -1,7 +1,7 @@
 /**
  * Popup address-validation dispatch (extracted from index.tsx). The codecs
  * themselves are covered in @smirk/core address.test.ts; here we cover the
- * popup-specific error shaping — empty input, unknown asset, and the CryptoNote
+ * popup-specific error shaping: empty input, unknown asset, and the CryptoNote
  * base58 char-position hint that helps users spot copy-paste mangling.
  */
 import { test } from 'node:test';
@@ -34,7 +34,7 @@ test('validateSendRecipient: Grin also accepts an npub / raw x-only hex', () => 
   assert.equal(validateSendRecipient('grin', 'npub1notarealbech32'), 'Not a valid npub');
   // A non-npub grin string still goes through the normal address validator.
   assert.match(validateSendRecipient('grin', 'not-an-address') ?? '', /Not a valid GRIN/);
-  // Non-grin assets are unaffected — an npub is not a valid BTC address.
+  // Non-grin assets are unaffected: an npub is not a valid BTC address.
   assert.match(validateSendRecipient('btc', hex) ?? '', /Not a valid BTC/);
 });
 
@@ -43,7 +43,7 @@ test('recipientNpubToHex: hex → itself, non-npub/hex → null', () => {
   assert.equal(recipientNpubToHex(hex), hex);
   assert.equal(recipientNpubToHex('grin1someaddress'), null); // a slatepack address, not nostr
   assert.equal(recipientNpubToHex('npub1bad'), null); // malformed npub
-  assert.equal(recipientNpubToHex('alice@goblin.st'), null); // a NIP-05 name — resolved async, not here
+  assert.equal(recipientNpubToHex('alice@goblin.st'), null); // a NIP-05 name: resolved async, not here
 });
 
 test('isNip05Name + validateSendRecipient accept a NIP-05 name for Grin (federation)', () => {
@@ -54,6 +54,6 @@ test('isNip05Name + validateSendRecipient accept a NIP-05 name for Grin (federat
   assert.equal(isNip05Name('no@tld'), false);
   // Grin accepts a NIP-05 name (format-valid); resolution is deferred to send time.
   assert.equal(validateSendRecipient('grin', 'alice@goblin.st'), null);
-  // Other assets do NOT — a name is not a BTC address.
+  // Other assets do NOT: a name is not a BTC address.
   assert.match(validateSendRecipient('btc', 'alice@goblin.st') ?? '', /Not a valid BTC/);
 });

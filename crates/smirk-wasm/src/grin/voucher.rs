@@ -1,4 +1,4 @@
-//! Wasm exports for Grin voucher transactions — the non-interactive
+//! Wasm exports for Grin voucher transactions: the non-interactive
 //! UTXO transfer pattern used by social tipping.
 //!
 //! Two orchestrators:
@@ -90,7 +90,7 @@ mod dto {
         pub amount: u64,
         pub commitment_hex: String,
         pub proof_hex: String,
-        /// SECRET — caller (JS) encrypts this to recipient via ECIES
+        /// SECRET: caller (JS) encrypts this to recipient via ECIES
         /// or URL fragment key. Never log; never transmit plaintext.
         pub blinding_factor_hex: String,
     }
@@ -105,7 +105,7 @@ mod dto {
 
     /// Mirror of `grin_ext::voucher::CreateVoucherResult` on the wire.
     /// `tx_json` carries the same data as `tx_bytes_hex` but in the
-    /// JSON shape Grin's `/v2/foreign push_transaction` accepts —
+    /// JSON shape Grin's `/v2/foreign push_transaction` accepts;
     /// hand to backend broadcast unchanged. Sending
     /// `{tx_bytes_hex}` instead fails with
     /// `InvalidArgStructure "tx"` at the node.
@@ -140,7 +140,7 @@ mod dto {
         pub kernel_excess_hex: String,
         pub tx_bytes_hex: String,
         /// JSON-shaped Transaction body. Hand straight to the
-        /// backend's broadcast endpoint as the `tx` field — same
+        /// backend's broadcast endpoint as the `tx` field, same
         /// contract as `FinalizeSendResultDto.tx_json` for the
         /// slate-ceremony flow. Without this the caller would have
         /// to re-deserialize tx_bytes_hex from the custom wire

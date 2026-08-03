@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * balance-freshness-cue — the escalating "are these balances live?" affordance
+ * balance-freshness-cue: the escalating "are these balances live?" affordance
  * (packages/ui/src/components/FreshnessCue.tsx) escalates on SUSTAINED refresh
  * failure and clears once a refresh succeeds again.
  *

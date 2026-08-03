@@ -56,7 +56,7 @@ export interface AuthMethods {
      * redeploy; omitted for a returning wallet, which the backend
      * exempts. The `challenge` must be the FULL original
      * Challenge object returned by `/auth/pow-challenge`, NOT the
-     * Solution's internal challenge-hash field — the envelope shape
+     * Solution's internal challenge-hash field: the envelope shape
      * matches the backend's `altcha::Payload` struct exactly.
      *
      * The typed alias is in `@smirk/core/pow.ts::AltchaPayload`;
@@ -130,7 +130,7 @@ export interface AuthMethods {
    * Sign in with a seed-derived Nostr identity (NIP-98). Builds + signs the auth
    * event for POST /auth/nostr and returns a session. The npub must already be
    * linked (see `linkNostr`); 401 otherwise. Shell-agnostic (extension / desktop
-   * / mobile) — the logic lives here in core.
+   * / mobile): the logic lives here in core.
    */
   nostrLogin(identity: NostrIdentity): Promise<
     ApiResponse<{
@@ -242,7 +242,7 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
     },
 
     async refreshToken(refreshToken) {
-      // Retry OK — refresh is idempotent (returns same token if not expired).
+      // Retry OK: refresh is idempotent (returns same token if not expired).
       const result = await client.retryableRequest<Record<string, unknown>>(
         '/auth/refresh',
         {
@@ -312,7 +312,7 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
     },
 
     async checkRestore(params) {
-      // Retry OK — check-restore is a read-only query.
+      // Retry OK: check-restore is a read-only query.
       const result = await client.retryableRequest<Record<string, unknown>>(
         '/auth/check-restore',
         {
@@ -346,7 +346,7 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
     },
 
     async linkNostr(identity) {
-      // 1. Fetch a single-use server nonce (authed — the session JWT is added
+      // 1. Fetch a single-use server nonce (authed: the session JWT is added
       // automatically). The server binds it to THIS account, so a nonce minted
       // for another user cannot be spent here.
       const challenge = await client.request<{ nonce: string }>(

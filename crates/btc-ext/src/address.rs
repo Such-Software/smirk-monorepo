@@ -1,11 +1,11 @@
 //! Address derivation for BTC and LTC.
 //!
 //! Two flavors implemented in v1:
-//! - **P2WPKH** (BIP84) — native segwit, `bc1q…` / `ltc1q…`.
-//! - **P2TR** (BIP86) — taproot, `bc1p…` / `ltc1p…`. Uses BIP341
+//! - **P2WPKH** (BIP84): native segwit, `bc1q…` / `ltc1q…`.
+//! - **P2TR** (BIP86): taproot, `bc1p…` / `ltc1p…`. Uses BIP341
 //!   key-only spend with no script tree.
 //!
-//! Legacy P2PKH and P2SH-P2WPKH are intentionally omitted from v1 — modern
+//! Legacy P2PKH and P2SH-P2WPKH are intentionally omitted from v1: modern
 //! wallets don't generate them, and clients that receive to legacy
 //! addresses can still spend them through PSBT.
 //!
@@ -95,7 +95,7 @@ pub fn decode_recipient_script(
                 .map_err(|_| AddressError::Bech32Decode)?;
             // The address ENCODES the post-tweak output key directly
             // (BIP341 key-only spend). We're constructing the
-            // script_pubkey for a recipient — we never need to spend
+            // script_pubkey for a recipient; we never need to spend
             // from it, so wrapping the x-only as "already tweaked" is
             // exactly right here.
             let tweaked = bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(xonly);

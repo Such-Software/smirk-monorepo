@@ -9,10 +9,10 @@
  * | LTC   | `m/84'/2'/0'/0/0`        | secp256k1, BIP84 native-segwit  |
  * | XMR   | `m/44'/128'/0'/0/0`      | secp256k1 → mod l (Cake-compat) |
  * | WOW   | `m/44'/2086'/0'/0/0`     | secp256k1 → mod l               |
- * | Grin  | (separate — see below)   | ed25519 over legacy `SHA256(master + "smirk:grin:v1")` |
+ * | Grin  | (separate: see below)    | ed25519 over legacy `SHA256(master + "smirk:grin:v1")` |
  *
  * BTC/LTC switched from `m/44'/coin'/...` to `m/84'/coin'/...` on
- * 2026-05-11 — the older path produced P2WPKH bech32 addresses at a
+ * 2026-05-11: the older path produced P2WPKH bech32 addresses at a
  * non-standard derivation that no off-the-shelf wallet (Sparrow,
  * Electrum, Cake, Bitcoin Core) reproduces from a seed import. v0.3
  * standardizes on BIP84 so a Smirk seed restored anywhere matches.
@@ -22,12 +22,12 @@
  * Three derivation generations exist and we keep all of them so old
  * wallets can be swept and migrated:
  *
- *   v1: legacy custom SHA256(seed || `smirk:{coin}:v1`) — XMR/WOW
+ *   v1: legacy custom SHA256(seed || `smirk:{coin}:v1`) (XMR/WOW)
  *   v2: buggy SLIP-10 ed25519 at the 3-level path `m/44'/coin'/0'`
  *   v3: BIP32 secp256k1 at `m/44'/coin'/0'/0/0` (current, Cake-compatible)
  *
  * Grin gets its own treatment in `grin-ext` (HMAC-SHA512 with key
- * `"IamVoldemort"` over the raw BIP39 entropy — matches grin-wallet
+ * `"IamVoldemort"` over the raw BIP39 entropy: matches grin-wallet
  * and Grim). The `deriveGrinKey` here is the **legacy v1** code path,
  * preserved verbatim so existing Smirk wallets keep deriving the same
  * slatepack address. New Grin wallet flows should call into
@@ -48,8 +48,8 @@ import { registry } from '@smirk/assets';
 /**
  * SLIP-0044 BIP44 coin types, sourced from the asset registry.
  *
- * Adding a new chain to the wallet means adding it to `@smirk/assets`
- * — the value flows here automatically. The `assertCoinType` helper
+ * Adding a new chain to the wallet means adding it to `@smirk/assets`:
+ * the value flows here automatically. The `assertCoinType` helper
  * keeps strict typing while making the runtime lookup explicit.
  */
 const COIN_TYPES = {
@@ -71,20 +71,20 @@ function assertCoinType(id: 'btc' | 'ltc' | 'xmr' | 'wow'): number {
 }
 
 export interface GrinKeys {
-  /** Private key (32 bytes) — ed25519 scalar. */
+  /** Private key (32 bytes): ed25519 scalar. */
   privateKey: Uint8Array;
-  /** Public key (32 bytes) — ed25519 point, used as slatepack address. */
+  /** Public key (32 bytes): ed25519 point, used as slatepack address. */
   publicKey: Uint8Array;
 }
 
 export interface CryptonoteKeys {
-  /** Private spend key (32 bytes) — for signing transactions. */
+  /** Private spend key (32 bytes): for signing transactions. */
   privateSpendKey: Uint8Array;
-  /** Private view key (32 bytes) — for scanning + LWS registration. */
+  /** Private view key (32 bytes): for scanning + LWS registration. */
   privateViewKey: Uint8Array;
-  /** Public spend key (32 bytes) — half of the public address. */
+  /** Public spend key (32 bytes): half of the public address. */
   publicSpendKey: Uint8Array;
-  /** Public view key (32 bytes) — half of the public address. */
+  /** Public view key (32 bytes): half of the public address. */
   publicViewKey: Uint8Array;
 }
 
@@ -92,12 +92,12 @@ export interface CryptonoteKeys {
  * All per-asset keys derived from a single mnemonic. The shape varies
  * by chain family because the cryptographic primitives differ:
  *
- * - **UTXO** (BTC, LTC) — secp256k1: one (privateKey, publicKey) pair
+ * - **UTXO** (BTC, LTC): secp256k1, one (privateKey, publicKey) pair
  *   per chain.
- * - **Cryptonote** (XMR, WOW) — ed25519 with the dual-key model: a
+ * - **Cryptonote** (XMR, WOW): ed25519 with the dual-key model, a
  *   spend key and a view key, public AND private. See
  *   {@link CryptonoteKeys}.
- * - **Mimblewimble** (Grin) — schnorr-on-secp256k1zkp plus the
+ * - **Mimblewimble** (Grin): schnorr-on-secp256k1zkp plus the
  *   slatepack-address ed25519 keypair. See {@link GrinKeys}.
  * - **Nostr** (NIP-06 identity): secp256k1 schnorr, one (privateKey,
  *   x-only publicKey) pair at account 0. Cached here so a session-cache
@@ -105,7 +105,7 @@ export interface CryptonoteKeys {
  *   and answer getPublicKey without re-deriving from the now-absent phrase.
  *   Version-independent: the same account-0 path in v1/v2/v3.
  *
- * Per-asset shapes deliberately don't share a base type — that would
+ * Per-asset shapes deliberately don't share a base type: that would
  * paper over the asymmetry and force every consumer to narrow.
  */
 export interface DerivedKeys {
@@ -137,13 +137,13 @@ export function mnemonicToSeed(mnemonic: string, passphrase = ''): Uint8Array {
 }
 
 /**
- * Stable fingerprint for a wallet — `hex(SHA256(SHA256(bip39_seed)))`.
+ * Stable fingerprint for a wallet: `hex(SHA256(SHA256(bip39_seed)))`.
  *
  * Sent to the backend at wallet creation; checked at restore time so we
  * can confirm a recovery is for a Smirk-created wallet (and not, e.g.,
  * a vanilla BIP39 wallet whose user is trying to import into Smirk).
  *
- * 256-bit collision resistance ≈ 2^128 — brute force infeasible.
+ * 256-bit collision resistance ≈ 2^128: brute force infeasible.
  */
 export function computeSeedFingerprint(mnemonic: string, passphrase = ''): string {
   const seed = mnemonicToSeed(mnemonic, passphrase);
@@ -162,11 +162,11 @@ export function computeSeedFingerprint(mnemonic: string, passphrase = ''): strin
  * Derive `m/<purpose>'/coin'/0'/0/0` and return the leaf priv/pub key pair.
  *
  * `purpose` selects the BIP44/BIP84/BIP86 hardened first segment:
- * - `44` — BIP44 legacy path (used internally by XMR/WOW Cake-compatible
+ * - `44`: BIP44 legacy path (used internally by XMR/WOW Cake-compatible
  *   derivation, where the leaf key is then reduced mod ℓ).
- * - `84` — BIP84 native-segwit path (used by BTC/LTC since 2026-05-11,
+ * - `84`: BIP84 native-segwit path (used by BTC/LTC since 2026-05-11,
  *   replacing the earlier non-standard `BIP44 path + P2WPKH encoding`
- *   combination — see `docs/SEND_FLOW.md` § "BTC/LTC standardization to BIP84"
+ *   combination; see `docs/SEND_FLOW.md` § "BTC/LTC standardization to BIP84"
  *   for the migration record).
  */
 function deriveSecp256k1Key(
@@ -200,8 +200,8 @@ function deriveBip84Key(
  *
  * The account xpub is the enabler for the gap-limit fresh-address feature
  * (Lane 5, gated behind `ENABLE_BTCLTC_FRESH_ADDRS`): it lets the wallet
- * derive any receive (`/0/i`) or change (`/1/j`) PUBLIC key — and thus the
- * bech32 address — on a WARM session (session-cache restore, mnemonic +
+ * derive any receive (`/0/i`) or change (`/1/j`) PUBLIC key, and thus the
+ * bech32 address, on a WARM session (session-cache restore, mnemonic +
  * seed absent) WITHOUT the recovery phrase. Signing still requires the
  * mnemonic (the wasm PSBT path), so this xpub is a view-only credential:
  * disclosure derives addresses, never a spend authority.
@@ -211,7 +211,7 @@ function deriveBip84Key(
  */
 export function deriveBip84AccountXpub(masterSeed: Uint8Array, coinType: number): string {
   const account = HDKey.fromMasterSeed(masterSeed).derive(`m/84'/${coinType}'/0'`);
-  // `publicExtendedKey` is the neutered (public-only) serialization — no
+  // `publicExtendedKey` is the neutered (public-only) serialization: no
   // private material is encoded, which is what makes it warm-session safe.
   return account.publicExtendedKey;
 }
@@ -219,9 +219,9 @@ export function deriveBip84AccountXpub(masterSeed: Uint8Array, coinType: number)
 /**
  * Derive the BIP84 key at `.../change/index` under a given account.
  *
- * `source` is EITHER a master seed (with `coinType` supplied) — in which
+ * `source` is EITHER a master seed (with `coinType` supplied), in which
  * case the full `m/84'/coin'/0'/change/index` path is walked and BOTH the
- * private and public key come back — OR an account-level xpub string (the
+ * private and public key come back, OR an account-level xpub string (the
  * `deriveBip84AccountXpub` output), in which case only the PUBLIC key is
  * available (no private material can exist behind a neutered xpub).
  *
@@ -263,10 +263,10 @@ export function deriveBip84KeyAt(
 
 /**
  * Pre-v0.3 BTC/LTC derivation at `m/44'/coin'/0'/0/0` (used with P2WPKH
- * encoding — the Smirk-specific non-standard combination). Kept so the
+ * encoding: the Smirk-specific non-standard combination). Kept so the
  * `seed-to-keys` recovery script can show users their legacy addresses
  * for migration purposes. Not used by the current `deriveAllKeys` v3
- * code path — use `deriveBip84Key` for new derivations.
+ * code path; use `deriveBip84Key` for new derivations.
  */
 export function deriveLegacyBtcLtcKey(
   masterSeed: Uint8Array,
@@ -314,7 +314,7 @@ function scalarToBytes(scalar: bigint): Uint8Array {
 // ============================================================================
 
 /**
- * v1 Monero/Wownero key derivation — SHA256 of master seed + a per-coin
+ * v1 Monero/Wownero key derivation: SHA256 of master seed + a per-coin
  * domain separator. Kept for sweep/migration of pre-v3 wallets.
  *
  * The flow:
@@ -349,7 +349,7 @@ function deriveCryptonoteKeys(masterSeed: Uint8Array, coinId: string): Cryptonot
 }
 
 // ============================================================================
-// v2 SLIP-10 ed25519 derivation (BUGGY — kept for migration)
+// v2 SLIP-10 ed25519 derivation (BUGGY: kept for migration)
 // ============================================================================
 
 /**
@@ -357,7 +357,7 @@ function deriveCryptonoteKeys(masterSeed: Uint8Array, coinId: string): Cryptonot
  *
  * Ref: https://github.com/satoshilabs/slips/blob/master/slip-0010.md
  *
- * ed25519 SLIP-10 only supports hardened derivation — the path
+ * ed25519 SLIP-10 only supports hardened derivation: the path
  * components passed in are raw indices (0, 44, 128) and we OR in the
  * hardened bit ourselves.
  */
@@ -385,7 +385,7 @@ function slip10DeriveEd25519(seed: Uint8Array, path: number[]): Uint8Array {
 }
 
 /**
- * v2 Monero/Wownero derivation — buggy SLIP-10 path `m/44'/coin'/0'`.
+ * v2 Monero/Wownero derivation: buggy SLIP-10 path `m/44'/coin'/0'`.
  *
  * Kept because v2 wallets exist on disk; the migration code reads them,
  * derives v3 keys, and sweeps the v2 funds. Don't use for new wallets.
@@ -396,7 +396,7 @@ function deriveBip44MoneroKeys(masterSeed: Uint8Array, coinType: number): Crypto
   const spendKeyScalar = bytesToScalar(rawKey);
   const privateSpendKey = scalarToBytes(spendKeyScalar);
 
-  // Monero's Hs() — Keccak-256 reduced mod l.
+  // Monero's Hs(): Keccak-256 reduced mod l.
   const viewKeySeed = keccak_256(privateSpendKey);
   const viewKeyScalar = bytesToScalar(viewKeySeed);
   const privateViewKey = scalarToBytes(viewKeyScalar);
@@ -412,7 +412,7 @@ function deriveBip44MoneroKeys(masterSeed: Uint8Array, coinType: number): Crypto
 // ============================================================================
 
 /**
- * v3 Monero/Wownero derivation — BIP32 secp256k1 at
+ * v3 Monero/Wownero derivation: BIP32 secp256k1 at
  * `m/44'/coin'/0'/0/0`, then reduce the leaf private key mod l.
  *
  * The non-hardened tail (`/0/0`) is the choice that matches Cake
@@ -436,11 +436,11 @@ function deriveBip32MoneroKeys(masterSeed: Uint8Array, coinType: number): Crypto
 }
 
 // ============================================================================
-// Grin v1 (legacy — for new flows use @smirk/wasm `grin.deriveExtendedKey`)
+// Grin v1 (legacy: for new flows use @smirk/wasm `grin.deriveExtendedKey`)
 // ============================================================================
 
 /**
- * Legacy Grin slatepack ed25519 keys — `SHA256(master || "smirk:grin:v1")`.
+ * Legacy Grin slatepack ed25519 keys: `SHA256(master || "smirk:grin:v1")`.
  *
  * Preserved verbatim so existing Smirk wallets keep producing the
  * same slatepack address they did before. New Grin wallet flows
@@ -504,7 +504,7 @@ export function deriveNostrKeyFromSeed(
 // Top-level derivation
 // ============================================================================
 
-/** Derivation generation — keep all so v1/v2 wallets can be swept. */
+/** Derivation generation: keep all so v1/v2 wallets can be swept. */
 export type DerivationVersion = 1 | 2 | 3;
 
 /**
@@ -526,7 +526,7 @@ export function deriveAllKeys(
   const masterSeed = mnemonicToSeed(mnemonic, passphrase);
 
   if (version === 3) {
-    // v3 BTC/LTC uses BIP84 (m/84') — the industry-standard P2WPKH path.
+    // v3 BTC/LTC uses BIP84 (m/84'): the industry-standard P2WPKH path.
     // Switched 2026-05-11; pre-v0.3 wallets used m/44' here (non-standard).
     // Legacy `deriveLegacyBtcLtcKey` remains for the seed-to-keys recovery
     // script so users on the old path can locate their funds.

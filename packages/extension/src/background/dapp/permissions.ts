@@ -5,7 +5,7 @@
  *
  * **MV3 storage semantics.** `chrome.storage.local` survives SW
  * eviction (unlike in-memory Maps), so granted permissions persist
- * across browser restarts. Quota is 10 MiB total — each permission
+ * across browser restarts. Quota is 10 MiB total; each permission
  * record is ~200 bytes, supports ~50k origins before that matters.
  */
 
@@ -29,7 +29,7 @@ export function chromeStoragePermissionStore(): OriginPermissionStore {
     },
 
     async set(perm) {
-      // Preserve grantedAt on upsert — the wallet-handler computes
+      // Preserve grantedAt on upsert: the wallet-handler computes
       // the new value but a paranoia layer here guards against
       // accidental "regrant resets the timer" bugs in future
       // adapter code.
@@ -51,7 +51,7 @@ export function chromeStoragePermissionStore(): OriginPermissionStore {
         if (!k.startsWith(KEY_PREFIX)) continue;
         out.push(v as OriginPermission);
       }
-      // Most-recently-used first — matches the Settings UI's expected
+      // Most-recently-used first: matches the Settings UI's expected
       // sort order without forcing every caller to re-sort.
       out.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
       return out;

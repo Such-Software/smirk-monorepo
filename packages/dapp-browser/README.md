@@ -58,7 +58,7 @@ planned v0.4). The interface is the same.
 | Symbol | What it is |
 | ------ | ---------- |
 | `DappBrowserController` | The interface every platform implementation satisfies. |
-| `BrowserSnapshot` | Shape consumed by subscribers — active tab, full tab list, and pre-extracted active state. |
+| `BrowserSnapshot` | Shape consumed by subscribers: active tab, full tab list, and pre-extracted active state. |
 | `BrowserNavigationState` | URL, title, loading, can-go-back/forward, favicon, origin, security indicator. |
 | `BrowserTab`, `TabId` | Tab metadata + branded id. |
 | `BrowserFrameRect` | x/y/width/height for positioning the native webview overlay. |
@@ -71,7 +71,7 @@ planned v0.4). The interface is the same.
 
 ## Implementing a new controller
 
-Subclassing isn't expected — the interface is the contract. A new
+Subclassing isn't expected; the interface is the contract. A new
 platform implementation is a class that satisfies
 `DappBrowserController` against the platform's native APIs.
 
@@ -79,9 +79,9 @@ Required reading before you start:
 
 1. The file header in `src/controller.ts` covers lifecycle invariants.
 2. The `MockController` source (`src/mock-controller.ts`) is a
-   complete reference implementation — short enough to read in five
+   complete reference implementation, short enough to read in five
    minutes. Mirror its shape.
-3. The architecture doc's section on **webview positioning** —
+3. The architecture doc's section on **webview positioning**:
    embedded webviews are native overlays positioned over the wallet
    UI by absolute coordinates, not iframes in the DOM. Your impl
    needs `setFrameRect(rect)` to actually move the native webview.
@@ -116,4 +116,4 @@ the test boundary.
 
 ## License
 
-MIT OR Apache-2.0 — matches the rest of the monorepo.
+MIT OR Apache-2.0: matches the rest of the monorepo.

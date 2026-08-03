@@ -15,7 +15,7 @@
 //! ```
 //!
 //! The `fee` is a 64-bit big-endian value (Grin's `FeeFields` packs
-//! `fee_shift` into the high 4 bits, but we treat it opaquely — the caller
+//! `fee_shift` into the high 4 bits, but we treat it opaquely; the caller
 //! provides the already-packed u64).
 //!
 //! NRD ("No Recent Duplicate") kernels enforce a relative lock height
@@ -37,14 +37,14 @@ pub const NRD_MAX_RELATIVE_HEIGHT: u16 = 10080;
 /// the slate-v4 wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum KernelFeatures {
-    /// Standard kernel — has a fee.
+    /// Standard kernel: has a fee.
     Plain { fee: u64 },
-    /// Coinbase kernel — no fee, no locktime.
+    /// Coinbase kernel: no fee, no locktime.
     Coinbase,
-    /// Height-locked — fee + absolute block-height before which the
+    /// Height-locked: fee + absolute block-height before which the
     /// transaction cannot be included.
     HeightLocked { fee: u64, lock_height: u64 },
-    /// No-Recent-Duplicate — fee + relative lock height (in blocks)
+    /// No-Recent-Duplicate: fee + relative lock height (in blocks)
     /// between successive instances of the same kernel commitment.
     /// `relative_height` must be in `[1, NRD_MAX_RELATIVE_HEIGHT]`.
     Nrd { fee: u64, relative_height: u16 },
@@ -63,7 +63,7 @@ impl KernelFeatures {
 
     /// Reconstruct kernel features from the fields a SlateV4 carries:
     /// `feat` byte, `fee` value, and the optional `feat_args` (which holds
-    /// `lock_hgt` — interpreted as either an absolute lock height for
+    /// `lock_hgt`, interpreted as either an absolute lock height for
     /// `HeightLocked` kernels, or a relative height for NRD kernels).
     ///
     /// Used by `receiver_round_s2` and `sender_finalize_s3` to compute the

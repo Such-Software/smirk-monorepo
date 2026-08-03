@@ -1,15 +1,15 @@
 /**
- * SentTipsScreen — list of tips the user has sent + clawback action.
+ * SentTipsScreen: list of tips the user has sent + clawback action.
  *
  * Powered by `/api/v1/tips/social/sent`. Each row shows status, asset,
  * amount, recipient, and (for clawback-eligible tips) a Clawback
  * button. Two states matter for recovery:
  *
- *   - `draft` — sender abandoned (popup closed mid-flow). No on-chain
+ *   - `draft`: sender abandoned (popup closed mid-flow). No on-chain
  *     funds. "Discard" cancels the draft server-side.
- *   - `pending` / `pending_confirmation` (not claimed yet) — sender
+ *   - `pending` / `pending_confirmation` (not claimed yet): sender
  *     can clawback to recover funds.
- *   - `claimed` / `clawed_back` / `cancelled` — terminal, info-only.
+ *   - `claimed` / `clawed_back` / `cancelled`: terminal, info-only.
  *
  * Component is presentational + state-light: shell provides the data,
  * delegates network calls (refresh, clawback, discard) back.
@@ -36,7 +36,7 @@ export interface SentTipRow {
    *  UI tag rows that survive even if the backend loses them. */
   hasLocalBackup?: boolean;
   /**
-   * Reconstructed share URL for a public tip — only present when (a)
+   * Reconstructed share URL for a public tip: only present when (a)
    * the tip is public, (b) funding has confirmed past the asset's
    * required threshold, AND (c) the local backup carries the URL
    * fragment so the shell can rebuild
@@ -54,11 +54,11 @@ export interface SentTipsScreenProps {
   error?: string;
   onBack: () => void;
   onRefresh: () => Promise<void> | void;
-  /** Clawback an unclaimed tip — recovers funds to the sender. The
+  /** Clawback an unclaimed tip: recovers funds to the sender. The
    *  shell wraps `api.clawbackSocialTip(tipId)` and a per-asset
    *  sweep if needed; returns the success/error. */
   onClawback: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
-  /** Cancel a draft tip — discards server-side state. No funds moved
+  /** Cancel a draft tip: discards server-side state. No funds moved
    *  for drafts so this is just cleanup. */
   onDiscardDraft: (tipId: string) => Promise<{ ok: boolean; error?: string }>;
   resolveIcon?: (key: string) => string | undefined;
@@ -321,7 +321,7 @@ function TipCard({
           </div>
         )}
 
-      {/* Public-tip share affordance — only present when the shell
+      {/* Public-tip share affordance: only present when the shell
           successfully reconstructed the URL from the local backup's
           fragment AND funding has buried. Sits next to (not instead
           of) Clawback: the sender may still want to recover funds
@@ -418,7 +418,7 @@ function statusBadge(row: SentTipRow): { label: string; color: string } {
       return { label: 'Draft', color: 'var(--smirk-fg-muted)' };
     case 'cancelled':
       // Distinguished from a plain Cancelled when a local backup is
-      // available — the user can still recover those funds via
+      // available: the user can still recover those funds via
       // clawback. Without the hint the GC'd-funded-draft case looks
       // identical to a benign abandoned draft.
       return row.hasLocalBackup
@@ -435,8 +435,8 @@ function statusBadge(row: SentTipRow): { label: string; color: string } {
     case 'clawed_back':
       return { label: 'Clawed back', color: 'var(--smirk-positive)' };
     case 'funding_mismatch':
-      // Sender funded LESS than declared. Recoverable via clawback
-      // — the corresponding `isClawbackable` branch surfaces the
+      // Sender funded LESS than declared. Recoverable via clawback;
+      // the corresponding `isClawbackable` branch surfaces the
       // button. Negative color flags this as needing attention.
       return { label: 'Underfunded', color: 'var(--smirk-negative, #ff6b6b)' };
     default:

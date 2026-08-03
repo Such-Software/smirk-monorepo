@@ -1,5 +1,5 @@
 /**
- * BTC/LTC relay-fee floor — one source of truth for every broadcast path.
+ * BTC/LTC relay-fee floor: one source of truth for every broadcast path.
  *
  * Electrum fee estimates can return rates (e.g. 1.0 sat/vB) that sit at
  * or below the network's effective minimum relay fee. A tx built at the
@@ -9,11 +9,11 @@
  *
  * So EVERY BTC/LTC broadcast path must clamp the chosen sat/vB rate to
  * this floor before building the tx:
- *   - SendWizard (display + submit)        — packages/ui
- *   - send() / sendBtcLtc                   — send-handler.ts
- *   - tip funding                           — tip-handler.ts (via send)
- *   - dapp approval send                    — execute-approval.ts (via send)
- *   - tip claim sweep (sweepUtxo)           — tip-claim-handler.ts
+ *   - SendWizard (display + submit):         packages/ui
+ *   - send() / sendBtcLtc:                    send-handler.ts
+ *   - tip funding:                            tip-handler.ts (via send)
+ *   - dapp approval send:                     execute-approval.ts (via send)
+ *   - tip claim sweep (sweepUtxo):            tip-claim-handler.ts
  *
  * A 1.0 sat/vB estimate is what gets rejected in practice, so the floor
  * sits just above it. The tip-funding and sweep paths are the ones that

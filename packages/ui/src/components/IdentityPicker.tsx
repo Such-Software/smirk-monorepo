@@ -1,8 +1,8 @@
 /**
- * Identity avatar + picker — the shared "who am I acting as" control used by the
+ * Identity avatar + picker: the shared "who am I acting as" control used by the
  * Feed composer and each DM thread (per-conversation/context identities).
  *
- * North stars: ACCESSIBLE (a real listbox — keyboard operable, labelled, focus-
+ * North stars: ACCESSIBLE (a real listbox: keyboard operable, labelled, focus-
  * managed) and COOL (a deterministic blockies-style avatar so every identity has a
  * recognizable face). Presentational only: the consumer supplies the identity list +
  * the current selection + an onSelect; resolving keys stays in the wallet.
@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 export type IdentitySource = 'derived' | 'burner' | 'imported' | 'per-origin';
 
 export interface PickerIdentity {
-  /** x-only pubkey hex — the stable id. */
+  /** x-only pubkey hex: the stable id. */
   pubkeyHex: string;
   /** NIP-19 npub, for display + the recognizable face. */
   npub: string;
@@ -28,7 +28,7 @@ const SOURCE_META: Record<IdentitySource, { text: string; hue: number }> = {
   'per-origin': { text: 'per-site', hue: 205 },
 };
 
-/** npub1abcd…wxyz — compact, monospace-friendly. */
+/** npub1abcd…wxyz: compact, monospace-friendly. */
 export function shortNpubDisplay(npub: string): string {
   return npub.length > 18 ? `${npub.slice(0, 10)}…${npub.slice(-4)}` : npub;
 }
@@ -41,7 +41,7 @@ function hexBytes(hex: string): number[] {
 
 /**
  * Deterministic blockies-style avatar: a left-right-symmetric 5×5 block pattern +
- * a two-tone palette, all derived from the pubkey — so an identity always looks the
+ * a two-tone palette, all derived from the pubkey, so an identity always looks the
  * same and different identities look different at a glance.
  */
 export function IdentityAvatar({

@@ -1,5 +1,5 @@
 /**
- * BackendPicker — choose which smirk-backend the wallet talks to.
+ * BackendPicker: choose which smirk-backend the wallet talks to.
  *
  * The wallet is backend-agnostic: the default public instance, a self-hosted
  * smirk-backend-core, or another operator's. This one presentational component
@@ -37,7 +37,7 @@ export interface BackendPickerProps {
   current?: { url: string; instanceName?: string; isDefault: boolean };
   /** The built-in default backend URL, for the "reset to default" affordance. */
   defaultUrl?: string;
-  /** Validate + probe a candidate URL. Never commits — pure read. */
+  /** Validate + probe a candidate URL. Never commits: pure read. */
   probe: (url: string) => Promise<{ ok: boolean; info?: BackendProbeInfo; error?: string }>;
   /** Commit the probed backend (write config + re-point + re-bootstrap). */
   onUse: (info: BackendProbeInfo) => Promise<void>;

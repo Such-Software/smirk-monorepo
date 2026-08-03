@@ -43,7 +43,7 @@ export function SentTipsRoute({
         const backup = backupsById.get(t.id);
         // Reconstruct the share URL only for public tips that have
         // (a) buried funding and (b) a local backup carrying the URL
-        // fragment. Pre-2026-06-04 backups lack the fragment field —
+        // fragment. Pre-2026-06-04 backups lack the fragment field:
         // those tips show no Copy link button (but can still be
         // clawed back; the funds are recoverable, just the URL
         // isn't). The fragment is the secret that decrypts the
@@ -73,7 +73,7 @@ export function SentTipsRoute({
           ...(shareUrl ? { shareUrl } : {}),
         });
       }
-      // Orphan local backups — server lost the row but we can still
+      // Orphan local backups: server lost the row but we can still
       // clawback locally via the stored key material.
       for (const b of backups) {
         if (serverIds.has(b.tipId)) continue;
@@ -112,7 +112,7 @@ export function SentTipsRoute({
       onBack={onBack}
       onRefresh={load}
       onClawback={async (tipId) => {
-        // Full on-chain clawback — see tip-claim-handler.ts.
+        // Full on-chain clawback; see tip-claim-handler.ts.
         // Decrypts local backup, sweeps tip address back to sender's
         // wallet, marks backend as clawed_back, refreshes balances.
         const userId = session?.bootstrap?.userId;
@@ -120,7 +120,7 @@ export function SentTipsRoute({
         const outcome = await clawbackSocialTip(wallet, userId, tipId);
         if (!outcome.ok) return { ok: false, error: outcome.error };
         await removeTipKeyBackup(tipId);
-        // Drop the row from local state — refresh will reflect new
+        // Drop the row from local state; refresh will reflect new
         // backend state on next load.
         setRows((rs) => rs.filter((row) => row.id !== tipId));
         void onRefresh();

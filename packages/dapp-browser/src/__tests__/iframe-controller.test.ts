@@ -3,7 +3,7 @@
  *
  * Runs the shared conformance suite (same one `MockController` runs)
  * and adds iframe-specific assertions for the methods that aren't on
- * the `DappBrowserController` interface — `dispatchPageMessage`,
+ * the `DappBrowserController` interface: `dispatchPageMessage`,
  * `getReloadGen`, `notifyTabLoaded`, `notifyTabTitle`, `inlineMode`.
  */
 
@@ -38,7 +38,7 @@ describe('IframeBrowserController — iframe-specific behaviour', () => {
   it('setFrameRect / hideFrame are no-ops (CSS-laid iframes need no positioning)', async () => {
     const c = new IframeBrowserController();
     await c.open();
-    // open() auto-allocates one tab — that's the conformance
+    // open() auto-allocates one tab: that's the conformance
     // contract. Operate on it directly.
     await c.setFrameRect({ x: 10, y: 20, width: 300, height: 400 });
     await c.hideFrame();

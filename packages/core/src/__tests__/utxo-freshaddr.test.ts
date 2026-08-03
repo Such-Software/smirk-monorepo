@@ -1,5 +1,5 @@
 /**
- * Lane 5 — BTC/LTC HD gap-limit fresh addresses.
+ * Lane 5: BTC/LTC HD gap-limit fresh addresses.
  *
  * Unit coverage for the money-safe, deterministic pieces:
  *  - BIP84 account xpub + `deriveBip84KeyAt` reproduce index 0 and match a
@@ -165,7 +165,7 @@ test('reserveChange is monotonic and collision-free under concurrency (mutex)', 
   const N = 50;
   const results = await Promise.all(Array.from({ length: N }, () => book.reserveChange()));
   results.sort((a, b) => a - b);
-  // Every index 0..N-1 handed out exactly once — no duplicates, no gaps.
+  // Every index 0..N-1 handed out exactly once: no duplicates, no gaps.
   assert.deepEqual(results, Array.from({ length: N }, (_, i) => i));
   assert.equal((await book.read()).changeNext, N);
 });
@@ -175,7 +175,7 @@ test('scan indices always include index 0 and cover the gap window', async () =>
   const recv = await book.receiveScanIndices();
   assert.equal(recv[0], 0);
   assert.equal(recv[recv.length - 1], GAP_LIMIT); // 0 + GAP_LIMIT
-  // The change window is a gap window too, never "only what we reserved" —
+  // The change window is a gap window too, never "only what we reserved";
   // that is what makes a restored wallet find its change.
   const chg0 = await book.changeScanIndices();
   assert.equal(chg0[0], 0);

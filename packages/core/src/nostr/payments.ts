@@ -1,10 +1,10 @@
 /**
- * Payment payloads — the structured content carried inside a NIP-17 gift-wrapped
+ * Payment payloads: the structured content carried inside a NIP-17 gift-wrapped
  * rumor (kind 14) for value transfer over Nostr (P3, the Goblin convergence).
  *
  * A tip, an atomic-swap coordination step, and an interactive Grin slatepack
  * exchange are all just typed payloads on the SAME rail: a kind-1059 gift-wrap.
- * The relay only ever sees ciphertext addressed to an npub — the discriminator
+ * The relay only ever sees ciphertext addressed to an npub; the discriminator
  * lives in here, inside the seal, where only the recipient can read it.
  *
  * Wire shape is deliberately small + versioned so Goblin (and any future client)
@@ -15,19 +15,19 @@
 /** Protocol marker tag placed on the rumor so Goblin recognizes the payload. */
 export const GOBLIN_PROTOCOL_TAG: readonly [string, string] = ['goblin', '1'];
 
-/** NIP-17 direct-message rumor kind — the inner event a gift-wrap carries. */
+/** NIP-17 direct-message rumor kind: the inner event a gift-wrap carries. */
 export const PAYMENT_RUMOR_KIND = 14;
 
-/** NIP-59 gift-wrap kind — the outer envelope (matches the backend relay's
+/** NIP-59 gift-wrap kind: the outer envelope (matches the backend relay's
  *  `GIFT_WRAP_KIND`). Filter inbox reads on `{ kinds: [GIFT_WRAP_KIND] }`. */
 export const GIFT_WRAP_KIND = 1059;
 
 /**
  * Where a Grin slatepack sits in the interactive S1→S2→S3 exchange:
- *   - `offer`    — S1 from the sender; the recipient must respond;
- *   - `response` — S2 from the recipient, back to the sender to finalize;
- *   - `finalize` — a settlement notice (S3 broadcast) closing the exchange;
- *   - `cancel`   — the sender (or recipient) abandons the exchange.
+ *   - `offer`    : S1 from the sender; the recipient must respond;
+ *   - `response` : S2 from the recipient, back to the sender to finalize;
+ *   - `finalize` : a settlement notice (S3 broadcast) closing the exchange;
+ *   - `cancel`   : the sender (or recipient) abandons the exchange.
  */
 export type GrinSlatepackRole = 'offer' | 'response' | 'finalize' | 'cancel';
 
@@ -44,7 +44,7 @@ export interface GrinSlatepackPayload {
   memo?: string;
 }
 
-/** A tip — value pushed to an npub. Shape spans interactive + non-interactive
+/** A tip: value pushed to an npub. Shape spans interactive + non-interactive
  *  assets: `slatepack` carries an interactive Grin tip; `txid` settles a
  *  non-interactive one (XMR/BTC/…); `address` lets it double as a pay-me
  *  request. Only `asset` + `amount` are required. */
@@ -62,7 +62,7 @@ export interface TipPayload {
 export type PaymentPayload = GrinSlatepackPayload | TipPayload;
 
 /** An unsigned rumor template (kind 14) ready for {@link wrapPayment}. Not a
- *  full event — `wrapEvent` stamps `pubkey`/`created_at`/`id`. */
+ *  full event: `wrapEvent` stamps `pubkey`/`created_at`/`id`. */
 export interface UnsignedRumor {
   kind: number;
   content: string;
@@ -97,7 +97,7 @@ const GRIN_ROLES: ReadonlySet<string> = new Set<GrinSlatepackRole>([
 
 /**
  * Parse + validate a rumor's content into a {@link PaymentPayload}. Throws on any
- * shape the current version doesn't recognize — callers treat a throw as "not a
+ * shape the current version doesn't recognize; callers treat a throw as "not a
  * payment for us" and skip the event.
  */
 export function parsePaymentPayload(content: string): PaymentPayload {

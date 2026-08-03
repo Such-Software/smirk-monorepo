@@ -19,7 +19,7 @@
  * an arbitrary string (e.g. a URL or a session id).
  *
  * Construct via `makeTabId(string)`. Controllers generate ids however
- * they like — typically UUID v4 — but consumers should treat the
+ * they like, typically UUID v4, but consumers should treat the
  * value as fully opaque.
  */
 export type TabId = string & { readonly __tag: 'TabId' };
@@ -41,7 +41,7 @@ export function makeTabId(raw: string): TabId {
  * the browser's URL bar plus the bits the chrome needs to render
  * (loading state, history navigability, favicon).
  *
- * State is *observed*, not commanded — to change the URL you call
+ * State is *observed*, not commanded: to change the URL you call
  * `controller.navigate(url)`, then receive the new state via
  * `controller.subscribe`.
  */
@@ -95,7 +95,7 @@ export interface BrowserNavigationState {
 // ======================================================================
 
 /**
- * A single browser tab. Tabs are the unit of webview ownership — each
+ * A single browser tab. Tabs are the unit of webview ownership: each
  * tab corresponds to exactly one native webview instance under the
  * hood.
  *
@@ -141,7 +141,7 @@ export interface BrowserFrameRect {
 
 /**
  * Wire-format message from an embedded page, paired with the origin
- * the controller resolved it from. Opaque to this package — the
+ * the controller resolved it from. Opaque to this package: the
  * `request` field is whatever shape `@such-software/smirk-dapp-api`'s wallet
  * handler expects.
  *

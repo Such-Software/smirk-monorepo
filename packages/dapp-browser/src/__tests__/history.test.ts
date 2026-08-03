@@ -1,5 +1,5 @@
 /**
- * Tests for `InMemoryHistoryStore` — the default `HistoryStore` impl
+ * Tests for `InMemoryHistoryStore`: the default `HistoryStore` impl
  * used in tests and as a fallback before a persistent adapter is
  * wired in.
  *

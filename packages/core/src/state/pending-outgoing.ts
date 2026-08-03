@@ -1,5 +1,5 @@
 /**
- * pendingOutgoing — sender-side tracking of in-flight transactions.
+ * pendingOutgoing: sender-side tracking of in-flight transactions.
  *
  * When a Send completes successfully, the wallet records the txHash +
  * amount + fee in session state. The displayed balance subtracts the
@@ -41,13 +41,13 @@ export interface PendingOutgoingTx {
   /**
    * Sum of the input atomic amounts this tx consumed. JSON-string of
    * BigInt. Set by the send-handler; load-bearing for the "post-send
-   * locked change preview" — for CryptoNote/Mimblewimble chains the
+   * locked change preview": for CryptoNote/Mimblewimble chains the
    * displayed-available subtracts this whole sum (because the change
    * output will be locked, not immediately spendable), and the
    * difference (`inputsTotal − amount − fee`) appears as expected
    * locked change in the displayed-locked total until LWS reflects.
    * For UTXO chains the change is immediately spendable so this field
-   * is informational only — display still subtracts amount + fee.
+   * is informational only; display still subtracts amount + fee.
    *
    * Optional for forward compat with the timing-only v1 entries; old
    * entries fall back to the simpler `amount + fee` subtraction.
@@ -56,9 +56,9 @@ export interface PendingOutgoingTx {
   /**
    * Chain-appropriate identifiers for the inputs this tx spent. Used
    * for (a) input-selection filtering on subsequent sends in the same
-   * pending window — keeps the send-handler from picking the same
+   * pending window, keeps the send-handler from picking the same
    * UTXO / output twice before LWS/Electrum has reflected the spend
-   * (the mempool-double-spend footgun), and (b) reconciliation —
+   * (the mempool-double-spend footgun), and (b) reconciliation:
    * when none of these identifiers remains in the spendable set, LWS
    * has caught up and this entry can be dropped early.
    *
@@ -74,7 +74,7 @@ export interface PendingOutgoingTx {
    */
   inputs?: string[];
   /**
-   * Why this tx was sent — drives the per-asset Activity row's copy
+   * Why this tx was sent: drives the per-asset Activity row's copy
    * and tap-routing. Discriminated union so future categories (dapp
    * payments, v0.4 native swap deposits, etc.) drop in without
    * touching existing renderers.
@@ -82,7 +82,7 @@ export interface PendingOutgoingTx {
    * Optional + backward-compatible: pre-context entries render as
    * generic "Sending to {recipient}". Add a new variant in three
    * places: this union, the creating handler, and the Activity row
-   * renderer — no migration on stored entries needed because the
+   * renderer. No migration on stored entries is needed because the
    * field is optional.
    */
   context?: PendingOutgoingContext;
@@ -105,7 +105,7 @@ export type PendingOutgoingContext =
  * for each chain:
  *
  * - **WOW** ~2-min blocks, 4-conf cushion → 8 min on-chain + LWS rescan.
- *   5 min is short by ~30%, intentionally — the trade is "snap back to
+ *   5 min is short by ~30%, intentionally: the trade is "snap back to
  *   correct LWS state slightly early" vs "double-displayed balance
  *   sitting around indefinitely if scan never picks up". A user who
  *   sends and gets unlucky may see a brief flicker; cheaper than a
@@ -118,7 +118,7 @@ export type PendingOutgoingContext =
  * - **BTC/LTC** ~10 / ~2.5 min blocks, 1-conf shown as available →
  *   60 min covers worst case Electrum lag.
  * - **Grin** ~60 s blocks, but the lock-window cushion makes the
- *   relevant window 60 min — matches BTC/LTC for now. Revisit once
+ *   relevant window 60 min, matching BTC/LTC for now. Revisit once
  *   we have spend telemetry from production.
  */
 const AGE_OUT_MS_BY_ASSET: Record<string, number> = {
@@ -139,7 +139,7 @@ export function isStale(tx: PendingOutgoingTx, now: number): boolean {
 
 /**
  * Filter a pendingOutgoing list to entries that are (a) for `asset`
- * and (b) not aged out. Pure — caller decides whether to actually
+ * and (b) not aged out. Pure: caller decides whether to actually
  * prune the underlying state.
  */
 export function pendingOutgoingFor(
@@ -151,7 +151,7 @@ export function pendingOutgoingFor(
 }
 
 /**
- * Sum of outgoing amounts (recipient amount only — fee comes from the
+ * Sum of outgoing amounts (recipient amount only; fee comes from the
  * input total separately, double-counting the fee here would oversub-
  * tract). Atomic units, BigInt.
  */
@@ -163,7 +163,7 @@ export function pendingOutgoingTotal(
   let total = 0n;
   for (const e of pendingOutgoingFor(entries, asset, now)) {
     // amount represents what left the wallet to the recipient. The fee
-    // also leaves the wallet — but for displayed-available math the
+    // also leaves the wallet, but for displayed-available math the
     // fee is part of `confirmed` reduction the network reflects, not
     // something we subtract here. We DO subtract fee for "outgoing
     // total" displayed to user (see pendingOutgoingTotalWithFee).
@@ -173,7 +173,7 @@ export function pendingOutgoingTotal(
 }
 
 /**
- * Sum including fee — `amount + fee` per entry. Use for the "Sending
+ * Sum including fee: `amount + fee` per entry. Use for the "Sending
  * X" subline. For UTXO chains this is also the right deduction from
  * displayed-available (change is immediately spendable). For
  * CryptoNote/Mimblewimble use `inFlightInputsTotal` instead.
@@ -194,7 +194,7 @@ export function pendingOutgoingTotalWithFee(
  * Sum of `inputsTotal` across non-stale entries for an asset. For
  * CryptoNote / Mimblewimble chains this is the right thing to
  * subtract from displayed-available because the change output will be
- * locked, not immediately spendable — i.e. *all* the inputs we spent
+ * locked, not immediately spendable: i.e. *all* the inputs we spent
  * have effectively left the spendable set. Falls back to
  * `amount + fee` for old entries without `inputsTotal` (forward-compat
  * with v1 schema).
@@ -216,7 +216,7 @@ export function inFlightInputsTotal(
 }
 
 /**
- * Expected locked change from non-stale entries — `inputsTotal − amount
+ * Expected locked change from non-stale entries: `inputsTotal − amount
  * − fee`, summed across entries for an asset. For CryptoNote /
  * Mimblewimble chains this is what should appear in displayed-locked
  * during the in-flight window, until LWS reflects the spend and the
@@ -240,12 +240,12 @@ export function expectedLockedChange(
 /**
  * Set of all input identifiers across non-stale `pendingOutgoing`
  * entries for one asset. The send-handler subtracts this from the
- * spendable set before greedy selection — prevents picking an input
+ * spendable set before greedy selection: prevents picking an input
  * we just spent before LWS/Electrum has reflected it (the mempool
  * double-spend footgun).
  *
  * Comparisons are case-insensitive on the key-image side (LWS returns
- * lowercase hex; we lowercase on insert as well) — caller can use
+ * lowercase hex; we lowercase on insert as well), so the caller can use
  * `Set.has` directly without further normalization.
  */
 export function recentlySpentInputs(
@@ -263,15 +263,15 @@ export function recentlySpentInputs(
 
 /**
  * Reconciliation: drop entries whose every input is in the supplied
- * `verifiedSpent` set — i.e. the network (LWS / Electrum / etc.) now
+ * `verifiedSpent` set: i.e. the network (LWS / Electrum / etc.) now
  * reflects the spend. Comparison is by identifier in the same format
  * as `PendingOutgoingTx.inputs` (lowercase-hex key image for
  * CryptoNote, `txid:vout` for UTXO).
  *
  * Why "verified spent" rather than "still spendable": for XMR/WOW we
  * already compute the verified-spent set as part of balance fetch
- * (spend-key derived key images that match server-reported candidates)
- * — surfacing it costs nothing extra. The "still spendable" inverse
+ * (spend-key derived key images that match server-reported candidates),
+ * so surfacing it costs nothing extra. The "still spendable" inverse
  * would require an additional unspent_outs fetch per refresh.
  *
  * Returns the kept entries. An entry without `inputs` (legacy v1
@@ -293,7 +293,7 @@ export function reconcilePendingOutgoing(
     if (e.asset !== asset) return true; // not our concern
     if (!e.inputs || e.inputs.length === 0) return true; // can't reconcile, keep
     // Drop only when EVERY input is verified spent. A single input
-    // not in the set means "LWS hasn't fully reflected yet" — keep
+    // not in the set means "LWS hasn't fully reflected yet", so keep
     // the entry to keep the displayed-available subtraction live.
     const allVerifiedSpent = e.inputs.every((id) => verifiedSpent.has(id));
     return !allVerifiedSpent;

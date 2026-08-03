@@ -1,7 +1,7 @@
 import type { Theme } from './types';
 
 /**
- * Amiga Workbench 1.x — the iconic four-color palette (black, white,
+ * Amiga Workbench 1.x: the iconic four-color palette (black, white,
  * cobalt blue, orange) of the OG Workbench desktop. Bold, plasticky,
  * unmistakable. Sharp rectangles, thick borders, and a bitmap-feel
  * Topaz-ish font.
@@ -12,13 +12,13 @@ import type { Theme } from './types';
  *   color 2 = #FFFFFF (highlight surface)
  *   color 3 = #FF8800 (accent / drag bars)
  *
- * Workbench used a strict 4-color WB screen — we lean into that
+ * Workbench used a strict 4-color WB screen; we lean into that
  * constraint instead of softening it. Chrome is white-on-blue with
  * orange accents; surfaces are white "windows" with thick black
  * borders, which is what Workbench actually looked like.
  */
 export const amigaTheme: Theme = {
-  // Stable id — kept as `amiga`. Display name uses the OS name
+  // Stable id: kept as `amiga`. Display name uses the OS name
   // ("Workbench") rather than the Commodore hardware trademark.
   id: 'amiga',
   name: 'Workbench',
@@ -50,7 +50,7 @@ export const amigaTheme: Theme = {
 
     // Topaz was the Workbench system bitmap font; the extension bundles
     // Press Start 2P (OFL, /fonts/) as the closest permissively-licensed
-    // pixel substitute — see the @font-face in the CSS payload. If a
+    // pixel substitute; see the @font-face in the CSS payload. If a
     // user has a real Topaz on the system, that wins via the front of
     // the stack.
     fontFamily:
@@ -65,7 +65,7 @@ export const amigaTheme: Theme = {
     radiusSm: '0',
     radiusLg: '0',
 
-    // No drop shadows on Workbench — depth was conveyed by stacking
+    // No drop shadows on Workbench: depth was conveyed by stacking
     // windows with thick borders. Use sharp 2px outlines via box-shadow
     // when components ask for raised/sunken styling.
     shadowRaised: '0 0 0 1px #000000, inset 1px 1px 0 #ffffff',

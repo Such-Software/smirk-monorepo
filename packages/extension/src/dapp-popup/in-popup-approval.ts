@@ -1,5 +1,5 @@
 /**
- * In-popup ApprovalHandler — surfaces the dapp approval prompt as a
+ * In-popup ApprovalHandler: surfaces the dapp approval prompt as a
  * modal inside the wallet's current React tree, instead of opening
  * a separate native popup window.
  *
@@ -7,16 +7,16 @@
  *  - Tauri desktop (no `chrome.windows.create`, no SW; the
  *    embedded-browser tab dispatches requests to the wallet's main
  *    window where this handler renders the modal in the Browse tab).
- *  - Future Capacitor mobile (same constraint — no separate window,
+ *  - Future Capacitor mobile (same constraint: no separate window,
  *    the approval is an in-app sheet over the active screen).
  *
  * The extension's Chrome MV3 flow uses `chromePopupApprovalHandler`
- * instead, because the SW context can't host a modal — it has to
+ * instead, because the SW context can't host a modal; it has to
  * open a foreground popup window where the wallet UI can run.
  *
  * The handler is a single-pending-at-a-time queue: if a second
  * request arrives while one is open, it's denied with a clear error
- * so the dapp can retry. We don't try to stack modals — concurrent
+ * so the dapp can retry. We don't try to stack modals: concurrent
  * approval dialogs are confusing and historically a source of
  * sign-the-wrong-thing UX bugs.
  */
@@ -28,7 +28,7 @@ import type {
 } from '@such-software/smirk-dapp-api';
 
 export interface InPopupApprovalQueue {
-  /** ApprovalHandler implementation — pass to `createWalletHandler`. */
+  /** ApprovalHandler implementation: pass to `createWalletHandler`. */
   readonly handler: ApprovalHandler;
 
   /**
@@ -41,7 +41,7 @@ export interface InPopupApprovalQueue {
   /**
    * Resolve the currently-open request with the user's decision.
    * No-op if there is no pending request (e.g., user clicked
-   * approve twice — first click already resolved it).
+   * approve twice; first click already resolved it).
    */
   resolveCurrent(result: ApprovalResult): void;
 }

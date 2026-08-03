@@ -1,5 +1,5 @@
 /**
- * Nostr MessagingProvider — the default adapter.
+ * Nostr MessagingProvider: the default adapter.
  *
  * NIP-17 private DMs over NIP-59 gift-wrap. Sending uses nostr-tools' vetted
  * `nip17` (kind-14 rumor, kind-13 seal, kind-1059 gift-wrap), which keeps the
@@ -28,7 +28,7 @@ const DM_RELAY_LIST_KIND = 10050;
 /**
  * Securely unwrap a NIP-59 gift-wrap DM. Delegates to the shared, hardened
  * {@link unwrapRumorSecurely} (verifies the kind-13 seal signature + enforces
- * seal.pubkey === rumor.pubkey — the anti-impersonation check nostr-tools'
+ * seal.pubkey === rumor.pubkey, the anti-impersonation check nostr-tools'
  * `unwrapEvent` omits). Re-exported here for the existing DM call sites.
  */
 export const unwrapDmSecurely = unwrapRumorSecurely;
@@ -45,7 +45,7 @@ export function wrapToDirectMessage(
   const rumor = unwrapDmSecurely(wrap, recipientSk);
   if (!rumor) return null;
   const nowSec = Math.floor(Date.now() / 1000);
-  // The rumor `id`/`created_at` are UNSIGNED (inside the encrypted layer) — the
+  // The rumor `id`/`created_at` are UNSIGNED (inside the encrypted layer): the
   // authenticated seal only binds the AUTHOR, not these fields. So an
   // authenticated-but-malicious sender can pick a `created_at` far in the future
   // (pin-to-top) or a colliding `id` (dedup-suppress another message). Key off
@@ -114,7 +114,7 @@ export class NostrMessagingProvider implements MessagingProvider {
       {
         onevent: (evt: { id?: string; pubkey: string; content: string }) => {
           // Verifying unwrap: skips anything with a bad seal sig or a
-          // seal/rumor author mismatch (impersonation) — see unwrapDmSecurely.
+          // seal/rumor author mismatch (impersonation); see unwrapDmSecurely.
           const dm = wrapToDirectMessage(evt, identity.privateKey);
           if (dm) onMessage(dm);
         },

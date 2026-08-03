@@ -1,11 +1,11 @@
 /**
- * UnifiedBalance — the single large total at the top of Home.
+ * UnifiedBalance: the single large total at the top of Home.
  *
  * Per UI_DESIGN.md Principle 8: Home leads with one big number that
  * answers *"how much do I have?"*. Per-asset rows live below in a
  * BalanceCard list.
  *
- * This component is purely presentational — it takes pre-formatted
+ * This component is purely presentational: it takes pre-formatted
  * strings for the total and pending values. Aggregation across assets,
  * denomination conversion, and price-feed staleness handling live in
  * the consumer (extension/mobile/desktop), not here. That keeps the
@@ -23,7 +23,7 @@ import type { FreshnessCueProps } from './FreshnessCue';
 export interface UnifiedBalanceProps {
   /**
    * Already-formatted total (e.g. `"$2,134.27"` or `"0.04123 BTC"`).
-   * Pass `null` for "not available yet" — renders as a placeholder.
+   * Pass `null` for "not available yet": renders as a placeholder.
    */
   totalDisplay: string | null;
   /**
@@ -32,13 +32,13 @@ export interface UnifiedBalanceProps {
    */
   pendingDisplay?: string | null;
   /**
-   * Already-formatted locked total (on-chain but inside lock window —
+   * Already-formatted locked total (on-chain but inside lock window;
    * CryptoNote chains only). Omit/null/"" suppresses the row.
    */
   lockedDisplay?: string | null;
   /**
    * Already-formatted "in-flight outgoing" total across all assets
-   * (sender-side pendingOutgoing — see
+   * (sender-side pendingOutgoing: see
    * `@smirk/core/state/pending-outgoing`). Omit/null/"" suppresses.
    */
   sendingDisplay?: string | null;
@@ -50,7 +50,7 @@ export interface UnifiedBalanceProps {
   denominationLabel?: string;
   /**
    * Cycle the active denomination. UI_DESIGN says tap the total to
-   * cycle, long-press to open a picker — long-press is platform-
+   * cycle, long-press to open a picker; long-press is platform-
    * specific so we expose a separate `onPickDenomination` for callers.
    */
   onCycleDenomination?: () => void;
@@ -61,7 +61,7 @@ export interface UnifiedBalanceProps {
   /** Toggle hidden state. */
   onToggleHidden: () => void;
   /**
-   * Loading state for the headline number — consumers can show this
+   * Loading state for the headline number: consumers can show this
    * while initial balances stream in. Pending row stays hidden when
    * loading.
    */
@@ -103,7 +103,7 @@ export function UnifiedBalance({
 
   // Seamless balances: once we have a total, KEEP showing it during a background
   // refresh (the freshness cue below signals the update). Only fall back to the
-  // loading glyph when there is no cached total at all — never blank a known
+  // loading glyph when there is no cached total at all: never blank a known
   // number to "…" just because a refresh is in flight.
   const total = hidden
     ? HIDDEN_PLACEHOLDER
@@ -147,7 +147,7 @@ export function UnifiedBalance({
             background: 'transparent',
             border: 'none',
             color: 'inherit',
-            // Buttons don't inherit font-family from their parent —
+            // Buttons don't inherit font-family from their parent;
             // UA stylesheets set their own. Force inherit so pixel
             // themes (DMG, Workbench) actually paint the balance
             // in their theme font.
@@ -244,10 +244,10 @@ export interface HomeActionRowProps {
   onSend?: () => void;
   onReceive?: () => void;
   onSwap?: () => void;
-  /** Hide the Tip action entirely — the backend advertises no social tips. The
+  /** Hide the Tip action entirely: the backend advertises no social tips. The
    *  row reflows to the remaining verbs. Default: shown. */
   showTip?: boolean;
-  /** Disable any combination — e.g. Swap when no swap routes available. */
+  /** Disable any combination: e.g. Swap when no swap routes available. */
   disabled?: Partial<Record<'tip' | 'send' | 'receive' | 'swap', boolean>>;
   class?: string;
 }

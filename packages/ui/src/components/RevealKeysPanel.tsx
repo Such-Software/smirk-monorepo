@@ -1,11 +1,11 @@
 /**
- * `RevealKeysPanel` — surface every cryptographic identifier Smirk
+ * `RevealKeysPanel`: surface every cryptographic identifier Smirk
  * derives from the unlocked seed, behind a "Reveal" gate per dangerous
  * field.
  *
  * Why expose all of this:
  *   - The BTC pubkey hash is what `TEST_POW_REQUIRED_FOR_PUBKEYS` on
- *     the backend wants — without surfacing it somewhere, the only way
+ *     the backend wants; without surfacing it somewhere, the only way
  *     to opt your wallet into the PoW gate is to grep the backend logs
  *     (which truncate at the first 16 chars).
  *   - Power users moving funds to / from other wallets need WIFs for
@@ -13,7 +13,7 @@
  *   - Auditors / staff / forum verifiers may want a public view key for
  *     a CryptoNote address.
  *
- * Threat model: the wallet is already unlocked when this renders — the
+ * Threat model: the wallet is already unlocked when this renders, so the
  * keys live in memory either way. The "Reveal" gate is a shoulder-surf
  * defence, not a cryptographic gate. Private spend keys carry a second
  * "I understand" tap so a misclick doesn't paint your seed value on
@@ -21,7 +21,7 @@
  *
  * Address-reuse caveat for BTC/LTC xpubs: Smirk currently uses one
  * address per asset (the first derivation under BIP84). xpubs / zpubs
- * derived from the same seed are out of scope here — adding them would
+ * derived from the same seed are out of scope here; adding them would
  * surface that other wallets could derive additional addresses, which
  * is technically true and creates a confusing UX where "my Smirk
  * balance" diverges from "this xpub's balance". Tracked for v0.3.x
@@ -34,7 +34,7 @@ import type { ComponentChildren, JSX } from 'preact';
 
 /**
  * Minimal shape this panel needs from the unlocked wallet. Subset of
- * `@smirk/core::UnlockedWallet` — we don't import the type directly to
+ * `@smirk/core::UnlockedWallet`; we don't import the type directly to
  * keep `@smirk/ui` zero-dependency on `@smirk/core`. The host wallet
  * narrows the type at the call site.
  */
@@ -99,7 +99,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
           setTimeout(() => setCopied(false), 1500);
         } catch {
           // clipboard write can fail on some packaged environments
-          // (Tauri without permission). Silent — the value is still
+          // (Tauri without permission). Silent: the value is still
           // visible to copy manually.
         }
       }}
@@ -353,7 +353,7 @@ export function RevealKeysPanel(props: RevealKeysPanelProps): JSX.Element {
         <em>Reveal</em> only on a device you trust, alone.
       </div>
 
-      {/* PoW gate hash — front and centre since it's the v0.3.x rollout tool. */}
+      {/* PoW gate hash: front and centre since it's the v0.3.x rollout tool. */}
       <Section
         title="Smirk PoW gate hash"
         subtitle="Drop this into TEST_POW_REQUIRED_FOR_PUBKEYS on the backend to make YOUR wallet require a proof-of-work solution while leaving POW_REQUIRED=false globally. Used during the pre-flip safety test (see backend README)."

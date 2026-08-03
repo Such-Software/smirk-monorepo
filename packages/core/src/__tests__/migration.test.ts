@@ -25,7 +25,7 @@ import { chainProviders } from '../chain/registry';
 import type { UtxoChainProvider } from '../chain/provider';
 import type { UtxoEntry } from '../chain/types';
 
-// A well-known BIP-39 test mnemonic (Trezor vector) — NOT a funded wallet.
+// A well-known BIP-39 test mnemonic (Trezor vector), NOT a funded wallet.
 const MNEMONIC =
   'legal winner thank year wave sausage worth useful legal winner thank yellow';
 const PASSWORD = 'correct horse battery staple';
@@ -52,7 +52,7 @@ const REAL_V024 = {
 /**
  * Seal the mnemonic PHRASE bytes exactly as v0.2.x did: XChaCha20-Poly1305 with
  * a PBKDF2-SHA256 key. core `encryptPrivateKey` is byte-identical to the legacy
- * seal (verified), so this produces a genuine v0.2-format `walletState` blob —
+ * seal (verified), so this produces a genuine v0.2-format `walletState` blob;
  * the KAT then proves the v0.3 decryptor reproduces the mnemonic. Swap in a REAL
  * exported v0.2.4 blob here for the final ship-gate check.
  */
@@ -73,7 +73,7 @@ test('decrypt KAT — 600k cohort (pbkdf2Iterations stored)', async () => {
 
 test('decrypt KAT — 100k legacy cohort (pbkdf2Iterations ABSENT ⇒ 100000)', async () => {
   const s = await sealLikeV02(MNEMONIC, PASSWORD, 100_000);
-  // pbkdf2Iterations intentionally absent — decrypt MUST default to 100000.
+  // pbkdf2Iterations intentionally absent: decrypt MUST default to 100000.
   const legacy: LegacyWalletState = { ...s };
   assert.equal(await decryptLegacyMnemonic(legacy, PASSWORD), MNEMONIC);
 });
@@ -137,7 +137,7 @@ test('migrateLegacyWallet — reseal a REAL v0.2.4 blob into a v0.3 keystore', a
 
   // Seed preserved end to end (decrypt → reseal → unlock).
   assert.equal(wallet.mnemonic, MNEMONIC);
-  // The keystore write is the crash-safe commit point — detection flips false.
+  // The keystore write is the crash-safe commit point: detection flips false.
   assert.equal(await detectLegacyWallet(storage), false);
   // Legacy walletState is KEPT (cleanup is a separate, later step).
   assert.notEqual(await storage.get(LEGACY_WALLET_KEY), null);
@@ -146,11 +146,11 @@ test('migrateLegacyWallet — reseal a REAL v0.2.4 blob into a v0.3 keystore', a
 });
 
 // ===========================================================================
-// sweepLegacyBtcLtc — m/44' -> m/84' fund sweep (FUND-CRITICAL)
+// sweepLegacyBtcLtc: m/44' -> m/84' fund sweep (FUND-CRITICAL)
 // ===========================================================================
 
 /** A real unlocked v0.3 wallet (m/84' addresses) sealed from MNEMONIC. Built
- *  once — one 600k-PBKDF2 unlock shared across the sweep KATs. */
+ *  once: one 600k-PBKDF2 unlock shared across the sweep KATs. */
 const WALLET: UnlockedWallet = await new WalletKeystore(
   new InMemoryStorage(),
 ).createWallet({ mnemonic: MNEMONIC, password: PASSWORD });
@@ -252,7 +252,7 @@ test('sweepLegacyBtcLtc — happy path: scans m/44, pays m/84, subtracts fee, pe
   // Destination is the v0.3 m/84' receive address, NEVER the m/44' source.
   assert.equal(out.address, WALLET.addresses.btc);
 
-  // Durable txid record written — the cross-restart double-broadcast guard.
+  // Durable txid record written: the cross-restart double-broadcast guard.
   const rec = await storage.get<{ txid: string }>('smirk_legacy_sweep_btc');
   assert.equal(rec?.txid, 'c'.repeat(64));
 });
@@ -358,7 +358,7 @@ test('sweepLegacyBtcLtc — relay floor is applied (1.0 estimate clamps to 1.1)'
   const storage = new InMemoryStorage();
   // 1 input vsize 110; at floored 1.1 => feeSat = ceil(110*1.1)+1 = 123
   // (110*1.1 = 121.0000…1 in float, so ceil = 122, +1 = 123).
-  // An UNfloored 1.0 would give ceil(110)+1 = 111 — a different output amount,
+  // An UNfloored 1.0 would give ceil(110)+1 = 111, a different output amount,
   // so this asserts the 1.1 floor was actually applied.
   const { provider, calls } = fakeUtxo({
     asset: 'btc',
@@ -409,7 +409,7 @@ test('sweepLegacyBtcLtc — LTC path pays the wallet LTC (ltc1q) address', async
   assert.equal(res.status, 'swept');
   assert.deepEqual(calls.scanned, [legacyLtc.address]);
   assert.match(WALLET.addresses.ltc, /^ltc1q/);
-  // Durable record is per-asset — LTC record present, BTC untouched.
+  // Durable record is per-asset: LTC record present, BTC untouched.
   assert.equal((await storage.get<{ txid: string }>('smirk_legacy_sweep_ltc'))?.txid, 'e'.repeat(64));
   assert.equal(await storage.get('smirk_legacy_sweep_btc'), null);
 });

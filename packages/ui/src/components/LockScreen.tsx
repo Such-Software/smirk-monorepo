@@ -1,5 +1,5 @@
 /**
- * LockScreen — password prompt shown when a wallet exists but is locked.
+ * LockScreen: password prompt shown when a wallet exists but is locked.
  *
  * Rendered by the popup gate when `WalletKeystore.getState().kind === 'locked'`.
  * On submit, calls `onUnlock(password)`; the caller wires that to
@@ -15,11 +15,11 @@ import { Button } from './Button';
 export interface LockScreenProps {
   /**
    * Called when the user submits a password. Caller wires this to
-   * `walletKeystore.unlock(password)`. May throw — the wizard will
+   * `walletKeystore.unlock(password)`. May throw; the wizard will
    * surface the error.
    */
   onUnlock: (password: string) => Promise<void>;
-  /** Optional brand mark URL — extension passes the favicon. */
+  /** Optional brand mark URL: extension passes the favicon. */
   iconUrl?: string;
   class?: string;
 }
@@ -35,7 +35,7 @@ export function LockScreen({ onUnlock, iconUrl, class: className }: LockScreenPr
     setError(null);
     try {
       await onUnlock(password);
-      // Successful unlock removes this screen from the tree — nothing
+      // Successful unlock removes this screen from the tree; nothing
       // more to do here.
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to unlock');

@@ -1,5 +1,5 @@
 /**
- * Tests for `InMemoryBookmarkStore` — the default `BookmarkStore`
+ * Tests for `InMemoryBookmarkStore`: the default `BookmarkStore`
  * impl used in tests and as a fallback before persistent storage is
  * wired in.
  *

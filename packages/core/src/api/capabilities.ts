@@ -1,9 +1,9 @@
 /**
- * Backend capabilities (`GET /capabilities`) — what THIS instance offers, so the
+ * Backend capabilities (`GET /capabilities`): what THIS instance offers, so the
  * wallet adapts per-instance: grey out disabled chains/features, pick the right
  * network, and shape the import-restore UX to the operator's restore policy.
  *
- * Fields mirror the backend wire shape (snake_case) verbatim — no transform, so
+ * Fields mirror the backend wire shape (snake_case) verbatim, no transform, so
  * the types track the OpenAPI contract directly.
  */
 
@@ -16,7 +16,7 @@ export interface RestoreCapability {
   /**
    * Restore-PoW pricing curve: a restore depth (days) free of PoW, then +1
    * hashcash difficulty bit per `pow_days_per_bit` days beyond it (0 = pricing
-   * off), capped at `pow_max_bits`. Optional — older backends omit it. The
+   * off), capped at `pow_max_bits`. Optional; older backends omit it. The
    * wallet computes its required difficulty from these + the chosen restore date.
    */
   pow_free_days?: number;
@@ -28,7 +28,7 @@ export interface RestoreCapability {
  * Registration gates a NEW wallet must clear on this instance (returning wallets
  * and self-hosting bypass them). Mirrors the backend `RegistrationCapability`.
  * Optional on `BackendCapabilities` because legacy/older backends don't advertise
- * it — treat an absent value as "open" (no gates). See {@link summarizeRegistration}.
+ * it: treat an absent value as "open" (no gates). See {@link summarizeRegistration}.
  */
 export interface RegistrationCapability {
   /** A valid operator-minted invite code is required to register. */
@@ -50,13 +50,13 @@ export interface RegistrationCapability {
 
 /** The onboarding path for a backend's registration gates, derived from
  *  {@link RegistrationCapability}. `kind` drives the wizard branch:
- *  - `free`: no user-facing gate (maybe PoW, auto) — proceed straight to register.
- *  - `invite` / `payment`: exactly one gate — route straight to it.
- *  - `choose`: 2+ gates that are ALTERNATIVES (`mode: any`) — show method buttons.
- *  - `sequential`: 2+ gates ALL required (`mode: all`) — collect each in turn. */
+ *  - `free`: no user-facing gate (maybe PoW, auto); proceed straight to register.
+ *  - `invite` / `payment`: exactly one gate; route straight to it.
+ *  - `choose`: 2+ gates that are ALTERNATIVES (`mode: any`); show method buttons.
+ *  - `sequential`: 2+ gates ALL required (`mode: all`); collect each in turn. */
 export interface RegistrationPlan {
   kind: 'free' | 'invite' | 'payment' | 'choose' | 'sequential';
-  /** Enabled user-facing methods (PoW excluded — it is automatic). */
+  /** Enabled user-facing methods (PoW excluded, it is automatic). */
   methods: Array<'invite' | 'payment'>;
   /** Formatted price ("<amount> <ccy>"), when a payment method is involved. */
   price?: string;
@@ -139,7 +139,7 @@ export interface PremiumPlanInfo {
 
 /** The authenticated user's CURRENT premium subscription status (`GET
  *  /premium/status`). Distinct from {@link PremiumCapability} (which is the
- *  operator's plans/pricing) — this is "am I, right now, a subscriber?". Gates
+ *  operator's plans/pricing): this is "am I, right now, a subscriber?". Gates
  *  premium-only actions like posting to a `premium-post` relay feed. */
 export interface PremiumStatus {
   /** True iff the user holds an unexpired subscription. */
@@ -169,7 +169,7 @@ export interface PremiumCapability {
 /**
  * Operator-curated public feed. Present only when `features.feed`. The wallet
  * reads notes DIRECTLY from `relay_url` (+ `extra_relays`) filtered to the
- * owner/allowlist authors — there is no feed-serving backend endpoint. Maps onto
+ * owner/allowlist authors; there is no feed-serving backend endpoint. Maps onto
  * the Nostr `FeedSources` type. See {@link feedSourcesFromCapability}.
  */
 export interface FeedCapability {
@@ -216,7 +216,7 @@ export function summarizeRegistration(reg?: RegistrationCapability): {
   };
 }
 
-/** First-party Nostr relay this instance runs — the wallet's DM inbox, used
+/** First-party Nostr relay this instance runs: the wallet's DM inbox, used
  *  alongside the public interop relays. */
 export interface MessagingCapability {
   /** ws(s):// relay URL to connect to. */
@@ -249,16 +249,16 @@ type Caps = BackendCapabilities | null | undefined;
 export const capAllowsPrices = (c: Caps): boolean => c == null || c.features.prices;
 /** Social tips (`/tips/social/*`). Permissive on unknown (default-off on new backends). */
 export const capAllowsTips = (c: Caps): boolean => c == null || c.features.tips;
-/** Social tips, STRICT — only when a caps-advertising backend says tips:true.
+/** Social tips, STRICT: only when a caps-advertising backend says tips:true.
  *  Used to gate the tip poll loops + Tip action so they never fire on a backend
  *  that doesn't run tips (the v3 client only ever talks to caps-advertising
  *  backends, so an unknown/legacy caps reads as "no tips" here). */
 export const capHasTips = (c: Caps): boolean => !!c?.features.tips;
 /** Grin relay (address registration + slatepack relay). Permissive on unknown. */
 export const capAllowsGrin = (c: Caps): boolean => c == null || c.features.grin_relay;
-/** First-party Nostr relay (DM inbox). STRICT — only when advertised. */
+/** First-party Nostr relay (DM inbox). STRICT: only when advertised. */
 export const capHasRelay = (c: Caps): boolean => !!c?.features.nostr_relay && !!c?.messaging;
-/** Operator public feed. STRICT — needs the flag AND the feed config block. */
+/** Operator public feed. STRICT: needs the flag AND the feed config block. */
 export const capHasFeed = (c: Caps): boolean => !!c?.features.feed && !!c?.feed;
 /** Paid premium relay tier. STRICT. */
 export const capHasPremium = (c: Caps): boolean => !!c?.features.premium_relay && !!c?.premium;
@@ -271,7 +271,7 @@ export const capAllowsChain = (
 
 /**
  * Earliest wallet-birthday / restore date this instance's policy permits, given
- * `now`. `null` = no floor (the `unlimited` policy — any date is allowed).
+ * `now`. `null` = no floor (the `unlimited` policy: any date is allowed).
  *
  * - `unlimited`   → `null` (no restriction)
  * - `create-only` → `now` (only a wallet created ~today registers; the backend
@@ -280,7 +280,7 @@ export const capAllowsChain = (
  *
  * The wallet uses this to bound the restore-date picker on import and to explain
  * why an older date isn't available on this backend. Pure (testable; `now` is
- * injected) and the single place the policy semantics live client-side — mirrors
+ * injected) and the single place the policy semantics live client-side; mirrors
  * the backend's enforcement so the UX and the server agree.
  */
 export function earliestRestoreDate(restore: RestoreCapability, now: Date): Date | null {

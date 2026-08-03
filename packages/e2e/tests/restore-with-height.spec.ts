@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * restore-with-height — how the wallet surfaces the operator's RESTORE POLICY.
+ * restore-with-height: how the wallet surfaces the operator's RESTORE POLICY.
  *
  * Whether an early restore/birthday height is allowed is an OPERATOR policy the
  * backend advertises at `GET /capabilities` (`restore.policy`) and enforces at
@@ -19,16 +19,16 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *
  *   (A) `GET /capabilities` reports `restore.policy === "create-only"` (asserted
  *       via `page.request.get`, which originates from the POPUP page and IS
- *       capturable — unlike the offscreen bootstrap-auth traffic), AND
+ *       capturable, unlike the offscreen bootstrap-auth traffic), AND
  *   (B) the import onboarding wizard offers NO restore-height / birthday PICKER
  *       (the field is absent). As of v0.3.0 there is deliberately no per-shell
- *       restore-date picker — the import flow always stamps the birthday to
+ *       restore-date picker: the import flow always stamps the birthday to
  *       "now" (create), which is exactly what create-only wants. Asserting the
  *       absence of that control is the client-side expression of create-only.
  *
  * WHY NOT wait on bootstrap-auth: the extension's `POST /auth/extension` fires
  * from the OFFSCREEN document, which is invisible to Playwright's
- * page/context response listeners and `waitForResponse` — any such wait ALWAYS
+ * page/context response listeners and `waitForResponse`; any such wait ALWAYS
  * times out. Auth setup therefore goes through `importAndUnlock`, which detects
  * a valid token via a REAL backend balance rendering on Home (alice's WOW), not
  * by sniffing the offscreen request.
@@ -55,7 +55,7 @@ test('create-only backend: /capabilities reports create-only and onboarding offe
   // ── 1. Assert the import wizard offers NO restore-height / birthday field ──
   // Do this on the FIRST import step (the mnemonic entry screen) before we
   // complete onboarding, so we observe the actual restore surface a user sees.
-  // A create-only instance greys/hides the control entirely — the seed-word
+  // A create-only instance greys/hides the control entirely: the seed-word
   // grid, password, and continue affordances are the ONLY inputs; there is no
   // restore-date picker testid anywhere in the shell (verified in source).
   await page.goto(`chrome-extension://${extensionId}/popup.html`);

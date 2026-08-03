@@ -4,13 +4,13 @@
  * write back the user's decision, returns it.
  *
  * **Why a standalone window, not the action popup?** The action
- * popup closes on focus loss — a long approval flow (read message
+ * popup closes on focus loss: a long approval flow (read message
  * → think → click) often loses focus to the page being dappified,
  * making the prompt disappear mid-decision. A `chrome.windows.create`
  * popup stays open until the popup code closes it explicitly.
  *
  * **MV3 SW eviction safety.** Pending requests and the user's
- * decision both live in `chrome.storage.session` — survives SW
+ * decision both live in `chrome.storage.session`, which survives SW
  * eviction between request kick-off and resolution. The handler
  * subscribes to `chrome.storage.onChanged` for the result key,
  * which fires even if the SW was just respawned to deliver the
@@ -27,7 +27,7 @@ const PENDING_PREFIX = 'smirk:dapp:approval-pending:';
 const RESULT_PREFIX = 'smirk:dapp:approval-result:';
 
 /** Approval requests can hang while the user thinks. We do NOT
- *  expire them — a user may legitimately leave the prompt open for
+ *  expire them: a user may legitimately leave the prompt open for
  *  minutes. The page-side transport has its own 5-minute timeout
  *  which converts to a USER_REJECTED error on the dapp side, but
  *  the wallet side leaves the storage record for forensics. */
@@ -74,7 +74,7 @@ export function chromePopupApprovalHandler(): ApprovalHandler {
     const win = await chrome.windows.create({
       url: popupUrl,
       type: 'popup',
-      // Reasonable wallet popup dimensions. Specific to Chromium —
+      // Reasonable wallet popup dimensions. Specific to Chromium;
       // Firefox honors the same fields.
       width: 420,
       height: 640,
@@ -88,7 +88,7 @@ export function chromePopupApprovalHandler(): ApprovalHandler {
       return await waitForResult(id);
     } finally {
       // Best-effort cleanup of both keys + the window. Errors here
-      // don't matter — eventually the storage shape garbage-collects
+      // don't matter: eventually the storage shape garbage-collects
       // itself if a popup gets killed mid-flow.
       try {
         await chrome.storage.session.remove([pendingKey(id), resultKey(id)]);

@@ -7,7 +7,7 @@
  * `alice@smirk.cash`. Returns the x-only pubkey + the recipient's relay hints (for
  * NIP-17 delivery later).
  *
- * Security: "follow the key, not the name" — the npub is authoritative; the name is
+ * Security: "follow the key, not the name". The npub is authoritative; the name is
  * only a lookup. Returns a graceful result (never throws) per the resilience ethos.
  */
 import { hexToBytes } from '@noble/hashes/utils';
@@ -39,7 +39,7 @@ export function splitNip05(identifier: string, homeDomain: string): { name: stri
 const HEX64 = /^[0-9a-f]{64}$/i;
 
 /**
- * The instance's NIP-05 "home" authority, derived from its API base URL host — so
+ * The instance's NIP-05 "home" authority, derived from its API base URL host, so
  * a self-hosted instance treats ITS OWN domain as home (bare-name resolution + the
  * bare-vs-`name·domain` display rule) instead of the hardcoded default. Falls back
  * to `smirk.cash` when the URL can't be parsed.

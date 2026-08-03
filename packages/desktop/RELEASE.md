@@ -16,9 +16,9 @@ cargo tauri signer generate -w ~/.tauri/smirk-updater.key
 ```
 
 The command prints two files:
-- `~/.tauri/smirk-updater.key` — **private key. Never commit. Never
+- `~/.tauri/smirk-updater.key`: **private key. Never commit. Never
   paste into a chat. Back this up offline.**
-- `~/.tauri/smirk-updater.key.pub` — public key (paste below)
+- `~/.tauri/smirk-updater.key.pub`: public key (paste below)
 
 Open `packages/desktop/src-tauri/tauri.conf.json` and:
 - Set `plugins.updater.active` to `true`
@@ -28,9 +28,9 @@ Open `packages/desktop/src-tauri/tauri.conf.json` and:
 For each release, the workflow pulls the private key from secrets at
 build time:
 - GitHub repo settings → Secrets and variables → Actions → New secret:
-  - `TAURI_SIGNING_PRIVATE_KEY` — the literal contents of
+  - `TAURI_SIGNING_PRIVATE_KEY`: the literal contents of
     `smirk-updater.key` (base64-encoded blob).
-  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the passphrase you set
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the passphrase you set
     during `cargo tauri signer generate` (use one).
 
 ### 2. Apple signing + notarization
@@ -46,21 +46,21 @@ Keychain Access, then export from Keychain as a `.p12` with a
 passphrase.
 
 Add as GitHub Actions secrets:
-- `APPLE_CERTIFICATE` — base64-encoded `.p12` contents
+- `APPLE_CERTIFICATE`: base64-encoded `.p12` contents
   (`base64 -i cert.p12 | pbcopy`)
-- `APPLE_CERTIFICATE_PASSWORD` — the passphrase you set
-- `APPLE_SIGNING_IDENTITY` — e.g. `Developer ID Application: Such
+- `APPLE_CERTIFICATE_PASSWORD`: the passphrase you set
+- `APPLE_SIGNING_IDENTITY`: e.g. `Developer ID Application: Such
   Software (TEAMID)`
-- `APPLE_ID` — your Apple ID email
-- `APPLE_PASSWORD` — an app-specific password generated at
+- `APPLE_ID`: your Apple ID email
+- `APPLE_PASSWORD`: an app-specific password generated at
   appleid.apple.com (NOT your Apple ID login password)
-- `APPLE_TEAM_ID` — 10-character ID from Apple Developer portal
+- `APPLE_TEAM_ID`: 10-character ID from Apple Developer portal
 
 When all six are set, the workflow's macOS leg signs + notarizes
 automatically. When they're missing or empty, the workflow still
 produces an unsigned bundle (useful for test releases).
 
-### 3. Windows + Linux signing — explicit non-goal for v0.3.0
+### 3. Windows + Linux signing: explicit non-goal for v0.3.0
 
 Per the project's ship plan, v0.3.0 ships Windows and Linux unsigned.
 Users will see SmartScreen / kernel warnings on first launch. The
@@ -68,7 +68,7 @@ release notes call this out and provide SHA256 checksums.
 
 Code-signing on Windows requires an Authenticode cert from a CA
 (~$300/yr for an EV cert that bypasses SmartScreen immediately). On
-Linux, AppImage signing is uncommon — most users verify the SHA256
+Linux, AppImage signing is uncommon; most users verify the SHA256
 against the published value.
 
 Nothing is pre-wired for Windows signing today. If we get user demand
@@ -96,7 +96,7 @@ and set `bundle.windows.certificateThumbprint` in `tauri.conf.json`.
    git push origin main v0.3.1
    ```
 5. The `desktop-release` workflow fires automatically on the tag
-   push. Watch the Actions tab — the matrix takes ~30-45 minutes for
+   push. Watch the Actions tab: the matrix takes ~30-45 minutes for
    the full three-platform build.
 6. **Verify** the published GitHub release has:
    - macOS: the signed + notarized `.app`, wrapped into a `.dmg` by
@@ -130,7 +130,7 @@ If a published release has a critical bug:
 1. **Delete the GitHub release** (keeps the tag, removes the binaries).
 2. **Bump the version + cut a new tag** with the fix.
 3. The updater served the previous `latest.json` until the new
-   release publishes — old installs auto-pull the fix on next
+   release publishes; old installs auto-pull the fix on next
    update check. Users on the broken release have to manually
    download the new one if their wallet won't open.
 

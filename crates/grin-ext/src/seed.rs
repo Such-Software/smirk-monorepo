@@ -37,7 +37,7 @@ const HMAC_KEY: &[u8] = b"IamVoldemort";
 pub struct ExtendedPrivateKey(pub [u8; 64]);
 
 impl ExtendedPrivateKey {
-    /// First 32 bytes — the root secret key used for blinding factors and
+    /// First 32 bytes: the root secret key used for blinding factors and
     /// transaction signing on the Grin side.
     pub fn secret_key(&self) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -45,7 +45,7 @@ impl ExtendedPrivateKey {
         out
     }
 
-    /// Last 32 bytes — the chain code for further child key derivation.
+    /// Last 32 bytes: the chain code for further child key derivation.
     pub fn chain_code(&self) -> [u8; 32] {
         let mut out = [0u8; 32];
         out.copy_from_slice(&self.0[32..]);
@@ -114,7 +114,7 @@ pub fn mnemonic_to_extended_private_key_legacy_bip39(
     let parsed =
         Mnemonic::parse_normalized(mnemonic).map_err(|e| format!("invalid BIP39 mnemonic: {e}"))?;
     // Use the full BIP39 64-byte seed (PBKDF2-HMAC-SHA512 of mnemonic +
-    // empty passphrase, 2048 iterations — bip39 crate's `to_seed`).
+    // empty passphrase, 2048 iterations: bip39 crate's `to_seed`).
     let seed = parsed.to_seed("");
 
     let mut mac = HmacSha512::new_from_slice(HMAC_KEY).map_err(|e| format!("hmac init: {e}"))?;
@@ -130,7 +130,7 @@ pub fn mnemonic_to_extended_private_key_legacy_bip39(
 mod tests {
     use super::*;
 
-    /// The standard BIP39 test vector — 12 words derived from 16 zero bytes
+    /// The standard BIP39 test vector: 12 words derived from 16 zero bytes
     /// of entropy. Used across the Bitcoin / Ethereum / Grin ecosystems for
     /// regression tests.
     const ZERO_ENTROPY_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -195,7 +195,7 @@ mod tests {
         //     seed = m.to_seed("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", passphrase="")
         //     print(hmac.new(b"IamVoldemort", seed, hashlib.sha512).hexdigest())'
         let xkey = mnemonic_to_extended_private_key_legacy_bip39(ZERO_ENTROPY_MNEMONIC).unwrap();
-        // Independent value — verifying determinism. If this assertion
+        // Independent value, verifying determinism. If this assertion
         // fires after a `bip39` crate version bump, regenerate via the
         // python snippet above and update.
         assert_eq!(xkey.0.len(), 64);

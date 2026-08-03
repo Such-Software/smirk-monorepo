@@ -1,4 +1,4 @@
-// Smirk Wallet desktop — Tauri entry point.
+// Smirk Wallet desktop: Tauri entry point.
 //
 // Hides the console window on Windows release builds; debug builds
 // keep the console so `eprintln!` output is visible during dev.

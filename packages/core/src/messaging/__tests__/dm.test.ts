@@ -1,6 +1,6 @@
 /**
  * NIP-17 DM crypto round-trip (the delicate, Goblin-interop-critical part) via
- * nostr-tools' vetted nip17 — the same wrap/unwrap the NostrMessagingProvider
+ * nostr-tools' vetted nip17, the same wrap/unwrap the NostrMessagingProvider
  * uses. No relay: this pins the gift-wrap correctness, not the transport.
  */
 import { test } from 'node:test';

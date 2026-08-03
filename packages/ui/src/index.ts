@@ -1,9 +1,9 @@
 /**
- * @smirk/ui — shared Preact components for the Smirk wallet.
+ * @smirk/ui: shared Preact components for the Smirk wallet.
  *
  * Drives the action-centric redesign described in
  * `smirk-monorepo/docs/UI_DESIGN.md`. Components are presentational and
- * registry-driven — they take asset ids (not hardcoded chains) and
+ * registry-driven: they take asset ids (not hardcoded chains) and
  * render against `@smirk/assets` definitions.
  *
  * Consumers (extension popup, Capacitor mobile, Tauri desktop) wrap

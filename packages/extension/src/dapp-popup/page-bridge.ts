@@ -2,8 +2,8 @@
  * Glue between the embedded-browser controller's `PageRequest`
  * surface and the dapp-api `WalletHandlerDispatch`.
  *
- * The Tauri side (and future Capacitor side) hands us a `PageRequest`
- * — `{origin, tab, request}` where `request` is opaque. We narrow it
+ * The Tauri side (and future Capacitor side) hands us a `PageRequest`:
+ * `{origin, tab, request}` where `request` is opaque. We narrow it
  * to a `SmirkWireRequest`, dispatch through the wallet handler with
  * the page's origin as `OriginContext`, and return the resulting
  * `SmirkWireResponse`. The controller routes the response back to

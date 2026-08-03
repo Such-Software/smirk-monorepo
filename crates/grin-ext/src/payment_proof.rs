@@ -1,4 +1,4 @@
-//! Grin payment proofs — cryptographically-signed receipts.
+//! Grin payment proofs: cryptographically-signed receipts.
 //!
 //! Reference: `grin-wallet/libwallet/src/internal/tx.rs::payment_proof_message`.
 //!
@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn sign_and_verify_round_trip() {
         let (rx_secret, rx_pub) = kp_from_seed(&[7u8; 32]);
-        let sender_pub = [0x42; 32]; // not necessarily a real ed25519 — sender's slatepack addr bytes
+        let sender_pub = [0x42; 32]; // not necessarily a real ed25519: sender's slatepack addr bytes
         let amount = 60_000_000_000u64;
         let commit = [0x91; 33]; // some Grin commitment
 

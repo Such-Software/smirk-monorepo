@@ -2,7 +2,7 @@
 
 How the Smirk Wallet browser extension is built, packaged, and shipped
 to the Chrome Web Store + addons.mozilla.org. Read this end-to-end
-before cutting a release — every step affects what users see.
+before cutting a release: every step affects what users see.
 
 ## Versioning
 
@@ -56,7 +56,7 @@ so all the upstream workspace packages must be built first. The
 From a clean working tree (commit or stash everything first):
 
 ```sh
-# 0. Sanity — make sure everything passes
+# 0. Sanity: make sure everything passes
 make wasm
 npm run typecheck --workspaces --if-present
 npm test --workspaces --if-present
@@ -71,10 +71,10 @@ make ext-chrome
 make ext-firefox
 ( cd packages/extension/dist && zip -r -X ../releases/smirk-wallet-firefox-v0.3.0.zip . )
 
-# 4. Source archive for AMO (deterministic — tied to git HEAD)
+# 4. Source archive for AMO (deterministic: tied to git HEAD)
 git archive --format=zip --output=packages/extension/releases/smirk-wallet-source-v0.3.0.zip HEAD
 
-# 5. Checksums — publish these in the GitHub release notes
+# 5. Checksums: publish these in the GitHub release notes
 ( cd packages/extension/releases &&
   sha256sum smirk-wallet-chrome-v0.3.0.zip \
             smirk-wallet-firefox-v0.3.0.zip \
@@ -119,7 +119,7 @@ diff -r /tmp/snap-1 packages/extension/dist
 ```
 
 Empty output = reproducible. If anything differs, investigate before
-shipping — drift usually means a stray `Date.now()`, hostname leak,
+shipping: drift usually means a stray `Date.now()`, hostname leak,
 or an unpinned dependency.
 
 ## Chrome Web Store upload
@@ -130,7 +130,7 @@ or an unpinned dependency.
    `smirk-wallet-chrome-v0.3.0.zip`.
 4. Update **Store listing** copy if any user-facing changes warrant it.
 5. **Privacy practices**: re-confirm the disclosures (no remote
-   code, no PII collection — the extension is fully client-side
+   code, no PII collection: the extension is fully client-side
    except for backend tipping calls that the user explicitly opts
    into).
 6. **Submit for review**. Typical turnaround: 1–3 business days for
@@ -150,7 +150,7 @@ mandatory.
 4. When prompted for source code, upload
    `smirk-wallet-source-v0.3.0.zip`.
 5. In **Notes to reviewers**, paste the build instructions block
-   below — reviewers re-run it to confirm the upload zip matches the
+   below: reviewers re-run it to confirm the upload zip matches the
    source.
 
    ```

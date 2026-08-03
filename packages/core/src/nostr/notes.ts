@@ -1,15 +1,15 @@
 /**
- * Notes + feed plane (kind-1) — the in-app Nostr social surface.
+ * Notes + feed plane (kind-1): the in-app Nostr social surface.
  *
  * Read a feed (subscription filters to relays) and post notes, built on
  * `NostrClient`. Three seams are deliberate so the MVP extends cleanly to a fuller
  * social client without call-site churn:
- *   - `resolvePostingIdentity` — which npub a note is signed under (main today;
+ *   - `resolvePostingIdentity`: which npub a note is signed under (main today;
  *     a rotated social sub-identity plugs in later).
- *   - `resolvePublishRelays`   — where a note goes (operator relay today; optional
+ *   - `resolvePublishRelays`:   where a note goes (operator relay today; optional
  *     public-relay fallback later).
- *   - `postingRequirement`     — capability-driven gate; NEVER hardcodes the
- *     paywall — an operator can run open, premium-post, or free premium.
+ *   - `postingRequirement`:     capability-driven gate; NEVER hardcodes the
+ *     paywall: an operator can run open, premium-post, or free premium.
  */
 
 import { finalizeEvent, verifyEvent } from 'nostr-tools/pure';
@@ -114,7 +114,7 @@ export function resolvePublishRelays(
 
 /**
  * Capability-driven posting gate. Reads the operator's relay policy + the user's
- * premium status — it NEVER hardcodes a paywall. Only `premium-post` WITHOUT
+ * premium status; it NEVER hardcodes a paywall. Only `premium-post` WITHOUT
  * premium blocks; open / inbox-outbox / author-allowlist / a premium holder / a
  * free-premium operator all resolve to `allowed`.
  */
@@ -144,7 +144,7 @@ export function postingRequirement(caps: {
   return { kind: 'allowed' };
 }
 
-/** NIP-01 kind-0 profile metadata (replaceable — relays keep only the newest). */
+/** NIP-01 kind-0 profile metadata (replaceable: relays keep only the newest). */
 export const PROFILE_KIND = 0;
 
 /** kind-0 profile content. Only the fields we own are set; callers may extend
@@ -154,7 +154,7 @@ export interface NostrProfile {
   name?: string;
   /** Human display name. */
   display_name?: string;
-  /** `<username>@<homeDomain>` — the verifiable handle external clients check
+  /** `<username>@<homeDomain>`: the verifiable handle external clients check
    *  against https://<homeDomain>/.well-known/nostr.json. */
   nip05?: string;
   about?: string;
@@ -165,7 +165,7 @@ export interface NostrProfile {
 /**
  * Build + sign a kind-0 profile (metadata) under the posting identity. Mirrors
  * {@link buildNoteEvent}: `content` is the JSON-stringified profile, `tags` empty.
- * kind-0 is REPLACEABLE, so publishing this overwrites the npub's prior profile —
+ * kind-0 is REPLACEABLE, so publishing this overwrites the npub's prior profile;
  * callers that want to preserve other clients' fields should merge first.
  */
 export function buildProfileEvent(identity: NostrIdentity, profile: NostrProfile): NostrWireEvent {

@@ -35,7 +35,7 @@ let cached: Capabilities | undefined;
 
 /**
  * Fetch (and cache) the running backend's /capabilities so a spec can self-skip
- * when the instance's OPERATOR CONFIG doesn't match its precondition — e.g. the
+ * when the instance's OPERATOR CONFIG doesn't match its precondition, e.g. the
  * pay-to-register scenario needs the payment gate ON, while a full create-new-
  * wallet needs it OFF. One suite run then adapts to whatever backend is up
  * instead of hard-coding a config assumption (and silently red/greening on it).

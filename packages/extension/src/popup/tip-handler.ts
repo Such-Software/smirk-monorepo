@@ -1,10 +1,10 @@
 /**
- * Tip-handler — orchestrates the per-asset funding tx + backend POST
+ * Tip-handler: orchestrates the per-asset funding tx + backend POST
  * for social tipping.
  *
  * Flow (per asset):
  *   1. Generate a fresh tip keypair locally (never derived from the
- *      sender's wallet — single-use, throwaway).
+ *      sender's wallet: single-use, throwaway).
  *   2. Compute the tip address from the fresh keypair.
  *   3. Build + sign + broadcast a tx funding that address with the
  *      tip amount. Sender's wallet pays the network fee.
@@ -62,7 +62,7 @@ import { storeTipKeyBackup } from './tip-key-backup';
  * in Sent Tips). Server-side dedupes on `(tip_id, funding_txid)` so
  * retries are safe to issue.
  *
- * Three attempts at 1s, 3s, 9s — total worst-case ~13s before surfacing
+ * Three attempts at 1s, 3s, 9s: total worst-case ~13s before surfacing
  * to the user. If all attempts fail the on-chain funds are still
  * recoverable: the local backup carries the tip key so the user can
  * clawback via the on-chain sweep path, but the tip won't appear in
@@ -102,7 +102,7 @@ async function attachFundingWithRetry(
  *  entry for instant balance feedback. Shape matches
  *  `PendingOutgoingTx` in @smirk/core. Fired immediately after a
  *  successful on-chain broadcast, BEFORE the backend attach-funding
- *  call — so even if attach fails the sender sees the deduction. */
+ *  call, so even if attach fails the sender sees the deduction. */
 export interface TipBroadcastEvent {
   assetId: string;
   txid: string;
@@ -111,7 +111,7 @@ export interface TipBroadcastEvent {
   recipient: string;
   inputs?: string[];
   inputsTotalAtomic?: bigint;
-  /** Backend tip id — included so the resulting `pendingOutgoing`
+  /** Backend tip id: included so the resulting `pendingOutgoing`
    *  entry can carry `context: {kind:'tip-fund', tipId}` and the
    *  per-asset Activity row can tap-route to the tip detail. */
   tipId: string;
@@ -124,34 +124,34 @@ export interface TipBroadcastEvent {
  */
 export async function dispatchSocialTip(args: {
   wallet: UnlockedWallet;
-  /** Backend user UUID for the sender — required for any /social
+  /** Backend user UUID for the sender: required for any /social
    *  endpoint that ties tips to the authenticated user. */
   senderUserId: string;
   fields: TipSubmitFields;
   /** Shell-provided sink for broadcast metadata. Called once per
    *  successful on-chain broadcast so the popup can write a
-   *  `pendingOutgoing` entry — sender's balance reflects the
+   *  `pendingOutgoing` entry: sender's balance reflects the
    *  deduction immediately instead of waiting for LWS / Electrum to
    *  reflect. Matches v0.2.4 `addPendingTx` behavior for XMR/WOW
    *  (which the v0.3 port silently dropped). */
   onBroadcast?: (e: TipBroadcastEvent) => void | Promise<void>;
-  /** Grin pending overlay (client output state) — required for a Grin tip:
+  /** Grin pending overlay (client output state), required for a Grin tip:
    *  scan-based input selection + child-index reservation. */
   grinPending?: GrinPendingOverlay;
-  /** Grin view-only rewind hash — required for a Grin tip's scan. */
+  /** Grin view-only rewind hash: required for a Grin tip's scan. */
   grinRewindHash?: string;
 }): Promise<TipSubmitOutcome> {
   const { wallet, fields, onBroadcast } = args;
 
   // MAX_SAFE_INTEGER guard (2026-06-13 tip audit should-fix #2).
-  // `api.createSocialTip` serializes `amount` as a JS Number — i.e.
+  // `api.createSocialTip` serializes `amount` as a JS Number, i.e.
   // a u53. WOW (11 decimals) hits 2^53-1 at ~90,071 WOW per tip,
   // realistic for whale/channel-raid tips. On-chain broadcast uses
   // the original bigint (correct), but the backend stores the
   // ROUNDED number as `tip.amount`, so the verifier then compares
   // observed-vs-declared against the wrong target and mis-branches
   // Verified vs Short. Recipient inbox + share URL display the
-  // rounded value too — silent precision loss with no user signal.
+  // rounded value too: silent precision loss with no user signal.
   //
   // Hard early-return BEFORE any broadcast so the user can split
   // into smaller tips. v0.3.1 structural fix: switch
@@ -231,7 +231,7 @@ async function createBtcLtcTip(
     recipientBtcPubkeyHex,
   });
 
-  // 4. Two-phase create — phase 1: persist the encrypted key + address
+  // 4. Two-phase create, phase 1: persist the encrypted key + address
   //    on the backend BEFORE any on-chain action. If the user closes
   //    the popup or hits a network failure between here and broadcast
   //    (step 6), nothing happened on-chain so there's nothing to
@@ -246,7 +246,7 @@ async function createBtcLtcTip(
     encrypted_key: encryptedKey,
     ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
     tip_address: tipAddress,
-    // NO funding_txid — backend creates status='draft'.
+    // NO funding_txid: backend creates status='draft'.
     sender_anonymous: fields.senderAnonymous,
   });
   if (draft.error || !draft.data) {
@@ -285,7 +285,7 @@ async function createBtcLtcTip(
   const feeRateSatPerVb = resolveFeeRateOrFallback(estimatedNormal);
 
   // 6. Build + sign + broadcast funding tx. If broadcast fails, the
-  //    draft is wasted DB state — cancel it server-side to keep things
+  //    draft is wasted DB state; cancel it server-side to keep things
   //    clean. Fund safety is intact because no funds left the sender.
   const sendResult = await send(wallet, {
     fromAssetId: asset,
@@ -321,7 +321,7 @@ async function createBtcLtcTip(
   //    server-side (dedupe on tip_id+funding_txid), so transient
   //    network errors here recover automatically via the retry
   //    helper. If all retries fail the funds are on-chain and the
-  //    key is in the local backup — user clawback path is available.
+  //    key is in the local backup, so the user clawback path is available.
   const attach = await attachFundingWithRetry(tipId, sendResult.txid);
   if (!attach.ok) {
     return {
@@ -345,7 +345,7 @@ async function createBtcLtcTip(
 
 /**
  * Resolve a recipient's BTC pubkey (lowercase hex, 33 bytes/66 chars).
- * BTC pubkey is the universal encryption target for tip keys — every
+ * BTC pubkey is the universal encryption target for tip keys: every
  * Smirk wallet has one, regardless of which asset the tip funds.
  */
 async function lookupRecipientBtcPubkey(
@@ -390,7 +390,7 @@ async function lookupRecipientBtcPubkey(
  *   - BTC/LTC: 32-byte secp256k1 private key
  *   - XMR/WOW: 32-byte ed25519 spend key (view key re-derived from it)
  *   - Grin: JSON-encoded voucher data (blind + commit + proof + nChild
- *     + amount + features) — recipient sweeps the voucher commitment.
+ *     + amount + features); recipient sweeps the voucher commitment.
  */
 function encryptTipKey(args: {
   keyMaterial: Uint8Array;
@@ -435,7 +435,7 @@ function encryptTipKey(args: {
 //
 // Sender generates a fresh primary keypair (random 32-byte spend seed
 // reduced to an ed25519 scalar; view key = sha256(spend) reduced).
-// Recipient claims by importing the spend key — gives them full
+// Recipient claims by importing the spend key, which gives them full
 // authority over that single-tip wallet. View key is also shared with
 // the backend so its LWS can monitor for funding confirmations.
 
@@ -465,10 +465,10 @@ async function createXmrWowTip(
     recipientBtcPubkeyHex,
   });
 
-  // 4. Phase 1 — persist the encrypted key + tip_address + view_key on
+  // 4. Phase 1: persist the encrypted key + tip_address + view_key on
   //    the backend BEFORE we broadcast. If the popup closes or the
   //    network fails between here and broadcast (step 6), no on-chain
-  //    action has happened — funds are intact. Backend registers LWS
+  //    action has happened; funds are intact. Backend registers LWS
   //    only when we call attach-funding in step 7, so we don't waste
   //    LWS quota on never-funded drafts.
   const draft = await api.createSocialTip({
@@ -480,7 +480,7 @@ async function createXmrWowTip(
     ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
     tip_address: tipKeys.address,
     tip_view_key: bytesToHex(tipKeys.viewKey),
-    // NO funding_txid — backend creates status='draft'.
+    // NO funding_txid: backend creates status='draft'.
     sender_anonymous: fields.senderAnonymous,
   });
   if (draft.error || !draft.data) {
@@ -504,7 +504,7 @@ async function createXmrWowTip(
     ...(urlFragmentEncoded ? { urlFragmentEncoded } : {}),
   });
 
-  // 5. (Skipped — `senderUserId` previously used for `api.registerLws`
+  // 5. (Skipped: `senderUserId` previously used for `api.registerLws`
   //    here; backend now registers LWS as part of the attach-funding
   //    side-effects so we don't double-register. Discard unused arg.)
   void senderUserId;
@@ -525,7 +525,7 @@ async function createXmrWowTip(
   }
 
   // 6a. Fire onBroadcast for instant balance feedback. Mirrors v0.2.4's
-  //     `addPendingTx` for XMR/WOW — the v0.3 port dropped this and
+  //     `addPendingTx` for XMR/WOW; the v0.3 port dropped this and
   //     senders saw zero deduction until LWS reflected the spend
   //     (~1-2 minutes). Fires BEFORE attach-funding so even an
   //     attach-funding failure surfaces the correct sender balance.
@@ -544,7 +544,7 @@ async function createXmrWowTip(
     });
   }
 
-  // 7. Phase 2 — attach the broadcast txid. Client retries 3x with
+  // 7. Phase 2: attach the broadcast txid. Client retries 3x with
   //    exponential backoff; if all retries fail the
   //    funds are on chain and the spend key is in the local backup,
   //    so the asset-detail tip row → Clawback fully recovers.
@@ -578,7 +578,7 @@ async function createXmrWowTip(
  * generateXmrWowTipKeys in smirk-extension/src/background/social/crypto.ts.
  *
  * View key is deterministically derived from the spend key
- * (Hs(spend) reduced mod ℓ — Monero standard) so the recipient only
+ * (Hs(spend) reduced mod ℓ, the Monero standard) so the recipient only
  * needs the spend key to recover both halves.
  */
 function generateXmrWowTipKeys(asset: 'xmr' | 'wow'): {
@@ -684,7 +684,7 @@ async function createGrinTip(
   const sortedDesc = [...spendableSet.outputs].sort((a, b) => b.amount - a.amount);
 
   const voucherAmount = Number(fields.amountAtomic);
-  // Mirrors grin-flows.ts calcGrinFee — `weight × DEFAULT_ACCEPT_FEE_BASE`
+  // Mirrors grin-flows.ts calcGrinFee: `weight × DEFAULT_ACCEPT_FEE_BASE`
   // per `grin_core::core::transaction::TransactionBody::weight`. The
   // previous `BASE × max(1, 4·out − in + kern)` formula produced ~8M
   // nanogrin which the node rejects as "Low fee transaction".
@@ -790,7 +790,7 @@ async function createGrinTip(
     recipientBtcPubkeyHex,
   });
 
-  // 7. Phase 1 — persist the encrypted voucher data on the backend
+  // 7. Phase 1: persist the encrypted voucher data on the backend
   //    BEFORE broadcasting. If any subsequent step fails (broadcast,
   //    attach-funding), the voucher data is safe server-side and the
   //    sender can recover via the asset-detail tip row → Clawback once the funding
@@ -804,7 +804,7 @@ async function createGrinTip(
     encrypted_key: encryptedKey,
     ...(claimKeyHash ? { claim_key_hash: claimKeyHash } : {}),
     tip_address: voucherResult.voucher.commitment_hex,
-    // NO funding_txid — backend creates status='draft'.
+    // NO funding_txid: backend creates status='draft'.
     grin_commitment: voucherResult.voucher.commitment_hex,
     sender_anonymous: fields.senderAnonymous,
   });
@@ -833,9 +833,9 @@ async function createGrinTip(
   });
 
   // 8. Broadcast the voucher tx via the backend's broadcast endpoint (reads only
-  //    `{ tx }` on v3 — no server output store to record into).
+  //    `{ tx }` on v3: no server output store to record into).
   // Grin node's `/v2/foreign push_transaction` accepts the JSON Transaction body
-  // (offset + body{inputs, outputs, kernels}) — NOT a hex-encoded wire blob.
+  // (offset + body{inputs, outputs, kernels}), NOT a hex-encoded wire blob.
   // `voucherResult.tx_json` is the canonical shape, emitted by
   // `crates/grin-ext/src/voucher.rs::serialize_voucher_tx_json`.
   const broadcast = await chainProviders.grin().broadcast({
@@ -843,7 +843,7 @@ async function createGrinTip(
   });
   if (broadcast.error) {
     // No overlay entry recorded yet (we add it only after broadcast succeeds),
-    // so the inputs are still selectable — just cancel the draft tip.
+    // so the inputs are still selectable; just cancel the draft tip.
     await api.cancelSocialTip(tipId).catch(() => undefined);
     return { ok: false, error: `Grin broadcast failed: ${broadcast.error}` };
   }
@@ -851,9 +851,9 @@ async function createGrinTip(
   // 9. Record the client pending overlay now that the tx is on the wire:
   //    exclude the spent inputs from selection until they're mined, and show the
   //    sender's change as pending until scan confirms it. The voucher output is
-  //    outgoing (to the tip recipient) — not our change/incoming — so it isn't
+  //    outgoing (to the tip recipient), not our change/incoming, so it isn't
   //    surfaced as pending, but its index was already consumed. The voucher +
-  //    change child indices were reserved atomically at step 3 — do NOT bump the
+  //    change child indices were reserved atomically at step 3, so do NOT bump the
   //    counter again here or it would double-advance and skip indices.
   await deps.overlay.addPending(slateId, {
     spentCommits: selected.map((i) => i.commitment_hex),
@@ -875,7 +875,7 @@ async function createGrinTip(
     createdAt: Date.now(),
   }).catch(() => undefined);
 
-  // 10. Phase 2 — attach the slate_id (acts as the funding identifier
+  // 10. Phase 2: attach the slate_id (acts as the funding identifier
   //     for Grin since the kernel commit IS the on-chain identity).
   //     Client retries 3x with exponential backoff.
   const attach = await attachFundingWithRetry(tipId, slateId);
@@ -911,11 +911,11 @@ function randomBytesHexUuidLike(): string {
 
 /**
  * Compose the claim URL for a public tip. The URL fragment carries
- * the symmetric key, which never reaches the server — only the
+ * the symmetric key, which never reaches the server: only the
  * claimer (who has the URL) can decrypt.
  *
  * Format matches the existing claim.smirk.cash landing page that
- * v0.2.4 users have been clicking — keeps cross-version compat.
+ * v0.2.4 users have been clicking; keeps cross-version compat.
  */
 function buildShareUrl(
   tipId: string,

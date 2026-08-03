@@ -1,5 +1,5 @@
 /**
- * @smirk/wasm — TypeScript bindings for the smirk-wasm WASM crypto bundle.
+ * @smirk/wasm: TypeScript bindings for the smirk-wasm WASM crypto bundle.
  *
  * This package re-exports every function from the wasm-bindgen output of
  * `crates/smirk-wasm`, organized into namespaces by chain. The underlying
@@ -32,7 +32,7 @@
 // `wasm_bindgen({ module_or_path })` loads/instantiates the WASM and
 // attaches every exported function to the `wasm_bindgen` function object.
 // We use `wasm_bindgen` itself as our `wasm.*` lookup target.
-// @ts-expect-error — generated file has no type declarations for the
+// @ts-expect-error:  generated file has no type declarations for the
 //                    no-modules export shim. The .d.ts only documents the
 //                    `--target web` shape.
 import { wasm_bindgen } from '../../../crates/smirk-wasm/pkg/smirk_wasm.js';
@@ -44,7 +44,7 @@ let initialized = false;
 
 /**
  * Initialize the WASM bundle. Must be called once before any other
- * function in this package. Idempotent — subsequent calls are no-ops.
+ * function in this package. Idempotent: subsequent calls are no-ops.
  *
  * @param moduleOrPath Optional pre-fetched WASM bytes or URL. In browsers
  *   the no-modules glue auto-derives the .wasm URL from the script src;
@@ -63,7 +63,7 @@ export async function initialize(
 // Generic
 // =============================================================================
 
-/** Sanity check — returns "smirk-wasm ready" if the bundle is loaded. */
+/** Sanity check: returns "smirk-wasm ready" if the bundle is loaded. */
 export const test = (): string => wasm.test();
 
 /** Bundle version + build tag (e.g. `"0.1.0-wow25"`). */
@@ -169,7 +169,7 @@ export const grin = {
     wasm.grin_slatepack_address_secret(mnemonic, index),
   /** Compute the wallet's `rewind_hash` (32-byte view credential, 64 hex
    *  chars) from the 64-byte extended private key (hex). This is the only
-   *  secret handed to `POST /wallet/grin/scan` — it lets the backend's
+   *  secret handed to `POST /wallet/grin/scan`: it lets the backend's
    *  view-only rewind scan recognize this wallet's outputs without spend
    *  authority. */
   rewindHash: (extKeyHex: string): string => wasm.grin_rewind_hash(extKeyHex),
@@ -516,7 +516,7 @@ export const grin = {
   // These wrap the 6 send/invoice ceremonies. Each takes a typed
   // params struct, marshals to JSON for the wasm call, and parses
   // the JSON result into a typed return. The wasm shim is the API
-  // boundary — see crates/smirk-wasm/src/grin/wallet_flows.rs for the
+  // boundary; see crates/smirk-wasm/src/grin/wallet_flows.rs for the
   // canonical DTO shapes.
 
   randomSecretNonce: (): string => wasm.grin_random_secret_nonce(),
@@ -539,7 +539,7 @@ export const grin = {
    * Searches child indices `0..=maxN` over the standard `[0,0,n,0]` layout,
    * applying the same v3/legacy x Regular/None x depth-3/4 candidate matrix the
    * send builder uses per input. Returns the matching 4-level path, or `null`
-   * when no index in range reproduces the commitment — the caller MUST then drop
+   * when no index in range reproduces the commitment; the caller MUST then drop
    * that output (never feed an unidentified input to the send builder: a wrong
    * path silently yields a bad blind and an invalid tx).
    *
@@ -701,7 +701,7 @@ export interface GrinFinalizeSendResult {
   kernel_excess_hex: string;
   /** Binary wire format transaction bytes, hex. */
   tx_bytes_hex: string;
-  /** JSON-shaped Transaction object — the format the Grin node's
+  /** JSON-shaped Transaction object: the format the Grin node's
    *  `/v2/foreign push_transaction` JSON-RPC expects. Pass this
    *  through to the backend broadcast endpoint as the `tx` field
    *  unchanged. Sending `{tx_bytes_hex}` instead fails with
@@ -764,7 +764,7 @@ export interface GrinFinalizeInvoiceResult {
   final_signature_hex: string;
   kernel_excess_hex: string;
   tx_bytes_hex: string;
-  /** JSON-shaped Transaction — see GrinFinalizeSendResult.tx_json. */
+  /** JSON-shaped Transaction: see GrinFinalizeSendResult.tx_json. */
   tx_json: unknown;
 }
 
@@ -777,7 +777,7 @@ export interface GrinVoucherChangePath {
 
 export interface GrinCreateVoucherParams {
   extended_private_key_hex: string;
-  /** LEGACY (pre-2026-05 / Grim) ext key for input-blind fallback — needed
+  /** LEGACY (pre-2026-05 / Grim) ext key for input-blind fallback: needed
    *  to tip a recovered legacy/depth-3 output. Omit for v3-only wallets. */
   legacy_extended_private_key_hex?: string;
   inputs: GrinUnspentOutput[];
@@ -794,7 +794,7 @@ export interface GrinCreateVoucherParams {
   change_bp_private_nonce_hex?: string;
 }
 
-/** Voucher output details — `blinding_factor_hex` is the SECRET that
+/** Voucher output details: `blinding_factor_hex` is the SECRET that
  *  grants spend authority. Caller (JS shell) encrypts this to recipient
  *  via ECIES (targeted tip) or stores in URL fragment (public tip). */
 export interface GrinVoucherOutput {
@@ -802,7 +802,7 @@ export interface GrinVoucherOutput {
   amount: number;
   commitment_hex: string;
   proof_hex: string;
-  /** SECRET — never log, never transmit plaintext. */
+  /** SECRET: never log, never transmit plaintext. */
   blinding_factor_hex: string;
 }
 
@@ -821,7 +821,7 @@ export interface GrinCreateVoucherResult {
 export interface GrinSweepVoucherParams {
   extended_private_key_hex: string;
   voucher_commitment_hex: string;
-  /** SECRET — decrypted from the sender's encrypted payload. */
+  /** SECRET: decrypted from the sender's encrypted payload. */
   voucher_blind_hex: string;
   voucher_amount: number;
   /** 0 = plain (default), 1 = coinbase. */
@@ -835,11 +835,11 @@ export interface GrinSweepVoucherParams {
 }
 
 export interface GrinSweepVoucherResult {
-  /** Claimer's new output — persist in their grin_outputs table. */
+  /** Claimer's new output: persist in their grin_outputs table. */
   output: GrinChangeOutputInfo;
   kernel_excess_hex: string;
   tx_bytes_hex: string;
-  /** JSON-shaped Transaction body — the format the Grin node's
+  /** JSON-shaped Transaction body: the format the Grin node's
    *  `/v2/foreign push_transaction` JSON-RPC expects. Hand to the
    *  backend broadcast endpoint as `tx` unchanged. Same contract as
    *  GrinFinalizeSendResult.tx_json. */
@@ -850,7 +850,7 @@ export interface GrinSweepVoucherResult {
 // Bitcoin / Litecoin
 // =============================================================================
 //
-// One namespace covers both chains — they differ only in network params
+// One namespace covers both chains; they differ only in network params
 // (HRP, version bytes), which are passed via the `network` argument.
 
 export type BtcNetwork = 'btc-mainnet' | 'btc-testnet' | 'ltc-mainnet' | 'ltc-testnet';
@@ -858,7 +858,7 @@ export type BtcAddressKind = 'p2wpkh' | 'p2tr';
 
 /**
  * Parameters for {@link bitcoin.buildPsbt}. Mirrors `BuildPsbtParamsJson`
- * in `crates/smirk-wasm/src/bitcoin.rs` — keep the shapes in sync.
+ * in `crates/smirk-wasm/src/bitcoin.rs`; keep the shapes in sync.
  */
 export interface BtcBuildPsbtParams {
   network: BtcNetwork;
@@ -880,7 +880,7 @@ export interface BtcBuildPsbtParams {
      * Optional owning-address tag (the wallet's own record of which
      * receive/change address this UTXO belongs to). When set, `build_psbt`
      * fails closed unless the P2WPKH script derived from `masterPath` equals
-     * this address's script — money gate G9. Omit for the single-address
+     * this address's script (money gate G9). Omit for the single-address
      * (flag-off) path to keep behavior byte-for-byte unchanged.
      */
     ownerAddress?: string;
@@ -890,7 +890,7 @@ export interface BtcBuildPsbtParams {
   /** Optional change output. Omit + set `changeSat: 0` to skip. */
   changeAddress?: string;
   changeSat?: number;
-  /** BIP39 mnemonic — needed to derive the master xprv at build time. */
+  /** BIP39 mnemonic: needed to derive the master xprv at build time. */
   mnemonic: string;
   /** BIP39 passphrase (empty string if unused). */
   passphrase?: string;
@@ -940,7 +940,7 @@ export const bitcoin = {
    * {@link extractTx} to get the final transaction hex.
    *
    * Caller's responsibility: UTXO selection, fee math (the difference
-   * between `sum(inputs)` and `recipientSat + changeSat` is the fee —
+   * between `sum(inputs)` and `recipientSat + changeSat` is the fee;
    * we don't validate it here). Dust-limit on the change output is
    * checked (rejects change below 294 sat) but the recipient amount
    * is not.

@@ -1,5 +1,5 @@
 /**
- * Contract tests for `solvePowChallenge` — the wire shape sent as
+ * Contract tests for `solvePowChallenge`: the wire shape sent as
  * the `altcha_solution` field on `/auth/extension`.
  *
  * Critical assertion: the return envelope is `{ challenge, solution }`
@@ -27,7 +27,7 @@ import { solvePowChallenge } from '../pow';
 import type { ApiResponse } from '../api/client';
 
 // Cheap fixture so `node --test` finishes in <1s. The contract is
-// about envelope shape — actual solve difficulty is irrelevant for
+// about envelope shape; actual solve difficulty is irrelevant for
 // what we're testing.
 const TEST_HMAC_KEY = 'pow-test-hmac-do-not-use-anywhere-else';
 
@@ -35,7 +35,7 @@ async function makeChallenge(): Promise<Challenge> {
   return await createChallenge({
     hmacKey: TEST_HMAC_KEY,
     algorithm: 'PBKDF2/SHA-256',
-    cost: 100, // PBKDF2 iterations per attempt — kept tiny for tests
+    cost: 100, // PBKDF2 iterations per attempt: kept tiny for tests
     maxnumber: 10,
     saltLength: 8,
   });
@@ -72,8 +72,8 @@ test('solvePowChallenge: returns the { challenge, solution } envelope (NOT a bar
   // optional signature), NOT the Solution's internal `derivedKey`
   // hash. Provenance check: parameters object must exist with the
   // server-issued salt/nonce/cost. (createChallenge produces a
-  // Challenge whose `signature` may be absent — `signature` is
-  // Option<String> on the backend — so we assert parameters.)
+  // Challenge whose `signature` may be absent: `signature` is
+  // Option<String> on the backend, so we assert parameters.)
   assert.ok(
     result.challenge.parameters,
     'envelope.challenge.parameters must be present (proves it is the original Challenge, not the Solution)',
@@ -97,7 +97,7 @@ test('solvePowChallenge: envelope.solution is altcha-lib Solution shape (counter
   const sol = result.solution as Record<string, unknown>;
   assert.equal(typeof sol.counter, 'number', 'Solution must have `counter`');
   assert.equal(typeof sol.derivedKey, 'string', 'Solution must have `derivedKey`');
-  // `time` is optional in the Rust struct; presence not asserted —
+  // `time` is optional in the Rust struct; presence not asserted:
   // some altcha-lib versions omit it.
 });
 
@@ -112,7 +112,7 @@ test('solvePowChallenge: returns null when challenge fetch fails (graceful migra
 });
 
 test('solvePowChallenge: accepts an AbortSignal option (signature surface check)', async () => {
-  // We don't assert that abort actually interrupts the solve — altcha-
+  // We don't assert that abort actually interrupts the solve: altcha-
   // lib v2 checks `controller.signal.aborted` between counter
   // attempts but the PBKDF2 itself is atomic, so on a tiny test
   // challenge the solve may finish before the signal lands. The
@@ -129,7 +129,7 @@ test('solvePowChallenge: accepts an AbortSignal option (signature surface check)
   assert.ok(result === null || typeof result === 'object');
 });
 
-// Smoke test to keep the deriveKey import exercised — if someone
+// Smoke test to keep the deriveKey import exercised: if someone
 // removes the `web/pbkdf2` import by mistake, the test bundle
 // fails to load and the breakage is visible.
 test('pbkdf2DeriveKey is the web variant (uses crypto.subtle, not node:crypto)', () => {

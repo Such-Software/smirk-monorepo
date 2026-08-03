@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * Nostr identity overhaul (v0.3.0) nav smoke — daemon-free.
+ * Nostr identity overhaul (v0.3.0) nav smoke: daemon-free.
  *
  * Guards the Phase 4-6 wiring of the identity feature without touching the
  * chain daemon or a live Nostr relay:
@@ -12,7 +12,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *     (`messages-screen`) as an `inbox/messages` drill-down. Before the
  *     merge this surface lived under Settings; the entry + drill-down are the
  *     merge. The surface renders its `messages-screen` root unconditionally
- *     (past any wallet-lock) — this is also the regression guard for the
+ *     (past any wallet-lock); this is also the regression guard for the
  *     original "Unlock the wallet to use messaging" warm-resume bug: the DM
  *     surface must render its shell, not a blanket lock screen.
  *   - Phase 6 (retirement): the old Settings → Messages nav row is gone
@@ -49,7 +49,7 @@ test('Inbox → Messages opens the DM surface (Phase 6 merge)', async ({
   const messagesEntry = page.getByTestId('inbox-messages-btn');
   await expect(messagesEntry).toBeVisible();
 
-  // Opening it lands on the DM surface — the shell renders regardless of
+  // Opening it lands on the DM surface: the shell renders regardless of
   // whether this backend runs a relay, and crucially NOT a wallet-lock. This
   // is the regression guard for the warm-resume "Unlock the wallet" bug.
   await messagesEntry.click();
@@ -78,7 +78,7 @@ test('Header identity chip → Manage identities opens the hub (single identity)
   await chip.click();
 
   // The dropdown carries a "Manage identities…" listbox option that routes to
-  // the Nostr identities hub — the fix for the previously-dead single-identity chip.
+  // the Nostr identities hub: the fix for the previously-dead single-identity chip.
   await page.getByRole('option', { name: /Manage identities/ }).click();
   await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({ timeout: 30_000 });
 

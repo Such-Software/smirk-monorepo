@@ -1,5 +1,5 @@
 /**
- * TipMaker — single-screen social tip composer.
+ * TipMaker: single-screen social tip composer.
  *
  * Replaces the 4-step wizard from smirk-extension v0.2.4 (platform →
  * username → amount → success). The v0.2.4 flow buried the interesting
@@ -34,7 +34,7 @@ export type TipPlatform = 'telegram' | 'discord' | 'smirk';
 export interface RecentRecipient {
   platform: TipPlatform;
   username: string;
-  /** Asset used last time this user tipped this recipient — drives the
+  /** Asset used last time this user tipped this recipient: drives the
    *  default asset for the new tip. */
   lastAssetId?: string;
   /** ISO timestamp of last tip. Used to sort the chips. */
@@ -99,12 +99,12 @@ export interface TipMakerProps {
   hideAssetIds?: string[];
   /** Optional: pre-select this asset on mount, overriding the
    *  largest-balance default. Shell wires this when the user arrives
-   *  via the per-asset detail screen's Tip button — entering the Tip
+   *  via the per-asset detail screen's Tip button: entering the Tip
    *  flow with the *intent* already attached to a coin is much less
    *  surprising than landing on whatever asset has the biggest
    *  balance. The recent-recipient lookup still overrides this once
    *  the user types a known handle (their last-tipped asset wins
-   *  there — that's the stronger signal). */
+   *  there; that's the stronger signal). */
   prefilledAssetId?: string;
   /**
    * Whether this backend can serve TARGETED (@username / platform) tips.
@@ -119,7 +119,7 @@ export interface TipMakerProps {
    *
    * A future backend that advertises targeted-tip support can pass
    * `allowTargeted` (wired from that capability) to restore the recipient
-   * composer + public/targeted toggle. Keep this capability-driven — do NOT
+   * composer + public/targeted toggle. Keep this capability-driven: do NOT
    * hardcode it true, or a public-only instance regresses to the 400 trap.
    */
   allowTargeted?: boolean;
@@ -133,16 +133,16 @@ const PLATFORM_LABEL: Record<TipPlatform, string> = {
 
 /** Brand-correct platform icons rendered inline as SVG (telegram,
  *  discord) or unicode emoji (smirk). v0.3 doesn't bundle a Nerd
- *  Font or icon-font, so SVGs go inline — they're tiny and avoid the
+ *  Font or icon-font, so SVGs go inline: they're tiny and avoid the
  *  extra HTTP fetch. */
 function PlatformIcon({ platform, size = 14 }: { platform: TipPlatform; size?: number }) {
   if (platform === 'smirk') {
-    // The Smirk emoji — used in the wallet's header brand mark and
+    // The Smirk emoji, used in the wallet's header brand mark and
     // throughout. Matches the wallet's identity character.
     return <span style={{ fontSize: size }}>😏</span>;
   }
   if (platform === 'telegram') {
-    // Telegram brand — simpleicons.org path, public domain.
+    // Telegram brand: simpleicons.org path, public domain.
     return (
       <svg
         width={size}
@@ -157,7 +157,7 @@ function PlatformIcon({ platform, size = 14 }: { platform: TipPlatform; size?: n
     );
   }
   if (platform === 'discord') {
-    // Discord brand — simpleicons.org path, public domain.
+    // Discord brand: simpleicons.org path, public domain.
     return (
       <svg
         width={size}
@@ -198,11 +198,11 @@ export function TipMaker(props: TipMakerProps) {
   );
 
   // Pick a default asset:
-  //   1. `prefilledAssetId` (shell-supplied — "I came from the Grin
+  //   1. `prefilledAssetId` (shell-supplied: "I came from the Grin
   //      screen, I want to tip Grin"). Highest-priority signal.
-  //   2. Recent recipient's `lastAssetId` — applied in the useEffect
+  //   2. Recent recipient's `lastAssetId`: applied in the useEffect
   //      below once a known username is typed.
-  //   3. Asset with the largest balance — final fallback when neither
+  //   3. Asset with the largest balance: final fallback when neither
   //      hint is available.
   const defaultAssetId = useMemo(() => {
     if (visibleAssetIds.length === 0) return '';
@@ -230,7 +230,7 @@ export function TipMaker(props: TipMakerProps) {
   const [amountText, setAmountText] = useState('');
   // Default to a PUBLIC share-URL tip unless this backend can serve targeted
   // tips (see `allowTargeted`). The shipped backend is public-only, so the
-  // out-of-box tip must be one it accepts — a targeted default would 400 on
+  // out-of-box tip must be one it accepts: a targeted default would 400 on
   // submit the moment the user filled the composer and pressed Send.
   const [isPublic, setIsPublic] = useState(!props.allowTargeted);
   const [senderAnonymous, setSenderAnonymous] = useState(false);
@@ -490,7 +490,7 @@ export function TipMaker(props: TipMakerProps) {
           borderRadius: 8,
         }}
       >
-        {/* Public/targeted toggle — only when this backend can actually serve a
+        {/* Public/targeted toggle: only when this backend can actually serve a
             targeted tip. On a public-only backend the tip is ALWAYS a public
             share-URL tip, so surfacing this toggle would just let the user
             compose a targeted tip the backend 400s. See `allowTargeted`. */}
@@ -677,7 +677,7 @@ function Label({ children }: { children: preact.ComponentChildren }) {
 }
 
 /**
- * Inline-expanding dropdown — single row when closed, vertical list
+ * Inline-expanding dropdown: single row when closed, vertical list
  * when open. Scales to N platforms without crowding the popup
  * (popup is ~360px wide, so 3-button-row blew out horizontally as
  * brand names grew; future Matrix/Signal/Nostr/etc. would have made
@@ -692,7 +692,7 @@ function PlatformDropdown({
 }) {
   const [open, setOpen] = useState(false);
   // Single source of platform ordering. Extend this when adding
-  // Matrix / Signal / Nostr / etc. — Label + Icon already keyed by
+  // Matrix / Signal / Nostr / etc.; Label + Icon already keyed by
   // TipPlatform union elsewhere in this file.
   const order: TipPlatform[] = ['smirk', 'telegram', 'discord'];
 
@@ -818,7 +818,7 @@ function Toggle({
 }
 
 /**
- * Asset picker — popover anchored under the chip. Sits next to the
+ * Asset picker: popover anchored under the chip. Sits next to the
  * amount input, so we can't expand inline like the platform
  * dropdown (would shove the input out of place). Instead the option
  * list renders absolutely-positioned below the chip, right-aligned
@@ -941,7 +941,7 @@ function AssetDropdown({
   );
 }
 
-// suppress unused-import warning if listAssets isn't called above —
+// suppress unused-import warning if listAssets isn't called above;
 // retain reference so the import survives tree-shake refactors.
 void listAssets;
 

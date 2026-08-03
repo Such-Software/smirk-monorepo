@@ -1,5 +1,5 @@
 /**
- * Money gate G14 — in-page Grin payments are HONESTLY REJECTED.
+ * Money gate G14: in-page Grin payments are HONESTLY REJECTED.
  *
  * A dapp-initiated grin send is deferred to v0.4: the interactive path would
  * write finalize context into a SendWizard slot it never populates, so the
@@ -63,7 +63,7 @@ function fakeProvider(unlocked: boolean): WalletProvider {
   };
 }
 
-/** Counting approval handler — should never be invoked for a grin payment. */
+/** Counting approval handler: should never be invoked for a grin payment. */
 function countingApproval(): { handler: ApprovalHandler; seen: ApprovalRequest[] } {
   const seen: ApprovalRequest[] = [];
   const handler: ApprovalHandler = async (req) => {

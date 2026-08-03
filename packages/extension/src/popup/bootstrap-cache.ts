@@ -2,7 +2,7 @@ import type { BootstrapAuthResult } from '@smirk/core';
 import { sessionStorage } from './singletons';
 
 // ============================================================================
-// Bootstrap (JWT + userId + LWS heights) cache — chrome.storage.session
+// Bootstrap (JWT + userId + LWS heights) cache: chrome.storage.session
 // scoped, ~5 min TTL. Skipping the auth round-trip on every popup open
 // shaves 1-2s off the warm-open feel; the cache dies on browser restart
 // AND on wallet fingerprint change (defensive: a re-imported wallet
@@ -13,7 +13,7 @@ import { sessionStorage } from './singletons';
 // stale-cache hit either succeeds (fast path) or surfaces an auth error
 // which we recover from by clearing the cache and re-bootstrapping. No
 // regression vs. the in-memory-only baseline that auditors signed off on
-// for v0.2.x — the access token never touches chrome.storage.local
+// for v0.2.x: the access token never touches chrome.storage.local
 // (which IS persistent and IS the legacy anti-pattern).
 // ============================================================================
 

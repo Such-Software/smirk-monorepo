@@ -1,12 +1,12 @@
 /**
- * Tests for `getPageApiInjectionScript()` — the IIFE source we feed
+ * Tests for `getPageApiInjectionScript()`: the IIFE source we feed
  * into `DappBrowserController.setInitScripts()` to bootstrap
  * `window.smirk` inside an embedded webview.
  *
  * Rather than depend on jsdom (a non-trivial transitive footprint),
  * we evaluate the script inside Node's `vm` module against a hand-
  * rolled `window` mock that's just large enough to capture the
- * transport calls. The mock is deliberately minimal — anything more
+ * transport calls. The mock is deliberately minimal; anything more
  * elaborate and we'd be testing the mock instead of the IIFE.
  */
 
@@ -29,7 +29,7 @@ function assertJsonEqual(actual: unknown, expected: unknown): void {
 }
 
 // ----------------------------------------------------------------------
-// Static checks — the returned string should compile cleanly and
+// Static checks: the returned string should compile cleanly and
 // reference the configured transport.
 // ----------------------------------------------------------------------
 
@@ -76,7 +76,7 @@ describe('getPageApiInjectionScript — static shape', () => {
 });
 
 // ----------------------------------------------------------------------
-// Behavioural checks — evaluate the IIFE in a sandbox and verify
+// Behavioural checks: evaluate the IIFE in a sandbox and verify
 // `window.smirk` is installed and wires the configured transport.
 // ----------------------------------------------------------------------
 
@@ -86,10 +86,10 @@ interface PostedMessage {
 }
 
 interface SandboxResult {
-  // The sandbox's `window` object — `window.smirk` is exposed here
+  // The sandbox's `window` object; `window.smirk` is exposed here
   // after the IIFE runs.
   window: SandboxWindow;
-  // Messages observed on `window.parent.postMessage(msg, '*')` —
+  // Messages observed on `window.parent.postMessage(msg, '*')`,
   // populated for the postMessage transport.
   posted: PostedMessage[];
   // Whatever the tauri/capacitor stubs captured, if used.
@@ -183,8 +183,8 @@ function evalInSandbox(transport: InjectionTransport): SandboxResult {
 
   const src = getPageApiInjectionScript({ transport });
   // CustomEvent + Map + Error are used as globals inside the IIFE.
-  // Map / Error are auto-provided by the vm realm; CustomEvent isn't —
-  // expose our minimal stub so `new CustomEvent("smirk-ready")` works.
+  // Map / Error are auto-provided by the vm realm; CustomEvent isn't.
+  // Expose our minimal stub so `new CustomEvent("smirk-ready")` works.
   const context = vm.createContext({ window, CustomEvent: CustomEventCtor });
   vm.runInContext(src, context);
 
@@ -283,7 +283,7 @@ describe('getPageApiInjectionScript — behaviour', () => {
   });
 
   // --------------------------------------------------------------
-  // postMessage transport — request/response wire protocol
+  // postMessage transport: request/response wire protocol
   // --------------------------------------------------------------
 
   it('postMessage transport: connect() sends a SMIRK_REQUEST and resolves on response', async () => {
@@ -349,7 +349,7 @@ describe('getPageApiInjectionScript — behaviour', () => {
     const p = sandbox.window.smirk!.isUnlocked();
     const wire = (sandbox.posted[0]!.message as { payload: { id: number } }).payload;
 
-    // Manually deliver a message on a different channel — should be ignored.
+    // Manually deliver a message on a different channel: should be ignored.
     const messageListener = (sandbox.window as unknown as {
       _listeners?: Array<(ev: { data: unknown }) => void>;
     })._listeners;
@@ -425,7 +425,7 @@ describe('getPageApiInjectionScript — behaviour', () => {
   });
 
   // --------------------------------------------------------------
-  // Method-specific param shapes — make sure each method on the
+  // Method-specific param shapes: make sure each method on the
   // surface matches the wire spec in protocol.ts.
   // --------------------------------------------------------------
 

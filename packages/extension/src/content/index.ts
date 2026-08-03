@@ -18,7 +18,7 @@
  * request is a fresh round-trip.
  *
  * **Cross-platform reuse note.** On Capacitor / Tauri there's no
- * content-script equivalent — the in-app browser → main-app message
+ * content-script equivalent: the in-app browser → main-app message
  * channel goes through the platform's own bridge (Capacitor.WebView,
  * __TAURI__.event). This file is extension-only; the analogous
  * mobile/desktop bridges live in their respective platform packages.
@@ -34,7 +34,7 @@ import { isInjectDisabled } from '../background/dapp/inject-policy';
 // --- Step 1: inject the page-context script (gated by user policy) ---
 //
 // document_start firing in the manifest means the page hasn't started
-// executing its own scripts yet — we want our `<script src=...>` to
+// executing its own scripts yet, and we want our `<script src=...>` to
 // run BEFORE the page's modules so `window.smirk` is defined when
 // the dapp's detection code runs. Inserting into <html> works
 // pre-<head>; falls back to documentElement otherwise.
@@ -42,10 +42,10 @@ import { isInjectDisabled } from '../background/dapp/inject-policy';
 // **Fingerprinting mitigation (issue #1).** Before we inject, check
 // the user's policy. If they've disabled `window.smirk` in Settings,
 // we skip injection AND skip the message relay below. The page sees
-// no `window.smirk`, no postMessage chatter — there is nothing for a
+// no `window.smirk`, no postMessage chatter: there is nothing for a
 // page (or a third-party tracker on a page) to fingerprint against.
 // Storage read is async, so the message-relay listener install also
-// has to wait until after the policy check resolves — otherwise the
+// has to wait until after the policy check resolves; otherwise the
 // disabled state would still chatter on the page's message bus.
 function injectPageScript() {
   try {
@@ -65,7 +65,7 @@ function injectPageScript() {
 
 void (async () => {
   if (await isInjectDisabled()) {
-    // User has globally disabled web-API injection. Do nothing —
+    // User has globally disabled web-API injection. Do nothing,
     // not even register the message listener. We want zero
     // observable footprint on the page in this mode.
     return;

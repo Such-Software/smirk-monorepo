@@ -1,5 +1,5 @@
 /**
- * High-level DM flow — thin convenience over the active provider + relay set, so
+ * High-level DM flow: thin convenience over the active provider + relay set, so
  * shells call `sendDm` / `subscribeDms` without threading relays through.
  */
 
@@ -26,7 +26,7 @@ export function recipientToHex(recipient: string): string {
  * Resolve a recipient (npub, hex, or `name@domain`) to their x-only pubkey + the
  * relays to DELIVER to: their NIP-17 DM inbox (kind 10050), falling back to their
  * NIP-05 relay hints, then the public interop relays. This is what makes DMs
- * reach non-Smirk (e.g. Goblin) users — you must publish where they read.
+ * reach non-Smirk (e.g. Goblin) users: you must publish where they read.
  */
 export async function resolveDmRelays(
   recipient: string,
@@ -51,7 +51,7 @@ export async function resolveDmRelays(
   try {
     inbox = await messagingProvider().queryDmRelayList({ pubkeyHex, relays: lookupRelays });
   } catch {
-    /* no kind-10050 / unreachable — fall back to the NIP-05 hints */
+    /* no kind-10050 / unreachable: fall back to the NIP-05 hints */
   }
   // Same reasoning for the fallback: if we resolved nothing, say so. Silently
   // substituting third-party relays sends the gift-wrap somewhere the operator
@@ -102,8 +102,8 @@ export async function publishDmInbox(identity: NostrIdentity): Promise<void> {
 }
 
 /**
- * Poll the active relays for raw (encrypted) gift-wraps addressed to `pubkeyHex`
- * — needs only the PUBLIC npub, so the background service worker calls this
+ * Poll the active relays for raw (encrypted) gift-wraps addressed to `pubkeyHex`.
+ * Needs only the PUBLIC npub, so the background service worker calls this
  * without the seed. Decrypt later with [`decryptWrap`] in an unlocked context.
  */
 export async function fetchDmWraps(

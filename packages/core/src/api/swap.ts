@@ -65,7 +65,7 @@ export function createSwapMethods(client: ApiClient): SwapMethods {
       // Best-effort backend tracking; the caller tolerates an error (it only means
       // webhook-driven status updates won't be authenticated, direct polling works).
       if (swapsUnsupported()) return { error: SWAPS_UNSUPPORTED };
-      // NOT retryable — non-idempotent at the network layer (Trocador's
+      // NOT retryable: non-idempotent at the network layer (Trocador's
       // /new_trade already created the row); the backend's idempotency
       // is on trade_id, but a retry after a successful response that
       // didn't reach us would still POST the same body, which the

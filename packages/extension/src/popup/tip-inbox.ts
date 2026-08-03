@@ -1,4 +1,4 @@
-/** Returns true iff a `pending` tip's funding has stalled — zero
+/** Returns true iff a `pending` tip's funding has stalled: zero
  *  confirmations beyond a generous wall-clock cutoff. Used to drop
  *  abandoned tips from the Inbox and per-asset history. */
 export const STALE_TIP_NO_CONF_MS = 24 * 60 * 60 * 1000;

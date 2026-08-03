@@ -26,7 +26,7 @@ make wasm-node   # Node target    → crates/smirk-wasm/pkg-node/
 
 `@smirk/wasm` builds against the browser target by default.
 
-## Use — browser
+## Use: browser
 
 ```ts
 import { initialize, grin, monero } from '@smirk/wasm';
@@ -38,7 +38,7 @@ const address = grin.slatepackAddress(mnemonic, 0, 'mainnet');
 const xmrTx   = monero.signTransaction(JSON.stringify(params));
 ```
 
-## Use — Node / restricted-fetch environments
+## Use: Node / restricted-fetch environments
 
 ```ts
 import { initialize, grin } from '@smirk/wasm';
@@ -68,7 +68,7 @@ There is no `wownero` namespace: `coin: "xmr" | "wow"` in the signing
 params selects Monero or Wownero, since the delta is on the chain side,
 not the crypto.
 
-Initialisation is idempotent — every shell can call it on boot
+Initialisation is idempotent: every shell can call it on boot
 without coordinating with the others.
 
 ## License

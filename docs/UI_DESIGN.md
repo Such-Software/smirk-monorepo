@@ -1,4 +1,4 @@
-# Smirk Wallet — UI Design Principles
+# Smirk Wallet: UI Design Principles
 
 Direction document for the v0.3+ wallet UI overhaul. Captures the
 architectural decisions that shape every screen so we don't drift back
@@ -26,7 +26,7 @@ one coin's view.
 The redesign starts from a different question: not "what coin is the
 user looking at," but "what is the user trying to do."
 
-## Principle 1 — Action-centric over asset-centric
+## Principle 1: Action-centric over asset-centric
 
 Top-level navigation is **verbs**, not **nouns**:
 
@@ -44,21 +44,21 @@ popup sees the four.
 
 Per-asset detail (address, view key, per-chain
 history, RPC override) lives as a drill-down screen *from* Home, not
-as its own tab — modern wallet pattern (Phantom, Trust, Cake) where
+as its own tab: modern wallet pattern (Phantom, Trust, Cake) where
 the asset list IS the wallet view.
 
 Asset selection is a sub-step *inside* each action flow, never the
 entry point. The user clicks "Send" and is then asked which asset;
 the user clicks "Create Tip" and is then asked the amount and asset.
 This inverts the legacy model where the user clicks "BTC" → then
-"Send" — the action they wanted was Send, not BTC.
+"Send": the action they wanted was Send, not BTC.
 
 The action row on Home contains the four universal verbs:
-**Tip · Send · Receive · Swap**. "Claim" is contextual — it appears
+**Tip · Send · Receive · Swap**. "Claim" is contextual: it appears
 only when there's a claimable tip, and it lives where the tip lives
 (Inbox), not as a top-level action.
 
-## Principle 2 — No transparent / shielded vault split
+## Principle 2: No transparent / shielded vault split
 
 A natural-seeming idea is to visually divide assets into transparent
 (BTC, LTC, …) and shielded (XMR, WOW, …) vaults. **We're not doing
@@ -66,7 +66,7 @@ that.**
 
 Rationale: privacy is a per-flow property, not a per-asset property.
 View keys make even "private" CryptoNote assets selectively
-transparent — the user can hand a view key to a tax accountant, post
+transparent: the user can hand a view key to a tax accountant, post
 a public tip with a published address, or share an LWS endpoint.
 Bitcoin can be made private with care. Splitting assets into two
 vaults oversimplifies and gives the user a false sense of binary
@@ -80,12 +80,12 @@ Where privacy considerations *do* surface in the UI:
 
 Not in the asset list.
 
-## Principle 3 — Unified Inbox for everything that arrives
+## Principle 3: Unified Inbox for everything that arrives
 
 Slatepacks aren't the only thing that flows in. Atomic-swap rounds
 (v0.4+) need responses. Incoming tips can carry notes. Free-form
 e2ee messages between users (v0.4+) ride the same relay. Lumping
-all of these into one tab — **Inbox** — gives users a single
+all of these into one tab, **Inbox**, gives users a single
 "what needs my attention" surface and re-uses one backend primitive
 across four item kinds.
 
@@ -96,24 +96,24 @@ across four item kinds.
 | 🎁 Tip | Incoming tip with optional note | "Claim" + read note |
 | 💬 Message | Free text, ≤240 chars, e2ee | Read + "Reply" + "Block" |
 
-All four ride the same backend envelope — the existing slatepack
+All four ride the same backend envelope: the existing slatepack
 relay endpoint generalizes to take a `kind` field plus an
 encrypted-to-recipient payload. Backend stores ciphertext + metadata
 + TTL only; never sees plaintext. Same relay primitive for all
 four = one schema to maintain, one code path to harden.
 
 **Versioning:**
-- v0.3 — Inbox surface ships with slatepacks (existing) + tips with
+- v0.3: Inbox surface ships with slatepacks (existing) + tips with
   optional notes.
-- v0.4 — adds swap-round items.
-- v0.4 (or v0.5) — adds free-form e2ee messages.
+- v0.4: adds swap-round items.
+- v0.4 (or v0.5): adds free-form e2ee messages.
 
 **Slatepack-specific behaviors:**
 
-- **Clipboard auto-detect** — when the popup opens, scan for
+- **Clipboard auto-detect**: when the popup opens, scan for
   `BEGINSLATEPACK…ENDSLATEPACK` and offer to ingest via a non-modal
   toast (with explicit consent for clipboard read).
-- **Invoice flow** as a first-class peer to standard Send — the
+- **Invoice flow** as a first-class peer to standard Send: the
   user can request payment by generating an invoice slatepack,
   distinct from "give me your address."
 
@@ -125,19 +125,19 @@ to accommodate future MW chains (Beam, MWC).
 **Anti-spam for free-form messages.** Three modes the user picks
 from in Settings:
 
-1. **Tip-gated** (default) — accept only from users you've previously
+1. **Tip-gated** (default): accept only from users you've previously
    tipped, or who've previously tipped you. Social graph as filter.
-2. **Open** — any registered Smirk user can DM. Power users / public
+2. **Open**: any registered Smirk user can DM. Power users / public
    tip-link recipients.
-3. **Closed** — only people in your contacts (manually allowed).
+3. **Closed**: only people in your contacts (manually allowed).
 
 Plus per-sender rate limit (default 3 / hour) and a per-recipient
 block list at every level. Block lists are encrypted blobs the
-backend stores — server has zero plaintext access.
+backend stores; server has zero plaintext access.
 
 **Strategic posture.** End-to-end-encrypted messages sit Signal/Matrix
 shape (operator is a relay, never sees plaintext, can't moderate).
-That carries no MTL or chat-platform classification — Cash App and
+That carries no MTL or chat-platform classification: Cash App and
 Venmo carry tx notes without messaging-specific licensing. The
 moderation-as-implicit-liability angle that bites unencrypted
 platforms doesn't apply here because we structurally cannot read
@@ -152,7 +152,7 @@ What we do **NOT** ship:
   trivially eliminates CSAM and spam-file vectors.
 - Search / indexing. Backend can't index ciphertext.
 
-## Principle 4 — Swaps are top-level, with a step tracker
+## Principle 4: Swaps are top-level, with a step tracker
 
 Swap UX has its own physics: multiple network fees (inbound +
 outbound), asymmetric confirmation times (10 min for BTC inbound vs
@@ -164,13 +164,13 @@ happening. Swap is a top-level tab.
 
 Inside the Swap tab:
 
-- **Asset pair selector** — from / to, with a search box (since the
+- **Asset pair selector**: from / to, with a search box (since the
   list of supported assets grows over time).
-- **Quote panel** — output amount, slippage, route, fees.
-- **Confirmation step** — explicit "yes, swap N BTC for M XMR" with
+- **Quote panel**: output amount, slippage, route, fees.
+- **Confirmation step**: explicit "yes, swap N BTC for M XMR" with
   the receiving address shown (it's *the user's own* address, but
   saying so explicitly avoids confusion).
-- **Step tracker post-broadcast** — a visual progress indicator with
+- **Step tracker post-broadcast**: a visual progress indicator with
   states like *Broadcast → Awaiting Inbound Confirmation → Routed →
   Awaiting Outbound → Funds Available*. Each step shows estimated
   time remaining when known.
@@ -180,7 +180,7 @@ swaps in v0.4+. Same UI surface, different backend. Aggregator
 (Trocador today; THORChain planned) vs Native (P2P) is a sub-toggle,
 not a separate tab.
 
-## Principle 5 — Tip Maker as one screen, not a wizard
+## Principle 5: Tip Maker as one screen, not a wizard
 
 Social tipping is the wallet's primary differentiator. The flow has
 to feel slick.
@@ -205,7 +205,7 @@ reached from Settings or from the ready-to-share banner on Home, with
 a prominent **Clawback** button. Unclaimed tips are the user's funds
 in limbo; recovering them shouldn't take three taps.
 
-## Principle 6 — Asset registry, not hardcoded chains
+## Principle 6: Asset registry, not hardcoded chains
 
 Today: BTC, LTC, XMR, WOW, Grin. Tomorrow: probably more BTC forks,
 Litecoin MWEB, additional CryptoNote chains, possibly an EVM chain or
@@ -258,7 +258,7 @@ Grin "pending balance includes locked outputs" thing, the Wownero
 PSBT-signing instead of raw-tx-signing" thing) without leaking them
 into UI code.
 
-### Principle 6a — User-curated visibility, registry-driven feature inclusion
+### Principle 6a: User-curated visibility, registry-driven feature inclusion
 
 Two related rules that fall out of "scales to N assets":
 
@@ -266,13 +266,13 @@ Two related rules that fall out of "scales to N assets":
 the user's `ui.hiddenAssets` preference through a single helper
 (`visibleAssetIds(state, assets)` in `@smirk/core/state/visibility`).
 *Nowhere else* in the codebase should `state.ui.hiddenAssets.includes(...)`
-appear inline — that's how visibility decisions drift apart across
+appear inline: that's how visibility decisions drift apart across
 surfaces. Hiding an asset:
 
 - Removes it from Home, the Send/Receive/Tip choosers, and the
   unified-balance total.
 - Skips balance-poll round-trips for it (cost-proportional to what
-  the user actually uses — hiding 2-3 of 5 assets saves 40-60% of
+  the user actually uses: hiding 2-3 of 5 assets saves 40-60% of
   the popup-open backend traffic).
 - Leaves the asset routable directly (claim notifications, external
   links) and leaves the wallet's keys intact.
@@ -297,7 +297,7 @@ See [`MULTI_ASSET_ARCHITECTURE.md`](./MULTI_ASSET_ARCHITECTURE.md)
 for the longer-form story on where capability flags + visibility +
 per-family adapters fit together as the wallet scales past 5 assets.
 
-## Principle 7 — Granular per-asset connection grants
+## Principle 7: Granular per-asset connection grants
 
 When a site calls `window.smirk.connect()`, the approval UI shouldn't
 be all-or-nothing. A Monero-only shop should be able to ask for the
@@ -312,10 +312,10 @@ metadata is shown alongside, but never as the primary identifier.)
 Persisted grants live per-origin × per-asset. Revoking an asset's
 grant for a site is a single click.
 
-## Principle 8 — Unified balance, with denomination + hide
+## Principle 8: Unified balance, with denomination + hide
 
-The Home tab leads with a single large total balance — the answer to
-"how much do I have?" — rather than a stack of per-asset numbers.
+The Home tab leads with a single large total balance (the answer to
+"how much do I have?") rather than a stack of per-asset numbers.
 Per-asset balances are still visible (one row each in the asset
 list below), but the headline number is the sum.
 
@@ -334,21 +334,21 @@ makes the distinction unmissable.
 **Hide toggle is mandatory.** An eye-icon next to the total masks
 all balance fields ("●●●●") for screen-share / coffee-shop /
 shared-laptop scenarios. This is a privacy expectation, not a
-nice-to-have — Coinbase, Trust, and most modern wallets ship it
+nice-to-have: Coinbase, Trust, and most modern wallets ship it
 because users learned to expect it.
 
 **Failure states.** When the price feed is stale or unavailable,
 the fiat denomination renders as `—` with a tooltip ("Rate
 unavailable, last fetched 12m ago"). The native-denomination total
 (BTC mode, sat mode) keeps working since it's just summed atomic
-units divided by registered decimals — no network dependency.
+units divided by registered decimals: no network dependency.
 
 **Implementation note.** Atomic-units math is BigInt end-to-end;
 fiat conversion happens at the display layer only. Asset registry
 provides decimals, price feed provides USD-per-asset, denomination
 picker translates. No floating-point on consensus-critical values.
 
-## Principle 9 — Themable surface, registry-driven
+## Principle 9: Themable surface, registry-driven
 
 The wallet ships with a theme registry in `@smirk/ui/themes/` that mirrors
 the asset-registry pattern from Principle 6. A theme is pure data:
@@ -364,21 +364,21 @@ interface Theme {
 ```
 
 `@smirk/ui` components consume themes **only** via CSS custom properties
-(`var(--smirk-bg)`, `var(--smirk-accent)`, …) — they never import a theme
+(`var(--smirk-bg)`, `var(--smirk-accent)`, …): they never import a theme
 object. That keeps the component library theme-agnostic and lets shells
 (extension / mobile / desktop) register their own themes (e.g. macOS Aqua,
 material-mobile) without rebuilding `@smirk/ui`.
 
 **Built-ins (as of 2026-05-13):**
-- `defaultTheme` — dark "Smirk Bauhaus" look, the fallback for missing
+- `defaultTheme`: dark "Smirk Bauhaus" look, the fallback for missing
   tokens.
-- `win95Theme` (Chicago '95) — chunky bevels, MS Sans Serif, gray
+- `win95Theme` (Chicago '95): chunky bevels, MS Sans Serif, gray
   system palette.
-- `winxpTheme` (Luna) — Luna blue/silver gradient, smoother bevels.
-- `amigaTheme` (Workbench) — orange-on-blue Workbench 1.3 palette.
-- `iosClassicTheme` (Glassy '07) — glossy iOS 1–6 era gradients.
-- `gameboyTheme` (DMG) — 4-color green LCD palette + Press Start 2P pixel font.
-- `n64Theme` (Ultra 64) — molded gray plastic with Lilita One display font.
+- `winxpTheme` (Luna): Luna blue/silver gradient, smoother bevels.
+- `amigaTheme` (Workbench): orange-on-blue Workbench 1.3 palette.
+- `iosClassicTheme` (Glassy '07): glossy iOS 1–6 era gradients.
+- `gameboyTheme` (DMG): 4-color green LCD palette + Press Start 2P pixel font.
+- `n64Theme` (Ultra 64): molded gray plastic with Lilita One display font.
 
 Codename naming (not "Windows 95", "Game Boy") avoids trademark exposure
 while staying identifiable. Fonts (Press Start 2P, Lilita One) are
@@ -405,7 +405,7 @@ ActionButton, Button, BalanceCard, UnifiedBalance, BottomNav, HomeTab,
 SendWizard's Grin Exchange affordance, and GrinRequestWizard pull from
 tokens; the older portions of SendWizard, ReceiveScreen,
 OnboardingWizard, LockScreen, and the settings page still carry inline
-styles. Touch as you go — no big-bang sweep planned.
+styles. Touch as you go: no big-bang sweep planned.
 
 ## Navigation summary
 
@@ -423,7 +423,7 @@ styles. Touch as you go — no big-bang sweep planned.
 │  SWAP:    aggregator vs native toggle; from/to picker;  │
 │           quote; step tracker for active swaps          │
 │                                                          │
-│  INBOX:   unified item list — slatepacks, swap rounds,  │
+│  INBOX:   unified item list:  slatepacks, swap rounds,  │
 │           incoming tips with notes, e2ee DMs (v0.4+);   │
 │           per-item action verbs (Sign / Claim / Reply)  │
 │                                                          │
@@ -439,7 +439,7 @@ the backend advertises one, and Browse appends when the shell
 installs an embedded-browser controller.
 
 Asset detail (balance, address, view key, per-chain history, RPC
-override) is a drill-down screen *from* Home — tap any asset row.
+override) is a drill-down screen *from* Home: tap any asset row.
 
 The same nav structure works on extension popup (360–400px wide),
 mobile (Capacitor full screen), and desktop (Tauri windowed). Shared
@@ -452,39 +452,39 @@ Preact components in `packages/ui/` keep visual consistency.
 - Onboarding flow (handled separately as part of v0.3 onboarding
   rework).
 - Mobile-specific affordances (push notifications, haptics, deep
-  linking) — covered in the Capacitor track.
+  linking): covered in the Capacitor track.
 - Auth / login (Telegram-based today; may evolve).
 
 ## Status
 
-- **Principle 1 (action-centric)** — shipped. Bottom nav has Home /
+- **Principle 1 (action-centric)**: shipped. Bottom nav has Home /
   Swap / Inbox / Settings; Home leads with UnifiedBalance + ActionRow
   (Tip · Send · Receive · Swap); asset picker is a sub-step inside Send
   and Receive flows.
-- **Principle 2 (no vault split)** — shipped. Asset list is flat.
-- **Principle 3 (Unified Inbox)** — partial. The Inbox ships two item
+- **Principle 2 (no vault split)**: shipped. Asset list is flat.
+- **Principle 3 (Unified Inbox)**: partial. The Inbox ships two item
   families: Grin slatepacks awaiting sign or finalize, and incoming
   social tips split into waiting-for-confirmations and ready-to-claim
   with a one-tap sweep. Public social tips work on all five assets,
   Grin included. Swap rounds and free-form e2ee DMs (v0.4+) are still
   future.
-- **Principle 4 (Swap top-level)** — Trocador is the shipped swap
+- **Principle 4 (Swap top-level)**: Trocador is the shipped swap
   aggregator; THORChain and native (P2P) swaps deferred to v0.4+.
-- **Principle 5 (Tip Maker)** — shipped as `TipMaker`, the
+- **Principle 5 (Tip Maker)**: shipped as `TipMaker`, the
   single-screen composer described above. Clawback for unclaimed tips
   lives in `SentTipsScreen`, reached from Settings or the
   ready-to-share banner on Home.
-- **Principle 6 (asset registry)** — shipped via `@smirk/assets` (44
+- **Principle 6 (asset registry)**: shipped via `@smirk/assets` (44
   unit tests). Three chain-id branches remain in UI code:
   `SendWizard`'s manual-slatepack toggle and its Broadcast-vs-Sent
   headline, and `InboxTab`'s slow-claim notice. They should key off
   registry data instead: `addressKind === 'interactive'` for the Grin
   cases, `family.family === 'cryptonote'` for the claim notice.
-- **Principle 7 (granular connection grants)** — pending; deferred to
+- **Principle 7 (granular connection grants)**: pending; deferred to
   v0.4 dapp work.
-- **Principle 8 (unified balance + denomination + hide)** — shipped via
+- **Principle 8 (unified balance + denomination + hide)**: shipped via
   `UnifiedBalance` + tri-state pending/locked rendering.
-- **Principle 9 (themable surface)** — shipped; 7 themes registered.
+- **Principle 9 (themable surface)**: shipped; 7 themes registered.
 
 Send is end-to-end on all 5 assets, Grin via the interactive Exchange
 step. Migration debt for inline-styled components tracked above.

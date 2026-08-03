@@ -1,5 +1,5 @@
 /**
- * Send handler — turns SendWizard's `onSubmit({ assetId, atomic, recipient })`
+ * Send handler: turns SendWizard's `onSubmit({ assetId, atomic, recipient })`
  * into a real network transaction.
  *
  * Per-asset dispatch:
@@ -89,7 +89,7 @@ function parseWasmResult<T>(json: string): T {
  *
  * Each input: 41 bytes of base data (outpoint + sequence + empty
  * script_sig) + ~27.25 vbytes of witness data (compressed witness =
- * 109 bytes / 4). Rounded to 68 vbytes per input — matches the
+ * 109 bytes / 4). Rounded to 68 vbytes per input, matching the
  * Bitcoin Core default-policy estimate for P2WPKH.
  *
  * Each output: 31 vbytes (8-byte value + 1-byte script length +
@@ -102,7 +102,7 @@ function parseWasmResult<T>(json: string): T {
  * after signing may differ by 1-2 vbytes per input due to DER
  * encoding length variation. Underestimating fees risks the tx
  * sitting in the mempool until next block-cycle; we don't try to
- * recompute after signing — the popular tradeoff is to round fees
+ * recompute after signing; the popular tradeoff is to round fees
  * up rather than tighten the estimator.
  */
 function estimateVsize(numInputs: number, numOutputs: number): number {
@@ -132,7 +132,7 @@ interface SelectedSet {
 
 /**
  * Sweep all UTXOs into a single 1-output tx to the recipient. Fee comes
- * out of the recipient amount — user pays the fee implicitly. Final
+ * out of the recipient amount: user pays the fee implicitly. Final
  * source-address balance is exactly 0.
  */
 function selectUtxosForSweep(
@@ -157,7 +157,7 @@ function selectUtxosForSweep(
 /**
  * Normal greedy UTXO selection: largest-first until selected ≥ amount + fee.
  *
- * Fee depends on input count, which depends on selection — so we
+ * Fee depends on input count, which depends on selection, so we
  * loop: start with 1 input, compute fee, add inputs if short, retry.
  * Caps at 50 iterations as a sanity bound (caller's UTXO set should
  * never need more).
@@ -168,7 +168,7 @@ function selectUtxos(
   feeRateSatPerVb: number,
 ): SelectedSet | { error: string } {
   // Sort largest-first. Confirmed-only would be more conservative;
-  // for v0.3 we include unconfirmed (height === 0) — explorers + LWS
+  // for v0.3 we include unconfirmed (height === 0): explorers + LWS
   // agree on RBF semantics for our paths.
   const sorted = [...utxos].sort((a, b) => b.value - a.value);
 
@@ -223,11 +223,11 @@ function selectUtxos(
  *
  * Flow: UTXO fetch → selection (sweep-all or greedy) → buildPsbt →
  * signPsbt → extractTx → broadcast. Single-recipient P2WPKH only;
- * change goes back to the from-address (Smirk's single-address scheme
- * — see `docs/SEND_FLOW.md`).
+ * change goes back to the from-address (Smirk's single-address scheme;
+ * see `docs/SEND_FLOW.md`).
  *
  * Caller supplies the fee rate (chosen via Compose-screen fee picker)
- * and the sweep flag — no hidden defaults or magic multipliers here.
+ * and the sweep flag: no hidden defaults or magic multipliers here.
  *
  * - `feeRateSatPerVb`: rate the user picked from the fee tiers shown
  *   on the Compose screen (Fast / Normal / Slow).
@@ -251,7 +251,7 @@ async function sendBtcLtc(
    * UTXO ids (`${txid}:${vout}`) of inputs spent by still-pending
    * sends from this wallet. We exclude these from selection so a
    * fast second-send doesn't try to spend a UTXO that's already in
-   * the mempool — Electrum would reject as "missing inputs".
+   * the mempool: Electrum would reject as "missing inputs".
    */
   excludeInputs: Set<string>,
 ): Promise<SendSubmitResult> {
@@ -266,7 +266,7 @@ async function sendBtcLtc(
 
   // Fresh-address mode is opt-in (ENABLE_BTCLTC_FRESH_ADDRS) AND requires the
   // account xpub (present on every v3 unlock; absent on a pre-xpub session
-  // cache, which self-heals to a re-unlock). With it off — the default — this
+  // cache, which self-heals to a re-unlock). With it off (the default) this
   // whole function behaves exactly as before: one address, fixed `/0/0` path,
   // change back to the from-address.
   const accountXpub = (
@@ -279,7 +279,7 @@ async function sendBtcLtc(
   // 1. Fetch UTXOs and filter out any we've already spent in a
   //    still-pending tx (Electrum may not have reflected the spend
   //    yet). Without this filter, a fast second-send picks the
-  //    largest UTXO, which is the one we just spent — Electrum
+  //    largest UTXO, which is the one we just spent, and Electrum
   //    rejects with "missing inputs / already in mempool".
   //
   //    In fresh-address mode we fetch across the whole address book
@@ -336,7 +336,7 @@ async function sendBtcLtc(
   // Owning-address + path tag map, keyed by `txid:vout`. In fresh mode this
   // comes straight off the tagged multi listing; in single-address mode it's
   // the fixed primary leaf. Selection below only carries `{txid,vout,value}`,
-  // so we recover each selected input's path/owner from this map — the path
+  // so we recover each selected input's path/owner from this map: the path
   // is never re-derived from the amount or re-guessed (money gate G9).
   const tagByOutpoint = new Map<string, { masterPath: string; ownerAddress?: string }>();
   for (const u of utxos) {
@@ -410,7 +410,7 @@ async function sendBtcLtc(
     return { ok: false, error: `Build PSBT failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 
-  // 5. Sign. signPsbt's masterPath is the *account* level — its
+  // 5. Sign. signPsbt's masterPath is the *account* level: its
   //    descendant resolves against bip32_derivation entries we put
   //    in during build.
   let signedJson: string;
@@ -507,7 +507,7 @@ async function sendBtcLtc(
  * hands out a subaddress, so nothing can be received on one).
  *
  * Privacy-critical: every transaction must use a fresh `outgoing_view_key`
- * from OS randomness. That happens inside `wasm.sign_transaction` —
+ * from OS randomness. That happens inside `wasm.sign_transaction`:
  * NEVER hardcoded, never zero-init. Pre-2026-05-10 the wasm had a
  * `Zeroizing::new([0u8; 32])` bug there that killed amount privacy on
  * every Smirk XMR/WOW tx; the regression test
@@ -520,7 +520,7 @@ async function sendXmrWow(
   toAddress: string,
   /**
    * Lowercase-hex computed key images of inputs spent by still-pending
-   * sends from this wallet. We exclude these from selection — the LWS
+   * sends from this wallet. We exclude these from selection: the LWS
    * `spend_key_images` filter (Phase 1) catches outputs the *server*
    * thinks are spent, but doesn't catch the window where we just
    * broadcast a tx and LWS hasn't yet reflected it. This cache covers
@@ -532,7 +532,7 @@ async function sendXmrWow(
    * to recipient, no meaningful change. `amountAtomic` is ignored.
    * RingCT requires a 2-output minimum, so monero-oxide will still
    * create a small/zero-value change output to the sender's own
-   * address — that's protocol-mandated padding, not "real" change.
+   * address; that's protocol-mandated padding, not "real" change.
    */
   sweep: boolean,
 ): Promise<SendSubmitResult> {
@@ -547,7 +547,7 @@ async function sendXmrWow(
   // 1. Fetch unspent outputs from LWS. The endpoint applies a server-side
   //    lock-window cushion (XMR ≥10 confs, WOW ≥4 confs) so anything
   //    returned here is past lock-time. BUT LWS still returns outputs
-  //    that look spendable to it without the spend key — including ones
+  //    that look spendable to it without the spend key, including ones
   //    we've already spent (the spend-key-images list ships candidates
   //    the daemon flagged, and we have to verify them ourselves).
   const unspentResp = await chainProviders.lws(asset).listOutputs(fromAddress, viewKeyHex);
@@ -563,7 +563,7 @@ async function sendXmrWow(
   //     (a) outputs whose key image matches one of the server's
   //         `spend_key_images` candidates (LWS-reflected spend), and
   //     (b) outputs whose key image is in `excludeInputs` (a still-
-  //         pending send from this wallet — LWS hasn't reflected yet).
+  //         pending send from this wallet; LWS hasn't reflected yet).
   //     Each kept output is annotated with its key image so the post-
   //     send pendingOutgoing entry can capture them for the next call.
   //     Bug closed by (a) alone: legacy 500 on second-WOW-send after
@@ -631,7 +631,7 @@ async function sendXmrWow(
   // - Sweep mode: select every spendable output. amount = sum − fee
   //   (computed once, since N is known). RingCT requires a 2-output
   //   minimum, so monero-oxide will still write a small/zero-value
-  //   change output to fromAddress — protocol-mandated padding, not
+  //   change output to fromAddress: protocol-mandated padding, not
   //   "real" change. Any tiny residual (estimated_fee − actual_fee,
   //   rounded down to fee_mask granularity) stays with the user.
   // Atomic amounts are strings (may exceed 2^53); sort by BigInt, largest-first.
@@ -800,8 +800,8 @@ async function sendXmrWow(
  * Top-level send dispatcher. SendWizard.onSubmit calls this with the
  * collected Compose-screen fields; we route to per-asset implementations.
  *
- * `excludeInputs` is the set of identifiers (chain-appropriate format
- * — `txid:vout` for UTXO chains, lowercase-hex key image for
+ * `excludeInputs` is the set of identifiers (chain-appropriate format:
+ * `txid:vout` for UTXO chains, lowercase-hex key image for
  * CryptoNote) of inputs spent by still-pending sends from the same
  * wallet. The popup builds this from `sessionState.pendingOutgoing`
  * via `recentlySpentInputs()` and passes it on every call.
@@ -820,7 +820,7 @@ export async function send(
   const asset = mustGetAsset(fields.fromAssetId);
 
   if (asset.id === 'btc' || asset.id === 'ltc') {
-    // Clamp to the relay floor — every BTC/LTC broadcast path must, or
+    // Clamp to the relay floor: every BTC/LTC broadcast path must, or
     // an at-floor Electrum estimate (e.g. 1.0 sat/vB) is rejected by
     // network rules. The SendWizard already floors for display; this is
     // the defensive backstop for non-wizard callers (tip funding, dapp).
@@ -840,7 +840,7 @@ export async function send(
     // address. Inputs received on a subaddress are spent under their
     // own `subaddr_index` (threaded from the LWS unspent list into both
     // the key image and the signing params). Fee
-    // comes from LWS (per_byte_fee / fee_mask) — wizard's
+    // comes from LWS (per_byte_fee / fee_mask); wizard's
     // feeRateSatPerVb is deliberately ignored. `sweep` is honored:
     // selects every spendable output, recipient gets sum − fee.
     return sendXmrWow(

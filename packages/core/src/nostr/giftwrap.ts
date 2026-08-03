@@ -3,7 +3,7 @@
  *
  * Wraps a {@link PaymentPayload} as: kind-14 rumor → kind-13 seal (NIP-44 to the
  * recipient, signed by the sender) → kind-1059 gift-wrap (NIP-44 under a fresh
- * EPHEMERAL key, so the outer event reveals neither sender nor content — only a
+ * EPHEMERAL key, so the outer event reveals neither sender nor content, only a
  * `p` tag routing it to the recipient). This is the exact envelope Goblin uses
  * for its kind-14 rumor Grin delivery, so a wrap Smirk publishes is one Goblin
  * can open, and vice-versa.
@@ -11,7 +11,7 @@
  * The heavy lifting (seal + ephemeral wrap + NIP-44 v2) is nostr-tools' `nip59`;
  * this module only maps our identity/wire types and layers the payment schema on
  * top. `wrapEvent` uses `Date.now()`/`Math.random()` for the decoy timestamps +
- * ephemeral key — fine in the wallet runtime; round-trips are deterministic in
+ * ephemeral key: fine in the wallet runtime; round-trips are deterministic in
  * outcome even though the wrapper bytes differ each call.
  */
 
@@ -29,7 +29,7 @@ const SEAL_KIND = 13;
 /**
  * Securely open a NIP-59 gift-wrap: decrypt both layers, REQUIRE a validly-signed
  * kind-13 seal, and enforce `seal.pubkey === rumor.pubkey`. nostr-tools'
- * `unwrapEvent` (2.23.x) does NEITHER — it only decrypts, so its returned `pubkey`
+ * `unwrapEvent` (2.23.x) does NEITHER: it only decrypts, so its returned `pubkey`
  * is attacker-controllable (a random ephemeral key can wrap a rumor claiming ANY
  * npub as author → sender impersonation). For a payment that is a real attack: you
  * would respond to, or credit a tip to, the wrong counterparty. This is the shared
@@ -56,7 +56,7 @@ export function unwrapRumorSecurely(
   }
 }
 
-/** A gift-wrap addressed to a recipient — a kind-1059 wire event. */
+/** A gift-wrap addressed to a recipient: a kind-1059 wire event. */
 export type PaymentGiftWrap = NostrWireEvent;
 
 /**
@@ -82,7 +82,7 @@ export function wrapPayment(
 /** The result of opening a gift-wrap: who really sent it (from the inner seal,
  *  which the ephemeral outer layer hides) + the parsed payload. */
 export interface UnwrappedPayment {
-  /** The sender's real x-only pubkey hex (the seal author — authenticated). */
+  /** The sender's real x-only pubkey hex (the seal author, authenticated). */
   senderPubkeyHex: string;
   payload: PaymentPayload;
   /** The rumor's own timestamp (may be decoy-randomized by the sender). */
@@ -92,7 +92,7 @@ export interface UnwrappedPayment {
 /**
  * Open a gift-wrap addressed to `recipient` and parse its payment payload.
  * Throws if the wrap isn't decryptable by this identity or the inner content
- * isn't a recognized payment — callers treat a throw as "not for us / not a
+ * isn't a recognized payment; callers treat a throw as "not for us / not a
  * payment" and skip it.
  */
 export function unwrapPayment(

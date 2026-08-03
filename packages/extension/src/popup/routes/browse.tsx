@@ -30,7 +30,7 @@ import {
 } from '../../dapp-popup';
 
 // ============================================================================
-// Browse tab — desktop-only, mounted via globalThis.__smirk_browser__
+// Browse tab: desktop-only, mounted via globalThis.__smirk_browser__
 // ============================================================================
 
 
@@ -44,7 +44,7 @@ import {
  *     frame slot.
  *  2. **Wire the page-RPC bridge** so `window.smirk` calls inside
  *     embedded pages route through the same `WalletHandler` the
- *     extension SW uses — full method parity (connect / signMessage
+ *     extension SW uses: full method parity (connect / signMessage
  *     / requestPayment / claimPublicTip). No SW round-trip; the
  *     unlocked wallet stays in this React tree.
  *  3. **Render the approval modal** on top of the browser shell
@@ -53,7 +53,7 @@ import {
  *     tricked into approving the wrong thing.
  *
  * The provider + permission store are reused verbatim from the
- * extension's chrome-shim-backed factories — the chrome-shim turns
+ * extension's chrome-shim-backed factories; the chrome-shim turns
  * `chrome.storage.*` into Tauri's `plugin-store`, so the same code
  * persists per-origin permissions on desktop.
  *
@@ -72,7 +72,7 @@ export function BrowseTab({
   const [opened, setOpened] = useState(false);
   const [pending, setPending] = useState<DappApprovalRequest | null>(null);
 
-  // Approval queue + wallet handler — created once per BrowseTab
+  // Approval queue + wallet handler: created once per BrowseTab
   // mount. The queue's listener wiring lives in its own effect
   // below so the React subscriber unsubscribes on unmount.
   const queue = useMemo(() => createInPopupApprovalQueue(), []);
@@ -81,7 +81,7 @@ export function BrowseTab({
 
   // Hide the embedded WebviewWindow while an approval is pending.
   // The embedded webview is a separate top-level OS window stacked
-  // over the wallet's frame slot — a React `position: fixed` modal
+  // over the wallet's frame slot; a React `position: fixed` modal
   // would render in the wallet popup BENEATH that window, invisible
   // to the user. `controller.hideFrame()` calls `embedded.hide()` on
   // the Rust side; when the user resolves the approval, we nudge a
@@ -113,7 +113,7 @@ export function BrowseTab({
     // would come back `LOCKED`. (2) BrowseTab has direct access to
     // the unlocked wallet in this React tree, so going through a
     // cache adds a stale-read failure mode for no benefit. The
-    // permission store still uses the chrome-shim — per-origin
+    // permission store still uses the chrome-shim: per-origin
     // permissions DO want to persist across wallet locks.
     const provider = createLiveWalletProvider(() => {
       const ws = walletStateRef.current;
@@ -199,14 +199,14 @@ export function BrowseTab({
 
   // BrowserShell must render UNWRAPPED so its content-frame
   // `getBoundingClientRect` returns the same rect the parent
-  // AppShell gave it — any extra flex/grid wrapper collapses the
+  // AppShell gave it; any extra flex/grid wrapper collapses the
   // measured slot and the embedded WebviewWindow ends up
   // positioned over a zero-size area (i.e. invisible).
   //
   // The approval modal renders as a sibling at `position: fixed`,
   // overlaying the entire wallet window (sidebar included). That's
   // intentional: while a dapp approval is pending, the only
-  // sensible actions are Approve / Deny / close-wallet — letting
+  // sensible actions are Approve / Deny / close-wallet; letting
   // the user click the Home tab and forget the request open is a
   // worse UX.
   // When the controller advertises `inlineMode` (currently the
@@ -215,7 +215,7 @@ export function BrowseTab({
   // iframe elements live inside the React tree. For native-WebView
   // controllers (Tauri WebviewWindow on macOS / Windows) the slot
   // stays empty and the controller overlays its own native window
-  // via `setFrameRect`. Same component for both — only the slot
+  // via `setFrameRect`. Same component for both: only the slot
   // content differs.
   const isInlineController =
     (controller as { inlineMode?: boolean }).inlineMode === true;

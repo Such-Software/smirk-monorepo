@@ -43,7 +43,7 @@ export function listThemes(): Theme[] {
 }
 
 /**
- * Look up a theme by id. Returns `undefined` if not registered — callers
+ * Look up a theme by id. Returns `undefined` if not registered; callers
  * should fall back to the default theme on miss.
  */
 export function getTheme(id: string): Theme | undefined {

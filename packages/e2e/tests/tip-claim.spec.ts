@@ -9,7 +9,7 @@ import {
 } from '@smirk/core';
 
 /**
- * Feature: tips — claim a PUBLIC (URL-shared) tip end to end.
+ * Feature: tips, claiming a PUBLIC (URL-shared) tip end to end.
  *
  * Drives the REAL in-extension claim entry point: Inbox → "+ Paste tip link"
  * (routes/inbox.tsx `PasteTipLinkScreen`, route `home/inbox/paste-tip`) →
@@ -23,7 +23,7 @@ import {
  * sign with the decrypted tip key → broadcast.
  *
  * ─── Real crypto, stubbed network ───
- * The claim's decryption is NOT stubbable — claimPublicTip really decrypts the
+ * The claim's decryption is NOT stubbable: claimPublicTip really decrypts the
  * backend `encrypted_key` with the fragment key from after the URL '#'. So we
  * MINT a genuine public-tip payload here with the SAME @smirk/core the
  * extension bundles: a fresh tip BTC key → `createPublicTipPayload(tipKey,
@@ -43,7 +43,7 @@ test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnem
 
 // Deterministic stand-ins the stubbed backend hands back.
 const TIP_ID = '22222222-3333-4444-8555-666666666666';
-const TIP_AMOUNT_SAT = 50_000; // 0.0005 BTC — what the claim success screen shows.
+const TIP_AMOUNT_SAT = 50_000; // 0.0005 BTC: what the claim success screen shows.
 // A confirmed UTXO sitting at the tip address. Segwit (P2WPKH) signing needs
 // only txid/vout/value (no prev-tx), so a fabricated outpoint signs + the
 // sweep tx builds without a live node.
@@ -133,7 +133,7 @@ test('paste a public BTC tip link → claim → swept success screen', async ({
   });
   // Grin balance scan is irrelevant to a BTC claim, but the unstubbed local
   // scan 503s and its retries drag out the claimer's initial balance settle
-  // (which is what populates session.bootstrap.userId — see the retry note
+  // (which is what populates session.bootstrap.userId; see the retry note
   // below). Stub it empty so bootstrap lands sooner and deterministically.
   await context.route('**/api/v1/wallet/grin/scan', async (route) => {
     await route.fulfill({
@@ -144,7 +144,7 @@ test('paste a public BTC tip link → claim → swept success screen', async ({
   });
 
   const page = await context.newPage();
-  // Import alice — she's the CLAIMER. Needs an unlocked wallet (BTC key to
+  // Import alice: she's the CLAIMER. Needs an unlocked wallet (BTC key to
   // decrypt with + a BTC receive address to sweep into) and a bootstrapped
   // session (userId), both of which importAndUnlock establishes.
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
@@ -161,7 +161,7 @@ test('paste a public BTC tip link → claim → swept success screen', async ({
 
   // The claim requires the claimer's `session.bootstrap.userId`, which only
   // lands once the initial balance fetch (gated on the tunneled XMR/WOW LWS)
-  // completes — a few tens of seconds after Home first paints, and AFTER
+  // completes, a few tens of seconds after Home first paints, and AFTER
   // importAndUnlock returns (that only waits for the WOW balance to render).
   // The popup exposes no post-bootstrap UI signal (the header refresh control
   // is an unwired prop), so we poll by attempting the claim: before bootstrap

@@ -3,7 +3,7 @@
  * InboxItem whose opaque `relayId` string is the only routing token that flows
  * from the item → wizard fields → the sign/cancel handlers. Backend items keep
  * their bare slate_id; Nostr items pack the slate_id + counterparty pubkey into
- * the same field so respond/cancel can address the gift-wrap back to the sender —
+ * the same field so respond/cancel can address the gift-wrap back to the sender,
  * WITHOUT threading a new `channel` field through InboxItem, the @smirk/ui types,
  * and the wizard-state schema. `relayId` is opaque everywhere except the API call
  * sites (and a React key), so encoding structured data in it is safe.

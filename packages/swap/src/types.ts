@@ -29,7 +29,7 @@ export interface QuoteRequest {
   /** Amount of `fromAsset` the user intends to send, in atomic units. */
   fromAmount: AtomicAmount;
   /**
-   * Destination address. Optional at `quote()` time — CEX aggregators
+   * Destination address. Optional at `quote()` time: CEX aggregators
    * don't need it until `start()`. Native adaptor-signature swaps may
    * inspect it earlier to pre-validate. Always supplied later via
    * `SwapStartParams.toAddress` regardless.
@@ -49,7 +49,7 @@ export interface SwapQuote {
   etaSeconds: number;
   /** When this quote stops being honored. UI should re-quote after. */
   expiresAt: Date;
-  /** Aggregator vs native — informational, for UI. */
+  /** Aggregator vs native: informational, for UI. */
   kind: SwapKind;
   /** Implementation-specific. Pass back into `start()` unmodified. */
   implementationData: unknown;
@@ -73,7 +73,7 @@ export type SwapStatus =
  *   - Native atomic (Grin↔BTC, WOW↔XMR): `counterpartyData` required;
  *     the multi-round protocol replaces address routing.
  *
- * One shape per swap family was rejected as premature — discriminated
+ * One shape per swap family was rejected as premature: discriminated
  * unions add type churn before we know which fields land where. Each
  * impl validates its own slice and throws a clear `SwapError` for
  * missing input.
@@ -93,7 +93,7 @@ export interface SwapStartParams {
    * status webhook; the wallet's backend matches it against the
    * `webhook_token` it persisted on `createSwap`. Without per-trade
    * tokens, webhook auth degrades to "any caller knowing the
-   * trade_id can move the status" — the constant-time comparison on
+   * trade_id can move the status"; the constant-time comparison on
    * the backend stops mattering. Constructor-time `opts.passthrough`
    * is preserved for back-compat, but a per-trade token passed here
    * takes precedence (see `TrocadorSwap.start`).
@@ -117,7 +117,7 @@ export interface SwapStarted {
    *   but the protocol decides the path out.
    *
    * Despite the name being a chain-level term, this is **not** a
-   * broadcast txid — the wallet hasn't broadcast anything yet at
+   * broadcast txid; the wallet hasn't broadcast anything yet at
    * start() return. Status polls reveal the eventual deposit txid
    * via `SwapStatus.outboundTxId` once the chain catches up.
    */

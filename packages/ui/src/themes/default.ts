@@ -1,7 +1,7 @@
 import type { Theme } from './types';
 
 /**
- * Default theme — the dark Bauhaus look the v0.3 popup ships with.
+ * Default theme: the dark Bauhaus look the v0.3 popup ships with.
  * Acts as the fallback when no theme is set or a partial theme is
  * applied (missing tokens inherit from here).
  */

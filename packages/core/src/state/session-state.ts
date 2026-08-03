@@ -1,5 +1,5 @@
 /**
- * Session state — the typed store every screen reads from and writes to.
+ * Session state: the typed store every screen reads from and writes to.
  *
  * "Session" here means the user-facing app lifetime, which means
  * different things per platform:
@@ -13,12 +13,12 @@
  *   quit.
  *
  * Sensitive form data (full address, password mid-typing) is *intended*
- * to disappear at session end — that's the right tier. Anything that
+ * to disappear at session end; that's the right tier. Anything that
  * needs to survive longer (denomination, theme, custom RPC URLs) goes
- * through a separate persistent store — see `chromeLocalStorage()` in
+ * through a separate persistent store: see `chromeLocalStorage()` in
  * [`./platform`] and the platform-specific equivalents.
  *
- * State migrations — when the schema changes, bump `CURRENT_VERSION`
+ * State migrations: when the schema changes, bump `CURRENT_VERSION`
  * and add a migration to [`MIGRATIONS`]. Never edit a published
  * shape in place.
  */
@@ -60,7 +60,7 @@ export interface SessionState {
    *   denomination survives browser close).
    * - `autoLockMinutes`: how long the wallet stays unlocked after the
    *   session ends (popup-close on extension, backgrounding on mobile,
-   *   window-close on desktop). **Has security implications** — when
+   *   window-close on desktop). **Has security implications**: when
    *   > 0, the derived leaf keys and addresses (never the mnemonic or
    *   seed) are mirrored to the platform's ephemeral-keyed storage for
    *   the configured duration. `0` (default) = lock immediately at
@@ -85,7 +85,7 @@ export interface SessionState {
      * links + claim-notification flows still work.
      *
      * "Hidden" is a UI preference. The wallet still owns the keys
-     * for hidden assets — hiding never destroys access. Claiming a
+     * for hidden assets; hiding never destroys access. Claiming a
      * tip for a hidden asset auto-unhides it (claiming money is an
      * explicit "I want to see this" signal).
      */
@@ -98,13 +98,13 @@ export interface SessionState {
    * available balance subtracts these so the user gets immediate
    * feedback before the network scanner catches up. Entries age out
    * per-asset (see `./pending-outgoing`). Survives popup-close,
-   * dies on browser-close — appropriate window for the use case.
+   * dies on browser-close: appropriate window for the use case.
    */
   pendingOutgoing: PendingOutgoingTx[];
 }
 
 export interface Route {
-  /** Route id — `"home"`, `"home/asset/btc"`, `"swap"`, `"inbox/item/<id>"`, etc. */
+  /** Route id: `"home"`, `"home/asset/btc"`, `"swap"`, `"inbox/item/<id>"`, etc. */
   current: string;
   /** Optional route params, e.g. `{ assetId: "btc" }`. */
   params?: Record<string, unknown>;
@@ -143,7 +143,7 @@ export const DEFAULT_SESSION_STATE: SessionState = {
  * returns the state at version N+1. The sequence runs from the
  * stored `version` up to `CURRENT_VERSION`.
  *
- * Add new entries, never edit existing ones — once a version has
+ * Add new entries, never edit existing ones: once a version has
  * shipped to users, its migration logic is load-bearing.
  *
  * @example
@@ -186,7 +186,7 @@ export const MIGRATIONS: Record<number, Migration> = {
     } satisfies SessionState;
   },
   // v4 → v5: add `ui.hiddenAssets` (default []). Existing wallets
-  // come out the other side with every registered asset visible —
+  // come out the other side with every registered asset visible;
   // the upgrade is a no-op for any user who's been using v0.3.0+.
   4: (s) => {
     const prev = s as SessionState;
@@ -205,13 +205,13 @@ export function migrate(raw: unknown): SessionState {
   }
   let state = raw as { version?: number };
 
-  // Unversioned legacy state — accept as v0 and let migrations fill in.
+  // Unversioned legacy state: accept as v0 and let migrations fill in.
   let version = typeof state.version === 'number' ? state.version : 0;
 
   // Stored state is from a future version (downgrade scenario, or
   // multiple Smirk installs at different versions writing to the same
   // storage). Reset rather than try to forward-compat; ephemeral
-  // state loss is safe — wallet seed lives elsewhere.
+  // state loss is safe: wallet seed lives elsewhere.
   if (version > CURRENT_VERSION) {
     return { ...DEFAULT_SESSION_STATE };
   }
@@ -228,7 +228,7 @@ export function migrate(raw: unknown): SessionState {
     version = typeof state.version === 'number' ? state.version : version + 1;
   }
 
-  // Final shape sanity — fill in defaults for any missing fields a
+  // Final shape sanity: fill in defaults for any missing fields a
   // partial migration left behind.
   return { ...DEFAULT_SESSION_STATE, ...(state as Partial<SessionState>) };
 }
@@ -251,7 +251,7 @@ const STORAGE_KEY = 'smirk:popup-state';
  * - Subscriber notifications when other contexts (extension pop-out,
  *   second window, etc.) write to the same storage
  *
- * Framework-agnostic — exposes `subscribe(listener)` so any UI layer
+ * Framework-agnostic: exposes `subscribe(listener)` so any UI layer
  * can wire it up. The Preact hooks live in `@smirk/ui/state`.
  */
 export class SessionStateStore {
@@ -271,12 +271,12 @@ export class SessionStateStore {
    * Promise-chain mutex serializing every `update()` call. Without it,
    * two near-simultaneous updates both read the same cached snapshot,
    * each mutate an independent JSON-deep-cloned draft, then race to
-   * `save()` — and the later write silently clobbers the earlier one.
+   * `save()`, and the later write silently clobbers the earlier one.
    * Dogfooded 2026-06-13 by the Trocador swap "Open Send → pre-filled"
    * click handler firing two concurrent `store.update`s and losing the
    * prefill payload to the trocador-wizard step write. The mutex makes
    * every caller observe a consistent load → mutate → save cycle.
-   * Callers that only `load()` / `save()` bypass it intentionally —
+   * Callers that only `load()` / `save()` bypass it intentionally:
    * single-shot writes don't need ordering with each other.
    */
   private updateChain: Promise<unknown> = Promise.resolve();
@@ -302,7 +302,7 @@ export class SessionStateStore {
             incomingJson = null;
           }
           if (incomingJson !== null && incomingJson === this.lastWrittenJson) {
-            // Echo of our own write — skip.
+            // Echo of our own write: skip.
             return;
           }
           const next = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
@@ -341,7 +341,7 @@ export class SessionStateStore {
    * Serialized via `updateChain`: concurrent callers queue and run
    * one-at-a-time so each load → mutate → save observes the writes
    * of every prior `update()`. Mutator throws propagate to the
-   * caller but don't break the chain — the next queued update runs
+   * caller but don't break the chain: the next queued update runs
    * with the pre-throw state (no partial write).
    */
   async update(
@@ -373,7 +373,7 @@ export class SessionStateStore {
   }
 
   /**
-   * Subscribe to state changes — fires after every write (local or
+   * Subscribe to state changes: fires after every write (local or
    * cross-context). Returns an unsubscribe function.
    */
   subscribe(listener: (state: SessionState) => void): () => void {

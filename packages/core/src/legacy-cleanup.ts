@@ -11,16 +11,16 @@
  * Ground truth (from the 4-subsystem audit): deleting `walletState` ITSELF is
  * safe-by-default once the v0.3 keystore exists (every field re-derives from the
  * seed, which is already resealed). The genuine stranding risks live ELSEWHERE:
- *   1. legacy `pendingSocialTips` entries still `pending` — each wraps an
+ *   1. legacy `pendingSocialTips` entries still `pending`: each wraps an
  *      EPHEMERAL, non-seed-derivable tip key that is the only sender clawback.
- *   2. legacy `grinPendingInvoice` — per-slate finalize secrets not on the
+ *   2. legacy `grinPendingInvoice`: per-slate finalize secrets not on the
  *      backend and not seed-derivable; losing them forfeits an in-flight receive.
  *      (`grinPendingReceive` is the softer, copy-outable, 24h-TTL sibling.)
- *   3. LIVE confirmed BTC/LTC at the m/44' address — auto-swept ONLY while
+ *   3. LIVE confirmed BTC/LTC at the m/44' address: auto-swept ONLY while
  *      `walletState` exists, so it must be empty before we turn the sweep off.
  *      The durable `smirk_legacy_sweep_<asset>` record is NOT sufficient: a late
  *      deposit re-strands after a prior sweep, so a live check is mandatory.
- *   4. XMR/WOW at a v1/v2 Cryptonote address for the pre-v3 cohort — there is
+ *   4. XMR/WOW at a v1/v2 Cryptonote address for the pre-v3 cohort: there is
  *      NO in-app sweep for these; the live wallet only ever watches the v3 addr.
  *
  * FAIL CLOSED: any check that cannot complete (locked wallet, missing keystore,
@@ -128,7 +128,7 @@ export async function assessLegacyCleanupSafety(
 ): Promise<CleanupSafety> {
   const blockers: CleanupBlocker[] = [];
 
-  // CHECK 0 — the v0.3 keystore MUST exist. If it doesn't, `walletState` may be
+  // CHECK 0: the v0.3 keystore MUST exist. If it doesn't, `walletState` may be
   // the only copy of the seed; deleting it strands everything. Stop immediately.
   const keystore = await storage.get<unknown>(V03_KEYSTORE_KEY);
   if (keystore == null) {
@@ -141,7 +141,7 @@ export async function assessLegacyCleanupSafety(
     return finalize(blockers);
   }
 
-  // CHECK 1 — need the mnemonic to derive the legacy addresses. A session-cache
+  // CHECK 1: need the mnemonic to derive the legacy addresses. A session-cache
   // restore drops it; without it every fund check is indeterminate. Stop.
   if (!wallet.mnemonic) {
     blockers.push({
@@ -156,7 +156,7 @@ export async function assessLegacyCleanupSafety(
 
   const legacy = await storage.get<LegacyWalletState>(LEGACY_WALLET_KEY);
 
-  // CHECK 2 — legacy unclaimed outgoing tips (ephemeral clawback key, no bridge).
+  // CHECK 2: legacy unclaimed outgoing tips (ephemeral clawback key, no bridge).
   try {
     const tips = await storage.get<LegacyPendingTip[]>(LEGACY_PENDING_TIPS_KEY);
     const pending = Array.isArray(tips)
@@ -181,7 +181,7 @@ export async function assessLegacyCleanupSafety(
     });
   }
 
-  // CHECK 4 — Grin in-flight slates (finalize secrets not seed/backend-derivable).
+  // CHECK 4: Grin in-flight slates (finalize secrets not seed/backend-derivable).
   try {
     const invoice = await storage.get<unknown>(LEGACY_GRIN_INVOICE_KEY);
     if (invoice != null) {
@@ -218,7 +218,7 @@ export async function assessLegacyCleanupSafety(
     });
   }
 
-  // CHECK 5 — LIVE BTC/LTC balance at the legacy m/44' address. Confirmed funds
+  // CHECK 5: LIVE BTC/LTC balance at the legacy m/44' address. Confirmed funds
   // are a hard block (the sweep only runs while walletState exists); unconfirmed
   // is a warn (will sweep once it confirms). Independent of the durable record.
   for (const asset of ['btc', 'ltc'] as const) {
@@ -271,7 +271,7 @@ export async function assessLegacyCleanupSafety(
     }
   }
 
-  // CHECK 6 — XMR/WOW stranded at a v1/v2 Cryptonote address. Only the pre-v3
+  // CHECK 6: XMR/WOW stranded at a v1/v2 Cryptonote address. Only the pre-v3
   // cohort is at risk (the live wallet is hardcoded to v3). There is NO in-app
   // sweep for these, so we LIVE-probe the re-derived legacy address and block on
   // any unspent (or fail closed if we cannot verify). v3/undefined => the wallet

@@ -3,7 +3,7 @@
  *
  * Different runtimes have different "ephemeral state" stores with
  * different lifetime semantics. The session-state store sits on top
- * of this interface — pick the right backend at boot, the rest of
+ * of this interface: pick the right backend at boot, the rest of
  * `@smirk/core/state/` doesn't care which platform it's on.
  *
  * | Platform               | Backend                          | Lifetime                          |
@@ -14,7 +14,7 @@
  * | Tauri / web / tests    | `localStorage` / in-memory       | Survives unless explicitly cleared |
  *
  * The semantic difference between "session" (extension) and "preferences"
- * (mobile/desktop) is real — on iOS/Android, killing an app and
+ * (mobile/desktop) is real: on iOS/Android, killing an app and
  * relaunching is the closest analog to "browser close," and platform
  * convention is that ephemeral UI state survives that gracefully.
  * Document the difference at the call site if it matters.
@@ -37,7 +37,7 @@ export interface PlatformStorage {
    * storage. Returns an unsubscribe function.
    *
    * Backends without cross-context change notification (in-memory,
-   * naive localStorage) implement a no-op subscribe — the local
+   * naive localStorage) implement a no-op subscribe: the local
    * context will see its own writes via direct mutation, just not
    * remote-context writes.
    */
@@ -45,11 +45,11 @@ export interface PlatformStorage {
 }
 
 // ============================================================================
-// In-memory backend — for tests + as a fallback
+// In-memory backend: for tests + as a fallback
 // ============================================================================
 
 /**
- * In-memory storage. Survives nothing — useful for tests, fallback
+ * In-memory storage. Survives nothing: useful for tests, fallback
  * when no other backend is available.
  */
 export class InMemoryStorage implements PlatformStorage {
@@ -117,7 +117,7 @@ interface ChromeStorageGlobal {
 }
 
 /**
- * Backend backed by `chrome.storage.session` — survives popup close,
+ * Backend backed by `chrome.storage.session`: survives popup close,
  * dies on browser close. Right tier for ephemeral UI state (current
  * route, mid-wizard form values, scroll position).
  */
@@ -168,7 +168,7 @@ export class ChromeSessionStorage implements PlatformStorage {
 }
 
 /**
- * Backend backed by `chrome.storage.local` — survives browser close.
+ * Backend backed by `chrome.storage.local`: survives browser close.
  * Right tier for user preferences (denomination, theme, spam mode,
  * RPC-server overrides). Don't use for sensitive state (seed lives
  * elsewhere, encrypted).
@@ -228,7 +228,7 @@ export class ChromeLocalStorage implements PlatformStorage {
  * localStorage), web testbeds, and as a fallback when chrome.storage
  * isn't available.
  *
- * Cross-context notification works via the `storage` event — fires in
+ * Cross-context notification works via the `storage` event: fires in
  * other tabs/windows of the same origin when localStorage changes.
  * (Doesn't fire in the same tab that wrote the value, which is fine
  * for our subscribe-to-remote-changes use case.)
@@ -280,7 +280,7 @@ export class WebLocalStorage implements PlatformStorage {
  * to `localStorage`; falls back to in-memory.
  *
  * Capacitor (mobile) callers should construct the appropriate backend
- * directly from `@capacitor/preferences` — that's a future
+ * directly from `@capacitor/preferences`: that's a future
  * `CapacitorPreferencesStorage` once mobile lands.
  */
 export function autoDetectEphemeralStorage(): PlatformStorage {
@@ -295,11 +295,11 @@ export function autoDetectEphemeralStorage(): PlatformStorage {
 }
 
 // ============================================================================
-// WalletTimers — abstract scheduled-callback surface
+// WalletTimers: abstract scheduled-callback surface
 // ============================================================================
 
 /**
- * Persistent scheduler — fires the registered callback even when the
+ * Persistent scheduler: fires the registered callback even when the
  * wallet UI surface is closed / backgrounded. Used by auto-lock and
  * any future "wake up the wallet at time T" flow.
  *
@@ -307,7 +307,7 @@ export function autoDetectEphemeralStorage(): PlatformStorage {
  *  - **Extension** wraps `chrome.alarms`. The SW receives the alarm
  *    and routes to whichever handler the popup registered.
  *  - **Desktop** would wrap a Tauri-side scheduler that survives
- *    window close. Not implemented in v0.3.0 by design — the desktop
+ *    window close. Not implemented in v0.3.0 by design: the desktop
  *    surface launches with a popup-level `setTimeout` that dies with
  *    the window. See `packages/desktop/README.md` "Known limitations".
  *  - **Mobile** will wrap an iOS/Android background-task scheduler
@@ -331,26 +331,26 @@ export interface WalletTimers {
   /**
    * Register the handler invoked when any timer fires. Returns an
    * unsubscribe. Implementations may dispatch multiple firings to a
-   * single listener — the listener inspects `name` and routes.
+   * single listener: the listener inspects `name` and routes.
    */
   onTimer(listener: (name: string) => void): () => void;
 }
 
 // ============================================================================
-// WalletNotifications — abstract OS-notification surface
+// WalletNotifications: abstract OS-notification surface
 // ============================================================================
 
 /**
- * OS-level notification surface — the bell the user sees when a tip
+ * OS-level notification surface: the bell the user sees when a tip
  * arrives or a confirmation lands. Implementations:
  *  - **Extension** wraps `chrome.notifications`.
  *  - **Desktop** would wrap Tauri's `notification` plugin. Not
- *    implemented in v0.3.0 by design — desktop tip-arrival is silent.
+ *    implemented in v0.3.0 by design: desktop tip-arrival is silent.
  *    See `packages/desktop/README.md` "Known limitations".
  *  - **Mobile** will wrap iOS / Android native notifications via
  *    Capacitor's `@capacitor/local-notifications`.
  *
- * Failures here are non-fatal — a wallet that can't show a
+ * Failures here are non-fatal: a wallet that can't show a
  * notification should still write the row to the in-wallet inbox.
  * Implementations should swallow + log rather than throw.
  */

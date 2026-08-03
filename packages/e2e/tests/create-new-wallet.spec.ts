@@ -10,7 +10,7 @@ test.skip(
 );
 
 /**
- * create-new-wallet — the full GENERATE → VERIFY → REGISTER path for a brand-new
+ * create-new-wallet: the full GENERATE → VERIFY → REGISTER path for a brand-new
  * wallet, driving the real MV3 extension against the local smirk-backend-core.
  *
  * Unlike the import specs (which replay an already-registered smoke seed), this
@@ -36,7 +36,7 @@ test.skip(
  *   with the word it read at that same index. That answers the challenge no
  *   matter which indices the wizard picked.
  *
- * CRITICAL — do NOT waitForResponse('/auth/extension'): that POST fires from the
+ * CRITICAL: do NOT waitForResponse('/auth/extension'): that POST fires from the
  * extension's OFFSCREEN document, whose network is invisible to Playwright's
  * page/context listeners, so any such wait ALWAYS times out. A fresh wallet also
  * has ZERO balance, so there is no balance number to assert on. We assert on the
@@ -52,7 +52,7 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   const caps = await getCapabilities();
   // A fresh, never-seen pubkey must be able to register unauthenticated for this
   // path to reach Home. Any registration gate that blocks a plain create makes
-  // the scenario N/A — skip rather than fail. (pow_required is restore-depth PoW,
+  // the scenario N/A; skip rather than fail. (pow_required is restore-depth PoW,
   // which a default-birthday create does not trigger, so it is not a blocker.)
   const { payment_required, invite_required } = caps.registration;
   test.skip(
@@ -114,7 +114,7 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   await page.getByTestId('onboarding-password-confirm-input').fill(PASSWORD);
   // Submitting runs onComplete → the offscreen bootstrap-auth registers the new
   // pubkey against /auth/extension. Then either the optional Smirk-setup step or
-  // Home. (That POST is invisible to Playwright — we assert on the UI outcome.)
+  // Home. (That POST is invisible to Playwright; we assert on the UI outcome.)
   await page.getByTestId('onboarding-set-password-submit').click();
 
   // optional Smirk-setup step → finish (absent when the shell wires no setup step)

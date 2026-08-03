@@ -1,7 +1,7 @@
 /**
- * AssetIcon — chain logo, sized + accessibility-labeled from the registry.
+ * AssetIcon: chain logo, sized + accessibility-labeled from the registry.
  *
- * Resolves the actual image path via a consumer-supplied resolver — icon
+ * Resolves the actual image path via a consumer-supplied resolver: icon
  * assets live in the consumer package (extension / mobile / desktop), not
  * here, so the same component renders against whichever asset folder the
  * host wraps it with. Falls back to a circle with the ticker text.
@@ -24,7 +24,7 @@ export interface AssetIconProps {
   size?: number;
   /**
    * Resolver from `iconKey` to an image URL. The ui package doesn't
-   * bundle icon assets — consumer wires this up against its own
+   * bundle icon assets; consumer wires this up against its own
    * icons folder.
    */
   resolveIcon?: (iconKey: string) => string | undefined;

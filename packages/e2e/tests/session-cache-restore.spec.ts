@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * Auto-unlock (session-cache) RESTORE — the regression that broke sign-in TWICE
+ * Auto-unlock (session-cache) RESTORE: the regression that broke sign-in TWICE
  * on 2026-07-07 and had no coverage. With a multi-hour auto-lock set, closing +
  * reopening the popup must RESTORE the wallet from the session cache WITHOUT
  * re-onboarding and WITHOUT the auth bootstrap failing.
@@ -18,7 +18,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *
  * Returning-user spec: needs a local backend + SMOKE_ALICE_MNEMONIC (an
  * already-registered wallet), like the other import specs. It does NOT create a
- * wallet, so it's safe against any backend — but the balance marker assumes the
+ * wallet, so it's safe against any backend, but the balance marker assumes the
  * local smoke backend.
  */
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
@@ -35,7 +35,7 @@ test('auto-unlock: reopening restores from the session cache (no re-sign-in, no 
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
   await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
 
-  // 2. Set a 4-hour auto-lock. setAutoLock writes the session cache immediately —
+  // 2. Set a 4-hour auto-lock. setAutoLock writes the session cache immediately:
   //    the exact keys+addresses payload that must survive chrome.storage's
   //    Uint8Array serialization.
   await page.getByTestId('nav-tab-settings').click();

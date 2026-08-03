@@ -6,7 +6,7 @@
  *
  * **Why approval-handler returns the computed result, not just yes/no.**
  * The unlocked wallet (seed, derived keys) lives in the trusted UI
- * context — popup window on extension, in-app screen on Capacitor,
+ * context: popup window on extension, in-app screen on Capacitor,
  * named window on Tauri. The wallet *handler* itself runs in a
  * stateless routing context (MV3 service worker, mobile background
  * thread, Tauri main process) that intentionally does NOT hold
@@ -17,7 +17,7 @@
  * back into the handler. This keeps the secret-bearing context tiny
  * and audit-friendly.
  *
- * The handler is approval-method-agnostic — it just gets a yes/no
+ * The handler is approval-method-agnostic; it just gets a yes/no
  * (with the user's optional asset-scope refinement for `connect`, or
  * the operation result for everything else).
  */
@@ -89,7 +89,7 @@ export type ApprovalRequest =
   | {
       kind: 'signNostrEvent';
       origin: OriginContext;
-      /** x-only pubkey (hex) of the identity this origin signs as — from its
+      /** x-only pubkey (hex) of the identity this origin signs as, from its
        *  OriginPermission.nostrPubkey. Absent = the user's active identity. The
        *  executor resolves it (account-0 / per-origin / vault) via the wallet. */
       identityPubkey?: string;
@@ -100,7 +100,7 @@ export type ApprovalRequest =
        *  get a strong warning and NO "allow for session" option; `session-grantable`
        *  may offer one; `default` prompts per-event. */
       tier: NostrKindTier;
-      /** True when an active session already covers this kind — the wallet may
+      /** True when an active session already covers this kind; the wallet may
        *  auto-approve + sign silently. The handler sets this to false for any
        *  money-tier kind, so money events always prompt. */
       sessionCovered: boolean;
@@ -113,7 +113,7 @@ export type ApprovalRequest =
       domainScope: string;
       /** Sub-scope within the origin (e.g. `sso`). Empty = the default key. */
       context: string;
-      /** True on the origin's FIRST e2ee use — the screen shows the disclosure
+      /** True on the origin's FIRST e2ee use; the screen shows the disclosure
        *  and approving grants the scope. False = re-derive under an already-
        *  granted scope; the screen auto-approves (deriving a public key, no
        *  fresh decision). */
@@ -131,7 +131,7 @@ export type ApprovalRequest =
   | {
       kind: 'nostrCrypt';
       origin: OriginContext;
-      /** x-only pubkey (hex) of the identity this origin encrypts/decrypts as —
+      /** x-only pubkey (hex) of the identity this origin encrypts/decrypts as,
        *  from its OriginPermission.nostrPubkey. Absent = the user's active identity. */
       identityPubkey?: string;
       /** encrypt plaintext → ciphertext, or decrypt ciphertext → plaintext. */
@@ -177,8 +177,8 @@ export type ApprovalResult =
   | {
       kind: 'nostrGrant';
       approved: true;
-      /** x-only pubkey (hex) of the identity the user chose to share with this origin
-       *  — their main (account-0) identity, or a per-origin one. The handler persists
+      /** x-only pubkey (hex) of the identity the user chose to share with this origin:
+       *  their main (account-0) identity, or a per-origin one. The handler persists
        *  it on OriginPermission.nostrPubkey; getNostrPublicKey returns it thereafter. */
       nostrPubkey?: string;
     }
@@ -186,7 +186,7 @@ export type ApprovalResult =
       kind: 'signNostrEvent';
       approved: true;
       result: SmirkNostrSignedEvent;
-      /** Set when the user chose "allow for this session" — the handler persists a
+      /** Set when the user chose "allow for this session"; the handler persists a
        *  time-boxed grant (money-tier kinds are filtered out before persisting). */
       grantSession?: { kinds: number[]; expiresAt: number };
     }
@@ -214,7 +214,7 @@ export type ApprovalResult =
  *    - opening the approval UI (popup window / modal / Tauri window)
  *    - waiting for the user's decision (resolve / reject the Promise)
  *    - cleaning up the UI when done
- *  Handler does NOT race a timeout — the user is allowed to take as
+ *  Handler does NOT race a timeout; the user is allowed to take as
  *  long as they want. If the platform wants a timeout it can layer
  *  one on internally and reject. */
 export type ApprovalHandler = (

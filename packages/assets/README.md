@@ -4,11 +4,11 @@ Asset registry for Smirk Wallet.
 
 This package answers one question:
 
-> Which chains does Smirk support, and what is their static metadata
-> — decimals, family, network params, capability flags?
+> Which chains does Smirk support, and what is their static metadata:
+> decimals, family, network params, capability flags?
 
 Definitions are pure data. The registry knows nothing about
-signing, address derivation, or transaction construction — those
+signing, address derivation, or transaction construction: those
 live in `@smirk/wasm` (Rust crypto, per chain) and `@smirk/core`
 (pure-JS chain helpers). Composing the registry with adapter code
 at the call site keeps this package importable from any context.
@@ -48,7 +48,7 @@ for (const a of registry.list({ swapRoute: 'thorchain' })) {
 2. Import + register it in `src/index.ts`.
 3. Update `ASSET_IDS` if the id is new.
 
-The registry is open-ended at runtime — third-party consumers can
+The registry is open-ended at runtime: third-party consumers can
 `registry.register(...)` their own definitions without forking.
 
 ## License

@@ -35,7 +35,7 @@ const RETRY_BASE_MS = 500;
 
 // SECURITY: do not reintroduce a body-logging debug switch here. Earlier
 // revisions had a `DEBUG_ENDPOINTS` list that `console.log`'d full request
-// + response JSON for `/grin/`, `/tips/social`, and `/prices` — including
+// + response JSON for `/grin/`, `/tips/social`, and `/prices`, including
 // `encrypted_key`, slatepacks, and view-key adjacent data. Browser console
 // is exposed to crash dumps, screen-share screenshots, and any other
 // extension with devtools access. For ad-hoc debugging use Chrome's
@@ -46,7 +46,7 @@ const RETRY_BASE_MS = 500;
  * `SmirkApi` (in `./index.ts`) which mixes in domain-specific methods.
  *
  * Construct directly only if you need to point at a non-default backend
- * (test fixtures, local dev) — most callers should use the singleton
+ * (test fixtures, local dev); most callers should use the singleton
  * `api` exported from `./index.ts`.
  */
 /** Wallet UTXO route dialect. `flat` (default) targets the legacy backend
@@ -135,7 +135,7 @@ export class ApiClient {
       if (!response.ok) {
         // Try JSON first (our backend's normal { error, code } shape).
         // Many failure paths bypass this: tower-governor 429s return
-        // empty bodies, nginx 502/503 returns HTML, and — critically —
+        // empty bodies, nginx 502/503 returns HTML, and, critically,
         // axum's Json extractor rejection at 422 returns a *plain
         // string* explaining what was wrong with the body shape ("...
         // missing field `signed_timestamp` ..."). Capturing that
@@ -148,7 +148,7 @@ export class ApiClient {
         try {
           bodyText = await response.text();
         } catch {
-          /* empty body or read failure — leave bodyText '' */
+          /* empty body or read failure: leave bodyText '' */
         }
         let bodyJson: { error?: string; code?: string } = {};
         if (bodyText.trim().startsWith('{')) {
@@ -186,7 +186,7 @@ export class ApiClient {
   /**
    * Make a request with automatic retry on 5xx errors and network failures.
    *
-   * Does NOT retry on 4xx (client errors) — those need caller intervention.
+   * Does NOT retry on 4xx (client errors); those need caller intervention.
    *
    * Use only for **idempotent** operations (GETs, refresh tokens,
    * check-restore, confirm-sweep). Non-idempotent POSTs (tip creation,
@@ -200,12 +200,12 @@ export class ApiClient {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       const result = await this.request<T>(endpoint, options);
 
-      // Success or client error (4xx) — don't retry.
+      // Success or client error (4xx): don't retry.
       if (result.data || (result.status && result.status < 500)) {
         return result;
       }
 
-      // Last attempt — return whatever we got.
+      // Last attempt: return whatever we got.
       if (attempt === MAX_RETRIES - 1) {
         return result;
       }

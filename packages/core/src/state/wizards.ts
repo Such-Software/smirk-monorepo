@@ -13,7 +13,7 @@
  * sees the same wizard state. The same pattern covers mobile
  * background→foreground and desktop window-switch.
  *
- * Generic over the field shape — callers parameterize by their own
+ * Generic over the field shape: callers parameterize by their own
  * typed fields. Steps are numeric (0..N-1); naming the steps is the
  * UI layer's job.
  */
@@ -23,7 +23,7 @@ import type { SessionStateStore, WizardState } from './session-state';
 /**
  * Typed wizard handle. Construct one per logical wizard (e.g. one
  * for `tip-maker`, one for `send`). Multiple users of the same
- * wizard id share state — useful for pop-out scenarios where two
+ * wizard id share state, useful for pop-out scenarios where two
  * windows view the same wizard, mutating-where-mutated.
  */
 export class Wizard<TFields extends Record<string, unknown>> {
@@ -54,7 +54,7 @@ export class Wizard<TFields extends Record<string, unknown>> {
    * `start()` from a `useEffect([])` on mount. Without idempotency,
    * the first render (which sees `active=false` because session state
    * is still loading from `chrome.storage.local`) overwrites the real
-   * persisted wizard state with a fresh step-0 — losing whatever
+   * persisted wizard state with a fresh step-0, losing whatever
    * progress the user had before closing the popup.
    */
   async start(): Promise<WizardState> {
@@ -81,7 +81,7 @@ export class Wizard<TFields extends Record<string, unknown>> {
 
   /**
    * Snapshot of the current state, or `null` if the wizard isn't
-   * active. The fields shape is unverified at runtime — callers
+   * active. The fields shape is unverified at runtime; callers
    * should be careful about reading state across schema changes
    * (consider versioning fields for long-running wizards).
    */

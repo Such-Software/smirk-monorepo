@@ -1,8 +1,8 @@
 /**
- * `@smirk/ui/themes` — theme registry, token system, application.
+ * `@smirk/ui/themes`: theme registry, token system, application.
  *
  * Components in `@smirk/ui` consume themes by reading CSS variables
- * (`var(--smirk-bg)`, `var(--smirk-accent)`, etc) — never by importing
+ * (`var(--smirk-bg)`, `var(--smirk-accent)`, etc), never by importing
  * theme objects directly. To use a theme, the shell (extension, mobile,
  * desktop) calls `applyTheme(theme)` once at boot and on every change.
  *

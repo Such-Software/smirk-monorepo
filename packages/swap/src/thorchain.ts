@@ -1,7 +1,7 @@
 /**
  * THORChain aggregator-style swap implementation.
  *
- * Stub for v0.3 — defines the shape; concrete HTTP wiring against the
+ * Stub for v0.3: defines the shape; concrete HTTP wiring against the
  * Midgard / Thornode APIs lands when the swap UI screen needs it.
  *
  * Reference docs:
@@ -9,7 +9,7 @@
  * - Pool / pricing: https://midgard.ninerealms.com/v2/doc
  *
  * Supported pairs at the time of writing (subject to availability):
- *   BTC ↔ LTC ↔ ETH (USDC) ↔ BCH — XMR pending; WOW/Grin not on THORChain.
+ *   BTC ↔ LTC ↔ ETH (USDC) ↔ BCH. XMR pending; WOW/Grin not on THORChain.
  */
 
 import type { AssetId } from '@smirk/assets';
@@ -44,7 +44,7 @@ export class ThorchainSwap implements Swap {
   private static readonly SUPPORTED: ReadonlySet<AssetId> = new Set([
     'btc',
     'ltc',
-    // xmr — once THORChain XMR rollout completes
+    // xmr: once THORChain XMR rollout completes
   ]);
 
   constructor(private readonly opts: ThorchainSwapOptions = {}) {

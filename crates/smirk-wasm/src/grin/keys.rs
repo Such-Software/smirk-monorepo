@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 /// Derive the 64-byte Grin extended private key from a BIP39 mnemonic.
 ///
-/// Matches `grin-wallet` and Grim — uses HMAC-SHA512 with key `"IamVoldemort"`
+/// Matches `grin-wallet` and Grim: uses HMAC-SHA512 with key `"IamVoldemort"`
 /// over the raw BIP39 entropy (NOT the 64-byte BIP39 PBKDF2 seed).
 ///
 /// Returns JSON: `{ "extended_private_key_hex": "...", "secret_key_hex": "...", "chain_code_hex": "..." }`.
@@ -22,12 +22,12 @@ pub fn grin_derive_extended_key(mnemonic: &str) -> Result<String, JsValue> {
     Ok(json)
 }
 
-/// LEGACY: derive the v1/v2-style ext key (`useBip39=true` —
+/// LEGACY: derive the v1/v2-style ext key (`useBip39=true`:
 /// PBKDF2-then-HMAC). Used to compute the fallback ext-key the
 /// orchestrators try when the v3 derivation can't reproduce a
 /// stored input commitment. Sunset 2026-11-15.
 ///
-/// Returns hex of the 64-byte ext key (no JSON wrapper — single-purpose).
+/// Returns hex of the 64-byte ext key (no JSON wrapper, single-purpose).
 #[wasm_bindgen]
 pub fn grin_derive_extended_key_legacy_bip39(mnemonic: &str) -> Result<String, JsValue> {
     let xkey = grin_ext::mnemonic_to_extended_private_key_legacy_bip39(mnemonic)
@@ -89,7 +89,7 @@ pub fn grin_derive_keys(mnemonic: &str, network: &str) -> Result<String, JsValue
 /// Derive a slatepack address (Grim/grin-wallet compatible) from a mnemonic.
 ///
 /// `network` must be `"mainnet"` or `"testnet"`.
-/// `index` is the address index — 0 is the wallet's default address.
+/// `index` is the address index; 0 is the wallet's default address.
 ///
 /// Returns the bech32-encoded address string (e.g. `"grin1abc..."`).
 #[wasm_bindgen]
@@ -117,7 +117,7 @@ pub fn grin_slatepack_address_secret(mnemonic: &str, index: u32) -> Result<Strin
 
 /// Decode a bech32 slatepack address back to its 32-byte ed25519 public
 /// key. Inverse of `grin_slatepack_address`. Returns the hex-encoded
-/// pubkey — the form `grin_slatepack_pack_encrypted` /
+/// pubkey: the form `grin_slatepack_pack_encrypted` /
 /// `grin_slatepack_encrypt` expects for the recipient.
 ///
 /// Accepts both mainnet (`grin1…`) and testnet (`tgrin1…`) HRPs.
@@ -132,7 +132,7 @@ pub fn grin_slatepack_address_to_pubkey_hex(addr: &str) -> Result<String, JsValu
 /// 64-byte extended private key (hex).
 ///
 /// `rewind_hash = blake2b-256(data = compressed_public_root_key (33B), key = [])`.
-/// This is the ONLY secret handed to `POST /wallet/grin/scan` — it lets the
+/// This is the ONLY secret handed to `POST /wallet/grin/scan`: it lets the
 /// backend's view-only rewind scan recognize this wallet's outputs WITHOUT
 /// exposing spend authority. Returns the 32-byte hash as 64 hex chars.
 #[wasm_bindgen]

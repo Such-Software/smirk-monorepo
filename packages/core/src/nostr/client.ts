@@ -1,10 +1,10 @@
 /**
- * `NostrClient` — the shared Nostr transport.
+ * `NostrClient`: the shared Nostr transport.
  *
  * A thin wrapper over nostr-tools' `SimplePool` (browser global WebSocket) that
  * owns relay connections and offers generic publish / subscribe / query. DMs
  * (NIP-17) and the notes/feed plane both ride this one client so there is a single
- * relay-management and event-I/O path — no fork. The DM provider can migrate onto
+ * relay-management and event-I/O path. No fork. The DM provider can migrate onto
  * it later as a behavior-zero refactor.
  *
  * This layer is transport-only: it does not know about kinds, identities, or

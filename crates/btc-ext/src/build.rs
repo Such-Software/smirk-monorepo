@@ -1,14 +1,14 @@
 //! Build unsigned PSBTs for BTC/LTC sends.
 //!
 //! v1 scope: single-recipient send with optional change output, P2WPKH
-//! (BIP84) inputs and outputs. The caller supplies (a) the master xprv —
-//! so we can derive each input's pubkey + populate `bip32_derivation`
-//! origin info that `sign_psbt` will resolve later — and (b) a list of
+//! (BIP84) inputs and outputs. The caller supplies (a) the master xprv
+//! (so we can derive each input's pubkey + populate `bip32_derivation`
+//! origin info that `sign_psbt` will resolve later) and (b) a list of
 //! inputs from the caller's UTXO set + the recipient/change parameters.
 //!
 //! Out of scope (v1): P2TR (BIP86) inputs (sender side), multi-recipient
 //! sends, RBF-replacement of an earlier tx, manual locktime overrides.
-//! Each is layered on top of the same PSBT primitive — add when needed.
+//! Each is layered on top of the same PSBT primitive; add when needed.
 //!
 //! Why the master xprv is required (not just the master xpub): the
 //! `bip32_derivation` map needs the master fingerprint, and the cheapest
@@ -100,7 +100,7 @@ impl std::error::Error for BuildError {}
 /// One UTXO the caller wants to spend.
 ///
 /// `master_path` is the BIP32 path (relative to the master xprv) where
-/// this UTXO's address was derived — e.g. `m/84'/0'/0'/0/3` for the
+/// this UTXO's address was derived, e.g. `m/84'/0'/0'/0/3` for the
 /// fourth receive address on the first BIP84 account. This is what the
 /// PSBT `bip32_derivation` map needs, and it's what makes `sign_psbt`
 /// know which child key to use when signing later.
@@ -113,7 +113,7 @@ pub struct UnsignedInput {
     /// Optional bech32 address this UTXO belongs to (the wallet's own tag for
     /// which receive/change address owns it). When present, `build_psbt`
     /// asserts the P2WPKH script derived from `master_path` equals this
-    /// address's script — money gate G9. `None` preserves the pre-fresh-address
+    /// address's script: money gate G9. `None` preserves the pre-fresh-address
     /// single-path behavior (no cross-check), so flag-off callers are
     /// byte-for-byte unchanged.
     pub owner_address: Option<String>,
@@ -129,7 +129,7 @@ pub struct BuildParams<'a> {
     /// everything net of fee to the recipient.
     pub change_address: Option<&'a str>,
     pub change_sat: u64,
-    /// Master xprv — used to derive each input's pubkey + populate
+    /// Master xprv: used to derive each input's pubkey + populate
     /// `bip32_derivation` origin. The xprv version bytes should match
     /// `network`; otherwise the resulting PSBT will be useless on the
     /// target chain.
@@ -155,12 +155,12 @@ pub fn extract_tx(psbt_base64: &str) -> Result<String, BuildError> {
 /// Caller responsibility:
 /// - UTXO selection (we assume `inputs` is the final spend set).
 /// - Fee math (we trust `recipient_sat + change_sat <= sum(inputs)`;
-///   the difference is the fee — we don't validate it here).
+///   the difference is the fee; we don't validate it here).
 /// - Change address generation (any change goes to `change_address`;
 ///   pass `None` to skip).
 ///
 /// Sequence is set to `0xfffffffd` on every input to signal RBF
-/// (BIP125). Locktime is 0 — we don't use absolute locktimes for normal
+/// (BIP125). Locktime is 0; we don't use absolute locktimes for normal
 /// sends.
 pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
     let total_in: u64 = params.inputs.iter().map(|i| i.value_sat).sum();
@@ -173,7 +173,7 @@ pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
     }
 
     // Dust-check change. The recipient amount is the user's
-    // responsibility — if they ask to send dust we let them.
+    // responsibility: if they ask to send dust we let them.
     if params.change_address.is_some() && params.change_sat > 0 && params.change_sat < DUST_LIMIT_P2WPKH {
         return Err(BuildError::DustChange);
     }
@@ -255,7 +255,7 @@ pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
         // Money gate G9 (fail-closed): if the caller tagged this UTXO with the
         // address it believes owns it, the script we just derived from
         // `master_path` MUST match that address's script. A mismatch means the
-        // path and the on-chain output disagree — signing would produce a
+        // path and the on-chain output disagree; signing would produce a
         // wrong-sighash / wrong-owner spend. Refuse to build instead. When
         // `owner_address` is None (single-address / flag-off path) this check
         // is skipped and behavior is unchanged.
@@ -267,7 +267,7 @@ pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
             }
         }
 
-        // bip32_derivation map entry — `sign_psbt` walks this to know
+        // bip32_derivation map entry: `sign_psbt` walks this to know
         // which child key signs which input.
         let mut bip32_derivation = BTreeMap::new();
         bip32_derivation.insert(child_pubkey.0, (master_fingerprint, path));
@@ -282,14 +282,14 @@ pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
         };
     }
 
-    // Empty PsbtOutput entries for each output — keeps the PSBT spec-
+    // Empty PsbtOutput entries for each output: keeps the PSBT spec-
     // valid; signers and bookkeepers may attach metadata later.
     psbt.outputs = (0..psbt.unsigned_tx.output.len())
         .map(|_| PsbtOutput::default())
         .collect();
 
     // Sanity check we didn't accidentally end up on the wrong network
-    // (e.g. xprv is mainnet but addresses were testnet — already caught
+    // (e.g. xprv is mainnet but addresses were testnet; already caught
     // by `decode_recipient_script`'s HRP comparison, this is
     // belt-and-suspenders).
     if params.master_xpriv.network != btc_network.into() {
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn build_psbt_rejects_btc_address_on_ltc_network() {
-        // Network mismatch — BTC address sent to an LTC tx → BadHrp →
+        // Network mismatch: BTC address sent to an LTC tx → BadHrp →
         // InvalidRecipient.
         let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::LtcMainnet).unwrap();
         let inputs = vec![UnsignedInput {
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn round_trip_through_sign_psbt() {
         // Build → sign → finalize → extract. Asserts that the final
-        // extracted tx has a non-empty witness for the input — i.e. the
+        // extracted tx has a non-empty witness for the input, i.e. the
         // PSBT was actually finalized (not just signed-with-partial-sigs).
         // Pre-2026-05-12 sign_psbt skipped finalization and extract_tx
         // returned a tx with empty witnesses, which every node rejected

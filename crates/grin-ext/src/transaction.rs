@@ -5,7 +5,7 @@
 //! `TransactionBody::write`. Wire format:
 //!
 //! ```text
-//!   offset       (32 bytes BlindingFactor — same as slate.off)
+//!   offset       (32 bytes BlindingFactor, same as slate.off)
 //!   num_inputs   (u64 BE)
 //!   num_outputs  (u64 BE)
 //!   num_kernels  (u64 BE)
@@ -27,14 +27,14 @@
 //! even/odd Y respectively).
 //!
 //! See [`pubkey_to_commitment`] for the prefix-swap conversion. The X
-//! coordinate is identical between encodings — both are 33-byte
+//! coordinate is identical between encodings: both are 33-byte
 //! compressed-form points on secp256k1.
 
 use crate::kernel::KernelFeatures;
 use crate::schnorr::point_add;
 use crate::slate::{SlateStateV4, SlateV4};
 
-/// One transaction input — a reference to an existing UTXO being spent.
+/// One transaction input: a reference to an existing UTXO being spent.
 #[derive(Debug, Clone)]
 pub struct TxInput {
     /// Output features of the UTXO being spent. `0` = Plain, `1` = Coinbase.
@@ -44,7 +44,7 @@ pub struct TxInput {
     pub commitment: [u8; 33],
 }
 
-/// One transaction output — a new UTXO being created.
+/// One transaction output: a new UTXO being created.
 #[derive(Debug, Clone)]
 pub struct TxOutput {
     /// Output features. `0` = Plain, `1` = Coinbase.
@@ -167,7 +167,7 @@ pub fn slate_to_transaction_bytes(params: &BuildTransactionParams) -> Result<Vec
 /// endpoint expects as its `tx` parameter.
 ///
 /// The binary wire format and the JSON-RPC format carry identical
-/// data — the difference is just encoding. push_transaction does NOT
+/// data; the difference is just encoding. push_transaction does NOT
 /// accept the raw binary form; it deserializes a `Transaction` struct
 /// from JSON, which means we have to emit the exact shape Grin's
 /// `#[derive(Serialize)]` for `Transaction` produces.
@@ -251,7 +251,7 @@ pub fn slate_to_transaction_json(
     //   Output: features (u8) || commit (33 bytes) || proof_len (u64 BE) || proof bytes
     //
     // The hash function is Blake2b-256 (BLAKE2b output truncated to
-    // 32 bytes — same primitive we use for sig_msg).
+    // 32 bytes, same primitive we use for sig_msg).
     use blake2::digest::{Update, VariableOutput};
     use blake2::Blake2bVar;
     let hash_bytes = |bytes: &[u8]| -> [u8; 32] {
@@ -268,7 +268,7 @@ pub fn slate_to_transaction_json(
         hash_bytes(&buf)
     };
     // Output sorts by its OutputIdentifier hash (features + commit
-    // ONLY — proof is NOT hashed for the Ord impl; see grin_core
+    // ONLY: proof is NOT hashed for the Ord impl; see grin_core
     // transaction.rs line 2017 `impl Ord for Output { ... cmp via
     // self.identifier }` and line 2160 `hashable_ord!(OutputIdentifier)`
     // where OutputIdentifier::Writeable is just features + commit).
@@ -304,14 +304,14 @@ pub fn slate_to_transaction_json(
         })
         .collect();
 
-    // Kernel: `TxKernel { features: KernelFeatures, excess, excess_sig }`
-    // — KernelFeatures is a nested struct, not flattened. KernelFeatures
+    // Kernel: `TxKernel { features: KernelFeatures, excess, excess_sig }`.
+    // KernelFeatures is a nested struct, not flattened. KernelFeatures
     // uses default external tagging:
     //   Plain        → {"Plain": {"fee": <u64-int>}}
     //   Coinbase     → "Coinbase"
     //   HeightLocked → {"HeightLocked": {"fee": <u64-int>, "lock_height": <u64-int>}}
     //   NRD          → {"NoRecentDuplicate": {"fee": ..., "relative_height": <u16-int>}}
-    // `fee` serializes via `fee_fields_as_int` — packed-u64 INT (not a
+    // `fee` serializes via `fee_fields_as_int`: packed-u64 INT (not a
     // stringified one). lock_height / relative_height likewise are bare
     // numbers. Empirically verified against
     // grin_core::core::transaction::{KernelFeatures, TxKernel} in
@@ -336,7 +336,7 @@ pub fn slate_to_transaction_json(
     //
     // grin's aggsig verifier (`secp256k1_aggsig_verify_single`) then reads
     // `sig.data[0..32]` directly as BE for the field element R.x and as BE
-    // for the scalar s — i.e., it expects the post-from_compact storage to
+    // for the scalar s, i.e., it expects the post-from_compact storage to
     // already be in BE form. For grin-wallet's own kernels this works
     // because they round-trip a sig through `serialize_compact` (which is
     // the inverse of `from_compact`) before hex-encoding, and the two
@@ -376,7 +376,7 @@ pub fn slate_to_transaction_json(
 /// `secp256k1_pubkey_to_pedersen_commitment` does a Y-coordinate flip
 /// (the commit form negates the pubkey internally), so an odd-Y pubkey
 /// maps to an even-Y commitment and vice versa. We were doing the
-/// naive prefix swap — every kernel.excess we wrote to chain since the
+/// naive prefix swap: every kernel.excess we wrote to chain since the
 /// monorepo migration was for the wrong point, which the node would
 /// reject with "Invalid Tx some kind of keychain error" (incorrect
 /// signature, because the verifier's pubkey-derived-from-commit
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn pubkey_to_commitment_returns_valid_commit() {
-        // The old "naive prefix swap" assertion is gone — the canonical
+        // The old "naive prefix swap" assertion is gone: the canonical
         // conversion done by libsecp256k1-zkp internally negates the
         // pubkey, so prefix may flip parity. Just check the conversion
         // round-trips through Commitment::to_pubkey for a known valid

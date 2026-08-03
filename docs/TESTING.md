@@ -4,20 +4,20 @@ Three layers, each catching a different class of bugs. Each layer requires
 the previous one to be green before it's worth running.
 
 ```
-                    Layer 3 — End-to-end
+                    Layer 3:  End-to-end
                   ┌──────────────────────┐
                   │  Production extension │
                   │  + mobile + backend   │
                   │  vs grin-wallet GUI   │
                   └──────────────────────┘
                           ▲
-                Layer 2 — Cross-implementation interop
+                Layer 2:  Cross-implementation interop
               ┌────────────────────────────────────────┐
               │  Our WASM ↔ grin-wallet via fixtures   │
               │  Our WASM ↔ Grin testnet via broadcast │
               └────────────────────────────────────────┘
                           ▲
-                Layer 1 — Unit tests + WASM smoke
+                Layer 1:  Unit tests + WASM smoke
               ┌────────────────────────────────────────┐
               │  cargo test --workspace --lib          │
               │  Node smoke harness against every      │
@@ -75,7 +75,7 @@ tests miss:
 
 Runs via `make wasm-smoke` (which builds the Node-target bundle first).
 
-**Known smoke limitations (Node only — browser is unaffected):**
+**Known smoke limitations (Node only; browser is unaffected):**
 - Pedersen commit + Bulletproof create/verify call into
   `libsecp256k1-zkp`'s `malloc` path, which Node's `--target nodejs`
   WASM loader can't satisfy (eager import resolution; no host malloc
@@ -101,7 +101,7 @@ serialization choice that's internally consistent but doesn't match
 what the network actually requires.
 
 See `crates/grin-ext/tests/README.md` for the strategy doc. Real
-example caught: c78aff0 — `sender_blind_excess` returned
+example caught: c78aff0. `sender_blind_excess` returned
 `inputs − outputs − offset` (wrong by sign), all 100+ internal tests
 passed because both sides used the same wrong convention, but a real
 mainnet broadcast would have failed at kernel verification.
@@ -141,17 +141,17 @@ depth-3 (Grim) v3, depth-4 (Smirk) v3, depth-4
 wrong seed and a mismatched commitment. Self-generated proofs would be
 circular, so the proofs come from grin's reference code.
 
-Dev-deps don't ship in the production WASM bundle — `grin_wallet_libwallet`
+Dev-deps don't ship in the production WASM bundle: `grin_wallet_libwallet`
 is a `[dev-dependencies]` entry, used by `cargo test` only.
 
 ### Upstream fixtures (committed, expand as bugs are found)
 
 We also commit real-world output from `grin-wallet` / Grim:
 
-- `crates/grin-ext/src/slatepack.rs::FIXTURE` — real slatepack from
+- `crates/grin-ext/src/slatepack.rs::FIXTURE`: real slatepack from
   `grin-wallet/api/src/owner_rpc.rs`, verified to dearmor + parse +
   re-encode losslessly through our types
-- `crates/grin-ext/src/slate.rs::FIXTURE_I2` — real slate v4 JSON,
+- `crates/grin-ext/src/slate.rs::FIXTURE_I2`: real slate v4 JSON,
   verified to round-trip through SlateV4 types
 
 **To add for other chains:**
@@ -250,7 +250,7 @@ For each of `BTC | LTC | XMR | WOW | GRIN`:
   pattern: mocks pass while real backend changes break prod. Integration
   tests hit a real backend (test instance) or are skipped.
 - **Mocked-out crypto.** Crypto round-trips against the real implementation
-  always — never a stub that "pretends to verify."
+  always, never a stub that "pretends to verify."
 
 ## Adding tests
 

@@ -1,7 +1,7 @@
 import type { Theme } from './types';
 
 /**
- * iOS Classic — the iPhone OS 1/2/3 look. Pre-flat-design. Glossy
+ * iOS Classic: the iPhone OS 1/2/3 look. Pre-flat-design. Glossy
  * "jelly" buttons, slate gradients, Helvetica, white text on dark
  * navy chrome with the lozenge dock at the bottom.
  *
@@ -16,7 +16,7 @@ import type { Theme } from './types';
  * paint the gradients in the CSS payload.
  */
 export const iosClassicTheme: Theme = {
-  // Stable id — kept as `ios-classic`. Display name avoids the Apple
+  // Stable id: kept as `ios-classic`. Display name avoids the Apple
   // "iPhone" trademark; uses the era + the visual style descriptor.
   id: 'ios-classic',
   name: "Glassy '07",
@@ -31,7 +31,7 @@ export const iosClassicTheme: Theme = {
     fg: '#ffffff',
     fgMuted: '#9aa3b2',
 
-    // Aqua blue — the original iPhone OS action color.
+    // Aqua blue: the original iPhone OS action color.
     accent: '#1f7be4',
     accentHover: '#3f8ce8',
     accentFg: '#ffffff',
@@ -54,13 +54,13 @@ export const iosClassicTheme: Theme = {
     fontSizeBase: '14px',
     fontSizeSmall: '12px',
 
-    // iOS Classic rounded *everything* — icons, buttons, the chrome.
+    // iOS Classic rounded *everything*: icons, buttons, the chrome.
     // 22% radius on icons was the rule (the "squircle" came later).
     radius: '10px',
     radiusSm: '6px',
     radiusLg: '14px',
 
-    // Glossy depth — the signature look.
+    // Glossy depth: the signature look.
     shadowRaised: '0 1px 0 rgba(255,255,255,0.15) inset, 0 1px 3px rgba(0,0,0,0.6)',
     shadowSunken: 'inset 0 2px 4px rgba(0,0,0,0.5)',
   },
@@ -70,7 +70,7 @@ export const iosClassicTheme: Theme = {
       -webkit-font-smoothing: antialiased;
     }
 
-    /* Headline balance: glossy slate jelly bar — the iOS nav-bar
+    /* Headline balance: glossy slate jelly bar, the iOS nav-bar
        gradient extended into a hero panel. */
     .smirk-theme-ios-classic .smirk-unified-balance {
       background:
@@ -118,7 +118,7 @@ export const iosClassicTheme: Theme = {
       outline-offset: 2px;
     }
 
-    /* Inputs: dark "search field" look from iOS classic — pill-shape,
+    /* Inputs: dark "search field" look from iOS classic; pill-shape,
        inset shadow, glossy top highlight. */
     .smirk-theme-ios-classic input,
     .smirk-theme-ios-classic select,
@@ -137,7 +137,7 @@ export const iosClassicTheme: Theme = {
       color: rgba(255,255,255,0.4);
     }
 
-    /* Asset list: classic iOS "grouped table view" — rounded card with
+    /* Asset list: classic iOS "grouped table view", rounded card with
        hairline separators and a subtle inset gradient. */
     .smirk-theme-ios-classic .smirk-asset-list {
       background: linear-gradient(180deg, #232b3d 0%, #1a2030 100%);
@@ -165,7 +165,7 @@ export const iosClassicTheme: Theme = {
       background: rgba(63,140,232,0.15);
     }
 
-    /* Bottom nav: the iOS dock — glossy black bar with embossed icons. */
+    /* Bottom nav: the iOS dock, glossy black bar with embossed icons. */
     .smirk-theme-ios-classic .smirk-bottom-nav {
       background:
         linear-gradient(180deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 50%),

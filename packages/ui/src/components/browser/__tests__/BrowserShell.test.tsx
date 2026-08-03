@@ -4,7 +4,7 @@
  * `BrowserShell` subscribes to the controller inside `useEffect`,
  * which does NOT run during SSR. So a server-render of the shell
  * shows the empty-snapshot path: just the outer container and the
- * frame slot. That's actually the most important thing to test here —
+ * frame slot. That's actually the most important thing to test here:
  * it's what a screen reader announces on first paint, before the JS
  * runtime has propagated any controller state.
  *
@@ -59,7 +59,7 @@ describe('BrowserShell — static (no useEffect)', () => {
 
   it('omits tab strip + URL bar on first SSR render (useEffect has not fired)', () => {
     // Until useEffect runs and the controller emits a snapshot, the
-    // shell renders only the frame slot. This is intentional — it's
+    // shell renders only the frame slot. This is intentional: it's
     // the "before JS" view and what screen readers see on first paint.
     const controller = new MockController();
     const html = renderToString(h(BrowserShell, { controller }));

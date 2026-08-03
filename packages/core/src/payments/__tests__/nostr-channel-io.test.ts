@@ -1,6 +1,6 @@
 /**
  * The runtime NostrChannelIO bridge (P3b): proves it delegates to the active
- * MessagingProvider + relay set — publish routes to publishWrap, query routes to
+ * MessagingProvider + relay set: publish routes to publishWrap, query routes to
  * the seedless wrap poll keyed on OUR pubkey, and outbound relays fold the
  * recipient's inbox together with ours. A recording fake provider stands in for
  * the relays; end-to-end gift-wrap flow is covered in slatepack-channel.test.ts.

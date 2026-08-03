@@ -1,6 +1,6 @@
 # @smirk/extension
 
-Chrome MV3 + Firefox MV3 wallet extension — the canonical Smirk
+Chrome MV3 + Firefox MV3 wallet extension: the canonical Smirk
 client. v0.3.0+.
 
 The legacy v0.2.x extension lives at
@@ -13,7 +13,7 @@ it is frozen. New work happens here.
   in `chrome.storage.local`, opt-in N-minute auto-lock session cache).
 - Per-asset send + receive: BTC, LTC, XMR, WOW, Grin (slatepack +
   encrypted Grin → Grin via address).
-- Social tipping (BTC/LTC/XMR/WOW/Grin) — two-phase create with
+- Social tipping (BTC/LTC/XMR/WOW/Grin): two-phase create with
   backend-side draft + client `chrome.storage.local` tip-key backup for
   recovery.
 - Per-asset detail screen with price sparkline + activity history
@@ -74,7 +74,7 @@ Load the unpacked extension from `packages/extension/dist/`.
   `src/background/dapp/provider.ts`.
 - **Dapp approval flow.** Sensitive ops (signMessage, requestPayment,
   claimPublicTip) round-trip through a `chrome.windows.create` popup
-  window — the action popup closes on focus loss and would lose any
+  window; the action popup closes on focus loss and would lose any
   long-running approval mid-decision. The popup-window context holds
   the unlocked wallet, performs the operation, writes the result
   back via `chrome.storage.session` for the SW to relay.
@@ -83,7 +83,7 @@ Load the unpacked extension from `packages/extension/dist/`.
   extension AND the v0.3.0 Tauri desktop embedded browser (each
   embedded webview gets the same `window.smirk` injection script,
   with responses routed back through Tauri events). The Capacitor
-  mobile build will reuse the same interfaces in v0.4 — only the
+  mobile build will reuse the same interfaces in v0.4; only the
   message-transport adapter is platform-specific
   (`chrome.runtime.sendMessage` ↔ `__TAURI__.event` ↔
   `Capacitor.WebView`).

@@ -199,7 +199,7 @@ export interface LwsProvisionResult {
 //
 // Grin is NON-CUSTODIAL: there is no server-side output store, balance, or
 // history. `POST /wallet/grin/scan` rewinds the UTXO set with the wallet's
-// view-only `rewind_hash` and returns its currently-unspent outputs — the
+// view-only `rewind_hash` and returns its currently-unspent outputs: the
 // single source of truth for balance and spendable inputs. The client owns
 // output state; balance/maturity/pending are derived from scan + a minimal
 // local pending overlay (see payments/grin-pending-overlay.ts).

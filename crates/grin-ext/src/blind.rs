@@ -19,7 +19,7 @@ use k256::{Scalar, U256};
 ///
 /// Unlike `secret-key`-style parsing that rejects zero, this accepts any
 /// 32 bytes and reduces them modulo the curve order. That's what slate
-/// construction needs — sums of valid blinds may legitimately produce zero
+/// construction needs: sums of valid blinds may legitimately produce zero
 /// or values >= n that must reduce.
 fn scalar_from_bytes_reduced(bytes: &[u8; 32]) -> Scalar {
     Scalar::from_uint_unchecked(U256::from_be_slice(bytes))

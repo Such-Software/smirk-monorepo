@@ -2,7 +2,7 @@
  * Nostr account linking + NIP-05 profile publishing.
  *
  * Linking binds the wallet's PRIMARY (account-0) identity to the backend account via
- * the authenticated `POST /auth/nostr/link` — the backend sets `nostr_pubkey` ONLY
+ * the authenticated `POST /auth/nostr/link`: the backend sets `nostr_pubkey` ONLY
  * from a NIP-98 signature, so this is the single path that makes
  * `<username>@<domain>` resolve. After a successful link we publish an account-0
  * kind-0 profile so external Nostr clients render the handle as verified.
@@ -38,7 +38,7 @@ export type PublishNip05Result =
 /**
  * Publish an account-0 kind-0 profile advertising `nip05 = <username>@<homeDomain>`.
  * Fetches any existing kind-0 on our relays and MERGES (never clobbers a user's
- * about/picture set elsewhere). Only the PRIMARY identity carries the handle — never
+ * about/picture set elsewhere). Only the PRIMARY identity carries the handle, never
  * a burner/imported. Never throws: the outcome comes back as a value.
  */
 export async function publishNip05Profile(
@@ -93,6 +93,6 @@ export async function linkPrimaryNostrIdentity(mnemonic: string): Promise<void> 
     const r = await api.linkNostr(primary);
     if (r.data?.nostrPubkey) void publishNip05Profile(primary);
   } catch {
-    /* non-fatal — claiming the handle already succeeded */
+    /* non-fatal: claiming the handle already succeeded */
   }
 }

@@ -15,14 +15,14 @@ import { ed25519 } from '@noble/curves/ed25519';
 import { signEd25519WithScalar } from '../crypto';
 
 // Two pinned scalars so the tests are deterministic across runs.
-// Values are arbitrary fixed bytes — these scalars never get used
+// Values are arbitrary fixed bytes; these scalars never get used
 // for anything real.
 const SCALAR_A = hexToBytes('0100000000000000000000000000000000000000000000000000000000000000');
 const SCALAR_B = hexToBytes('d1da1ad8f04dfe72a0d2c2e7a5f6cb56bcc5d9437c8a55d6a82ec6f0a3915b04');
 
 function publicKeyFor(scalar: Uint8Array): Uint8Array {
   // Match the call shape used by @smirk/core/hd for XMR/WOW/Grin
-  // public-key derivation — the same call the wallet makes to
+  // public-key derivation: the same call the wallet makes to
   // publish the public key the signature must verify against.
   return ed25519.ExtendedPoint.BASE.multiply(leBytesToBigInt(scalar)).toRawBytes();
 }

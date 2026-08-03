@@ -1,13 +1,13 @@
 /**
- * HomeTab — top-level Home view per UI_DESIGN.md Principle 1.
+ * HomeTab: top-level Home view per UI_DESIGN.md Principle 1.
  *
  * Composition:
- *   1. UnifiedBalance        — the big total + denomination + hide
- *   2. HomeActionRow         — Tip · Send · Receive · Swap
- *   3. Asset list            — one BalanceCard per registered asset
+ *   1. UnifiedBalance:         the big total + denomination + hide
+ *   2. HomeActionRow:          Tip · Send · Receive · Swap
+ *   3. Asset list:             one BalanceCard per registered asset
  *   4. (later) Recent activity strip
  *
- * Pure composition — no data-fetching, no formatting math, no state.
+ * Pure composition: no data-fetching, no formatting math, no state.
  * The consumer (extension package) wires up balances, prices, action
  * handlers, and asset filtering. This keeps `@smirk/ui` framework-
  * and platform-agnostic.
@@ -34,7 +34,7 @@ export interface HomeAssetRow {
   /**
    * Optional outgoing-in-flight total (sender-side pendingOutgoing,
    * see `@smirk/core/state/pending-outgoing`). Already subtracted from
-   * `balanceAtomic` by the caller — this is only for the
+   * `balanceAtomic` by the caller; this is only for the
    * `↑ X.XX sending` subline so the user knows where it went.
    */
   sendingAtomic?: bigint | number;
@@ -62,12 +62,12 @@ export interface HomeTabProps {
   resolveIcon?: (iconKey: string) => string | undefined;
   /**
    * Optional slot rendered between the action row and the asset list.
-   * Use for scan-progress banners, network warnings — anything the
+   * Use for scan-progress banners, network warnings, anything the
    * user should see prominently without scrolling.
    */
   topNotice?: ComponentChildren;
   /**
-   * Optional slot below the asset list — recent activity strip in
+   * Optional slot below the asset list: recent activity strip in
    * future, swap-in-progress banner, etc. Consumers can pass any
    * Preact node here.
    */

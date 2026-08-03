@@ -16,14 +16,14 @@ import { store } from '../singletons';
 import type { WalletSession } from '../types';
 
 /**
- * SwapRouter — wires the @smirk/ui SwapTab to the TrocadorSwap library
+ * SwapRouter: wires the @smirk/ui SwapTab to the TrocadorSwap library
  * and the wallet's send-handler. Single-provider for v0.3 (Trocador);
  * additional providers slot in by extending the wizard branch in
  * SwapTab and adding more handlers here.
  *
  * Client-direct architecture: Trocador calls go straight from this
  * context to api.trocador.app, so the backend never proxies user
- * money. Backend involvement is bookkeeping only — `POST /api/v1/swaps` so the
+ * money. Backend involvement is bookkeeping only: `POST /api/v1/swaps` so the
  * status mirror webhook has somewhere to write.
  */
 export function SwapRouter({
@@ -93,7 +93,7 @@ export function SwapRouter({
         ] ?? null
       }
       // Reuse the SendWizard's validator. The swap surface ignored
-      // address format pre-2026-06-13 — any address the user pasted
+      // address format pre-2026-06-13: any address the user pasted
       // was forwarded to /new_trade unchanged, opening the wrong-
       // chain refund hazard (XMR refunded to a BTC address, etc.).
       // `validateAddress` is the same helper SendWizard uses.
@@ -122,7 +122,7 @@ export function SwapRouter({
         // The state is set from the cached backend summary; the
         // real-time merge happens via onTrocadorFetchStatus on the
         // first 10s tick. Step is 3 (Status), not 2 (Deposit),
-        // because resuming means "I already sent" — DepositStep
+        // because resuming means "I already sent"; DepositStep
         // would offer to re-pre-fill the Send wizard, which is
         // wrong for a resumed swap.
         await store.update((s) => {
@@ -178,7 +178,7 @@ export function SwapRouter({
         const webhookToken = randomToken(24);
         // Rebuild a SwapQuote from persisted fields. The Trocador
         // library only reads (tradeId, provider, amountFromDecimal,
-        // amountToDecimal) from implementationData on /new_trade —
+        // amountToDecimal) from implementationData on /new_trade;
         // we don't need to round-trip the original quote object.
         const fromAsset = mustGetAsset(quote.fromAsset);
         const toAsset = mustGetAsset(quote.toAsset);
@@ -204,7 +204,7 @@ export function SwapRouter({
           refundAddress,
           // Per-trade webhook secret. Without this, Trocador delivers
           // every webhook with passthrough=null and the backend
-          // rejects every one as a token mismatch — the 60s backup
+          // rejects every one as a token mismatch; the 60s backup
           // poller would be the only finalization path. See the
           // 2026-06-13 swap-e2e review ship-blocker write-up.
           passthrough: webhookToken,
@@ -212,7 +212,7 @@ export function SwapRouter({
 
         // Build the SwapInFlight up front so we can persist it to
         // the trocador wizard BEFORE awaiting backend createSwap.
-        // Trocador's /new_trade is non-idempotent network state —
+        // Trocador's /new_trade is non-idempotent network state:
         // an MV3 popup-close between /new_trade success and the
         // wizard write strands the trade with no recovery
         // affordance. Writing inFlight first means the user always
@@ -235,7 +235,7 @@ export function SwapRouter({
         });
 
         // Persist to backend so the webhook receiver knows the token.
-        // Best-effort — failure here means status updates from the
+        // Best-effort: failure here means status updates from the
         // webhook won't be authenticated (rejected as 404), but the
         // UI's direct-poll-on-Trocador path still works.
         let backendTrackingOk = true;
@@ -266,7 +266,7 @@ export function SwapRouter({
         // Pre-fill the SendWizard with the deposit address + amount so
         // the user lands directly on Compose with everything filled.
         // Also stash a `pendingContext` so the resulting
-        // pendingOutgoing entry is tagged as a swap-deposit — the
+        // pendingOutgoing entry is tagged as a swap-deposit; the
         // AssetDetail Activity row then renders "Swap deposit → XMR
         // (CDNQ…)" with a tap-link back to the swap status, instead
         // of a generic "Sending to LTC1Q…".
@@ -337,7 +337,7 @@ export function SwapRouter({
       onTrocadorFetchStatus={async (id) => {
         // Hybrid: backend for identities (from/to/amount/address),
         // Trocador direct for state. v0.3.0 originally trusted the
-        // backend's `status` column unconditionally — but the only
+        // backend's `status` column unconditionally, but the only
         // signal that flips it is Trocador's webhook into
         // `/api/v1/webhook/trocador`, and there's no backend poller
         // to backstop a missed delivery. Real failure mode dogfooded
@@ -369,7 +369,7 @@ export function SwapRouter({
           });
           if (!backendTerminal) {
             // Augment with Trocador direct. Best-effort: a Trocador
-            // outage shouldn't tank the polling loop — keep the
+            // outage shouldn't tank the polling loop; keep the
             // backend's state as a fallback.
             try {
               const live = await trocador.status(id);
@@ -391,7 +391,7 @@ export function SwapRouter({
             state,
           };
         }
-        // Backend doesn't know about this swap — go direct.
+        // Backend doesn't know about this swap; go direct.
         const s = await trocador.status(id);
         return {
           id,
@@ -417,13 +417,13 @@ export function SwapRouter({
  *  knows the Trocador-string ↔ structured-state mapping.
  *
  *  `extra` carries the parts of the persisted SwapRecord that the
- *  status alone can't supply — the final to-amount (Trocador stores
+ *  status alone can't supply: the final to-amount (Trocador stores
  *  this on the row at terminal-transition; pre-2026-06-13 the
  *  mapper hardcoded '0' so every completed swap showed
  *  "Completed — 0 LTC sent"), and the refund address (needed so the
  *  'expired' state can tell the user where their deposit will return
- *  to if they did broadcast). Both are optional — the caller may
- *  not have them yet — and the mapper falls back to neutral copy
+ *  to if they did broadcast). Both are optional (the caller may
+ *  not have them yet) and the mapper falls back to neutral copy
  *  when they're absent. */
 function mapBackendStatus(
   status: string,
@@ -445,7 +445,7 @@ function mapBackendStatus(
         toAmount: extra?.amountToAtomic ?? '0',
       };
     case 'refunded': {
-      // Surface the refund destination when we have it — gives the
+      // Surface the refund destination when we have it: gives the
       // user a chain address to watch instead of "trust us, it's on
       // its way back."
       const reason = extra?.refundAddress
@@ -455,8 +455,8 @@ function mapBackendStatus(
     }
     case 'expired': {
       // Trocador's `expired` covers TWO real-world cases: (a) the
-      // quote validity window elapsed before any deposit arrived —
-      // no money moved — and (b) deposit landed but the underlying
+      // quote validity window elapsed before any deposit arrived
+      // (no money moved), and (b) deposit landed but the underlying
       // provider couldn't complete in time, refund in flight. We
       // don't have a reliable backend signal to discriminate (we'd
       // need historical state transitions or amount-observed
@@ -480,7 +480,7 @@ function mapBackendStatus(
       // failure with the raw value so the user (and Smirk support)
       // can act on it, rather than silently parking on
       // "in_progress" which the wizard renders as "Provider
-      // exchanging" forever — that's how the 2026-06-04 audit
+      // exchanging" forever: that's how the 2026-06-04 audit
       // found a future-Trocador-status would manifest as a stuck
       // visual on a swap that actually completed.
       return {

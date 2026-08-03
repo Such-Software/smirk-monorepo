@@ -1,6 +1,6 @@
 //! Grin / Mimblewimble protocol implementation for Smirk.
 //!
-//! This crate is built from primitives — not a fork of grin-wallet. We use
+//! This crate is built from primitives, not a fork of grin-wallet. We use
 //! audited libraries for crypto (HMAC-SHA512, secp256k1, ed25519, etc.)
 //! and reimplement the protocol layer (slate construction, slatepack codec,
 //! NRD kernels) so we can extend it with adaptor signatures and other

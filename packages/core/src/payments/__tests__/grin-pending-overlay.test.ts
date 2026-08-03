@@ -183,7 +183,7 @@ test('TWO overlay instances over the same store-key serialize (no lost update / 
     b.reserveNextChildIndex(),
   ]);
 
-  // Every reserved index is UNIQUE — no cross-instance rewind handed a dup.
+  // Every reserved index is UNIQUE: no cross-instance rewind handed a dup.
   assert.equal(new Set(ops).size, ops.length, 'no index handed out twice across instances');
   // Contiguous 100..105 for the first batch (proves no rewind, no gap).
   assert.deepEqual(
@@ -202,9 +202,9 @@ test('TWO overlay instances over the same store-key serialize (no lost update / 
 
 test('remove() frees a pre-broadcast reservation but REFUSES a broadcast entry', async () => {
   const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
-  // A pre-broadcast build reservation (falsy broadcast) — freeable.
+  // A pre-broadcast build reservation (falsy broadcast): freeable.
   await overlay.addPending('reserved', { spentCommits: ['inA'] });
-  // A broadcast tx — its inputs are spent in-flight; must NOT be freed.
+  // A broadcast tx: its inputs are spent in-flight; must NOT be freed.
   await overlay.addPending('sent', { spentCommits: ['inB'], broadcast: true });
 
   await overlay.remove('reserved');

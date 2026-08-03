@@ -1,24 +1,24 @@
 import type { Theme } from './types';
 
 /**
- * Game Boy DMG — the original 1989 four-shade pea-green LCD. The whole
+ * Game Boy DMG: the original 1989 four-shade pea-green LCD. The whole
  * interior of the popup becomes the screen: every surface uses one of
  * the four canonical shades, every glyph is rendered in chunky
  * monospace, and the bevel chrome around the screen sits behind it
  * via the page background.
  *
  * Canonical DMG palette (lightest → darkest):
- *   #9bbc0f — lightest (background)
- *   #8bac0f — light
- *   #306230 — dark
- *   #0f380f — darkest (ink)
+ *   #9bbc0f: lightest (background)
+ *   #8bac0f: light
+ *   #306230: dark
+ *   #0f380f: darkest (ink)
  *
  * Bandai's Super Game Boy + Pocket cartridges popularized variations
  * with cooler greens; we use the DMG-01 palette specifically since
  * it's the most recognizable.
  */
 export const gameboyTheme: Theme = {
-  // Stable id — kept as `gameboy`. Display name uses the Nintendo
+  // Stable id: kept as `gameboy`. Display name uses the Nintendo
   // internal model designator "DMG" (Dot Matrix Game) rather than
   // the consumer trademark.
   id: 'gameboy',
@@ -30,11 +30,11 @@ export const gameboyTheme: Theme = {
     bgSunken: '#8bac0f',
 
     // The darkest green is the ink. The mid-dark green is the muted
-    // ink — used for labels/units.
+    // ink: used for labels/units.
     fg: '#0f380f',
     fgMuted: '#306230',
 
-    // No real "accent" color exists in the four-shade palette —
+    // No real "accent" color exists in the four-shade palette;
     // we co-opt the dark green as the call-to-action surface and
     // the lightest green as text on top of it (inverted).
     accent: '#0f380f',
@@ -51,7 +51,7 @@ export const gameboyTheme: Theme = {
     warning: '#306230',
 
     // Pixel-feel monospace stack. The extension bundles Press Start 2P
-    // (NES-era 8x8 bitmap font, OFL-licensed) under /fonts/ — see the
+    // (NES-era 8x8 bitmap font, OFL-licensed) under /fonts/; see the
     // @font-face declaration in the CSS payload. Falls back to any
     // pixel-monospace the system has, then to generic monospace if a
     // shell ships this theme without the bundled font.
@@ -69,12 +69,12 @@ export const gameboyTheme: Theme = {
     radiusSm: '0',
     radiusLg: '0',
 
-    // No drop shadows on an LCD — depth was conveyed by changing shade.
+    // No drop shadows on an LCD: depth was conveyed by changing shade.
     shadowRaised: 'inset 0 0 0 2px #0f380f',
     shadowSunken: 'inset 0 0 0 1px #306230',
   },
   css: `
-    /* Bundled pixel font — extension dist serves /fonts/ same-origin.
+    /* Bundled pixel font: extension dist serves /fonts/ same-origin.
        If this theme is consumed outside the extension (mobile shell,
        desktop, web), the @font-face just fails to resolve and the
        fontFamily stack falls through to system pixel monospaces. */
@@ -86,7 +86,7 @@ export const gameboyTheme: Theme = {
       src: url('/fonts/press-start-2p.woff2') format('woff2');
     }
 
-    /* Crisp pixels everywhere — disable browser smoothing on icons,
+    /* Crisp pixels everywhere: disable browser smoothing on icons,
        SVGs, and even text where the engine allows. */
     .smirk-theme-gameboy {
       image-rendering: pixelated;
@@ -101,7 +101,7 @@ export const gameboyTheme: Theme = {
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    /* Restore the asset display-name + balance from being shouty — the
+    /* Restore the asset display-name + balance from being shouty: the
        wallet shows mixed-case addresses and numerics that shouldn't
        all-caps. */
     .smirk-theme-gameboy input,
@@ -113,7 +113,7 @@ export const gameboyTheme: Theme = {
       letter-spacing: 0;
     }
 
-    /* Headline balance: chunky pixel-step double frame — thick dark
+    /* Headline balance: chunky pixel-step double frame; thick dark
        border with a one-shade-lighter gap, then an outer dark ring.
        Reads like the LCD-era 4-pixel inset bezels on real Game Boy UI. */
     .smirk-theme-gameboy .smirk-unified-balance {
@@ -192,7 +192,7 @@ export const gameboyTheme: Theme = {
       color: #9bbc0f !important;
     }
 
-    /* Bottom nav: dark-green ink bar across the bottom — like the
+    /* Bottom nav: dark-green ink bar across the bottom, like the
        DMG's built-in status strip. */
     .smirk-theme-gameboy .smirk-bottom-nav {
       background: #8bac0f !important;

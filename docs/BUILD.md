@@ -23,7 +23,7 @@ separate `smirk-backend-core` repo and is not built here.
   cargo install wasm-bindgen-cli --version <version-from-Cargo.lock>
   ```
 
-- **Desktop only — Linux system libraries** (Tauri v2 webview stack). On
+- **Desktop only: Linux system libraries** (Tauri v2 webview stack). On
   Debian/Ubuntu:
 
   ```bash
@@ -34,7 +34,7 @@ separate `smirk-backend-core` repo and is not built here.
   ```
 
   (macOS needs Xcode command-line tools; Windows needs the MSVC build tools +
-  WebView2 — see the Tauri prerequisites guide.)
+  WebView2; see the Tauri prerequisites guide.)
 
 Install workspace dependencies once from the repo root:
 
@@ -94,7 +94,7 @@ npm run build:chrome  -w @smirk/extension     # dist/ with the Chrome MV3 manife
 npm run build:firefox -w @smirk/extension     # dist/ with the Firefox manifest
 ```
 
-Output: `packages/extension/dist/` — a loadable **unpacked** extension.
+Output: `packages/extension/dist/`, a loadable **unpacked** extension.
 
 - **Chrome:** `chrome://extensions` → enable Developer mode → **Load unpacked**
   → select `packages/extension/dist/`.
@@ -113,7 +113,7 @@ npm run build       -w @smirk/desktop       # vite frontend -> dist/
 npm run tauri:build -w @smirk/desktop        # native app + installers
 ```
 
-Output: `packages/desktop/src-tauri/target/release/` — the raw binary
+Output: `packages/desktop/src-tauri/target/release/`, the raw binary
 (`smirk-desktop`) and, under `bundle/`, the platform artifacts as configured by
 `bundle.targets` in `src-tauri/tauri.conf.json` (Linux: AppImage; macOS: `.app`;
 Windows: NSIS). The **first** build compiles the full Rust webview stack and can

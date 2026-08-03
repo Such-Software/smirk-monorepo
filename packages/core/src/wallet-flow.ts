@@ -3,18 +3,18 @@
  *
  * Layered above `@smirk/core/api` (raw HTTP client) and
  * `@smirk/core/keystore` (unlocked wallet). Belongs in core because
- * it's identical across extension / mobile / desktop wallets — only
+ * it's identical across extension / mobile / desktop wallets; only
  * the storage and UI shells differ.
  *
  * ## Auth
  *
  * Two-step:
- *   1. `checkRestore(fingerprint, keys)` — does the backend remember
+ *   1. `checkRestore(fingerprint, keys)`: does the backend remember
  *      this wallet? If yes, retrieve the previously-stored XMR / WOW
  *      LWS scan start heights so we can resume scanning from the
  *      right block instead of either rescanning from genesis (slow)
  *      or starting from "now" (misses balance).
- *   2. `extensionRegister(...)` — sign the canonical
+ *   2. `extensionRegister(...)`: sign the canonical
  *      `smirk-auth-{timestamp}` challenge with the derived BTC
  *      private key (Bitcoin message signature, BIP-137-shaped Base64),
  *      submit with all five public keys + fingerprint + the start
@@ -22,13 +22,13 @@
  *      the signature, and returns a JWT.
  *
  * The same `extensionRegister` endpoint creates a new user if none
- * exists for that fingerprint (`isNew: true`) — so a single call covers
+ * exists for that fingerprint (`isNew: true`), so a single call covers
  * both first-run and subsequent unlocks.
  *
  * The access token is cached in-memory only via
  * `globalThis.__smirk_api_token__` (`SmirkApi.setAccessToken`). We do
  * NOT persist the refresh token to `chrome.storage.local`
- * (legacy pattern flagged in the 2026-05-10 audit) — re-running this
+ * (legacy pattern flagged in the 2026-05-10 audit); re-running this
  * bootstrap on SW restart is cheap and avoids a plaintext-credential
  * surface.
  */
@@ -58,14 +58,14 @@ export interface BootstrapAuthResult {
  * Build the keys list as the backend expects it.
  *
  * For Cryptonote chains (XMR, WOW), the backend identifies a wallet by
- * its **public spend key** — the half of the address that's tied to
+ * its **public spend key**: the half of the address that's tied to
  * the spend authority. The public view key is sent separately because
  * the LWS needs it to scan; but the wallet's identity per the backend
  * is the spend key.
  *
  * Match the legacy `smirk-extension` exactly here, otherwise
  * `checkRestore` returns `keysValid: false` and we silently lose the
- * stored start heights — which is exactly the symptom we just hit.
+ * stored start heights, which is exactly the symptom we just hit.
  */
 function buildKeysList(wallet: UnlockedWallet) {
   return [
@@ -85,7 +85,7 @@ function buildKeysList(wallet: UnlockedWallet) {
  * imports Smirk-shaped seeds, so the backend is the canonical source of
  * truth for *birthday* (the wallet creation timestamp + LWS start
  * heights). The first registration writes this; every subsequent
- * registration — including re-imports after a clean reinstall — reads
+ * registration, including re-imports after a clean reinstall, reads
  * it back via `checkRestore`. We never start an XMR/WOW LWS scan from
  * "now" for an existing wallet, which would silently miss historical
  * balance.
@@ -94,10 +94,10 @@ function buildKeysList(wallet: UnlockedWallet) {
  * registration: we stamp `walletBirthday = now` so the backend has the
  * height to resume from on the next import. (A user importing a
  * non-Smirk seed would land here with the wrong birthday and a missed
- * scan — that's acceptable since non-Smirk imports are out of scope.)
+ * scan; that's acceptable since non-Smirk imports are out of scope.)
  *
  * Throws if the backend rejects the signature or the network fails.
- * Caller should surface the error to the user — auth is required for
+ * Caller should surface the error to the user: auth is required for
  * any subsequent balance / tip / signing operation.
  */
 /**
@@ -112,7 +112,7 @@ function buildKeysList(wallet: UnlockedWallet) {
  *
  * Resolve with the `altchaSolution` payload to attach (an
  * `altcha-lib` `{ challenge, solution }` envelope) or `null` to
- * proceed without one — the graceful-migration path the backend
+ * proceed without one: the graceful-migration path the backend
  * accepts during the v0.2 → v0.3 window.
  */
 export interface BootstrapAuthOptions {
@@ -122,7 +122,7 @@ export interface BootstrapAuthOptions {
    * failure). Defaults to the in-process `solvePowChallenge` when
    * omitted.
    *
-   * The typed return is non-negotiable — see `pow.ts::AltchaPayload`
+   * The typed return is non-negotiable: see `pow.ts::AltchaPayload`
    * comment. A regression here is what caused the 2026-06-11 wallet
    * registration outage (bare Solution sent instead of envelope).
    */
@@ -137,7 +137,7 @@ export async function bootstrapAuth(
   const keys = buildKeysList(wallet);
 
   // Best-effort restore lookup. Failure here (network blip, fresh
-  // backend) doesn't abort the bootstrap — we just register fresh.
+  // backend) doesn't abort the bootstrap; we just register fresh.
   let xmrStartHeight: number | undefined;
   let wowStartHeight: number | undefined;
   let isKnownWallet = false;
@@ -146,7 +146,7 @@ export async function bootstrapAuth(
     if (restoreCheck.data?.exists) {
       isKnownWallet = true;
       // Backend returns `null` for wallets registered before height
-      // tracking shipped — don't pass that downstream; treat as
+      // tracking shipped; don't pass that downstream; treat as
       // "no stored height".
       xmrStartHeight =
         typeof restoreCheck.data.xmrStartHeight === 'number'
@@ -167,32 +167,32 @@ export async function bootstrapAuth(
 
   // For an unknown-fingerprint wallet, stamp the birthday now so the
   // backend can hand it back next time. For a known wallet the backend
-  // already has it — ignore on resubmission.
+  // already has it; ignore on resubmission.
   const walletBirthday = isKnownWallet ? undefined : Math.floor(Date.now() / 1000);
 
-  // ALTCHA proof-of-work — only for genuinely new wallets.
+  // ALTCHA proof-of-work: only for genuinely new wallets.
   //
   // The backend's `is_returning_user` check (smirk-backend
   // src/api/auth.rs) accepts a re-registration for an already-known
   // pubkey_hash WITHOUT a PoW solution, even when POW_REQUIRED=true.
-  // The bypass is intentional — it's how v0.2.x stragglers and
+  // The bypass is intentional: it's how v0.2.x stragglers and
   // lock+unlock flows avoid burning CPU on a solution the server
   // immediately discards.
   //
   // We mirror the same predicate client-side using the
   // `isKnownWallet` flag `checkRestore` just gave us. Skipping the
   // solve here saves ~3-5s of PBKDF2 on every lock+unlock and on
-  // every import of an already-registered wallet — the desktop
+  // every import of an already-registered wallet; the desktop
   // wallet feels noticeably faster, and the extension SW handler
   // also benefits via this code path.
   //
-  // New wallets still solve normally — that's the Sybil gate doing
+  // New wallets still solve normally: that's the Sybil gate doing
   // its job. POW_REQUIRED=true with no isKnownWallet exemption =
   // a real new-user PoW cost.
   //
   // Host wallets can inject their own solver via `options.powSolver`
   // (the extension passes a background-SW-backed solver so the work
-  // survives popup close — see `packages/extension/src/popup/jobs/`).
+  // survives popup close; see `packages/extension/src/popup/jobs/`).
   let altchaSolution: AltchaPayload | null = null;
   if (!isKnownWallet) {
     altchaSolution = await (options.powSolver ?? solvePowChallenge)(api);
@@ -269,7 +269,7 @@ export interface AssetBalance {
    * On-chain but inside the protocol lock window. CryptoNote chains
    * (XMR ≥10 confs to spend, WOW ≥4 confs) expose this so the UI can
    * tell the user "your change is in the chain but not spendable for
-   * another N minutes". Optional — UTXO chains and Grin leave this
+   * another N minutes". Optional: UTXO chains and Grin leave this
    * undefined since they don't carry a meaningful lock-window concept
    * in our flow.
    */
@@ -283,7 +283,7 @@ export interface AssetBalance {
   stale?: boolean;
   /**
    * LWS scan progress for this asset (XMR/WOW only). Populated when the
-   * LWS reports `scanned_height < blockchain_height` — meaning the
+   * LWS reports `scanned_height < blockchain_height`, meaning the
    * displayed balance may be stale until the scanner catches up.
    * Undefined for assets that don't use LWS or when the scan is current.
    */
@@ -293,7 +293,7 @@ export interface AssetBalance {
    * as spent, in the same format as `PendingOutgoingTx.inputs`. For
    * CryptoNote (XMR/WOW) these are the lowercase-hex key images that
    * verified against our spend key (the same computation as the
-   * balance verified-spent path — surfacing is free). Consumed by
+   * balance verified-spent path; surfacing is free). Consumed by
    * `reconcilePendingOutgoing()` to drop in-flight entries whose
    * inputs are all now reflected as spent. UTXO chains and Grin
    * leave this undefined; their pendingOutgoing entries reconcile
@@ -305,14 +305,14 @@ export interface AssetBalance {
 /**
  * Verifies a server-reported spent-output by recomputing its key image
  * with the wallet's spend key. Returns the recomputed key image as
- * lowercase hex. Compare against the server's reported `key_image` —
+ * lowercase hex. Compare against the server's reported `key_image`;
  * mismatch means false positive (the LWS thought an output of yours
  * was spent, but it's actually a decoy in someone else's ring).
  *
  * Without this filter we'd subtract decoys from `total_received` and
  * over-report spend, often showing 0 when the real balance is positive.
  *
- * Injected as a dependency so `@smirk/core` doesn't pull in WASM —
+ * Injected as a dependency so `@smirk/core` doesn't pull in WASM;
  * each platform shell provides its own verifier (extension uses
  * `@smirk/wasm` directly, mobile may use a native module, etc.).
  */
@@ -353,7 +353,7 @@ export const BALANCE_ASSETS = ['btc', 'ltc', 'xmr', 'wow', 'grin'] as const;
  * Merge a fresh balance set over the last-known one, PREFERRING the last-known
  * value for any asset whose fresh fetch errored. A transient LWS/electrum failure
  * returns a zeroed `{error}` balance; overwriting a good cached value with that
- * makes the row "disappear" (flash to 0 — the reported XMR/WOW symptom). Kept
+ * makes the row "disappear" (flash to 0, the reported XMR/WOW symptom). Kept
  * values are flagged `stale` so the UI can warn without hiding the number.
  *
  * Precedence per asset: a clean fresh value wins; otherwise the last good value
@@ -384,12 +384,12 @@ export function mergeBalancesKeepLastKnown(
  * idempotently registers the wallet's view key with the backend's LWS
  * (no-op if already registered, with start heights when available so
  * historical balance is reachable). Returns a partial result if any
- * asset fails — failures are recorded per-asset on `AssetBalance.error`.
+ * asset fails; failures are recorded per-asset on `AssetBalance.error`.
  */
 export interface FetchBalancesOptions {
   /**
    * When provided, filter LWS-reported `spent_outputs` by recomputing
-   * their key images locally with the wallet's spend key — only the
+   * their key images locally with the wallet's spend key; only the
    * matches are subtracted from `total_received`. Without this the
    * popup over-subtracts (LWS includes decoys-of-your-outputs as
    * candidate spends, since it can't tell with view-key alone).
@@ -414,7 +414,7 @@ export interface FetchBalancesOptions {
    * and ZERO network round-trips are made for it.
    *
    * Used by `Show/Hide assets` to keep backend round-trips
-   * proportional to what the user wants to see — hiding 2-3 assets
+   * proportional to what the user wants to see; hiding 2-3 assets
    * cuts the popup-open balance-fetch cost by 40-60%.
    *
    * Shape stays stable regardless: `Balances` always has all 5
@@ -441,7 +441,7 @@ export interface FetchBalancesOptions {
    * The wallet's Grin `rewind_hash` (64-hex view credential). Computed on the
    * host side (which has wasm + the mnemonic) and threaded down so `@smirk/core`
    * stays wasm-free. When absent, the Grin balance is returned zeroed with no
-   * network round-trip (never throws) — a host that can't derive it (locked, no
+   * network round-trip (never throws); a host that can't derive it (locked, no
    * wasm) simply shows 0 for Grin.
    */
   grinRewindHash?: string;
@@ -520,7 +520,7 @@ export async function fetchAllBalances(
   // Visibility gate: skip the network round-trip for any asset the
   // user has hidden in Settings. We still return a zeroed
   // AssetBalance for hidden assets so the shape is stable for
-  // consumers — totals math, asset-detail direct-nav, etc. all keep
+  // consumers: totals math, asset-detail direct-nav, etc. all keep
   // working without per-call branching. See
   // docs/MULTI_ASSET_ARCHITECTURE.md for the long-form rationale.
   const visible = (id: string): boolean =>
@@ -529,7 +529,7 @@ export async function fetchAllBalances(
   const providers = options.providers ?? chainProviders;
 
   // Wrap each fetch so its callback fires as soon as the underlying
-  // promise resolves — independent of the slowest sibling. The
+  // promise resolves, independent of the slowest sibling. The
   // outer Promise.all still waits for everything (for the return
   // value), but the UI gets per-asset updates progressively.
   const tap = <K extends keyof Balances>(
@@ -633,7 +633,7 @@ async function fetchUtxoBalance(
 ): Promise<AssetBalance> {
   // Multi-address aggregation only when the fresh-address flag is ON and the
   // host actually supplied a ref set. Otherwise (default, and always flag-off)
-  // read the single primary address exactly as before — index 0's funds are
+  // read the single primary address exactly as before; index 0's funds are
   // in the ref set too, so nothing is hidden either way.
   const useMulti = btcLtcFreshAddrsEnabled() && refs !== undefined && refs.length > 0;
   if (!useMulti) {
@@ -721,7 +721,7 @@ async function fetchLwsBalance(
   //
   // Still awaited before the FIRST read (not raced): for a first-ever XMR/WOW
   // use the LWS account doesn't exist yet, so an unregistered getLwsBalance
-  // errors — surfacing that as a one-tick "0 with error" is jank we shouldn't
+  // errors; surfacing that as a one-tick "0 with error" is jank we shouldn't
   // ship. Every subsequent read skips registration and just reads.
   const acctKey = `${backendUrl}|${userId}|${asset}:${address}`;
   if (!registeredLwsAccounts.has(acctKey)) {
@@ -745,7 +745,7 @@ async function fetchLwsBalance(
   //
   // monero-lws cannot distinguish "your output spent by you" from
   // "your output appearing as a decoy in someone else's ring sig" with
-  // the view key alone — it reports BOTH as candidate `spent_outputs`.
+  // the view key alone; it reports BOTH as candidate `spent_outputs`.
   // The spend-key-derived key image disambiguates them: if the server's
   // reported key_image matches what WE compute with the spend key, it's
   // a real spend; otherwise it's a decoy false positive.
@@ -759,7 +759,7 @@ async function fetchLwsBalance(
 
   let spent = 0n;
   // Capture verified-spent key images for reconciliation. Same loop
-  // that decides `spent` populates this — no extra wasm calls. Each
+  // that decides `spent` populates this: no extra wasm calls. Each
   // entry here is what the server flagged AND our spend key confirms,
   // so it's safe to use as a "spent" signal for pendingOutgoing.
   const verifiedSpentInputs: string[] = [];
@@ -842,7 +842,7 @@ async function fetchLwsBalance(
       : undefined;
 
   // Split locked out of pending so the UI can render the two states
-  // separately. Pre-Phase-2 they were lumped — "pending" included both
+  // separately. Pre-Phase-2 they were lumped: "pending" included both
   // mempool incoming AND on-chain-but-locked, which obscured why a
   // user's balance was tied up.
   const lockedClamped = locked < 0n ? 0n : locked;
@@ -867,7 +867,7 @@ async function fetchLwsBalance(
  *
  * Maturity: coinbase matures at `height + 1440`; regular outputs at
  * `max(height, lock_height)`. `scan.total_balance` is deliberately NOT trusted
- * for `confirmed` — it neither splits maturity nor subtracts pending-spent.
+ * for `confirmed`; it neither splits maturity nor subtracts pending-spent.
  */
 async function fetchGrinBalance(
   providers: ChainProviderRegistry,
@@ -919,7 +919,7 @@ async function fetchGrinBalance(
  */
 export type Prices = Record<'btc' | 'ltc' | 'xmr' | 'wow' | 'grin', number | null>;
 
-/** Fetch current spot prices in USD. Best-effort — returns nulls on failure.
+/** Fetch current spot prices in USD. Best-effort: returns nulls on failure.
  *  Opt-in: a backend that advertises no price feed (`features.prices: false`) is
  *  never hit; the wallet shows a clean no-fiat state instead of logging a 404.
  *  Permissive on unknown/legacy caps (preserves old behavior). */
@@ -951,10 +951,10 @@ export async function fetchPrices(api: SmirkApi): Promise<Prices> {
 /**
  * Sum across all assets converted to fiat at current prices. Skips
  * assets whose price is null (no quote available). Atomic-unit math
- * uses `BigInt`, then divides by `10 ** decimals` at the very end —
+ * uses `BigInt`, then divides by `10 ** decimals` at the very end;
  * no floating-point on amounts, only on the (price * float) display.
  *
- * Counts confirmed + pending + locked — i.e. "total wealth on chain",
+ * Counts confirmed + pending + locked, i.e. "total wealth on chain",
  * not "spendable right now". The locked component matters: a user
  * with 32 WOW change inside the 4-conf lock window has $X of value,
  * just not movable yet, and the headline shouldn't hide that.

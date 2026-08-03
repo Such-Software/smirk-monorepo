@@ -1,8 +1,8 @@
-//! Grin voucher transactions — non-interactive UTXO transfers.
+//! Grin voucher transactions: non-interactive UTXO transfers.
 //!
 //! Mimblewimble transactions are normally interactive: the sender and
 //! receiver must both contribute to the kernel signature. Social tipping
-//! breaks this assumption — the sender wants to drop a tip somewhere and
+//! breaks this assumption: the sender wants to drop a tip somewhere and
 //! the recipient claims it asynchronously, with no live counterparty.
 //!
 //! The **voucher pattern** (ported from `smirk-extension`'s
@@ -15,7 +15,7 @@
 //!    sign the kernel single-handed (no interaction needed).
 //! 2. Sender takes the *voucher output's blinding factor* (which they
 //!    derived from their own keychain) and encrypts it to the
-//!    recipient — via ECIES to the recipient's BTC pubkey (targeted
+//!    recipient: via ECIES to the recipient's BTC pubkey (targeted
 //!    tip) or via a URL fragment key (public link tip).
 //! 3. Recipient decrypts the blinding factor, then runs the **sweep**
 //!    flow: build a single-party tx that spends the voucher commitment
@@ -23,9 +23,9 @@
 //!    (voucher blind + their own new-output blind), and signing the
 //!    kernel single-handed.
 //!
-//! This module provides the two orchestrators —
+//! This module provides the two orchestrators:
 //! [`create_grin_voucher`] (sender) and [`sweep_grin_voucher`]
-//! (claimer) — that produce broadcastable transaction bytes for each
+//! (claimer). Both produce broadcastable transaction bytes for each
 //! direction.
 //!
 //! ### Why single-party signing works
@@ -35,7 +35,7 @@
 //!
 //! If you know every input blind and every output blind, that scalar is
 //! fully computable. There's no protocol-level requirement that
-//! multiple keys contribute to it — the multi-party ceremony exists
+//! multiple keys contribute to it: the multi-party ceremony exists
 //! because *in normal sends* the sender doesn't know the receiver's
 //! output blind. In a voucher tx, the sender controls all blinds; in a
 //! sweep, the claimer knows both (the voucher blind from decryption +
@@ -50,12 +50,12 @@ use crate::secp256k1::public_key_from_secret_key;
 use crate::transaction::pubkey_to_commitment;
 use crate::wallet_flows::{derive_input_blind_with_fallback, ChangeOutputInfo, UnspentOutput};
 
-/// Inputs to [`create_grin_voucher`] — sender-side.
+/// Inputs to [`create_grin_voucher`]: sender-side.
 #[derive(Debug, Clone)]
 pub struct CreateVoucherParams {
     /// Wallet's 64-byte BIP32 root (secret_key || chain_code).
     pub extended_private_key: [u8; 64],
-    /// LEGACY (pre-2026-05 / Grim) ext key for input-blind fallback — same
+    /// LEGACY (pre-2026-05 / Grim) ext key for input-blind fallback: same
     /// semantics as `CreateSendTxParams::legacy_extended_private_key`.
     /// Required to TIP a recovered legacy/Grim (depth-3) output; without it
     /// such an input derives the wrong blind → wrong excess → network reject.
@@ -81,7 +81,7 @@ pub struct CreateVoucherParams {
     /// fresh (e.g. `random_secret_nonce()`).
     pub kernel_nonce: [u8; 32],
     /// Bulletproof rewind nonce for the voucher output. Recipient
-    /// doesn't need this — but the proof is on chain and must be
+    /// doesn't need this, but the proof is on chain and must be
     /// verifiable, so we still construct one.
     pub bp_rewind_nonce: [u8; 32],
     /// Bulletproof private nonce for the voucher output.
@@ -97,7 +97,7 @@ pub struct ChangePath {
     pub amount: u64,
 }
 
-/// The voucher output — what gets shared with the recipient. The
+/// The voucher output: what gets shared with the recipient. The
 /// `blinding_factor` is the secret that grants spend authority and
 /// MUST be encrypted to the recipient (never broadcast or stored
 /// plaintext server-side).
@@ -107,7 +107,7 @@ pub struct VoucherOutput {
     pub amount: u64,
     pub commitment: [u8; 33],
     pub proof: Vec<u8>,
-    /// SECRET — encrypted to recipient via ECIES (targeted) or URL
+    /// SECRET: encrypted to recipient via ECIES (targeted) or URL
     /// fragment key (public). Never log or transmit plaintext.
     pub blinding_factor: [u8; 32],
 }
@@ -115,7 +115,7 @@ pub struct VoucherOutput {
 /// Output of [`create_grin_voucher`].
 #[derive(Debug, Clone)]
 pub struct CreateVoucherResult {
-    /// Voucher output details (with secret blind — handle carefully).
+    /// Voucher output details (with secret blind; handle carefully).
     pub voucher: VoucherOutput,
     /// Change output (for the sender's own bookkeeping; appears as
     /// `unconfirmed` until the tx confirms).
@@ -123,7 +123,7 @@ pub struct CreateVoucherResult {
     /// 33-byte kernel excess (commitment form). Goes on chain;
     /// recipient does NOT need this to claim.
     pub kernel_excess: [u8; 33],
-    /// JSON-shaped Transaction body — the format the Grin node's
+    /// JSON-shaped Transaction body: the format the Grin node's
     /// `/v2/foreign push_transaction` JSON-RPC expects. Hand to the
     /// backend broadcast endpoint as the `tx` field unchanged. Same
     /// contract as `SweepVoucherResult.tx_json`.
@@ -132,14 +132,14 @@ pub struct CreateVoucherResult {
     pub tx_bytes: Vec<u8>,
 }
 
-/// Inputs to [`sweep_grin_voucher`] — claimer-side.
+/// Inputs to [`sweep_grin_voucher`]: claimer-side.
 #[derive(Debug, Clone)]
 pub struct SweepVoucherParams {
     /// Claimer's 64-byte BIP32 root.
     pub extended_private_key: [u8; 64],
     /// 33-byte commitment of the voucher output (on-chain identifier).
     pub voucher_commitment: [u8; 33],
-    /// SECRET — the voucher's blinding factor, decrypted from the
+    /// SECRET: the voucher's blinding factor, decrypted from the
     /// sender's encrypted payload. Grants spend authority.
     pub voucher_blind: [u8; 32],
     /// Voucher amount in nanogrin (so we can compute the claimer's
@@ -165,7 +165,7 @@ pub struct SweepVoucherResult {
     pub output: ChangeOutputInfo,
     pub kernel_excess: [u8; 33],
     pub tx_bytes: Vec<u8>,
-    /// JSON-shaped `Transaction` body — the format Grin's
+    /// JSON-shaped `Transaction` body: the format Grin's
     /// `/v2/foreign push_transaction` JSON-RPC accepts. Same data
     /// as `tx_bytes`, different encoding. Provided here so wasm
     /// callers can hand it straight to the backend broadcast
@@ -277,7 +277,7 @@ pub fn create_grin_voucher(
 
     // --- 6. Serialize the broadcastable transaction ---
     // Wire format mirrors `slate_to_transaction_bytes` but without the
-    // slate roundabout — we're producing the same wire shape directly
+    // slate roundabout: we're producing the same wire shape directly
     // since we have all data on hand.
     let mut all_outputs: Vec<(u8, [u8; 33], Vec<u8>)> = Vec::with_capacity(2);
     all_outputs.push((0, voucher_commit, voucher_proof));
@@ -362,7 +362,7 @@ pub fn sweep_grin_voucher(
     // --- 4. Serialize ---
     // Voucher tx has 1 input (the voucher commitment) and 1 output (claimer's).
     let voucher_input = UnspentOutput {
-        path: [0, 0, 0, 0], // unused — we don't re-derive the voucher blind here
+        path: [0, 0, 0, 0], // unused: we don't re-derive the voucher blind here
         amount: params.voucher_amount,
         commitment: params.voucher_commitment,
         is_coinbase: params.voucher_features == 1,
@@ -402,14 +402,14 @@ pub fn sweep_grin_voucher(
 /// Build the same single-kernel transaction as `serialize_voucher_tx`
 /// but in the JSON shape Grin's `/v2/foreign push_transaction` JSON-RPC
 /// accepts. Identical contract to `slate_to_transaction_json` in
-/// `transaction.rs` — see that fn's docstring for the rationale on
+/// `transaction.rs`; see that fn's docstring for the rationale on
 /// every field encoding (in particular the kernel signature byte
 /// reversal that pre-cancels grin's `from_compact` parser quirk).
 ///
 /// Inputs and outputs are canonically Blake2b256-sorted (same as
 /// `slate_to_transaction_json`) before serialization. The Grin node's
 /// `Transaction::validate` runs `verify_sorted_and_unique` and
-/// rejects unsorted bodies with `Serialization(SortError)` — which
+/// rejects unsorted bodies with `Serialization(SortError)`, which
 /// surfaces at the node as "Invalid Tx some kind of keychain error".
 /// Sweep vouchers are 1-in/1-out (sort is a no-op) but create
 /// vouchers can be N-in/2-out, so the sort is required.
@@ -429,7 +429,7 @@ fn serialize_voucher_tx_json(
         }
     };
 
-    // Blake2b-256 helper — same one transaction.rs uses for slate
+    // Blake2b-256 helper: same one transaction.rs uses for slate
     // serialization. Wire bytes for hashing are exactly what the
     // network sees: 1 byte features + 33 byte commit (Input), and for
     // Output the hash is over the OutputIdentifier (features + commit
@@ -495,7 +495,7 @@ fn serialize_voucher_tx_json(
         }),
     };
 
-    // Byte-reverse each 32-byte half of the 64-byte sig — pre-cancels
+    // Byte-reverse each 32-byte half of the 64-byte sig: pre-cancels
     // the `secp256k1_ecdsa_signature_parse_compact` byte reversal grin's
     // sig deserializer applies. See `slate_to_transaction_json` for the
     // full reasoning; the same constraint applies here verbatim.

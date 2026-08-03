@@ -1,5 +1,5 @@
 /**
- * NIP-07 (`window.nostr`) crypto — NIP-44 v2 + legacy NIP-04 encrypt/decrypt for
+ * NIP-07 (`window.nostr`) crypto: NIP-44 v2 + legacy NIP-04 encrypt/decrypt for
  * the wallet's Nostr identity. These are the operations a dapp (Magick Market, any
  * Nostr client) needs beyond getPublicKey/signEvent: reading + writing encrypted
  * DMs through the wallet. Pure over the identity's private key; the wallet runs

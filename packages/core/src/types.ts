@@ -1,7 +1,7 @@
 /**
  * Shared types for `@smirk/core`.
  *
- * Intentionally narrow — only the types the API surface and the
+ * Intentionally narrow: only the types the API surface and the
  * cross-chain orchestration layer need. Wallet-shell types
  * (encrypted-seed schemas, message-passing union types, onboarding
  * state) live in the consumer packages (`@smirk/extension`,
@@ -71,6 +71,6 @@ export interface SocialTipResult {
   status: string;
   /** Whether this is a public tip (claimable by anyone with the URL). */
   isPublic?: boolean;
-  /** Share URL — only available after tip is confirmed for public tips. */
+  /** Share URL: only available after tip is confirmed for public tips. */
   shareUrl?: string;
 }

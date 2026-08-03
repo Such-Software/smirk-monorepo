@@ -1,12 +1,12 @@
 /**
- * SlatepackChannel — the transport seam for interactive Grin value transfer
+ * SlatepackChannel: the transport seam for interactive Grin value transfer
  * (P3, the Goblin convergence). One logical operation ("deliver a slatepack to a
  * counterparty, collect their response, settle or cancel") behind two transports:
  *
- *   - {@link BackendRelayChannel}  — the backend's `/wallet/grin/relay/*` store-
+ *   - {@link BackendRelayChannel}: the backend's `/wallet/grin/relay/*` store-
  *     and-forward (same-backend recipients; the server sees amount + counterparties
  *     in the clear). The legacy path, kept as a fallback.
- *   - {@link NostrGiftwrapChannel} — NIP-59 gift-wraps over Nostr relays
+ *   - {@link NostrGiftwrapChannel}: NIP-59 gift-wraps over Nostr relays
  *     (recipients addressed by npub; the relay sees only ciphertext). The default
  *     when the recipient is Nostr-addressable, and the rail Goblin already speaks,
  *     so Smirk↔Goblin Grin payments interoperate by construction.
@@ -78,7 +78,7 @@ export interface SlatepackChannel {
    *     optimistically; the self-addressed copy retires the sender's own inbox).
    *   - Backend relay: flips the relay row via `relay/finalize` (`counterpartyRef`
    *     ignored; routed by slate_id + bearer token).
-   * Best-effort — a settle failure must not undo an on-chain broadcast, so
+   * Best-effort: a settle failure must not undo an on-chain broadcast, so
    * callers should not throw on failure.
    *
    * `txHash` is the broadcast tx reference (the finalized kernel excess hex). The
@@ -174,7 +174,7 @@ export class BackendRelayChannel implements SlatepackChannel {
 
 /** Injected relay I/O for the Nostr channel (real impl wraps the NostrClient). */
 export interface NostrChannelIO {
-  /** The active identity — signs seals, and is the `p`-tag we read our inbox by. */
+  /** The active identity: signs seals, and is the `p`-tag we read our inbox by. */
   identity: NostrIdentity;
   publish(relays: string[], event: NostrWireEvent): Promise<void>;
   query(relays: string[], filters: NostrFilter[]): Promise<NostrWireEvent[]>;
@@ -195,7 +195,7 @@ function grinPayload(
 /**
  * Interactive Grin exchange over NIP-59 gift-wraps. There is no server-side
  * "pending" state: {@link inbox} reconstructs it from the stream of kind-1059
- * events addressed to us — the latest role per slateId wins, and a
+ * events addressed to us: the latest role per slateId wins, and a
  * `finalize`/`cancel` retires that slateId.
  */
 export class NostrGiftwrapChannel implements SlatepackChannel {
@@ -282,7 +282,7 @@ export class NostrGiftwrapChannel implements SlatepackChannel {
     await this.publishTo(counterpartyRef, grinPayload('finalize', slateId));
   }
 
-  /** Settlement notice after a successful broadcast — the wire-level S3 that was
+  /** Settlement notice after a successful broadcast: the wire-level S3 that was
    *  previously never sent (inbox items only retired optimistically). Requires
    *  `counterpartyRef` (the recipient's pubkey) to address the gift-wrap; a
    *  no-op without it so a manual/clipboard send never throws here.
@@ -292,7 +292,7 @@ export class NostrGiftwrapChannel implements SlatepackChannel {
    *  `response` gift-wrap, so without a self-addressed terminal marker inbox()
    *  would keep reconstructing that slateId as `to-finalize` forever. The
    *  self-addressed `finalize` (newest role wins) retires it on the sender side
-   *  too — the whole exchange stays wire-driven, no local terminal state. */
+   *  too; the whole exchange stays wire-driven, no local terminal state. */
   async settle(slateId: string, counterpartyRef?: string): Promise<void> {
     if (!counterpartyRef) return;
     await this.finalizeNotice(slateId, counterpartyRef);

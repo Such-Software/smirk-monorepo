@@ -64,7 +64,7 @@ function connect(): chrome.runtime.Port {
   });
   port.onDisconnect.addListener(() => {
     connectedPort = null;
-    // Reject everything in flight — the popup will reconnect on next
+    // Reject everything in flight; the popup will reconnect on next
     // call. SW restart only happens between callsites in normal use.
     for (const [, p] of pendingRequests) {
       p.reject(new Error('background SW port disconnected'));
@@ -75,8 +75,8 @@ function connect(): chrome.runtime.Port {
 }
 
 /**
- * Distributive `Omit` over the discriminated `JobsPortRequest` union
- * — `Omit<Union, K>` collapses the union; we want every variant to
+ * Distributive `Omit` over the discriminated `JobsPortRequest` union:
+ * `Omit<Union, K>` collapses the union; we want every variant to
  * keep its discriminator. Spreading a single fresh `requestId` back
  * onto the result reconstructs the original variant.
  */
@@ -104,7 +104,7 @@ function sendRequest<T>(req: WithoutRequestId<JobsPortRequest>): Promise<T> {
 // ============================================================================
 
 /**
- * Start a new background job. Returns its id immediately — the job
+ * Start a new background job. Returns its id immediately; the job
  * runs in the offscreen document. Pass a `dedupKey` to merge with an
  * already-running job for the same key.
  */
@@ -148,7 +148,7 @@ export function subscribe(
 
 /**
  * Wait for a job to finish. Resolves with its result; rejects with
- * the recorded error. Safe across popup remounts — the await
+ * the recorded error. Safe across popup remounts: the await
  * subscribes to live state updates, and if the job has already
  * completed the initial subscription event delivers the result.
  */

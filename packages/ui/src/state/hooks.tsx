@@ -3,7 +3,7 @@
  *
  * Components opt into reactive session-state via these hooks; updates
  * trigger re-renders the way React/Preact users expect. The
- * underlying store is framework-agnostic — keeps `@smirk/core` clean,
+ * underlying store is framework-agnostic: keeps `@smirk/core` clean,
  * lets a hypothetical Tauri+Solid frontend swap in its own bindings.
  *
  * @example
@@ -82,7 +82,7 @@ function useStateContext(): StateContextValue {
  * state change (local or cross-context).
  *
  * On first render, returns `DEFAULT_SESSION_STATE` while the store
- * loads asynchronously — wrap critical reads in conditionals if you
+ * loads asynchronously; wrap critical reads in conditionals if you
  * need to wait for real data, or accept the default-flash.
  */
 export function useSessionState(): SessionState {
@@ -111,7 +111,7 @@ export function useSessionState(): SessionState {
 // ============================================================================
 
 export interface UseRouteApi {
-  /** Current route. Reactive — re-renders on change. */
+  /** Current route. Reactive: re-renders on change. */
   route: Route;
   /** Top-level tab (computed from `route.current`). */
   tab: Tab;
@@ -124,7 +124,7 @@ export interface UseRouteApi {
 }
 
 /**
- * Reactive route hook. Updates whenever the route changes — local
+ * Reactive route hook. Updates whenever the route changes: local
  * navigations, cross-context navigations, or restored from storage
  * on session resume.
  *
@@ -170,7 +170,7 @@ export function useRoute(): UseRouteApi {
 export interface UseWizardApi<TFields extends Record<string, unknown>> {
   /** True iff this wizard has any active state. */
   active: boolean;
-  /** Current step (0 if inactive — check `active` first). */
+  /** Current step (0 if inactive; check `active` first). */
   step: number;
   /** Collected fields so far. Empty object if inactive. */
   fields: Partial<TFields>;
@@ -186,7 +186,7 @@ export interface UseWizardApi<TFields extends Record<string, unknown>> {
 
 /**
  * Reactive wizard hook. Pass a stable wizard id and a defaults
- * object — restored across pop-out, session resume, and cross-context
+ * object: restored across pop-out, session resume, and cross-context
  * writes.
  *
  * The defaults object is captured at mount; changing it across

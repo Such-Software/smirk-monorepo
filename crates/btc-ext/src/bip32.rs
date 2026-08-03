@@ -2,7 +2,7 @@
 //!
 //! Wraps rust-bitcoin's [`bitcoin::bip32`] with our [`Network`] type so
 //! callers don't have to wire up `bitcoin::Network` themselves. We keep
-//! this layer thin — the heavy lifting (HMAC-SHA512, secp256k1 child key
+//! this layer thin: the heavy lifting (HMAC-SHA512, secp256k1 child key
 //! derivation, version-byte serialization) lives in rust-bitcoin and is
 //! audited.
 
@@ -61,7 +61,7 @@ mod tests {
     use super::*;
 
     // BIP39 test vector: "abandon abandon abandon abandon abandon abandon
-    // abandon abandon abandon abandon abandon about" — the canonical
+    // abandon abandon abandon abandon abandon about": the canonical
     // all-abandon mnemonic.
     const ABANDON_MNEMONIC: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";

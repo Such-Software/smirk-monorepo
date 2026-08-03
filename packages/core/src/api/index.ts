@@ -1,5 +1,5 @@
 /**
- * Smirk API client — mixes all domain-specific method groups into a
+ * Smirk API client: mixes all domain-specific method groups into a
  * single class.
  *
  * Most callers should import the singleton `api`:
@@ -94,7 +94,7 @@ export class SmirkApi
   getSentTips: TipsMethods['getSentTips'];
   getReceivedTips: TipsMethods['getReceivedTips'];
 
-  // Social tips — note: SocialMethods.getReceivedTips is renamed to
+  // Social tips. Note: SocialMethods.getReceivedTips is renamed to
   // getReceivedSocialTips here because TipsMethods already exposes
   // getReceivedTips for link tips.
   lookupSocial: SocialMethods['lookupSocial'];
@@ -249,7 +249,7 @@ export class SmirkApi
   }
 
   /**
-   * This backend instance's capabilities — enabled chains, features, and the
+   * This backend instance's capabilities: enabled chains, features, and the
    * wallet-restore policy. The wallet reads this to adapt per-instance: grey out
    * disabled chains/features and shape the import-restore UX to the policy (see
    * `earliestRestoreDate`).
@@ -260,7 +260,7 @@ export class SmirkApi
 
   /**
    * The authenticated user's premium subscription status. Requires a bearer
-   * token. `active` gates premium-only actions — e.g. whether the Feed compose
+   * token. `active` gates premium-only actions, e.g. whether the Feed compose
    * box may post to a `premium-post` relay. Answers even on non-premium backends
    * (returns `{ active: false }`).
    */

@@ -1,4 +1,4 @@
-//! Slate v4 wire-format helpers — round-trip + summary.
+//! Slate v4 wire-format helpers: round-trip + summary.
 //!
 //! The full slate construction ceremony lives in
 //! [`crate::grin::slate_builder`]; this module is just for read-only

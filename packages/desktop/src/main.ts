@@ -2,7 +2,7 @@
  * Smirk Wallet desktop entry point.
  *
  * Install order is load-bearing:
- *  1. Install `chrome.*` shim FIRST — the popup's module top-level
+ *  1. Install `chrome.*` shim FIRST: the popup's module top-level
  *     code calls `chrome.storage.local.get(...)` etc. at import time,
  *     so a `chrome` global must already exist before we dynamic-import
  *     the popup module.
@@ -14,7 +14,7 @@
  *     against our shimmed globals; the wallet UI takes over from
  *     there.
  *
- * No code-splitting in this entry — keep it under 100 LOC so a future
+ * No code-splitting in this entry: keep it under 100 LOC so a future
  * reader can follow the hand-off in one read.
  */
 
@@ -42,7 +42,7 @@ installChromeShim();
  * they keep the canonical "native WebView per tab" architecture
  * that other wallets (MetaMask, Phantom) use on mobile.
  *
- * `navigator.userAgent` is the runtime platform signal at hand —
+ * `navigator.userAgent` is the runtime platform signal at hand;
  * Tauri's `os` plugin would be cleaner but pulls in another command
  * roundtrip + capability. The UA-string check is fine here because
  * we run in our own WebView; UA spoofing isn't a threat surface.
@@ -65,7 +65,7 @@ async function installTauriController(): Promise<TauriBrowserController> {
 }
 
 function installIframeController(): IframeBrowserController {
-  // The iframe controller is in-process JS — no Tauri command
+  // The iframe controller is in-process JS: no Tauri command
   // round-trip needed. Page-side script injection is the dapp's
   // responsibility (cross-origin iframes block parent injection);
   // see docs/DAPP_INTEGRATION.md.

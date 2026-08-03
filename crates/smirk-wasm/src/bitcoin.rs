@@ -68,7 +68,7 @@ pub fn btc_derive_address(
 
 /// Sign a base64-encoded PSBT with the **master** xprv derived from the
 /// mnemonic. `Psbt::sign` walks each input's `bip32_derivation` and checks
-/// the fingerprint against the provided xprv — since `btc_build_psbt`
+/// the fingerprint against the provided xprv; since `btc_build_psbt`
 /// stores the master fingerprint, the master xprv is what we must pass
 /// here. Earlier revisions passed an account-level xprv and the
 /// fingerprint mismatch silently produced empty `partial_sigs`,
@@ -76,7 +76,7 @@ pub fn btc_derive_address(
 /// from miniscript downstream.
 ///
 /// Inputs whose origin doesn't match this seed's master fingerprint are
-/// left untouched — correct for multi-signer flows.
+/// left untouched, correct for multi-signer flows.
 ///
 /// The `master_path` parameter is **unused** (kept in the JS signature
 /// for backward compatibility with existing v0.3 callers). It can be
@@ -106,7 +106,7 @@ pub fn btc_sign_psbt(
 /// JSON-deserializable mirror of `btc_ext::build::UnsignedInput`.
 ///
 /// JS-side shape: `{ txid: string, vout: number, value_sat: number,
-/// master_path: string }`. Numbers fit in u32/u64 — values larger than
+/// master_path: string }`. Numbers fit in u32/u64; values larger than
 /// `Number.MAX_SAFE_INTEGER` (9.007 PBTC, irrelevant in practice)
 /// would need string-typing.
 #[derive(Deserialize)]
@@ -143,7 +143,7 @@ struct BuildPsbtParamsJson {
     change_address: Option<String>,
     #[serde(default)]
     change_sat: u64,
-    /// BIP39 mnemonic — used to derive the master xprv at build time so
+    /// BIP39 mnemonic: used to derive the master xprv at build time so
     /// the resulting PSBT carries `bip32_derivation` origin entries that
     /// `btc_sign_psbt` can later resolve.
     mnemonic: String,
@@ -153,7 +153,7 @@ struct BuildPsbtParamsJson {
 
 /// Build an unsigned base64-encoded PSBT for a BTC/LTC send.
 ///
-/// Input is a single JSON object — see `BuildPsbtParamsJson` for the
+/// Input is a single JSON object; see `BuildPsbtParamsJson` for the
 /// shape. Output is base64 PSBT string ready to feed into `btc_sign_psbt`.
 ///
 /// v1 scope: single-recipient P2WPKH (BIP84) sends with optional change

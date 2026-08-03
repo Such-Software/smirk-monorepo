@@ -11,7 +11,7 @@
  * The whole feature is gated behind {@link btcLtcFreshAddrsEnabled}
  * (`ENABLE_BTCLTC_FRESH_ADDRS`, default OFF). With the flag OFF the wallet
  * never advances past index 0: receive stays `m/84'/coin'/0'/0/0`, balance /
- * UTXO / history read that single address, and change returns to it — exactly
+ * UTXO / history read that single address, and change returns to it, exactly
  * today's behavior. Existing index-0 funds stay visible and spendable
  * regardless of the flag, because index 0 is always in the scan range.
  *
@@ -59,7 +59,7 @@ export const ENABLE_BTCLTC_FRESH_ADDRS_DEFAULT = false;
  * Resolve the `ENABLE_BTCLTC_FRESH_ADDRS` client flag.
  *
  * Default OFF (ship-dark). Overridable at runtime via
- * `globalThis.__SMIRK_ENABLE_BTCLTC_FRESH_ADDRS__` — the host shell sets it
+ * `globalThis.__SMIRK_ENABLE_BTCLTC_FRESH_ADDRS__`: the host shell sets it
  * from its own config/settings surface, and unit tests set it to force the
  * feature on. Reading a global (rather than a compile-time const) is what
  * lets tests exercise the flag-on path without a rebuild.
@@ -83,7 +83,7 @@ export class GapLimitError extends Error {
 }
 
 /**
- * Persisted per-(fingerprint,asset) book. Plain JSON — round-trips through
+ * Persisted per-(fingerprint,asset) book. Plain JSON: round-trips through
  * `storage.local` unchanged (all numbers, no `Uint8Array`).
  */
 export interface UtxoAddressBookState {
@@ -143,7 +143,7 @@ function storageKey(fingerprint: string, asset: UtxoBookAsset): string {
 
 /**
  * Per-(fingerprint,asset) HD address book over a {@link PlatformStorage}
- * (the persistent `storage.local` tier — the book must survive browser
+ * (the persistent `storage.local` tier: the book must survive browser
  * close, unlike session state).
  *
  * Construct one per asset. All mutating operations are serialized through an
@@ -188,7 +188,7 @@ export class UtxoAddressBook {
   }
 
   /**
-   * The current fresh receive index — the address to SHOW the user. Does not
+   * The current fresh receive index: the address to SHOW the user. Does not
    * advance the pointer. With the feature off this is always 0.
    */
   async currentReceiveIndex(): Promise<number> {
@@ -197,7 +197,7 @@ export class UtxoAddressBook {
 
   /**
    * Advance to (and return) the next fresh receive index. Money gate G12:
-   * refuses to move more than {@link GAP_LIMIT} past the highest USED index —
+   * refuses to move more than {@link GAP_LIMIT} past the highest USED index:
    * throws {@link GapLimitError} rather than hand out an unrecoverable address.
    *
    * Idempotent-ish contract: it always advances by exactly one when allowed;
@@ -235,7 +235,7 @@ export class UtxoAddressBook {
    * Reserve the next change index. Monotonic + atomic: two concurrent sends
    * get two distinct indices, and the increment is persisted BEFORE the
    * caller receives its index, so a crash after reserve never re-hands the
-   * same index (at worst it burns an index — a gap, never a collision).
+   * same index (at worst it burns an index: a gap, never a collision).
    */
   async reserveChange(): Promise<number> {
     return this.runExclusive((s) => {
@@ -277,7 +277,7 @@ export class UtxoAddressBook {
   /**
    * Receive indices to SCAN for balance/UTXO/history aggregation: `0` through
    * `max(receiveHigh, usedReceiveHigh) + GAP_LIMIT`, inclusive. Index 0 is
-   * always included, so existing primary-address funds are always visible —
+   * always included, so existing primary-address funds are always visible,
    * even with the feature off (where the range collapses toward `[0]` for a
    * fresh wallet, and the caller only actually queries index 0).
    */
@@ -323,7 +323,7 @@ function range0(top: number): number[] {
 /** SLIP-0044 coin types for the BIP84 path, matching `hd.ts`. */
 const BIP84_COIN_TYPE: Record<UtxoBookAsset, number> = { btc: 0, ltc: 2 };
 
-/** `m/84'/coin'/0'/change/index` — the master path the signer resolves against. */
+/** `m/84'/coin'/0'/change/index`: the master path the signer resolves against. */
 export function bip84MasterPath(asset: UtxoBookAsset, change: 0 | 1, index: number): string {
   return `m/84'/${BIP84_COIN_TYPE[asset]}'/0'/${change}/${index}`;
 }

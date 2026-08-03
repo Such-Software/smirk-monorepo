@@ -1,12 +1,12 @@
 /**
- * Grin client-side tx-history journal — an append-only, best-effort record of
+ * Grin client-side tx-history journal: an append-only, best-effort record of
  * this wallet's Grin send/receive/tip activity, keyed by slateId in
  * `chrome.storage.local` under `grin_tx_journal_v1`.
  *
  * WHY THIS EXISTS
  * ---------------
  * v3 Grin is NON-CUSTODIAL. `POST /wallet/grin/scan` exposes only the wallet's
- * CURRENT UTXO set — never a send/receive log — and Mimblewimble commitments
+ * CURRENT UTXO set (never a send/receive log), and Mimblewimble commitments
  * carry no amount/direction a third party (or a later scan) could reconstruct.
  * So asset-detail's Grin Activity went dark (returned `[]`). This module
  * restores that history the only way possible client-side: by capturing each
@@ -14,7 +14,7 @@
  * build, send finalize/broadcast, receive sign, invoice finalize, tip build),
  * then replaying it into asset-detail.
  *
- * READ-ONLY DISPLAY — NEVER MONEY-CRITICAL
+ * READ-ONLY DISPLAY: NEVER MONEY-CRITICAL
  * ----------------------------------------
  * Unlike {@link GrinPendingOverlay} (which gates input selection + owns the
  * child-index counter, and whose corruption loses funds), this journal is PURE
@@ -31,7 +31,7 @@
  * load-modify-save mutations run through a single module-level serialization
  * chain ({@link enqueue}) so two concurrent writes over the one storage slot
  * can't tear each other's read-modify-write apart (a lost update here is only a
- * missing/stale history row, never fund loss — but the mutex is cheap and keeps
+ * missing/stale history row, never fund loss, but the mutex is cheap and keeps
  * the append-only invariant honest).
  */
 
@@ -43,16 +43,16 @@ export type GrinTxDirection = 'send' | 'receive';
 
 /**
  * Lifecycle of a journalled tx. Deliberately coarse (display-only):
- *   - `pending`   — built/signed locally, not yet known-broadcast.
- *   - `finalized` — we (or our counterparty) put it on the wire; `kernelExcess`
+ *   - `pending`   : built/signed locally, not yet known-broadcast.
+ *   - `finalized` : we (or our counterparty) put it on the wire; `kernelExcess`
  *                   is usually known and links to a block explorer.
- *   - `cancelled` — the user abandoned a still-pre-broadcast flow.
+ *   - `cancelled` : the user abandoned a still-pre-broadcast flow.
  */
 export type GrinTxStatus = 'pending' | 'finalized' | 'cancelled';
 
 /** One journalled Grin tx, keyed by its slateId. */
 export interface GrinTxJournalEntry {
-  /** Slate UUID (or voucher pseudo-slate id) — the primary key. */
+  /** Slate UUID (or voucher pseudo-slate id), the primary key. */
   slateId: string;
   direction: GrinTxDirection;
   /** Amount moved, in nanogrin (atomic units). */
@@ -62,7 +62,7 @@ export interface GrinTxJournalEntry {
   /** Counterparty label (slatepack address, @username, user_id) when known. */
   counterparty?: string;
   status: GrinTxStatus;
-  /** On-chain kernel excess — the block-explorer identity — once finalized. */
+  /** On-chain kernel excess (the block-explorer identity) once finalized. */
   kernelExcess?: string;
   /** Unix ms of first record (stable across status updates). */
   createdAt: number;
@@ -98,7 +98,7 @@ async function loadJournal(): Promise<GrinTxJournal> {
       return raw as GrinTxJournal;
     }
   } catch {
-    // chrome undefined (tests) or storage error — degrade to empty.
+    // chrome undefined (tests) or storage error: degrade to empty.
   }
   return { entries: {} };
 }
@@ -107,7 +107,7 @@ async function saveJournal(j: GrinTxJournal): Promise<void> {
   await chrome.storage.local.set({ [GRIN_TX_JOURNAL_KEY]: j });
 }
 
-// ── Public API — every function is best-effort and can never reject ───────────
+// ── Public API: every function is best-effort and can never reject ───────────
 
 /**
  * Record (or enrich) a journal entry. Upsert semantics keyed by `slateId`:
@@ -122,7 +122,7 @@ async function saveJournal(j: GrinTxJournal): Promise<void> {
  *
  * This lets the two-phase flows (build → finalize) collapse onto one row: the
  * build records `pending` + amount, the finalize upgrades it to `finalized` +
- * kernelExcess. Best-effort — swallows all errors.
+ * kernelExcess. Best-effort: swallows all errors.
  */
 export async function recordGrinTx(entry: GrinTxJournalEntry): Promise<void> {
   try {
@@ -153,7 +153,7 @@ export async function recordGrinTx(entry: GrinTxJournalEntry): Promise<void> {
 
 /**
  * Flip an existing entry's status (e.g. → `cancelled` on user cancel). No-op if
- * the slateId was never journalled. Best-effort — swallows all errors.
+ * the slateId was never journalled. Best-effort: swallows all errors.
  */
 export async function updateGrinTxStatus(
   slateId: string,
@@ -173,7 +173,7 @@ export async function updateGrinTxStatus(
 }
 
 /**
- * Read the whole journal as a flat array (unordered — caller sorts). Best-effort:
+ * Read the whole journal as a flat array (unordered: caller sorts). Best-effort:
  * returns `[]` on any error so asset-detail never throws off a bad journal.
  */
 export async function readGrinJournal(): Promise<GrinTxJournalEntry[]> {

@@ -1,7 +1,7 @@
 import type { Theme } from './types';
 
 /**
- * Windows XP Luna theme — the blue/silver/green palette that defined
+ * Windows XP Luna theme: the blue/silver/green palette that defined
  * an era. Glossy gradient title bars, rounded corners on chrome,
  * Tahoma 11, and that unmistakable green Start button.
  *
@@ -17,7 +17,7 @@ import type { Theme } from './types';
  * colors.
  */
 export const winxpTheme: Theme = {
-  // Stable id — kept as `winxp`. Display name uses the visual style's
+  // Stable id: kept as `winxp`. Display name uses the visual style's
   // codename ("Luna") instead of the OS trademark.
   id: 'winxp',
   name: 'Luna',

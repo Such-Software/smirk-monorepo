@@ -37,7 +37,7 @@ use crate::transaction::{
 /// `path` is the BIP32 derivation path (4 levels of u32) that produced
 /// the original output's commitment; the wallet re-derives the same
 /// blinding factor here to sign. `commitment` is the on-chain Pedersen
-/// commitment of that output — used as the input reference in the
+/// commitment of that output: used as the input reference in the
 /// slate's `coms` list.
 #[derive(Debug, Clone)]
 pub struct UnspentOutput {
@@ -59,7 +59,7 @@ pub struct ChangeOutputInfo {
     pub path: [u32; 4],
     pub amount: u64,
     pub commitment: [u8; 33],
-    /// Bulletproof bytes — required when reconstructing the slate at
+    /// Bulletproof bytes: required when reconstructing the slate at
     /// finalization (compact S1 strips outputs from the wire form).
     pub proof: Vec<u8>,
 }
@@ -69,9 +69,9 @@ pub struct ChangeOutputInfo {
 pub struct CreateSendTxParams {
     /// Wallet's 64-byte BIP32 root (secret_key || chain_code).
     /// Derived via the v3 / `useBip39=false` path (raw entropy →
-    /// HMAC-SHA512 with `"IamVoldemort"`) — grin-wallet compatible.
+    /// HMAC-SHA512 with `"IamVoldemort"`): grin-wallet compatible.
     pub extended_private_key: [u8; 64],
-    /// LEGACY: optional v1/v2 ext key (`useBip39=true` —
+    /// LEGACY: optional v1/v2 ext key (`useBip39=true`:
     /// PBKDF2-then-HMAC). When set, the orchestrator falls back to
     /// this key if v3 derivation produces an input commitment that
     /// doesn't match the on-chain value. Lets v0.3 spend outputs
@@ -79,7 +79,7 @@ pub struct CreateSendTxParams {
     /// migrated to v3 derivation. Sunset 2026-11-15. See
     /// `seed::mnemonic_to_extended_private_key_legacy_bip39`.
     pub legacy_extended_private_key: Option<[u8; 64]>,
-    /// All inputs we're spending. Already selected by the caller —
+    /// All inputs we're spending. Already selected by the caller:
     /// orchestrator does not pick UTXOs (the caller has wallet-level
     /// context about which UTXOs to use, see legacy notes on greedy
     /// selection with fee iteration).
@@ -95,7 +95,7 @@ pub struct CreateSendTxParams {
     /// 4-level BIP32 path for the change output, if any. Caller is
     /// responsible for allocating a fresh `nChild` index.
     pub change_path: [u32; 4],
-    /// Kernel offset scalar — typically all-zero for COMPACT_SLATE_PURPOSE_SEND_INITIAL
+    /// Kernel offset scalar: typically all-zero for COMPACT_SLATE_PURPOSE_SEND_INITIAL
     /// (the receiver computes the offset adjustment at S2). Pass
     /// `[0u8; 32]` unless you have a specific reason otherwise.
     pub kernel_offset: [u8; 32],
@@ -276,7 +276,7 @@ pub struct SignIncomingSendParams {
     /// 4-level BIP32 path for the receiver's new output. Caller is
     /// responsible for allocating a fresh `nChild` index.
     pub output_path: [u32; 4],
-    /// Fresh kernel-signing nonce — generate via [`crate::random_secret_nonce`].
+    /// Fresh kernel-signing nonce: generate via [`crate::random_secret_nonce`].
     pub receiver_kernel_nonce: [u8; 32],
     /// Bulletproof rewind nonce for the new output.
     pub bp_rewind_nonce: [u8; 32],
@@ -289,7 +289,7 @@ pub struct SignIncomingSendParams {
 pub struct SignIncomingSendOutput {
     /// The S2 slate, ready to encode back to the sender.
     pub slate: SlateV4,
-    /// Info about the receiver's output — persist for spending later.
+    /// Info about the receiver's output: persist for spending later.
     pub output: ReceiverOutputInfo,
     /// Kernel-excess public-key commitment, 33-byte compressed point.
     /// Computed at S2 because both participants' xs are now known; the
@@ -298,7 +298,7 @@ pub struct SignIncomingSendOutput {
     /// the wallet can correlate confirmed kernels to receive rows.
     /// (Legacy commit b6d3593 added this to receives.)
     pub kernel_excess: [u8; 33],
-    /// Receiver context — retain for any post-S2 operations.
+    /// Receiver context: retain for any post-S2 operations.
     pub context: ReceiverContext,
 }
 
@@ -403,7 +403,7 @@ pub fn sign_incoming_send_slate(
 pub struct FinalizeSendParams {
     /// The S2 slate returned from the receiver.
     pub s2_slate: SlateV4,
-    /// Sender context produced by `create_send_transaction` — holds
+    /// Sender context produced by `create_send_transaction`: holds
     /// the secret blind excess + kernel nonce + offset.
     pub sender_context: SenderContext,
     /// Same `inputs` array passed to `create_send_transaction`. The
@@ -425,9 +425,9 @@ pub struct FinalizeSendOutput {
     pub final_signature: [u8; 64],
     /// Kernel-excess 33-byte commitment for sender's history record.
     pub kernel_excess: [u8; 33],
-    /// Binary transaction bytes — wire format used by Grin P2P.
+    /// Binary transaction bytes: wire format used by Grin P2P.
     pub tx_bytes: Vec<u8>,
-    /// JSON-shaped transaction object — the format Grin's
+    /// JSON-shaped transaction object: the format Grin's
     /// `/v2/foreign push_transaction` JSON-RPC endpoint expects as its
     /// `tx` parameter. Pass this through to the backend broadcast
     /// handler verbatim (don't wrap it in another object).
@@ -440,7 +440,7 @@ pub struct FinalizeSendOutput {
 ///
 /// 1. Call `sender_finalize_s3` (verifies receiver's partial + aggregates).
 /// 2. Compute the kernel-excess commitment (same point-sum as the
-///    receiver computed at S2 — both arrive at the same value).
+///    receiver computed at S2; both arrive at the same value).
 /// 3. Lift the sender's `UnspentOutput` list and optional change into
 ///    `TxInput` / `TxOutput` shapes for `slate_to_transaction_bytes`.
 /// 4. Build the transaction binary.
@@ -455,14 +455,14 @@ pub fn finalize_send_slate(
     let s3_slate = final_out.slate;
     let final_signature = final_out.final_signature;
 
-    // 2. Kernel-excess commitment — point sum of xs across all
+    // 2. Kernel-excess commitment: point sum of xs across all
     //    participants. Same value the receiver wrote into receive
     //    history at S2; sender uses it to correlate the on-chain
     //    kernel to this tx in their own history. Converted to the
     //    Pedersen commitment form (08/09 prefix) that grin-wallet,
     //    block explorers, and the on-chain `kernel.excess` use as the
     //    canonical "kernel id". The raw pubkey form (02/03) is what
-    //    the schnorr math produces and is identical mod prefix — but
+    //    the schnorr math produces and is identical mod prefix, but
     //    consumers compare against grincoin.org which indexes by the
     //    commit form, so we expose that and only that.
     let kernel_excess_pubkey = point_add(&s3_slate.sigs[0].xs, &s3_slate.sigs[1].xs)?;
@@ -483,12 +483,12 @@ pub fn finalize_send_slate(
     // change output (from add_output_commitment) + the receiver's
     // output (from receiver_round_s2's append). Inputs are reflected
     // separately via `sender_inputs` here, so we need to NOT pass them
-    // through slate.coms — slate_to_transaction_bytes already pulls
+    // through slate.coms: slate_to_transaction_bytes already pulls
     // outputs from coms (filtering would double-count).
     //
     // Rebuild a coms list with ONLY outputs (the receiver's output and
     // any change). This is what compact-slate finalization conventionally
-    // does — inputs live in the per-participant local state, outputs
+    // does: inputs live in the per-participant local state, outputs
     // travel with the slate.
     let mut outputs_only_coms = Vec::new();
     if let Some(coms) = &s3_slate.coms {
@@ -504,7 +504,7 @@ pub fn finalize_send_slate(
 
     let sender_change_outputs: Vec<TxOutput> = match &params.change_output {
         Some(ch) => {
-            // Filter the change output out of the slate's coms too —
+            // Filter the change output out of the slate's coms too:
             // the transaction-builder appends sender_change_outputs to
             // the outputs derived from the slate, so passing change
             // here AND keeping it in slate.coms would double-count.
@@ -573,9 +573,9 @@ pub struct CreateInvoiceParams {
 pub struct CreateInvoiceOutput {
     /// I1 slate to share with the payer.
     pub slate: SlateV4,
-    /// Receiver context — required for the I3 finalize step.
+    /// Receiver context: required for the I3 finalize step.
     pub context: ReceiverContext,
-    /// Info about the receiver's new output — persist so the wallet
+    /// Info about the receiver's new output: persist so the wallet
     /// can spend it later.
     pub output: ReceiverOutputInfo,
 }
@@ -669,12 +669,12 @@ pub struct SignInvoiceParams {
 pub struct SignInvoiceOutput {
     /// I2 slate, ready to return to the receiver.
     pub slate: SlateV4,
-    /// Sender context — not strictly required for invoice flow
+    /// Sender context: not strictly required for invoice flow
     /// (receiver finalizes), but useful for audit / debug.
     pub context: SenderContext,
     /// Info about the change output the sender created (if any).
     pub change_output: Option<ChangeOutputInfo>,
-    /// Per-input derivation labels — see CreateSendTxOutput.
+    /// Per-input derivation labels: see CreateSendTxOutput.
     pub input_derivations: Vec<String>,
 }
 
@@ -687,7 +687,7 @@ pub struct SignInvoiceOutput {
 ///    invoice; sender either accepts or rejects.)
 /// 4. Compute `sender_blind_excess = change_blind − Σ input_blinds −
 ///    kernel_offset`. (Or `−Σ inputs − offset` with no change.)
-/// 5. Call low-level `sender_round_i2` — appends sender's participant
+/// 5. Call low-level `sender_round_i2`: appends sender's participant
 ///    data with their partial sig.
 /// 6. Append sender's input commitments to slate.coms. Append change
 ///    output (commitment + proof) if any.
@@ -707,7 +707,7 @@ pub fn sign_invoice(params: &SignInvoiceParams) -> Result<SignInvoiceOutput, Str
     let target = amount.checked_add(fee).ok_or("amount + fee overflows u64")?;
 
     // Derive input blinds + verify commitments. Same try-fallback
-    // wrapper as create_send_transaction — covers v3 → legacy ext-key
+    // wrapper as create_send_transaction: covers v3 → legacy ext-key
     // → switch=None and surfaces a diagnostic on total mismatch.
     let mut input_blinds = Vec::with_capacity(params.inputs.len());
     let mut input_derivations: Vec<String> = Vec::with_capacity(params.inputs.len());
@@ -799,11 +799,11 @@ pub struct FinalizeInvoiceParams {
     pub i2_slate: SlateV4,
     /// Receiver context from `create_invoice`.
     pub receiver_context: ReceiverContext,
-    /// Sender's inputs — included in the slate's coms after I2, but
+    /// Sender's inputs: included in the slate's coms after I2, but
     /// also needed separately for `slate_to_transaction_bytes` to
     /// build the binary transaction. Caller must provide them
     /// (or the receiver wallet must extract them from the slate
-    /// and pass them through — see test for usage).
+    /// and pass them through; see test for usage).
     pub sender_inputs: Vec<UnspentOutput>,
 }
 
@@ -831,7 +831,7 @@ pub fn finalize_invoice(
     let i3_slate = final_out.slate;
     let final_signature = final_out.final_signature;
 
-    // Kernel excess commitment — same point sum as the send flow,
+    // Kernel excess commitment: same point sum as the send flow,
     // converted to canonical commitment form (08/09 prefix). See note
     // on the send-flow equivalent above.
     let kernel_excess_pubkey = point_add(&i3_slate.sigs[0].xs, &i3_slate.sigs[1].xs)?;
@@ -863,7 +863,7 @@ pub fn finalize_invoice(
     }
     let mut i3_outputs_only = i3_slate.clone();
     i3_outputs_only.coms = Some(outputs_only_coms);
-    // slate_to_transaction_bytes expects state Standard3 — invoice
+    // slate_to_transaction_bytes expects state Standard3: invoice
     // flow ends at Invoice3 which carries the same final kernel sig.
     // Patch the state so the transaction builder accepts it.
     i3_outputs_only.sta = SlateStateV4::Standard3;
@@ -898,7 +898,7 @@ pub fn finalize_invoice(
 ///   - ext_key: v3 (modern), legacy v1/v2 (if `legacy_ext_key.is_some()`)
 ///   - switch: Regular (HF2 default), None (raw BIP32 child)
 ///   - depth: 4 (walk all path elements, our internal convention),
-///            3 (walk first 3 elements — grin-wallet's `ExtKeychainPath`
+///            3 (walk first 3 elements: grin-wallet's `ExtKeychainPath`
 ///               default for standard outputs; the 4th u32 is just
 ///               serialization padding). Only enabled when path[3] == 0;
 ///               otherwise depth-3 would silently drop a meaningful step.
@@ -1013,11 +1013,11 @@ pub(crate) fn derive_input_blind_with_fallback(
 /// reproduces `commitment` is this output's index; return its path.
 ///
 /// This is pure reuse of the SAME matching logic `create_send_transaction`
-/// applies per input — no new money logic. `is_coinbase` is irrelevant here (it
+/// applies per input: no new money logic. `is_coinbase` is irrelevant here (it
 /// only changes kernel features, not the output's blinding factor), so we probe
 /// with `false`.
 ///
-/// Returns `None` if no index in range matches — the caller must then DROP that
+/// Returns `None` if no index in range matches: the caller must then DROP that
 /// output from the spendable set (never feed an unidentified input to the send
 /// builder: a wrong path silently yields a bad blind and an invalid tx).
 pub fn identify_output(

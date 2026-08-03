@@ -2,20 +2,20 @@
  * Asset-agnostic signMessage executor used in any wallet-foreground
  * context that holds an `UnlockedWallet`. Runs in the approval popup
  * window on the browser extension, and in the BrowseTab dapp bridge
- * on Tauri desktop / Capacitor mobile — same code, no fork.
+ * on Tauri desktop / Capacitor mobile: same code, no fork.
  *
  * Compute one signature per requested asset. BTC/LTC use the
  * canonical Bitcoin-message format (`signBitcoinMessage`); XMR/WOW
  * sign the raw UTF-8 message bytes with their ed25519 private
  * spend-key scalar; Grin signs with its slatepack ed25519 scalar.
  * All ed25519 signatures go through `signEd25519WithScalar` because
- * our keys are stored as raw scalars, not RFC-8032 seeds — passing
+ * our keys are stored as raw scalars, not RFC-8032 seeds; passing
  * them to `ed25519.sign` would re-clamp into a different scalar and
  * yield signatures that don't verify against the public keys we
  * actually publish.
  *
  * Per-asset failures are captured per-asset (empty signature string)
- * rather than aborting the whole result — smirk.cash and similar
+ * rather than aborting the whole result: smirk.cash and similar
  * dapps pick the signature for the asset the user chose, so one
  * failing asset shouldn't kill the others.
  */
@@ -42,7 +42,7 @@ import type { SmirkAsset, SmirkSignResult } from '@such-software/smirk-dapp-api'
 /**
  * Messages the wallet's OWN backend treats as an authentication challenge:
  * `POST /auth/extension` verifies a BIP-137 signature over `smirk-auth-<ts>`.
- * The general dapp `signMessage` surface MUST NEVER produce one — otherwise a
+ * The general dapp `signMessage` surface MUST NEVER produce one; otherwise a
  * connected site (which already holds the btc pubkey from `connect()`) could
  * have the user approve a `signMessage("smirk-auth-<now>")` and replay it to the
  * backend to forge a full authenticated session for the user's own account.
@@ -117,7 +117,7 @@ export function signMessageWithUnlocked(
       }
     } catch (e) {
       console.error(`[signMessage] ${asset} signing failed:`, e);
-      // Emit nothing for this asset — see file header. The dapp
+      // Emit nothing for this asset; see file header. The dapp
       // surfaces it as "No signature found for <asset>".
     }
   }
@@ -171,8 +171,8 @@ function assertNotSelfAuthToken(event: UnsignedNostrEvent): void {
 /**
  * Schnorr-sign an arbitrary Nostr event AS an already-resolved identity (NIP-98
  * login, kind-1 notes, …). The caller (execute-approval) resolves WHICH identity
- * the origin acts as — account-0, a per-origin compartmentalized identity, or a
- * vault burner/imported — via `resolveNostrIdentityForOrigin`, keeping this a pure,
+ * the origin acts as (account-0, a per-origin compartmentalized identity, or a
+ * vault burner/imported) via `resolveNostrIdentityForOrigin`, keeping this a pure,
  * storage-free signer. `null` means the identity couldn't be produced (e.g. a
  * per-origin/vault key on a warm resume) → re-unlock.
  */
@@ -204,7 +204,7 @@ function base64ToBytes(b64: string): Uint8Array {
 
 /**
  * Derive the origin's app-scoped e2ee PUBLIC key (x25519 hex). `domainScope` is
- * the wallet-verified origin, supplied by the handler — never a page string.
+ * the wallet-verified origin, supplied by the handler, never a page string.
  * Requires the unlocked mnemonic (absent on a session-cache restore).
  */
 export function deriveAppEncKeyWithUnlocked(

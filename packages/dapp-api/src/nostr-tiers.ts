@@ -3,22 +3,22 @@
  * signature is a credential, so which events a connected origin may sign WITHOUT
  * a fresh per-event prompt is a security decision, not a UX one.
  *
- *   - `money`             — value / authorization events (17, 27235, 30402, 22242). NEVER
+ *   - `money`:              value / authorization events (17, 27235, 30402, 22242). NEVER
  *                           auto-signed, NEVER session-grantable. Every one gets an
  *                           explicit, per-event approval with a strong warning.
- *   - `session-grantable` — high-volume, low-risk social events (1, 7, 1059). The
+ *   - `session-grantable`:  high-volume, low-risk social events (1, 7, 1059). The
  *                           user MAY grant a time-boxed session so a dapp signs
  *                           these without re-prompting for the window.
- *   - `default`           — everything else: per-event prompt, but not flagged as
+ *   - `default`:            everything else: per-event prompt, but not flagged as
  *                           money-tier and not session-grantable (unknown kinds are
- *                           treated conservatively — prompt, never auto-sign).
+ *                           treated conservatively: prompt, never auto-sign).
  *
  * The wallet-handler is the enforcement point: it computes `sessionCovered=false`
  * for anything not session-grantable and refuses to persist a money-tier kind into
  * a session, so the property holds even if the approval UI is buggy or hostile.
  */
 
-/** Value / authorization kinds — never auto-signed. NIP-99 classified listing
+/** Value / authorization kinds: never auto-signed. NIP-99 classified listing
  *  (30402), NIP-42 relay auth / login (22242), NIP-98 HTTP auth (27235), and the
  *  Goblin money-tier kind 17.
  *
@@ -49,7 +49,7 @@ export interface NostrSessionGrant {
 }
 
 /** True iff an active session covers `kind`. A money-tier kind is NEVER covered,
- *  even if a stale/hostile session lists it — the tier check wins. */
+ *  even if a stale/hostile session lists it; the tier check wins. */
 export function isNostrSessionActive(
   session: NostrSessionGrant | undefined,
   kind: number,
@@ -62,7 +62,7 @@ export function isNostrSessionActive(
 
 /**
  * Merge a newly-granted session into any existing one, DROPPING money-tier kinds
- * (defense in depth — a money kind must never be persisted into a session) and
+ * (defense in depth: a money kind must never be persisted into a session) and
  * any non-session-grantable kind. Returns the session to persist, or undefined if
  * nothing grantable survived.
  */

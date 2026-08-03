@@ -10,10 +10,10 @@
  *   2. If nothing is reusable, kick off a fresh job with a
  *      popup-computed BIP-137 signature. The signature is the one
  *      step the SW can't perform (it doesn't get the private key);
- *      everything downstream — checkRestore, PoW solve,
- *      extensionRegister — lives in the offscreen runner.
+ *      everything downstream (checkRestore, PoW solve,
+ *      extensionRegister) lives in the offscreen runner.
  *   3. Await the result via the long-lived port. Survives popup
- *      remount — re-subscribing to a still-running job picks up
+ *      remount: re-subscribing to a still-running job picks up
  *      progress where it left off.
  *
  * Token freshness window: the backend allows 5 minutes of drift on
@@ -95,7 +95,7 @@ export async function runBootstrapInBackground(
     return reusableDone.result;
   }
 
-  // 1b. Still-running job. Attach to it via awaitJob — the SW's
+  // 1b. Still-running job. Attach to it via awaitJob: the SW's
   // dedup-on-start means even a *new* `start` here would point at
   // the same id, but going through awaitJob skips a needless RPC.
   const inflight = existing.find(
@@ -105,7 +105,7 @@ export async function runBootstrapInBackground(
     return await jobs.awaitJob<'bootstrap-auth'>(inflight.id);
   }
 
-  // ---- 2. Nothing reusable — start fresh ----
+  // ---- 2. Nothing reusable: start fresh ----
   const id = await jobs.start(
     'bootstrap-auth',
     input,

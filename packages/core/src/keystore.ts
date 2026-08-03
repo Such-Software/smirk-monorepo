@@ -1,5 +1,5 @@
 /**
- * Wallet keystore — encrypted seed storage + unlock state machine.
+ * Wallet keystore: encrypted seed storage + unlock state machine.
  *
  * The keystore is the single source of truth for "does this user have a
  * wallet, and is it unlocked?" Layer above HD derivation, layer below the
@@ -38,7 +38,7 @@
  *   snapshot taken mid-flight can read the cached derived keys: spend
  *   authority for the cache window, not the recovery phrase. This is
  *   the same level of exposure as the popup's own in-memory unlocked
- *   state — i.e., we are not making the threat model worse than
+ *   state, i.e., we are not making the threat model worse than
  *   "the wallet is currently unlocked," we are *extending the
  *   duration* of that exposure window for the user's convenience.
  *   A co-resident malicious extension is **not** in scope for this
@@ -46,7 +46,7 @@
  * - PBKDF2 iterations default to `PBKDF2_ITERATIONS` (600_000).
  * - Decrypted secret buffers (seed bytes) are zeroed on `lock()` /
  *   `destroy()` before being released for GC. JS strings (the
- *   mnemonic) are unfixable — we drop the reference and accept that
+ *   mnemonic) are unfixable; we drop the reference and accept that
  *   a heap snapshot mid-flight could observe it.
  *
  * @example
@@ -98,7 +98,7 @@ const KEYSTORE_KEY = 'smirk_keystore_v1';
 export const KEYSTORE_VERSION = 1;
 
 /**
- * Serialized, password-encrypted keystore. Safe to write to disk —
+ * Serialized, password-encrypted keystore. Safe to write to disk:
  * disclosure of this object alone does NOT compromise the wallet
  * (attacker still needs the password and at least 600_000 PBKDF2
  * iterations of guessing).
@@ -114,7 +114,7 @@ export interface EncryptedKeystore {
   salt: string;
   /** PBKDF2 iteration count. */
   iterations: number;
-  /** SHA-256(SHA-256(seed)) — 64 hex chars. Identifies the wallet across
+  /** SHA-256(SHA-256(seed)): 64 hex chars. Identifies the wallet across
    *  re-imports without exposing the seed. Used by backend dedupe. */
   fingerprint: string;
   /** Wallet creation timestamp (ms since epoch). */
@@ -132,7 +132,7 @@ export interface WalletAddresses {
 
 /**
  * In-memory unlocked wallet state. Holds the seed and per-asset key
- * material — must not be serialized to any persistent storage.
+ * material: must not be serialized to any persistent storage.
  *
  * Held by reference inside `WalletKeystore` after a successful
  * `unlock()`; released when `lock()` or `destroy()` is called.
@@ -141,7 +141,7 @@ export interface UnlockedWallet {
   /**
    * BIP39 phrase. Present after a fresh `unlock()` /
    * `createWallet()`, but **undefined** when the wallet was restored
-   * from the session cache (2026-06-13 hardening — session cache no
+   * from the session cache (2026-06-13 hardening: session cache no
    * longer persists the mnemonic). Call sites that need the phrase
    * (BTC/LTC PSBT signing, every Grin surface, "show seed" /
    * "export seed") must early-return with a "please re-unlock" UX
@@ -157,7 +157,7 @@ export interface UnlockedWallet {
   keys: DerivedKeys;
   /** Per-asset receive addresses. */
   addresses: WalletAddresses;
-  /** Same fingerprint as the keystore — useful for sanity checks. */
+  /** Same fingerprint as the keystore, useful for sanity checks. */
   fingerprint: string;
 }
 
@@ -247,7 +247,7 @@ export async function unlockKeystore(
     try {
       mnemonicBytes = decrypt(hexToBytes(keystore.encryptedMnemonic), key);
     } catch {
-      // The AEAD tag check failed — wrong password (or tampered
+      // The AEAD tag check failed: wrong password (or tampered
       // ciphertext). Constant-time inside `decrypt`; we don't
       // distinguish the two cases.
       throw new InvalidPasswordError();
@@ -314,7 +314,7 @@ export function restoreUnlockedFromCache(args: {
 /**
  * Hard upper bound on the auto-unlock TTL. Twenty-four hours. The
  * pre-2026-06-13 "Never" sentinel (`MAX_SAFE_INTEGER`) and the
- * negative-int "Never" convention are gone — any stored preference
+ * negative-int "Never" convention are gone; any stored preference
  * that exceeds the cap clamps to the cap on read, so legacy v0.2.4
  * users self-heal without a migration script.
  */
@@ -325,7 +325,7 @@ export const AUTO_LOCK_MAX_MINUTES = 24 * 60;
  * `[0, AUTO_LOCK_MAX_MINUTES]` band. Negative values (the legacy
  * "Never" convention) clamp to the cap; `MAX_SAFE_INTEGER` clamps
  * to the cap; non-finite or NaN values fall back to 0 (no cache).
- * Storing 0 still means "do not cache" — that path is preserved.
+ * Storing 0 still means "do not cache"; that path is preserved.
  */
 export function clampAutoLockMinutes(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
@@ -337,7 +337,7 @@ export function clampAutoLockMinutes(raw: unknown): number {
 /**
  * Storage key for the optional session-cache (used by the "auto-lock
  * after N minutes" UX). Held in a separate, ephemeral storage
- * (`chrome.storage.session` on extension, in-memory elsewhere) —
+ * (`chrome.storage.session` on extension, in-memory elsewhere),
  * NEVER the persistent storage that holds the encrypted keystore.
  *
  * v0.3.0 (2026-06-13) bumped the on-disk version from `v1` (which
@@ -346,7 +346,7 @@ export function clampAutoLockMinutes(raw: unknown): number {
  * parser rejects any payload missing `version: 2`, missing the
  * `_noMnemonic: true` brand, or containing a `mnemonic` field; on
  * rejection the cache is dropped and the user re-enters their
- * password once. No migration / dual-parse / shim — the user
+ * password once. No migration / dual-parse / shim: the user
  * decision was to break v0.2.4 cache compat for honest security.
  */
 export const SESSION_CACHE_KEY = 'smirk_unlocked_session_cache';
@@ -363,7 +363,7 @@ export interface SessionCachePayload {
   readonly fingerprint: string;
   readonly keys: DerivedKeys;
   readonly addresses: WalletAddresses;
-  /** Unix ms when this cache becomes invalid. Finite — no Infinity / "never". */
+  /** Unix ms when this cache becomes invalid. Finite: no Infinity / "never". */
   readonly expiresAtMs: number;
 }
 
@@ -421,7 +421,7 @@ export function parseSessionCache(raw: unknown): SessionCachePayload | null {
 }
 
 /**
- * `chrome.storage.session` (like JSON) does NOT preserve `Uint8Array` — a stored
+ * `chrome.storage.session` (like JSON) does NOT preserve `Uint8Array`: a stored
  * key comes back as a plain numeric-keyed object, so downstream signing throws
  * "private key must be hex string or Uint8Array" and an auto-unlock (session
  * cache) restore fails even though the user never had to sign in. These two
@@ -444,8 +444,8 @@ export function serializeForSessionCache(value: unknown): unknown {
 
 /**
  * Inverse of {@link serializeForSessionCache}. Revives `{ __u8: hex }` to a
- * `Uint8Array`, AND recovers a `Uint8Array` that a prior (pre-fix) write —
- * or the raw storage layer — flattened into a `{0:..,1:..}` numeric-keyed
+ * `Uint8Array`, AND recovers a `Uint8Array` that a prior (pre-fix) write,
+ * or the raw storage layer, flattened into a `{0:..,1:..}` numeric-keyed
  * object, so an already-broken cache self-heals instead of stranding the user.
  */
 export function reviveForSessionCache(value: unknown): unknown {
@@ -473,7 +473,7 @@ export function reviveForSessionCache(value: unknown): unknown {
 /**
  * Cheap sanity check that a restored `DerivedKeys` still carries real byte
  * material (the BTC/LTC signing keys the auth bootstrap needs). Guards the
- * lost-bytes case where storage dropped the arrays entirely — the restore then
+ * lost-bytes case where storage dropped the arrays entirely; the restore then
  * falls back to a password unlock instead of throwing mid-sign-in.
  */
 export function derivedKeysUsable(keys: DerivedKeys | undefined): boolean {
@@ -489,9 +489,9 @@ export function derivedKeysUsable(keys: DerivedKeys | undefined): boolean {
  * Wraps a `PlatformStorage` with the wallet state machine.
  *
  * Lifecycle:
- * - `empty`     — no keystore on disk yet (fresh install).
- * - `locked`    — keystore present, password not entered this session.
- * - `unlocked`  — password entered, keys + addresses available.
+ * - `empty`     : no keystore on disk yet (fresh install).
+ * - `locked`    : keystore present, password not entered this session.
+ * - `unlocked`  : password entered, keys + addresses available.
  *
  * Transitions:
  * - `createWallet` :  empty/locked → unlocked
@@ -500,7 +500,7 @@ export function derivedKeysUsable(keys: DerivedKeys | undefined): boolean {
  * - `destroy`      :  any → empty  (also zeroes in-memory state)
  *
  * On MV3 service-worker restart, the in-memory cached state is lost
- * and `getState()` re-reads from storage — which means a previously
+ * and `getState()` re-reads from storage, which means a previously
  * `unlocked` wallet shows up as `locked` until the user re-enters
  * their password. That's intentional (see file header).
  */
@@ -523,7 +523,7 @@ export class WalletKeystore {
    * Encrypt the supplied mnemonic under `password` and persist. Leaves
    * the wallet in the `unlocked` state.
    *
-   * If a keystore already exists, this throws — the caller must
+   * If a keystore already exists, this throws: the caller must
    * `destroy()` first to confirm the user really wants to replace it.
    */
   async createWallet(args: {
@@ -565,8 +565,8 @@ export class WalletKeystore {
    */
   async lock(): Promise<void> {
     if (this.cached) {
-      // `seed` is optional after the 2026-06-13 session-cache change
-      // — a wallet restored from cache has no seed bytes to zero.
+      // `seed` is optional after the 2026-06-13 session-cache change:
+      // a wallet restored from cache has no seed bytes to zero.
       this.cached.seed?.fill(0);
       // Best-effort key zeroization. Some private-key fields are
       // immutable typed arrays from `@noble/curves`; we zero what we can.
@@ -595,16 +595,16 @@ export class WalletKeystore {
    * so a thrown error mid-flight leaves the old keystore untouched.
    * If the storage write itself fails after we've computed the new
    * bytes, the on-disk state is the OLD ciphertext + the user's
-   * OLD password — recoverable by retrying. There is no "half-
+   * OLD password, recoverable by retrying. There is no "half-
    * rotated" state on disk.
    *
-   * Leaves the in-memory cached wallet alone — the unlocked
+   * Leaves the in-memory cached wallet alone: the unlocked
    * `UnlockedWallet` doesn't depend on the encryption key, only on
    * the underlying mnemonic. Subsequent `unlock()` calls require
    * the new password.
    *
    * Iterations default to `PBKDF2_ITERATIONS` (600_000) for the new
-   * keystore — the rotation is also the path forward for legacy
+   * keystore; the rotation is also the path forward for legacy
    * v0.2.x wallets that were created at 100_000 iterations, if we
    * ever wire an opportunistic re-encrypt on first unlock.
    */
@@ -621,7 +621,7 @@ export class WalletKeystore {
       throw new Error('New password must be non-empty');
     }
     // Verify current password by decrypting (throws InvalidPasswordError
-    // on AEAD mismatch). We discard the decrypted wallet — the caller
+    // on AEAD mismatch). We discard the decrypted wallet: the caller
     // doesn't need it; in-memory state stays whatever it was.
     const unlocked = await unlockKeystore(keystore, args.currentPassword);
     // Sanity: `unlockKeystore` is the fresh-unlock path and must
@@ -652,7 +652,7 @@ export class WalletKeystore {
       await this.storage.set(KEYSTORE_KEY, preserved);
     } finally {
       // Zero the temporarily-decrypted seed bytes even on the
-      // success path — we held a plaintext seed for the duration
+      // success path: we held a plaintext seed for the duration
       // of the rotation, and it should not outlive this call.
       unlocked.seed.fill(0);
       zeroKeysIfPossible(unlocked.keys);
@@ -685,7 +685,7 @@ function zeroKeysIfPossible(keys: DerivedKeys): void {
       try {
         b.fill(0);
       } catch {
-        /* immutable typed array — best effort only */
+        /* immutable typed array: best effort only */
       }
     }
   };

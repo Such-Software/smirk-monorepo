@@ -1,14 +1,14 @@
-//! Slatepack encoding — ASCII armor + binary `SlatepackBin` format + age
+//! Slatepack encoding: ASCII armor + binary `SlatepackBin` format + age
 //! encryption (mode = 1).
 //!
 //! Three layers:
 //!
-//! 1. **ASCII armor** (`BEGINSLATEPACK…ENDSLATEPACK`) — base58 of inner
+//! 1. **ASCII armor** (`BEGINSLATEPACK…ENDSLATEPACK`): base58 of inner
 //!    binary, with checksum and word-wrap. Tolerant of messenger quote
 //!    prefixes (`>`) and arbitrary line breaks.
-//! 2. **`SlatepackBin`** — the binary structure inside the armor: version,
+//! 2. **`SlatepackBin`**: the binary structure inside the armor: version,
 //!    mode (plain or encrypted), optional sender, payload.
-//! 3. **age encryption** (mode = 1) — payload encrypted to recipient's
+//! 3. **age encryption** (mode = 1): payload encrypted to recipient's
 //!    slatepack-address ed25519 pubkey via X25519 ECDH. Pure-Rust
 //!    ChaCha20-Poly1305 + scrypt.
 
@@ -126,7 +126,7 @@ pub fn grin_slatepack_unpack(armored: &str) -> Result<String, JsValue> {
 ///
 /// `recipient_pubkey_hex` is the 32-byte ed25519 public key from inside the
 /// recipient's bech32 slatepack address (use [`super::keys::grin_slatepack_address`]
-/// in reverse — TODO: bech32-decode helper) or the raw 32-byte hex. Returns
+/// in reverse; TODO: bech32-decode helper) or the raw 32-byte hex. Returns
 /// the encrypted bytes that go into `SlatepackBin.payload` when mode = 1.
 #[wasm_bindgen]
 pub fn grin_slatepack_encrypt(

@@ -6,7 +6,7 @@
  * private keys are encrypted at rest and only decryptable while unlocked.
  *
  * `getActiveNostrIdentity(mnemonic)` is the single resolver the rest of the popup
- * calls instead of `deriveNostrIdentity(mnemonic, 0)` — switch the active identity
+ * calls instead of `deriveNostrIdentity(mnemonic, 0)`: switch the active identity
  * here and sends/DMs/inbox follow.
  */
 
@@ -58,7 +58,7 @@ function vaultKey(mnemonic: string): Uint8Array {
   return sha256(utf8ToBytes(`smirk-nostr-vault-v1\x00${mnemonic}`));
 }
 
-/** Secret crypto bound to this wallet — ciphertext is hex(XChaCha20-Poly1305). */
+/** Secret crypto bound to this wallet: ciphertext is hex(XChaCha20-Poly1305). */
 export function vaultCrypto(mnemonic: string): { encrypt: EncryptSecret; decrypt: DecryptSecret } {
   const key = vaultKey(mnemonic);
   return {
@@ -119,7 +119,7 @@ export async function restoreVaultBackup(mnemonic: string, text: string): Promis
   return merged;
 }
 
-/** True when `text` is a backup made under a DIFFERENT seed than `mnemonic` — used
+/** True when `text` is a backup made under a DIFFERENT seed than `mnemonic`, used
  *  to warn before a doomed decrypt. Null-safe: returns false for non-backups. */
 export function isForeignVaultBackup(mnemonic: string, text: string): boolean {
   const fp = peekVaultBackupFingerprint(text);
@@ -129,7 +129,7 @@ export function isForeignVaultBackup(mnemonic: string, text: string): boolean {
 /**
  * Resolve the ACTIVE identity for signing/posting/delivery. Falls back to the
  * account-0 derived identity if the vault is unreadable or its active secret is
- * missing — the wallet must always have a usable identity.
+ * missing: the wallet must always have a usable identity.
  */
 export async function getActiveNostrIdentity(mnemonic: string): Promise<NostrIdentity> {
   try {
@@ -144,7 +144,7 @@ export async function getActiveNostrIdentity(mnemonic: string): Promise<NostrIde
 // ── session cache for a NON-default active identity's key ─────────────────────
 // The account-0 key already rides in wallet.keys.nostr (the keystore session cache),
 // so it survives a warm resume for free. A burner/imported/derived-N ACTIVE identity
-// does not — its secret is encrypted under a mnemonic-derived key. To honour the
+// does not: its secret is encrypted under a mnemonic-derived key. To honour the
 // user's choice on a warm resume we cache JUST the active identity's private key in
 // chrome.storage.session, on the SAME lifetime as the keystore session cache
 // (auto-lock wipes it). Single key: only one wallet is unlocked at a time; the
@@ -180,7 +180,7 @@ export async function cacheActiveNostrKeyForSession(
   const active = await getActiveNostrIdentity(wallet.mnemonic);
   const account0Pub = wallet.keys?.nostr ? bytesToHex(wallet.keys.nostr.publicKey) : null;
   if (active.pubkeyHex === account0Pub) {
-    // Default identity — already warm-resume-safe via wallet.keys.nostr.
+    // Default identity: already warm-resume-safe via wallet.keys.nostr.
     await clearCachedActiveNostrKey();
     return;
   }
@@ -214,7 +214,7 @@ export async function readCachedActiveNostrKey(
 
 /**
  * Resolve the Nostr identity a DAPP (origin) should sign/read as. This is the
- * canonical dapp resolver — it makes the identity switcher actually govern dapps
+ * canonical dapp resolver: it makes the identity switcher actually govern dapps
  * and supports opt-in per-origin compartmentalization.
  *
  * - `chosenPubkeyHex` absent → the user's ACTIVE identity (the portable default).
@@ -224,14 +224,14 @@ export async function readCachedActiveNostrKey(
  *   the vault; on a warm resume falls back to the session-cached active key.
  *
  * Returns null when the chosen identity's key isn't available (e.g. a per-origin or
- * vault key on a warm resume with no mnemonic) — the caller prompts a re-unlock.
+ * vault key on a warm resume with no mnemonic); the caller prompts a re-unlock.
  */
 export async function resolveNostrIdentityForOrigin(
   wallet: UnlockedWallet,
   origin: string,
   chosenPubkeyHex?: string,
 ): Promise<NostrIdentity | null> {
-  // account-0 — cached, works on a warm resume.
+  // account-0: cached, works on a warm resume.
   const account0 = wallet.keys?.nostr ? nostrIdentityFromPrivkey(wallet.keys.nostr.privateKey) : null;
   // No stored choice (a legacy / pre-picker grant) → the wallet's default account-0
   // identity, matching the dapp public cache's default so the displayed npub and the
@@ -271,7 +271,7 @@ export async function refreshActiveNostrKeyCache(wallet: UnlockedWallet): Promis
 }
 
 /** A vault identity projected for the @smirk/ui IdentityPicker. Metadata only (no
- *  secrets) — the pubkey/npub/label/source are readable without the mnemonic. */
+ *  secrets): the pubkey/npub/label/source are readable without the mnemonic. */
 export interface PickerIdentityLite {
   pubkeyHex: string;
   npub: string;
@@ -279,7 +279,7 @@ export interface PickerIdentityLite {
   source: 'derived' | 'burner' | 'imported';
 }
 
-/** List this wallet's Nostr identities for a picker (works on a warm resume — reads
+/** List this wallet's Nostr identities for a picker (works on a warm resume: reads
  *  the unencrypted vault metadata by fingerprint). Falls back to just the default
  *  account-0 identity when no vault exists yet. */
 export async function listNostrIdentitiesForPicker(
@@ -302,7 +302,7 @@ export async function listNostrIdentitiesForPicker(
 
 /** Result of resolving the active Nostr identity from a (possibly warm-resumed)
  *  wallet. `identity` is null when it can't be produced; `needsUnlock` distinguishes
- *  "the ACTIVE identity's key isn't available warm — re-unlock to use it" from "no
+ *  "the ACTIVE identity's key isn't available warm, re-unlock to use it" from "no
  *  usable identity at all". */
 export interface ActiveNostrResolution {
   identity: NostrIdentity | null;
@@ -312,13 +312,13 @@ export interface ActiveNostrResolution {
 }
 
 /**
- * Wallet-aware active-identity resolver — the canonical entry point every Nostr
+ * Wallet-aware active-identity resolver: the canonical entry point every Nostr
  * surface (messaging, feed, dapp signing) should use instead of
  * `deriveNostrIdentity(wallet.mnemonic, 0)`.
  *
  * Unlike {@link getActiveNostrIdentity} it works on a WARM RESUME (no mnemonic) for
  * the default identity by using the cached account-0 key (`wallet.keys.nostr`), and
- * it refuses to silently fall back to account-0 for a NON-default active identity —
+ * it refuses to silently fall back to account-0 for a NON-default active identity:
  * that would post/DM as the user's MAIN identity when they selected a burner. In
  * that case it returns `identity: null, needsUnlock: true` so the surface can show a
  * precise "re-unlock to use <label>" instead of leaking the wrong identity.
@@ -326,7 +326,7 @@ export interface ActiveNostrResolution {
 export async function getActiveNostrIdentityFromWallet(
   wallet: UnlockedWallet,
 ): Promise<ActiveNostrResolution> {
-  // Fresh unlock: the mnemonic is in memory — honor the ACTIVE identity fully
+  // Fresh unlock: the mnemonic is in memory, so honor the ACTIVE identity fully
   // (derived-N / burner / imported), decrypting its secret as needed.
   if (wallet.mnemonic) {
     try {
@@ -348,7 +348,7 @@ export async function getActiveNostrIdentityFromWallet(
   }
   // Active is a non-default identity (burner / imported / derived-N). Try the
   // session-cached active key first (so it survives a warm resume too); otherwise do
-  // NOT fall back to account-0 — signal a precise re-unlock.
+  // NOT fall back to account-0; signal a precise re-unlock.
   const cached = await readCachedActiveNostrKey(wallet.fingerprint, active.pubkeyHex);
   if (cached) return { identity: cached, needsUnlock: false };
   return {

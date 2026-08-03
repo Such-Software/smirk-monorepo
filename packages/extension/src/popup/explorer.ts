@@ -1,7 +1,7 @@
 /**
  * Block-explorer URL builders + row timestamp extraction for the Activity list.
  * Pure (no React, no module state); extracted from index.tsx. Grin's Mimblewimble
- * model has no per-tx URL — kernel-excess links where available, else null.
+ * model has no per-tx URL: kernel-excess links where available, else null.
  */
 
 import type { AssetDetailTxRow } from '@smirk/ui';

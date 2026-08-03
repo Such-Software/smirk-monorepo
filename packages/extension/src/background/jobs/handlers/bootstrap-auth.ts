@@ -1,5 +1,5 @@
 /**
- * `bootstrap-auth` handler — runs the full `bootstrapAuth` pipeline
+ * `bootstrap-auth` handler: runs the full `bootstrapAuth` pipeline
  * (checkRestore + PoW + extensionRegister) inside the offscreen
  * document so popup close can't abort it mid-flight.
  *
@@ -9,7 +9,7 @@
  * everything from scratch (new challenge, new solve, new tokens).
  * Running the full bootstrap here means the tokens land in
  * `chrome.storage.session` regardless of which popup (if any) is
- * open when the solve completes — `jobs.list({ dedupKey })` on
+ * open when the solve completes; `jobs.list({ dedupKey })` on
  * remount returns the completed job's result and the popup is
  * authenticated without redoing any work.
  *
@@ -36,7 +36,7 @@ import { PAYMENT_PENDING_SENTINEL } from '../types';
 
 /** The backend signals a minted+bound-but-not-yet-Settled pay-to-register invoice
  *  with the stable `PAYMENT_PENDING` code (auth.rs `verify_payment_settled`).
- *  Expected during polling — not a failure. Match the machine-readable code
+ *  Expected during polling, not a failure. Match the machine-readable code
  *  first; fall back to the legacy 400 + string for backends predating the code
  *  so the rollout is not order-dependent. */
 function isPaymentPending(result: {
@@ -54,12 +54,12 @@ function isPaymentPending(result: {
  * Map a non-2xx `/auth/extension` response to a human-friendly
  * single-line error the OnboardingWizard / popup can show under the
  * password field. The generic surface used to be "Unknown error",
- * which was actively unhelpful — rate-limit replies have no JSON
+ * which was actively unhelpful: rate-limit replies have no JSON
  * body so `result.error` lands as 'Unknown error' even though the
  * status (429) tells us exactly what happened.
  *
  * Backend pushes a structured `code` on most errors (AUTH_ERROR,
- * VALIDATION_ERROR, RATE_LIMITED, …) — use that first; fall back to
+ * VALIDATION_ERROR, RATE_LIMITED, …): use that first; fall back to
  * HTTP status; finally fall back to the raw error string.
  */
 function friendlyRegisterError(result: {
@@ -109,7 +109,7 @@ function friendlyRegisterError(result: {
 export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
   kind: 'bootstrap-auth',
   async run(input, ctx) {
-    // ---- 1. checkRestore — best-effort lookup for resume heights ----
+    // ---- 1. checkRestore: best-effort lookup for resume heights ----
     let xmrStartHeight: number | undefined;
     let wowStartHeight: number | undefined;
     let isKnownWallet = false;
@@ -135,7 +135,7 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
       ? undefined
       : Math.floor(Date.now() / 1000);
 
-    // ---- 2. PoW solve — only for genuinely new wallets ----
+    // ---- 2. PoW solve: only for genuinely new wallets ----
     // The backend's returning-user bypass (see smirk-backend's
     // src/api/auth.rs `is_returning_user`) accepts re-registrations
     // for an already-known pubkey_hash WITHOUT a PoW solution, even
@@ -145,11 +145,11 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
     // We mirror that bypass client-side using the same signal:
     // `checkRestore` already told us if the wallet is known (it's
     // step 1 above), and that's exactly the predicate the backend
-    // uses. Skip the solve when it would be discarded anyway —
+    // uses. Skip the solve when it would be discarded anyway:
     // saves ~3-5s of CPU on every lock+unlock and on every import
     // of an already-registered wallet.
     //
-    // New wallets still solve normally — that's the Sybil gate
+    // New wallets still solve normally; that's the Sybil gate
     // doing its job.
     //
     // solvePowChallenge returns the `AltchaPayload` envelope ({

@@ -1,6 +1,6 @@
 /**
  * SlatepackChannel seam (P3): the backend-relay adapter and the Nostr gift-wrap
- * channel behind one interface. The Nostr channel uses INJECTED relay I/O — the
+ * channel behind one interface. The Nostr channel uses INJECTED relay I/O: the
  * fake below is an in-memory relay, so we exercise deliver → the counterparty's
  * inbox → respond → the original sender's inbox → cancel with real gift-wrap
  * crypto and no network.
@@ -67,7 +67,7 @@ test('nostr channel: deliver → recipient inbox shows a to-sign offer', async (
   assert.equal(inbox[0]!.slateId, SLATE);
   assert.equal(inbox[0]!.slatepack, 'S1_ARMORED');
   assert.equal(inbox[0]!.counterpartyRef, alice.pubkeyHex);
-  // Alice (the sender) sees nothing pending — the offer isn't addressed to her.
+  // Alice (the sender) sees nothing pending: the offer isn't addressed to her.
   assert.equal((await aliceCh.inbox()).length, 0);
 });
 

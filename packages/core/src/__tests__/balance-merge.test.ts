@@ -1,5 +1,5 @@
 /**
- * mergeBalancesKeepLastKnown — the "don't flash to 0 on a failed fetch" logic.
+ * mergeBalancesKeepLastKnown: the "don't flash to 0 on a failed fetch" logic.
  * A transient LWS/electrum failure returns a zeroed `{error}` balance; merging it
  * over a good last-known value must keep the number (flagged stale), which is the
  * fix for the reported "XMR/WOW showed then disappeared" jank.

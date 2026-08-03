@@ -1,5 +1,5 @@
 /**
- * ReadyToShareTipsBanner — Home-tab affordance for sent public tips
+ * ReadyToShareTipsBanner: Home-tab affordance for sent public tips
  * whose funding has buried far enough for the share URL to be safely
  * distributable.
  *
@@ -11,7 +11,7 @@
  * cue that their pending public tip had matured. Tapping routes to
  * the cross-asset Sent Tips list where the URL + Copy-link sits.
  *
- * Hidden when `count === 0` — caller doesn't need a `count > 0` guard.
+ * Hidden when `count === 0`; caller doesn't need a `count > 0` guard.
  */
 
 import type { JSX } from 'preact';
@@ -19,7 +19,7 @@ import type { JSX } from 'preact';
 export interface ReadyToShareTipsBannerProps {
   /** Number of public tips with funding past the confirmation gate. */
   count: number;
-  /** Click handler — typically navigates to the Sent Tips surface. */
+  /** Click handler: typically navigates to the Sent Tips surface. */
   onView: () => void;
 }
 

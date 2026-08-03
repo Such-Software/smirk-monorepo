@@ -1,5 +1,5 @@
 /**
- * MockController tests — runs the shared conformance suite plus
+ * MockController tests: runs the shared conformance suite plus
  * mock-specific test-helper assertions.
  *
  * The conformance suite is the contract every controller impl must
@@ -16,7 +16,7 @@ import { NotSupportedError, makeTabId } from '../types';
 import { runControllerConformance } from './conformance';
 
 // ----------------------------------------------------------------------
-// Conformance suite — exercises the full interface.
+// Conformance suite: exercises the full interface.
 // ----------------------------------------------------------------------
 
 runControllerConformance({

@@ -99,7 +99,7 @@ test('getAppEncryptionKey: NOT_CONNECTED when the origin has no permission', asy
 
 test('getAppEncryptionKey: locked wallet routes through approval (popup unlocks), not LOCKED', async () => {
   // A locked wallet must NOT short-circuit with LOCKED before the
-  // approval popup can open — the popup (ApprovalApp) renders the
+  // approval popup can open: the popup (ApprovalApp) renders the
   // unlock screen, and only after unlock does the derive run. Here the
   // recording handler stands in for "user unlocked + approved".
   const { handler, seen } = recordingApproval();
@@ -234,12 +234,12 @@ test('nostrEncrypt: locked wallet routes through approval (popup unlocks), not L
 
 test('getNostrPublicKey: self-connects on grant — no prior connect() needed (NIP-07)', async () => {
   const { handler, seen } = recordingApproval();
-  const store = memStore(); // NO permission — a NIP-07 dapp never called connect()
+  const store = memStore(); // NO permission: a NIP-07 dapp never called connect()
   const dispatch = createWalletHandler({ provider: fakeProvider(), permissions: store, approval: handler });
 
   const res = await dispatch(req('getNostrPublicKey', {}), ORIGIN);
 
-  // Must NOT be NOT_CONNECTED — the grant establishes the connection.
+  // Must NOT be NOT_CONNECTED: the grant establishes the connection.
   assert.notEqual(res.error?.code, 'NOT_CONNECTED');
   assert.equal(seen[0]?.kind, 'nostrGrant');
   const perm = await store.get(ORIGIN.origin);

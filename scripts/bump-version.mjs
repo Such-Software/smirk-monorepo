@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * bump-version.mjs — set every shipped artifact's version to a single
+ * bump-version.mjs: set every shipped artifact's version to a single
  * semver. Lockstep across the workspace: root + every `packages/*` +
  * the extension's `manifest.json` (the file Chrome/Firefox actually
  * read, which `npm version` ignores).
@@ -10,7 +10,7 @@
  *   node scripts/bump-version.mjs 0.3.0 --check  # verify-only, no writes
  *   node scripts/bump-version.mjs --print        # print current versions
  *
- * Cargo crates are deliberately left alone — they aren't published from
+ * Cargo crates are deliberately left alone: they aren't published from
  * here, and the smirk-wasm crate's npm package picks up the version
  * via its own `package.json` once that file exists. If we later need
  * Cargo crates in lockstep, add them to CARGO_TARGETS below.
@@ -24,7 +24,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 // Targets carry the file path + the JSON path to the version string.
-// Keep the manifest target last — it's the file Chrome reads, and we
+// Keep the manifest target last: it's the file Chrome reads, and we
 // want it confirmed-written after every npm package has been touched.
 const NPM_TARGETS = [
   'package.json',
@@ -37,7 +37,7 @@ const NPM_TARGETS = [
 ];
 const MANIFEST_TARGETS = ['packages/extension/manifest.json'];
 
-// Rust crates intentionally skipped — they're never published. If
+// Rust crates intentionally skipped: they're never published. If
 // a future release needs Cargo in lockstep, add their Cargo.toml here
 // and add a Cargo-aware bump alongside `bumpJsonTargets`.
 const CARGO_TARGETS = [];

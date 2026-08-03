@@ -2,12 +2,12 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * send-fee-btc — regression guard for the namespaced BTC/LTC fee estimate.
+ * send-fee-btc: regression guard for the namespaced BTC/LTC fee estimate.
  *
  * THE BUG: against a namespaced backend (smirk-backend-core) the client used to
  * POST the FLAT `{asset}` body to the fee route and 422, so `estimateFee` failed,
  * the Compose fee tiers never populated, `selectedFeeSat` stayed null, and the
- * "Continue to review" button was permanently disabled — BTC/LTC Send was dead.
+ * "Continue to review" button was permanently disabled; BTC/LTC Send was dead.
  * The fix (packages/core/src/api/wallet-utxo.ts::estimateFee) translates the
  * namespaced dialect: POST `{asset, blocks}` per confirmation target and map the
  * `{asset, sat_per_vb}` responses into the `{fast, normal, slow}` shape callers
@@ -23,8 +23,8 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  * (`{asset, sat_per_vb}`, one rate per `blocks` target) so the outcome does not
  * hinge on live Electrum. This is exactly the shape the regression fix translates,
  * so stubbing it still exercises the real per-dialect mapping + the Compose fee
- * picker. The wallet's own BTC balance is NOT stubbed — it comes from the funded
- * alice wallet via the backend — because Compose gates Continue on amount + fee
+ * picker. The wallet's own BTC balance is NOT stubbed: it comes from the funded
+ * alice wallet via the backend, because Compose gates Continue on amount + fee
  * not exceeding session balance.
  *
  * Preconditions mirror send-compose-xmr.spec.ts:
@@ -43,7 +43,7 @@ const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
 
 // A real, checksum-valid mainnet BTC bech32 (P2WPKH) address (the BIP173
 // reference address). It only needs to pass the client-side `isValidBtcAddress`
-// decode on the Address step — nothing is ever sent to it.
+// decode on the Address step; nothing is ever sent to it.
 const BTC_RECIPIENT = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
 
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
@@ -91,12 +91,12 @@ test('Send → BTC → fee tiers resolve (namespaced) → reach Review (no broad
   // --- Send wizard: Home → BTC → Address → Compose ----------------------
   await page.getByTestId('home-action-send').click();
 
-  // Step 0 — pick BTC.
+  // Step 0: pick BTC.
   const btcPick = page.getByTestId('send-asset-btc');
   await expect(btcPick).toBeVisible({ timeout: 15_000 });
   await btcPick.click();
 
-  // Step 1 — recipient address.
+  // Step 1: recipient address.
   const addr = page.getByTestId('send-address-input');
   await expect(addr).toBeVisible();
   await addr.fill(BTC_RECIPIENT);
@@ -104,7 +104,7 @@ test('Send → BTC → fee tiers resolve (namespaced) → reach Review (no broad
   await expect(addrContinue).toBeEnabled();
   await addrContinue.click();
 
-  // Step 2 — Compose. THE REGRESSION ASSERTION: the fee tiers populate. Before
+  // Step 2: Compose. THE REGRESSION ASSERTION: the fee tiers populate. Before
   // the fix the picker was stuck on "Loading fee rates…" / a fee-estimate error
   // and every tier row was disabled with a "—" rate. Now `send-fee-tier-normal`
   // renders a usable "N.N sat/vB · …" rate and is enabled.
@@ -131,14 +131,14 @@ test('Send → BTC → fee tiers resolve (namespaced) → reach Review (no broad
 
   await page.getByTestId('send-amount-input').fill(amountBtc);
 
-  // "Continue to review" must become ENABLED — the whole point of the fix. A
+  // "Continue to review" must become ENABLED: the whole point of the fix. A
   // null fee (the bug) would keep `canContinue` false and lock this button.
   const composeContinue = page.getByTestId('send-compose-continue');
   await expect(composeContinue).toContainText(/Continue to review/i);
   await expect(composeContinue).toBeEnabled({ timeout: 15_000 });
   await composeContinue.click();
 
-  // --- Step 3 — Review reached (read-only). Assert, do NOT submit. -------
+  // --- Step 3: Review reached (read-only). Assert, do NOT submit. -------
   const reviewSubmit = page.getByTestId('send-review-submit');
   await expect(reviewSubmit).toBeVisible({ timeout: 15_000 });
 

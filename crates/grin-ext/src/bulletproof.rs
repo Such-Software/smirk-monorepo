@@ -4,19 +4,19 @@
 //! `rust-secp256k1-zkp` at v0.7.15, in `crates/secp256k1zkp/`, patched for
 //! `wasm32-unknown-unknown`).
 //!
-//! Grin uses **the original Bulletproofs (BP), not BP+** — see
+//! Grin uses **the original Bulletproofs (BP), not BP+**; see
 //! `grin/core/src/libtx/proof.rs` which calls `secp.bullet_proof(...)`. The
 //! wrappers here use the same C library functions (`secp256k1_bulletproof_*`)
 //! so output is byte-equivalent to what `grin-wallet` produces.
 //!
 //! ## What this module exposes
 //!
-//! - [`pedersen_commit`] — commit to a `(value, blinding_factor)` pair,
+//! - [`pedersen_commit`]: commit to a `(value, blinding_factor)` pair,
 //!   producing a 33-byte commitment that hides the value.
-//! - [`bullet_proof_create`] — produce a range proof showing the committed
+//! - [`bullet_proof_create`]: produce a range proof showing the committed
 //!   value lies in `[0, 2^64)`.
-//! - [`bullet_proof_verify`] — verify a range proof against a commitment.
-//! - [`bullet_proof_rewind`] — recover the committed value and blinding
+//! - [`bullet_proof_verify`]: verify a range proof against a commitment.
+//! - [`bullet_proof_rewind`]: recover the committed value and blinding
 //!   factor from a proof, given the rewind nonce.
 //!
 //! Range proofs are mandatory on every Grin transaction output. Without
@@ -32,7 +32,7 @@ pub const COMMITMENT_LEN: usize = 33;
 /// Create a Pedersen commitment to `(value, blinding_factor)`.
 ///
 /// Returns 33 bytes: `0x09` parity prefix + 32-byte X coordinate (Grin's
-/// commitment format — slightly different from a compressed secp256k1
+/// commitment format, slightly different from a compressed secp256k1
 /// pubkey because the Y-parity is stored as `0x08`/`0x09`).
 pub fn pedersen_commit(value: u64, blinding_factor: &[u8; 32]) -> Result<[u8; COMMITMENT_LEN], String> {
     let secp = Secp256k1::with_caps(ContextFlag::Commit);
@@ -74,7 +74,7 @@ pub fn bullet_proof_create(
     Ok(proof.proof[..proof.plen].to_vec())
 }
 
-/// Create a Bulletproof that embeds a 20-byte proof `message` — the v3
+/// Create a Bulletproof that embeds a 20-byte proof `message`: the v3
 /// identifier message produced by [`crate::build_v3_proof_message`].
 ///
 /// Identical to [`bullet_proof_create`] except the proof carries the
@@ -169,7 +169,7 @@ pub fn bullet_proof_rewind(
 mod tests {
     use super::*;
 
-    /// Three deterministic 32-byte test scalars — values chosen to be
+    /// Three deterministic 32-byte test scalars: values chosen to be
     /// non-zero and well-distributed; not derived from any seed.
     const BLIND: [u8; 32] = [
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(value, VALUE, "rewind must recover the original committed value");
 
         // The blinding factor that rewind returns is derived deterministically
-        // from the rewind nonce — it is NOT the original blinding factor the
+        // from the rewind nonce; it is NOT the original blinding factor the
         // prover used. (This is intentional in Grin's design: the receiver
         // doesn't need to learn the sender's blind; they get a usable blind
         // they can compute themselves and spend the output with.)

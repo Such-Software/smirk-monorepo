@@ -1,5 +1,5 @@
 /**
- * Wallet-side request dispatcher. Same logic across every platform —
+ * Wallet-side request dispatcher. Same logic across every platform:
  * the platform supplies a WalletProvider, OriginPermissionStore, and
  * ApprovalHandler; this function turns wire requests into wire
  * responses, applying permission checks + approval prompts in
@@ -14,7 +14,7 @@
  * provider.** The approval-handling context (popup window on
  * extension, in-app modal on Capacitor, named window on Tauri) is
  * also the only context that holds the unlocked seed. We don't
- * round-trip key material back into the dispatcher — the approval
+ * round-trip key material back into the dispatcher; the approval
  * handler returns the already-computed result. The provider is
  * restricted to public, cache-friendly metadata.
  */
@@ -92,7 +92,7 @@ async function dispatchInner<M extends SmirkMethod>(
 ): Promise<unknown> {
   switch (req.method) {
     case 'isConnected': {
-      // No unlock required — this is the page asking whether it
+      // No unlock required: this is the page asking whether it
       // already has any permission. Safe to answer when locked
       // (otherwise pages couldn't render their "Connect" button
       // without prompting the user to unlock first).
@@ -112,7 +112,7 @@ async function dispatchInner<M extends SmirkMethod>(
       // Fast path: an already-covered permission on an UNLOCKED wallet
       // serves public keys straight from the cache, no prompt. When the
       // wallet is LOCKED we deliberately fall through to the approval
-      // popup instead of returning LOCKED here — the popup renders the
+      // popup instead of returning LOCKED here: the popup renders the
       // unlock screen (ApprovalApp) and only resolves the connect once
       // the user has unlocked. `isUnlocked()` is passive (it just picks
       // fast-path vs. prompt; it never opens a popup).
@@ -125,7 +125,7 @@ async function dispatchInner<M extends SmirkMethod>(
         return await deps.provider.getPublicKeys(existing!.assets);
       }
 
-      // Otherwise prompt (a locked wallet lands here too — the approval
+      // Otherwise prompt (a locked wallet lands here too: the approval
       // popup unlocks first, then shows the connect prompt). User may
       // grant a narrower set than asked.
       const decision = await deps.approval({
@@ -203,7 +203,7 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'requestPayment': {
-      // No LOCKED pre-check — the approval popup unlocks first, then
+      // No LOCKED pre-check: the approval popup unlocks first, then
       // shows the payment confirmation and sends from the unlocked
       // wallet. Asset-scope is still enforced from the stored grant.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
@@ -221,7 +221,7 @@ async function dispatchInner<M extends SmirkMethod>(
       // interactive Grin path (deferred to v0.4) would write finalize
       // context into a SendWizard slot it never populates, so the returned
       // S2 could never finalize and would lock the user's inputs for ~7
-      // days — a real fund-availability hazard. Reject BEFORE the asset-
+      // days: a real fund-availability hazard. Reject BEFORE the asset-
       // scope check so this reads as a capability limit, not an auth leak
       // (the rejection must not depend on whether the origin holds a grin
       // grant).
@@ -259,12 +259,12 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'claimPublicTip': {
-      // Public tips are receiving funds — no asset-scope permission
+      // Public tips are receiving funds: no asset-scope permission
       // required (anyone with the URL fragment can claim). We still
       // require unlock so the popup has somewhere to deposit them,
       // and we still prompt the user to confirm so a hostile page
       // can't silently fire a claim that pre-confirms a tip the
-      // user hasn't seen. No LOCKED pre-check — the approval popup
+      // user hasn't seen. No LOCKED pre-check: the approval popup
       // unlocks first, then the claim deposits into the unlocked wallet.
       const params = req.params as { tipId: string; fragmentKey: string };
       const decision = await deps.approval({
@@ -296,14 +296,14 @@ async function dispatchInner<M extends SmirkMethod>(
     case 'getNostrPublicKey': {
       // A standard NIP-07 dapp (Magick Market, any Nostr app) calls
       // window.nostr.getPublicKey() directly and NEVER calls our proprietary
-      // connect(). So the Nostr grant IS the connection for a pure-Nostr origin —
+      // connect(). So the Nostr grant IS the connection for a pure-Nostr origin:
       // do NOT require a pre-existing permission. The npub is still a dedicated,
       // cross-site-correlatable disclosure, so it always prompts on first ask.
       //
       // We route through the approval popup when the origin isn't yet
       // granted OR when the wallet is LOCKED. In the locked case the npub
       // can't be read from the (empty) SW public cache, so returning
-      // LOCKED here would stop the popup from opening — instead the popup
+      // LOCKED here would stop the popup from opening; instead the popup
       // renders the unlock screen (ApprovalApp) first, then the grant
       // disclosure, and only reads the npub once unlocked. `isUnlocked()`
       // stays passive (it just decides fast-path vs. prompt).
@@ -349,7 +349,7 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'signNostrEvent': {
-      // No LOCKED pre-check — the approval popup renders the unlock
+      // No LOCKED pre-check: the approval popup renders the unlock
       // screen when locked, then signs with the unlocked wallet. Scope +
       // money-tier session enforcement below all run on the stored grant.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
@@ -364,7 +364,7 @@ async function dispatchInner<M extends SmirkMethod>(
       // events (17/27235/30402/22242) ALWAYS get an explicit per-event prompt and can
       // never be session-covered; low-tier events (notes/reactions/gift-wraps)
       // may be covered by an active session grant so the wallet auto-signs. The
-      // tier + coverage are computed HERE (the enforcement point) — a money kind
+      // tier + coverage are computed HERE (the enforcement point): a money kind
       // is reported as never-covered regardless of any stored session.
       const tier = nostrKindTier(params.event.kind);
       const nowMs = Date.now();
@@ -383,7 +383,7 @@ async function dispatchInner<M extends SmirkMethod>(
       if (decision.kind !== 'signNostrEvent') {
         throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
       }
-      // Persist a session grant if the user asked for one — mergeNostrSession
+      // Persist a session grant if the user asked for one; mergeNostrSession
       // drops money-tier + non-grantable kinds, so a money event can never be
       // written into a session even if the approval UI tried.
       if (decision.grantSession) {
@@ -396,13 +396,13 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'getAppEncryptionKey': {
-      // No LOCKED pre-check — the approval popup unlocks first, then
+      // No LOCKED pre-check: the approval popup unlocks first, then
       // derives the key in its unlocked context (the seed never reaches
       // this routing layer). The one-time disclosure still gates below.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       const params = req.params as { context?: string };
       const context = params.context ?? '';
-      // domainScope is the VERIFIED origin, set here — never a page string.
+      // domainScope is the VERIFIED origin, set here: never a page string.
       const firstGrant = !hasE2eeAuthorized(perm);
       // The executor derives in its unlocked context (the pubkey is public but
       // needs the seed). `firstGrant` drives the one-time disclosure; a
@@ -431,7 +431,7 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'appSealOpen': {
-      // No LOCKED pre-check — the approval popup unlocks first, then
+      // No LOCKED pre-check: the approval popup unlocks first, then
       // opens the sealed box in its unlocked context. Scope gated below.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       if (!hasE2eeAuthorized(perm)) {
@@ -461,10 +461,10 @@ async function dispatchInner<M extends SmirkMethod>(
     case 'nostrEncrypt':
     case 'nostrDecrypt': {
       // NIP-07 DM crypto: low-tier, requires the Nostr scope (same one-time grant
-      // as getNostrPublicKey). Runs silently once granted — a per-call prompt on
+      // as getNostrPublicKey). Runs silently once granted: a per-call prompt on
       // every DM decrypt would be unusable (matches Goblin's session model, where
       // 1/7/1059 are session-grantable and only 17/27235/30402/22242 are money-tier).
-      // No LOCKED pre-check — the approval popup unlocks first, then runs
+      // No LOCKED pre-check: the approval popup unlocks first, then runs
       // the crypto in its unlocked context. Scope gated below.
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       if (!hasNostrAuthorized(perm)) {
@@ -513,7 +513,7 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     default: {
-      // Exhaustiveness check — the switch above covers every
+      // Exhaustiveness check: the switch above covers every
       // SmirkMethod. If a new method gets added to the map without
       // a case here, TS catches it at compile time AND we fall
       // through to a runtime UNSUPPORTED.
@@ -567,7 +567,7 @@ async function touch(
 ): Promise<void> {
   // Bump lastUsedAt so Settings shows the most-recent activity and
   // a future auto-revoke-idle policy has a real timestamp to work
-  // against. Fire-and-forget — we don't want a slow storage write
+  // against. Fire-and-forget: we don't want a slow storage write
   // to slow down the request.
   void store.set({ ...perm, lastUsedAt: Date.now() }).catch((e) => {
     console.warn('[smirk-dapp-api] failed to touch permission:', e);

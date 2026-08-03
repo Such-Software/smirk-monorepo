@@ -1,5 +1,5 @@
 <!--
-  Smirk Wallet — pull request template.
+  Smirk Wallet: pull request template.
 
   Replace this comment block with a brief summary of the change. The
   checklists below set the bar; tick them off as you go, leave a

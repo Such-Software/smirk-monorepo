@@ -25,7 +25,7 @@ const pkgNodeDir = join(here, '..', 'crates', 'smirk-wasm', 'pkg-node');
 
 // The wasm-bindgen --target nodejs output includes a few `require("env")`
 // calls for WASM imports that, in browser environments, are filled in by
-// the runtime. Node has no `env` module — provide a Proxy stub that throws
+// the runtime. Node has no `env` module: provide a Proxy stub that throws
 // only if a host function is actually called (which our crypto code paths
 // don't trigger). If a future change does call into env, the test will fail
 // loudly with the missing function name instead of a confusing module-load
@@ -163,7 +163,7 @@ check('grin_slate_round_trip', () => {
 // ----------------------------------------------------------------------------
 // Grin: Pedersen + Bulletproofs
 //
-// SKIPPED in Node smoke — these paths call into the libsecp256k1-zkp C
+// SKIPPED in Node smoke: these paths call into the libsecp256k1-zkp C
 // code's `malloc`, which Node's --target nodejs WASM loader can't satisfy
 // (it resolves imports eagerly). Browser --target web works because
 // browsers either provide the symbol or don't enforce eager resolution.
@@ -231,7 +231,7 @@ check('grin adaptor sig 2-party round-trip', () => {
   // Alice's normal partial (using same effective challenge).
   const sA = mod.grin_adaptor_partial_sign(skA, nA, rTotalNoT, pTotal, T, TEST_MSG);
 
-  // Bob "spends the other chain" — t becomes known.
+  // Bob "spends the other chain": t becomes known.
   const sBcomp = mod.grin_adaptor_complete(sBprime, t);
   // Aggregate.
   const sAgg = mod.grin_schnorr_aggregate_partials(sA + sBcomp);
@@ -295,7 +295,7 @@ check('validate_address rejects garbage input', () => {
   const r = mod.validate_address('xxxx');
   const j = JSON.parse(r);
   // The function may report failure as either {valid: false, ...} or
-  // {success: false, error: ...} depending on its current shape — both
+  // {success: false, error: ...} depending on its current shape; both
   // indicate "not a valid address." Anything that returns success:true
   // for "xxxx" is a bug.
   const ok = j.valid === false || j.success === false;

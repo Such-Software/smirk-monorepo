@@ -1,5 +1,5 @@
 /**
- * ActionButton — primary CTA used in the action-centric Home tab.
+ * ActionButton: primary CTA used in the action-centric Home tab.
  *
  * Per UI_DESIGN.md Principle 1, top-level navigation is verbs (Tip,
  * Send, Swap, Claim) not nouns. This is the chrome those verbs render
@@ -11,7 +11,7 @@
  * ```
  *
  * The `icon` prop is intentionally `JSX.Element | string` rather than a
- * specific icon-library type — consumers bring their own icon set.
+ * specific icon-library type; consumers bring their own icon set.
  */
 
 import type { ComponentChildren } from 'preact';
@@ -19,7 +19,7 @@ import type { ComponentChildren } from 'preact';
 export interface ActionButtonProps {
   /** Short verb (≤ 6 chars works best). */
   label: string;
-  /** Icon glyph — string emoji, image element, or SVG component. */
+  /** Icon glyph: string emoji, image element, or SVG component. */
   icon?: ComponentChildren;
   /** Click handler. */
   onClick?: () => void;
@@ -102,7 +102,7 @@ export function ActionButton({
 }
 
 /**
- * ActionRow — convenience wrapper for a row of equally-sized
+ * ActionRow: convenience wrapper for a row of equally-sized
  * ActionButtons. The Home tab uses this for its primary action strip.
  */
 export interface ActionRowProps {

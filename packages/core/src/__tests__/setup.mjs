@@ -1,5 +1,5 @@
 /**
- * Test setup — polyfill `globalThis.crypto` for Node 18.
+ * Test setup: polyfill `globalThis.crypto` for Node 18.
  *
  * Node 18 exposes `globalThis.crypto` in the main process but not in
  * the `node --test` subprocess. Production code uses bare `crypto`

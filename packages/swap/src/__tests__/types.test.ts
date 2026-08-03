@@ -15,7 +15,7 @@ describe('ThorchainSwap', () => {
     assert.equal(swap.supports('btc', 'ltc'), true);
     assert.equal(swap.supports('ltc', 'btc'), true);
     assert.equal(swap.supports('btc', 'btc'), false);
-    // grin and wow are not THORChain pools — must fall through to native
+    // grin and wow are not THORChain pools; must fall through to native
     // (ThorchainSwap returns false; the swap router then tries NativeSwap).
     assert.equal(swap.supports('grin', 'btc'), false);
     assert.equal(swap.supports('wow', 'xmr'), false);

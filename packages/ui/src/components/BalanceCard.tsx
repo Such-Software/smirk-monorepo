@@ -1,9 +1,9 @@
 /**
- * BalanceCard — a single asset's balance, formatted from atomic units.
+ * BalanceCard: a single asset's balance, formatted from atomic units.
  *
  * Shows the icon, ticker, formatted amount, and optional fiat value. The
  * action-centric Wallet tab renders a list of these (one per registered
- * asset). Click handler is hoisted up — this component is presentational.
+ * asset). Click handler is hoisted up; this component is presentational.
  */
 
 import { mustGetAsset } from '@smirk/assets';
@@ -17,7 +17,7 @@ export interface BalanceCardProps {
   balanceAtomic: bigint | number;
   /**
    * Optional incoming-pending balance (mempool / 0-conf). Only rendered
-   * when non-zero — keeps the default row tight on pixel themes.
+   * when non-zero: keeps the default row tight on pixel themes.
    */
   pendingAtomic?: bigint | number;
   /**
@@ -29,16 +29,16 @@ export interface BalanceCardProps {
   /**
    * Optional in-flight outgoing total. Renders as `↑ X.XX sending`
    * in the warning color. The caller has already subtracted this
-   * from `balanceAtomic` — this prop is purely for the subline.
+   * from `balanceAtomic`; this prop is purely for the subline.
    */
   sendingAtomic?: bigint | number;
   /** Optional fiat value (already formatted: `"$12.34"`). */
   fiatDisplay?: string;
-  /** Click handler — usually a navigate to the asset's detail screen. */
+  /** Click handler: usually a navigate to the asset's detail screen. */
   onClick?: () => void;
   /** Icon resolver (see `AssetIcon`). */
   resolveIcon?: (iconKey: string) => string | undefined;
-  /** Loading state — renders shimmer placeholders for the amount. */
+  /** Loading state: renders shimmer placeholders for the amount. */
   loading?: boolean;
   /** Mask the amount with `●●●●●`. Pairs with the headline hide toggle. */
   hidden?: boolean;
@@ -62,12 +62,12 @@ export function BalanceCard({
 }: BalanceCardProps) {
   const asset = mustGetAsset(assetId);
   // Display cap per asset: BTC keeps 8 (high $/unit, dust matters), LTC
-  // 4, XMR 4, WOW 2, GRIN 2 — matches the v0.2.4 convention. Falls back
+  // 4, XMR 4, WOW 2, GRIN 2; matches the v0.2.4 convention. Falls back
   // to full precision for any asset that hasn't opted in. AssetDetail
   // and copy/hover still surface the full atomic value.
   const displayCap = asset.displayDecimals ?? asset.decimals;
-  // Balance list: trim zeros for compactness (`0.008` not `0.00800000`
-  // — the latter only made sense back when we showed full precision).
+  // Balance list: trim zeros for compactness (`0.008` not `0.00800000`;
+  // the latter only made sense back when we showed full precision).
   const formatted = hidden
     ? HIDDEN_PLACEHOLDER
     : formatAmountWithAsset(balanceAtomic, asset, displayCap);
@@ -98,7 +98,7 @@ export function BalanceCard({
       style={{
         // Outer is a column so the main row keeps its tight icon-
         // name-balance layout and any sublines (sending / locked /
-        // pending) sit below as a full-width strip — they used to
+        // pending) sit below as a full-width strip; they used to
         // stack inside the right column, which on chunky pixel
         // themes pushed wide enough to overlap the asset name.
         display: 'flex',

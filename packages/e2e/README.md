@@ -1,4 +1,4 @@
-# @smirk/e2e — end-to-end suite (the client-release gate)
+# @smirk/e2e: end-to-end suite (the client-release gate)
 
 Playwright drives the **real MV3 browser extension** (headless Chromium) against a
 **running backend**. This is the release gate: it exercises the actual popup +
@@ -28,7 +28,7 @@ HEADED=1 npm run test -w @smirk/e2e  # watch it drive a visible window
 `build:ext` (`scripts/build-extension.sh`) compiles the workspace libs
 (`@smirk/assets` → `@smirk/core` → `@smirk/ui`) then `vite build`s the extension
 with the backend baked in. **Editing a testid in `@smirk/ui` has no effect until
-you rebuild** — the extension bundles ui's `dist/`, not its source.
+you rebuild**: the extension bundles ui's `dist/`, not its source.
 
 ### Env
 
@@ -50,18 +50,18 @@ you rebuild** — the extension bundles ui's `dist/`, not its source.
    and the whole register/checkRestore pipeline run in the extension's
    **offscreen document**, whose traffic is **invisible** to Playwright's
    page/context response listeners. `waitForResponse('/auth/extension')` there
-   **always** times out. Detect auth by a **capturable** signal instead — a real
+   **always** times out. Detect auth by a **capturable** signal instead: a real
    backend balance rendering on Home. `fixtures/onboard.ts` `importAndUnlock`
    encapsulates this.
 2. **Assert on capturable UI, not offscreen effects.** Balances, headings,
-   testids, nav state — all fine (they originate from the popup page). Offscreen
+   testids, nav state: all fine (they originate from the popup page). Offscreen
    side effects are not directly observable; assert on their UI consequence.
 
 ## Self-adapting to operator config
 
 Some scenarios need a specific backend config. Rather than hard-code an
 assumption, they read `GET /capabilities` (`fixtures/capabilities.ts`) and
-`test.skip` when the running instance doesn't match — so **one suite run adapts
+`test.skip` when the running instance doesn't match, so **one suite run adapts
 to whatever backend is up**.
 
 **A skip is not a pass.** `skip-guard-reporter.ts` fails the run when a spec
@@ -104,7 +104,7 @@ silently drops the guard**, so the run reports its skips and exits 0. Use
 | `nostr-identity` | Settings → Nostr link/login identity screen | `nostr_identity` on |
 | `grin-send-nostr` | Grin Send accepts an npub + a NIP-05 name as recipient (routes over gift-wrap, not slatepack) → advances to amount | alice seed, grin on |
 | `goblin-paylink` | pasting a `goblin:` checkout URI pre-fills the Grin Send flow (npub → pubkey, amount from the link) | alice seed, grin on |
-| `session-cache-restore` | reopening the popup restores from the session cache — no re-onboard, no key/offscreen sign-in error | alice seed |
+| `session-cache-restore` | reopening the popup restores from the session cache: no re-onboard, no key/offscreen sign-in error | alice seed |
 | `feed` | Feed tab is present + renders **iff** the backend advertises `features.feed` (absent otherwise) | alice seed |
 | `balance-freshness-cue` | the freshness affordance escalates on **sustained** refresh failure (quiet, then amber >30s, then red >60s) and clears once a refresh succeeds | alice seed |
 | `send-fee-btc` | regression guard: against a **namespaced** backend the BTC/LTC fee estimate populates the Compose fee tiers so "Continue to review" enables | alice seed |

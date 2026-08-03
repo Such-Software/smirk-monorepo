@@ -4,8 +4,8 @@ Smirk supports both Monero (XMR) and Wownero (WOW) through a single Rust + WASM 
 
 ## Crates
 
-- **`crates/monero-oxide/`** — vendored fork of [monero-oxide](https://github.com/monero-oxide/monero-oxide) with Wownero transaction support added in-tree. 16 library sub-crates covering ed25519, ringct (CLSAG, MLSAG, Borromean, Bulletproofs+), wallet logic, address parsing, and protocol types (18 counting the two test crates under `crates/monero-oxide/tests/`; all of them are workspace members, listed at `Cargo.toml:6-28`).
-- **`crates/smirk-wasm/`** — wasm-bindgen wrapper. Exposes the Monero/Wownero functions to JavaScript as a single WASM bundle.
+- **`crates/monero-oxide/`**: vendored fork of [monero-oxide](https://github.com/monero-oxide/monero-oxide) with Wownero transaction support added in-tree. 16 library sub-crates covering ed25519, ringct (CLSAG, MLSAG, Borromean, Bulletproofs+), wallet logic, address parsing, and protocol types (18 counting the two test crates under `crates/monero-oxide/tests/`; all of them are workspace members, listed at `Cargo.toml:6-28`).
+- **`crates/smirk-wasm/`**: wasm-bindgen wrapper. Exposes the Monero/Wownero functions to JavaScript as a single WASM bundle.
 
 ## Status
 
@@ -69,4 +69,4 @@ The Wownero changes (RCT type 8, ring 22, commitment scaling) sit deep in the tr
 
 The standalone fork at [Such-Software/monero-oxide](https://github.com/Such-Software/monero-oxide) publishes the workspace crates to crates.io under the `wownero-*` namespace (`wownero-oxide`, `wownero-ed25519`, `wownero-clsag`, etc.). Library names stay as `monero_*` so existing Rust code does `use monero_oxide::...` unchanged.
 
-Sync the standalone fork from the monorepo via `git subtree push` — see [MONOREPO.md](../MONOREPO.md#pushing-back-to-the-standalone-monero-oxide-fork-for-cratesio-publish).
+Sync the standalone fork from the monorepo via `git subtree push`: see [MONOREPO.md](../MONOREPO.md#pushing-back-to-the-standalone-monero-oxide-fork-for-cratesio-publish).

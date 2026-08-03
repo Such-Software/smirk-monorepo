@@ -67,8 +67,8 @@ where
 
 /// Generate a fresh per-transaction `outgoing_view_key` from OS randomness.
 ///
-/// SECURITY: `outgoing_view_key` is treated as a private key by monero-oxide
-/// — it seeds the RNG that produces the per-tx scalar `r` and the ECDH
+/// SECURITY: `outgoing_view_key` is treated as a private key by monero-oxide:
+/// it seeds the RNG that produces the per-tx scalar `r` and the ECDH
 /// shared secrets with each receiver. A constant value (e.g. zeros) lets
 /// any observer recompute `r`, derive the same shared secret, and decrypt
 /// amounts or link outputs back to the recipient.
@@ -94,7 +94,7 @@ pub(crate) fn fresh_outgoing_view_key() -> Zeroizing<[u8; 32]> {
 
 /// An unspent output from LWS `get_unspent_outs`.
 ///
-/// `height` and `rct` are deserialized but not currently read — they're
+/// `height` and `rct` are deserialized but not currently read; they're
 /// part of the LWS API contract (round-trip fidelity) and `rct` becomes
 /// load-bearing once we wire the RingCT commitment-recovery path; until
 /// then dead-code-allowed.
@@ -433,7 +433,7 @@ fn parse_address(address: &str, network: Network) -> Result<MoneroAddress, Strin
 /// - Subaddress: 12208  (0x2FB0, varint [0xB0, 0x5F])
 ///
 /// Pre-2026-05-12: the integrated arm was 6810, which doesn't match any
-/// real Wownero address — phantom value from a stale doc. Verified by
+/// real Wownero address: a phantom value from a stale doc. Verified by
 /// round-tripping a Stack-Wallet subaddress (`WW3pXrjga...CCM5ge` →
 /// prefix 12208) and aligning with current upstream constants.
 fn parse_wownero_address(address: &str, network: Network) -> Result<MoneroAddress, String> {

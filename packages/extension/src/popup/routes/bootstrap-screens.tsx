@@ -2,7 +2,7 @@
  * Placeholder rendered while the background `bootstrap-auth` job is
  * still running. Shows the animated doge so the wait reads as
  * intentional ("we're proving you're probably human") rather than
- * a hang. The actual work — PoW + register — happens in the
+ * a hang. The actual work (PoW + register) happens in the
  * offscreen runner; this view just listens for the result.
  *
  * If the popup closes while this is showing, the SW continues the

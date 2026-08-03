@@ -1,5 +1,5 @@
 /**
- * Explorer URL builders + row timestamp (extracted from index.tsx). Pure — asserts
+ * Explorer URL builders + row timestamp (extracted from index.tsx). Pure: asserts
  * the per-asset/per-row-kind URL mapping and the null cases (Grin has no per-tx URL).
  */
 import { test } from 'node:test';

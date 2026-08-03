@@ -10,7 +10,7 @@ test.skip(
 );
 
 /**
- * Pay-to-register gate — a FRESH (unregistered) wallet against a backend whose
+ * Pay-to-register gate: a FRESH (unregistered) wallet against a backend whose
  * `/capabilities` reports `payment_required: true`.
  *
  * Expected product behaviour: onboarding must NOT complete. The wizard reads the
@@ -28,20 +28,20 @@ test.skip(
  * payment-provider wiring; the router + non-completion are the real, testable
  * behaviour either way.)
  *
- * CRITICAL — do NOT `waitForResponse('/auth/extension')`. The bootstrap-auth
+ * CRITICAL: do NOT `waitForResponse('/auth/extension')`. The bootstrap-auth
  * POST fires from the extension's OFFSCREEN document, whose network is invisible
  * to Playwright's page/context response listeners, so any such wait ALWAYS times
  * out. We therefore assert only on capturable signals:
  *   - `/capabilities` read via `page.request.get` (a Playwright-context request,
- *     not a page-origin fetch — no CORS, always capturable);
+ *     not a page-origin fetch: no CORS, always capturable);
  *   - the popup UI (getByTestId / #root text) reflecting the blocked state;
  *   - the ABSENCE of a `/wallet/.../balance` response (those DO originate from
- *     the popup page and so are capturable — a blocked wallet never fires them).
+ *     the popup page and so are capturable; a blocked wallet never fires them).
  *
  * Why a fresh random mnemonic (NOT alice/bob/carol / importAndUnlock): the
  * funded smoke wallets are already registered, so `checkRestore` returns
  * exists:true and the backend's returning-user bypass SKIPS every registration
- * gate — including payment. Only a never-seen pubkey trips the gate. We generate
+ * gate, including payment. Only a never-seen pubkey trips the gate. We generate
  * a valid 12-word BIP-39 phrase with the same @scure/bip39 + english wordlist
  * the wizard's isValidMnemonic uses (packages/core/src/hd.ts), so the import
  * step validates it.
@@ -51,7 +51,7 @@ test.skip(
  *      (PAYMENT_* provider vars wired) so /capabilities reports payment_required.
  *   2. The extension dist is built against the local backend
  *      (VITE_SMIRK_BACKEND_URL=http://127.0.0.1:8080/api/v1,
- *      VITE_SMIRK_API_STYLE=namespaced) — already the case for this dist.
+ *      VITE_SMIRK_API_STYLE=namespaced): already the case for this dist.
  *
  * Requires the seed env only to gate the run (we still generate our own fresh
  * seed); we reuse SMOKE_ALICE_MNEMONIC as the "smoke suite is wired" signal so
@@ -86,7 +86,7 @@ test('fresh wallet → payment_required backend blocks onboarding (pay-to-regist
   console.log('CAPABILITIES', JSON.stringify(capsBody).slice(0, 500));
   const registration = (capsBody.registration ?? capsBody) as Record<string, unknown>;
   // Self-adapt to the running instance's operator config: if this backend is NOT
-  // payment-gated the gate can never fire, so the scenario is N/A — SKIP rather
+  // payment-gated the gate can never fire, so the scenario is N/A; SKIP rather
   // than fail. (Its mirror image, create-new-wallet.spec.ts, skips when the gate
   // IS on.) One suite run then works against either config.
   test.skip(
@@ -98,7 +98,7 @@ test('fresh wallet → payment_required backend blocks onboarding (pay-to-regist
   const page = await context.newPage();
 
   // Capturable diagnostic: log any backend response that ORIGINATES FROM THE
-  // POPUP PAGE (offscreen traffic never appears here — that's expected).
+  // POPUP PAGE (offscreen traffic never appears here; that's expected).
   page.on('response', (r) => {
     const u = r.url();
     if (u.includes('127.0.0.1:8080')) {
@@ -142,7 +142,7 @@ test('fresh wallet → payment_required backend blocks onboarding (pay-to-regist
 
   // ---- Home never rendered / no authenticated balance fetch fired. ----
   // Balance requests DO originate from the popup page (fetchAllBalances runs in
-  // the popup), so they ARE capturable — a blocked, unauthenticated wallet must
+  // the popup), so they ARE capturable; a blocked, unauthenticated wallet must
   // never fire one. Poll a short window: seeing one means onboarding wrongly
   // completed.
   const homeReached = await page

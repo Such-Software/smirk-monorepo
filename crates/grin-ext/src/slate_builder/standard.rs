@@ -1,8 +1,8 @@
-//! Standard ceremony — sender-driven (S1 → S2 → S3).
+//! Standard ceremony: sender-driven (S1 → S2 → S3).
 //!
-//! - **S1** — sender shares `xs` + `nonce` + `offset` and the amount/fee.
-//! - **S2** — receiver appends their output + their partial signature.
-//! - **S3** — sender appends their partial, aggregates, and verifies.
+//! - **S1**: sender shares `xs` + `nonce` + `offset` and the amount/fee.
+//! - **S2**: receiver appends their output + their partial signature.
+//! - **S3**: sender appends their partial, aggregates, and verifies.
 
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ use super::{
 };
 
 // ============================================================================
-// S1 — sender init
+// S1: sender init
 // ============================================================================
 
 /// Inputs to the sender-init step.
@@ -39,10 +39,10 @@ pub struct SenderInitParams {
     /// blinds, and the kernel offset.
     pub sender_blind_excess: [u8; 32],
 
-    /// Kernel offset — random 32-byte scalar chosen by the sender.
+    /// Kernel offset: random 32-byte scalar chosen by the sender.
     pub kernel_offset: [u8; 32],
 
-    /// Sender's secret kernel-signing nonce — a fresh CSPRNG-derived 32-byte
+    /// Sender's secret kernel-signing nonce: a fresh CSPRNG-derived 32-byte
     /// scalar that must NEVER be reused across slates.
     pub kernel_nonce: [u8; 32],
 }
@@ -132,7 +132,7 @@ pub fn sender_init_s1_with_id(
 }
 
 // ============================================================================
-// S2 — receiver round
+// S2: receiver round
 // ============================================================================
 
 /// Inputs to the receiver-round step. The receiver takes the sender's S1
@@ -148,11 +148,11 @@ pub struct ReceiverRoundParams {
     /// throwaway receivers).
     pub receiver_output_blind: [u8; 32],
 
-    /// Receiver's secret kernel-signing nonce — fresh CSPRNG-derived 32
+    /// Receiver's secret kernel-signing nonce: fresh CSPRNG-derived 32
     /// bytes that must NEVER be reused across slates.
     pub receiver_kernel_nonce: [u8; 32],
 
-    /// Legacy random rewind nonce — used ONLY when `extended_private_key`
+    /// Legacy random rewind nonce: used ONLY when `extended_private_key`
     /// is `None` (the unused low-level binding path). High-level flows set
     /// the ext key + path below for a deterministic, seed-recoverable nonce.
     pub bp_rewind_nonce: [u8; 32],
@@ -211,7 +211,7 @@ pub fn receiver_round_s2(params: &ReceiverRoundParams) -> Result<ReceiverRoundOu
     let r_r = public_key_from_secret_key(&params.receiver_kernel_nonce)
         .map_err(|e| format!("invalid receiver kernel nonce: {e}"))?;
 
-    // Sender's public excess + nonce — already in the slate.
+    // Sender's public excess + nonce: already in the slate.
     let sender_sig = &params.s1_slate.sigs[0];
 
     // Shared challenge sums.
@@ -227,7 +227,7 @@ pub fn receiver_round_s2(params: &ReceiverRoundParams) -> Result<ReceiverRoundOu
         &msg,
     )?;
 
-    // Sanity-check our own partial verifies — catches bugs in our math
+    // Sanity-check our own partial verifies: catches bugs in our math
     // before they leave the wallet.
     let ok = partial_verify(&partial_s, &r_r, &p_r, &r_total, &p_total, &msg)?;
     if !ok {
@@ -271,7 +271,7 @@ pub fn receiver_round_s2(params: &ReceiverRoundParams) -> Result<ReceiverRoundOu
     });
 
     // Append receiver's participant data (with their partial signature).
-    // Slate stores the partial as 64 bytes — see `partial_to_slate_part`.
+    // Slate stores the partial as 64 bytes; see `partial_to_slate_part`.
     let mut sigs = params.s1_slate.sigs.clone();
     sigs.push(ParticipantDataV4 {
         xs: p_r,
@@ -297,7 +297,7 @@ pub fn receiver_round_s2(params: &ReceiverRoundParams) -> Result<ReceiverRoundOu
 }
 
 // ============================================================================
-// S3 — sender finalize
+// S3: sender finalize
 // ============================================================================
 
 /// Inputs to the sender-finalize step.
@@ -312,7 +312,7 @@ pub struct SenderFinalizeParams {
 
 /// Output of finalize. The slate moves to S3 (ready to broadcast); the
 /// `final_signature` is the aggregated 64-byte Schnorr signature for the
-/// kernel — verified to be valid before this function returns.
+/// kernel, verified to be valid before this function returns.
 #[derive(Debug, Clone)]
 pub struct SenderFinalizeOutput {
     pub slate: SlateV4,

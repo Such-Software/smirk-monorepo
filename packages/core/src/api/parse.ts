@@ -4,7 +4,7 @@
  * These helpers safely extract fields from `unknown` API responses,
  * preventing crashes when the backend returns unexpected shapes (extra
  * fields, missing fields, wrong types). They favor returning `undefined`
- * over throwing — callers handle the missing-field case explicitly.
+ * over throwing: callers handle the missing-field case explicitly.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

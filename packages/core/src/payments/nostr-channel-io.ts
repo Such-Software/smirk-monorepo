@@ -1,10 +1,10 @@
 /**
- * Runtime {@link NostrChannelIO} for {@link NostrGiftwrapChannel} — the bridge
+ * Runtime {@link NostrChannelIO} for {@link NostrGiftwrapChannel}: the bridge
  * from the pure P3a seam to real relays. Payments share the gift-wrap inbox with
  * DMs (identical kind-1059 rail), so this reuses the messaging plane verbatim:
  * the same relay resolution that already targets a recipient's kind-10050 inbox
  * (Goblin users included) and the same seedless wrap poll the background poller
- * uses. No new relay code — just glue.
+ * uses. No new relay code, just glue.
  */
 
 import type { NostrIdentity } from '../nostr';

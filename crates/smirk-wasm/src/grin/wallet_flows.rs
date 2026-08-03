@@ -78,7 +78,7 @@ fn kernel_features_from_str(
 }
 
 // ============================================================================
-// DTOs — JSON shapes the JS side sends in / receives out
+// DTOs: JSON shapes the JS side sends in / receives out
 // ============================================================================
 
 mod dto {
@@ -143,7 +143,7 @@ mod dto {
         /// Compact-binary slate (slatepack payload), hex.
         pub slate_bin_hex: String,
         pub slate_id: String,
-        /// Sender context — opaque JSON the caller persists for finalize.
+        /// Sender context: opaque JSON the caller persists for finalize.
         pub sender_context_json: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub change_output: Option<ChangeOutputInfoDto>,
@@ -189,7 +189,7 @@ mod dto {
         /// Binary wire format transaction bytes, hex. Used for the
         /// P2P / gossip path or local round-trip testing.
         pub tx_bytes_hex: String,
-        /// JSON-shaped Transaction object — pass this to the backend
+        /// JSON-shaped Transaction object: pass this to the backend
         /// broadcast endpoint's `tx` field unchanged. Grin's
         /// `/v2/foreign push_transaction` deserializes this as a
         /// `grin_core::Transaction`. Sending the hex bytes instead
@@ -229,7 +229,7 @@ mod dto {
     #[derive(Debug, Clone, Deserialize)]
     pub struct SignInvoiceParamsDto {
         pub extended_private_key_hex: String,
-        /// LEGACY ext key — same purpose as in CreateSendTxParamsDto.
+        /// LEGACY ext key: same purpose as in CreateSendTxParamsDto.
         #[serde(default)]
         pub legacy_extended_private_key_hex: Option<String>,
         pub i1_slate_json: String,
@@ -264,7 +264,7 @@ mod dto {
         pub final_signature_hex: String,
         pub kernel_excess_hex: String,
         pub tx_bytes_hex: String,
-        /// JSON-shaped Transaction — see FinalizeSendResultDto.tx_json.
+        /// JSON-shaped Transaction: see FinalizeSendResultDto.tx_json.
         pub tx_json: serde_json::Value,
     }
 }
@@ -307,7 +307,7 @@ fn change_output_to_dto(c: &ChangeOutputInfo) -> dto::ChangeOutputInfoDto {
 }
 
 // ============================================================================
-// Wasm exports — the 6 orchestrators
+// Wasm exports: the 6 orchestrators
 // ============================================================================
 
 #[wasm_bindgen]
@@ -544,7 +544,7 @@ pub fn grin_slate_v4_from_bin_hex(bin_hex: &str) -> Result<String, JsValue> {
 /// input (v3/legacy key × Regular/None switch × depth-3/4). Returns the matching
 /// 4-level path as a JSON array (e.g. `"[0,0,7,0]"`), or the string `"null"` if
 /// no index in range reproduces the commitment (caller must then drop that
-/// output — never feed an unidentified input to the send builder).
+/// output; never feed an unidentified input to the send builder).
 ///
 /// `legacy_ext_key_hex` may be empty to skip the legacy fallback. `value` is in
 /// nanogrin.

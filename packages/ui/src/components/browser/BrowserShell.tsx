@@ -1,7 +1,7 @@
 // @jsxRuntime automatic
 // @jsxImportSource preact
 /**
- * `BrowserShell` — the top-level embedded-browser surface.
+ * `BrowserShell`: the top-level embedded-browser surface.
  *
  * Composes `BrowserTabStrip` and `BrowserUrlBar` and leaves a "frame
  * area" empty for the native webview overlay. Subscribes to a
@@ -53,8 +53,8 @@
  *   reload, security indicator, URL input, trailing slot) → frame
  *   slot. Reverse order on `Shift+Tab`. The wallet shell consuming
  *   `BrowserShell` is responsible for routing focus into the URL
- *   input via the `browser:focus-url-bar` keymap action (Cmd/Ctrl+L)
- *   — `BrowserShell` does not bind keys itself; the consuming shell
+ *   input via the `browser:focus-url-bar` keymap action (Cmd/Ctrl+L):
+ *   `BrowserShell` does not bind keys itself; the consuming shell
  *   wires `@smirk/keymap` and exposes a `focusUrlBar()` imperative
  *   handle when that lands.
  * - **Live regions.** Loading-state transitions DO NOT emit a live
@@ -69,7 +69,7 @@
  * accessible:
  *
  *  1. The frame slot's DOM presence must remain even when the
- *     native webview is overlaying it — screen readers rely on the
+ *     native webview is overlaying it: screen readers rely on the
  *     `role="region"` for the announcement boundary.
  *  2. `controller.setFrameRect()` is called whenever the slot's
  *     bounding rect changes; the native impl must respect zero-sized
@@ -105,7 +105,7 @@ export interface BrowserShellProps {
   readonly normalizeUrl?: (raw: string) => string;
 
   /**
-   * Optional class for the outer container — useful when the consumer
+   * Optional class for the outer container: useful when the consumer
    * needs to constrain the shell to a region of the wallet UI.
    */
   readonly class?: string;
@@ -116,7 +116,7 @@ export interface BrowserShellProps {
    * can paint its OS-level webview on top via `setFrameRect`. Inline-
    * mode controllers (notably `IframeBrowserController`) pass their
    * own `<IframeBrowserContent />` here so the iframe element renders
-   * as a real DOM child of the slot — no native overlay, no rect
+   * as a real DOM child of the slot: no native overlay, no rect
    * measurement required.
    *
    * Why a prop rather than reading `controller.inlineMode`: keeps
@@ -186,7 +186,7 @@ export function BrowserShell(props: BrowserShellProps): JSX.Element {
         </>
       )}
 
-      {/* Frame area — left empty for the native webview overlay. The
+      {/* Frame area: left empty for the native webview overlay. The
           controller paints its native webview on top of this region
           via `setFrameRect`. We deliberately render no content
           inside; anything we draw here would be invisible behind the
@@ -243,8 +243,8 @@ function defaultNormalizeUrl(raw: string): string {
  * (which moves the strip in / out), and on a controller change.
  *
  * Uses a `ResizeObserver` when available (every modern target) so
- * arbitrary layout changes — Settings overlay sliding in, font size
- * change, etc. — also propagate without us having to enumerate them.
+ * arbitrary layout changes (Settings overlay sliding in, font size
+ * change, etc.) also propagate without us having to enumerate them.
  */
 function useFrameRect(
   frameRef: RefObject<HTMLDivElement>,
@@ -277,7 +277,7 @@ function useFrameRect(
       window.removeEventListener('resize', push);
     };
     // `tabCount` is in the deps because hiding/showing the tab strip
-    // changes our `y` offset — ResizeObserver fires for size changes
+    // changes our `y` offset; ResizeObserver fires for size changes
     // but not necessarily position-only changes, so be explicit.
   }, [frameRef, controller, tabCount]);
 }

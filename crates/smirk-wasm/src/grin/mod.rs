@@ -9,20 +9,20 @@
 //!
 //! Submodules group exports by topic. The public function names (and thus
 //! the wasm-bindgen-exported JS symbols) are unchanged from the previous
-//! single-file layout — `pub use` re-exports preserve the surface.
+//! single-file layout; `pub use` re-exports preserve the surface.
 //!
-//! - [`keys`] — seed → extended key, address derivation, slatepack address
-//! - [`schnorr`] — single-signer Schnorr sign / verify
-//! - [`multiparty`] — point ops + multi-party Schnorr aggregation
-//! - [`adaptor`] — Schnorr adaptor signatures (atomic-swap building block)
-//! - [`bulletproof`] — Pedersen commit + Bulletproof create / verify / rewind
-//! - [`blind`] — scalar arithmetic helpers
-//! - [`slate`] — slate v4 round-trip + summary helpers
-//! - [`slate_builder`] — full S1→S2→S3 + I1→I2→I3 ceremonies
-//! - [`kernel`] — kernel features serialization + sig-message hash
-//! - [`transaction`] — finalized slate → broadcastable TX bytes
-//! - [`payment_proof`] — ed25519 receiver-signed payment receipts
-//! - [`slatepack`] — ASCII armor + binary codec + age encryption
+//! - [`keys`]: seed → extended key, address derivation, slatepack address
+//! - [`schnorr`]: single-signer Schnorr sign / verify
+//! - [`multiparty`]: point ops + multi-party Schnorr aggregation
+//! - [`adaptor`]: Schnorr adaptor signatures (atomic-swap building block)
+//! - [`bulletproof`]: Pedersen commit + Bulletproof create / verify / rewind
+//! - [`blind`]: scalar arithmetic helpers
+//! - [`slate`]: slate v4 round-trip + summary helpers
+//! - [`slate_builder`]: full S1→S2→S3 + I1→I2→I3 ceremonies
+//! - [`kernel`]: kernel features serialization + sig-message hash
+//! - [`transaction`]: finalized slate → broadcastable TX bytes
+//! - [`payment_proof`]: ed25519 receiver-signed payment receipts
+//! - [`slatepack`]: ASCII armor + binary codec + age encryption
 
 use wasm_bindgen::prelude::*;
 

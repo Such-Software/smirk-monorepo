@@ -1,7 +1,7 @@
 // @jsxRuntime automatic
 // @jsxImportSource preact
 /**
- * `BrowserUrlBar` — the address-bar / status-indicator strip.
+ * `BrowserUrlBar`: the address-bar / status-indicator strip.
  *
  * Renders:
  *  - Back / forward / reload buttons on the left.
@@ -11,7 +11,7 @@
  *
  * The component is presentational. Navigation commands flow back
  * through the consumer-supplied callbacks rather than touching the
- * controller directly — keeps the component testable without a real
+ * controller directly: keeps the component testable without a real
  * controller and keeps the layering clean.
  */
 
@@ -46,7 +46,7 @@ export interface BrowserUrlBarProps {
 
   /**
    * Optional class for the outer container. Useful when the consumer
-   * needs to override layout — e.g. compact mode on small screens.
+   * needs to override layout, e.g. compact mode on small screens.
    */
   readonly class?: string;
 }
@@ -55,7 +55,7 @@ export interface BrowserUrlBarProps {
 export function BrowserUrlBar(props: BrowserUrlBarProps): JSX.Element {
   // Local draft state so the user can type without each keystroke
   // hitting `onSubmitUrl`. Sync the draft with `state.url` only on
-  // explicit submit or when the user blurs without changes — that
+  // explicit submit or when the user blurs without changes; that
   // way external navigation (back/forward/click) updates the bar but
   // doesn't clobber a partially-typed URL.
   const [draft, setDraft] = useState(props.state.url);

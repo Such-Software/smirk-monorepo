@@ -3,7 +3,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
 
 /**
- * Feature: tips (Grin voucher) — create a PUBLIC Grin voucher tip and land on
+ * Feature: tips (Grin voucher): create a PUBLIC Grin voucher tip and land on
  * the success screen in its `shareUrlPending` state.
  *
  * Drives the REAL TipMaker composer (packages/ui/src/components/TipMaker.tsx)
@@ -14,7 +14,7 @@ import { getCapabilities } from '../fixtures/capabilities.js';
  * Why the assertion is the PENDING state, not a live URL:
  *   Grin is confirmation-gated, so `createGrinTip` returns
  *   `shareUrlPending:true` (tip-handler.ts) and TipSuccess renders the
- *   "⏳ Waiting for funding to confirm" affordance (`tip-share-pending`) —
+ *   "⏳ Waiting for funding to confirm" affordance (`tip-share-pending`);
  *   it deliberately HIDES the smirk.cash/tip URL + Copy-link button until
  *   funding buries past the confirmation gate. (Contrast BTC/LTC in
  *   tip-share-url.spec.ts, which are 0-conf and surface the live URL now.)
@@ -34,7 +34,7 @@ import { getCapabilities } from '../fixtures/capabilities.js';
  * requiring an exact match (a fabricated commitment fails with "input
  * commitment mismatch"). There is no live scan of alice's on-chain Grin
  * outputs here, and the switch-commitment blind derivation isn't
- * JS-reproducible / wasm-exported — so the stubbed output MUST carry
+ * JS-reproducible / wasm-exported, so the stubbed output MUST carry
  * alice's REAL commitment for the chosen (path, amount).
  *
  * GRIN_INPUT_COMMIT below is exactly that: alice's real `v3+Regular+d4`
@@ -42,7 +42,7 @@ import { getCapabilities } from '../fixtures/capabilities.js';
  * It's deterministic from alice's seed. To regenerate (e.g. if the smoke
  * alice seed rotates): run this spec with any junk 66-hex commitment, and
  * the thrown "input commitment mismatch …" error lists the correct
- * `v3+Regular+d4 → <commit>` candidate — paste that value here. The
+ * `v3+Regular+d4 → <commit>` candidate: paste that value here. The
  * canonical `key_id` (depth-4 [0,0,5,0]) lets resolveGrinSpendable recover
  * the path directly (grin-flows.ts::parseGrinCanonicalKeyId), so it never
  * has to run the wasm identify search over a non-existent chain.
@@ -55,7 +55,7 @@ const PASSWORD = 'e2e-test-password-123';
 const TIP_ID = '11111111-2222-4333-8444-555555555555';
 
 // Spendable Grin input we expose to the composer. value MUST stay pinned to
-// GRIN_INPUT_VALUE and commit MUST stay GRIN_INPUT_COMMIT together — the
+// GRIN_INPUT_VALUE and commit MUST stay GRIN_INPUT_COMMIT together: the
 // commitment is alice's real derivation for exactly that path+value.
 const GRIN_INPUT_VALUE = 5_000_000_000; // 5 GRIN (9 decimals)
 // Canonical Smirk key_id → path [0,0,5,0] (depth=04, p0=p1=p3=0, p2=5).
@@ -145,7 +145,7 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
   });
   // Chain-tip map: needed so the 5-GRIN output reads as MATURE (tip ≥ height),
   // otherwise it's counted "locked" and the balance gate blocks submit. High
-  // heights are always maturity-safe. (Grin tip only — other assets' confirmed
+  // heights are always maturity-safe. (Grin tip only; other assets' confirmed
   // balances come from their own endpoints, not this map.)
   await context.route('**/api/v1/wallet/heights', async (route) => {
     await route.fulfill({
@@ -160,7 +160,7 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
       }),
     });
   });
-  // Voucher broadcast — stubbed so no real Grin tx hits the wire. Flag it so we
+  // Voucher broadcast: stubbed so no real Grin tx hits the wire. Flag it so we
   // can assert the voucher was actually built + broadcast (not short-circuited).
   await context.route('**/api/v1/wallet/grin/broadcast', async (route) => {
     grinBroadcastCalled = true;
@@ -180,7 +180,7 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
 
   // Public tip: on a public-only backend the composer already defaults to a
   // public share-URL tip (the targeted toggle is hidden, since the backend can't
-  // serve targeted tips), so there's nothing to flip — the flow mints a share
+  // serve targeted tips), so there's nothing to flip: the flow mints a share
   // URL / claim link out of the box.
 
   // Force the funding asset to GRIN (default is largest-balance).
@@ -212,7 +212,7 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
   // The tip-id readout confirms the create round-trip landed the backend id.
   await expect(page.getByTestId('tip-id-label')).toContainText(TIP_ID.slice(0, 12));
 
-  // The composer really took the Grin voucher branch and broadcast the tx —
+  // The composer really took the Grin voucher branch and broadcast the tx:
   // proves this is the genuine voucher path, not an incidental success screen.
   expect(createAsset, 'create POST asset should be grin').toBe('grin');
   expect(createHadGrinCommitment, 'create POST should carry grin_commitment').toBe(true);

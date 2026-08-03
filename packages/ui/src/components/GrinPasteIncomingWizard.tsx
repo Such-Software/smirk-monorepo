@@ -1,5 +1,5 @@
 /**
- * GrinPasteIncomingWizard — receiver-side flow for an inbound S1 slate.
+ * GrinPasteIncomingWizard: receiver-side flow for an inbound S1 slate.
  *
  * Counterpart to SendWizard's Grin Exchange step. The sender's wallet
  * (external grin-wallet, Grim, or another Smirk user) handed us an S1
@@ -9,12 +9,12 @@
  *
  * Three steps:
  *
- *   step 0: Paste — textarea + optional clipboard auto-fill. Tap an
+ *   step 0: Paste. Textarea + optional clipboard auto-fill. Tap an
  *           Inbox row for pending_to_sign and the popup pre-fills the
  *           field; manual paste also works for external-wallet handoff.
- *   step 1: Sign — auto-runs `onSign` on first mount; displays the S2
+ *   step 1: Sign. Auto-runs `onSign` on first mount; displays the S2
  *           armored slatepack with copy/post-to-relay affordances.
- *   step 2: Done — confirmation; recorded output will reflect in
+ *   step 2: Done. Confirmation; recorded output will reflect in
  *           balance once the sender broadcasts.
  *
  * State persists via `useWizard<GrinPasteIncomingFields>` under the

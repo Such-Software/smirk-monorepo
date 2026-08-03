@@ -15,7 +15,7 @@ import type { UnlockedWallet } from '../keystore';
 import type { ChainProviderRegistry } from '../chain/registry';
 import type { UtxoEntry } from '../chain/types';
 
-// A valid BIP-39 test vector — NOT a funded wallet. assessLegacyCleanupSafety
+// A valid BIP-39 test vector, NOT a funded wallet. assessLegacyCleanupSafety
 // only reads wallet.mnemonic, so a minimal wallet object is sufficient.
 const MNEMONIC =
   'legal winner thank year wave sausage worth useful legal winner thank yellow';
@@ -127,7 +127,7 @@ test('assess — grinPendingInvoice hard-blocks; grinPendingReceive (fresh) warn
     ),
   );
 
-  // Fresh receive alone is a WARN — safe stays true.
+  // Fresh receive alone is a WARN; safe stays true.
   const s2 = await seededStorage();
   await s2.set(LEGACY_GRIN_RECEIVE_KEY, { createdAt: Date.now() });
   const r2 = await assessLegacyCleanupSafety(WALLET, s2, EMPTY);
@@ -258,6 +258,6 @@ test('cleanupLegacyWallet — throws LegacyCleanupBlockedError and deletes NOTHI
       return true;
     },
   );
-  // walletState is UNTOUCHED — the beacon stays until the block clears.
+  // walletState is UNTOUCHED; the beacon stays until the block clears.
   assert.notEqual(await s.get(LEGACY_WALLET_KEY), null);
 });

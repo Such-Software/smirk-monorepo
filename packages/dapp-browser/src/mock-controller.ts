@@ -1,5 +1,5 @@
 /**
- * `MockController` — a `DappBrowserController` implementation backed
+ * `MockController`: a `DappBrowserController` implementation backed
  * by in-memory state and no actual webview.
  *
  * Use cases:
@@ -10,7 +10,7 @@
  *  - Integration tests of `@such-software/smirk-dapp-api` wallet handlers that
  *    don't care which platform fired the page request.
  *
- * The mock is deliberately minimal — it tracks the state shape the
+ * The mock is deliberately minimal: it tracks the state shape the
  * interface promises and emits subscription events, but does not
  * simulate page loads, redirects, document title changes, etc. Tests
  * that need those should call the mock's explicit override hooks
@@ -77,7 +77,7 @@ export class MockController implements DappBrowserController {
     this.tabs.clear();
     this.activeTabId = null;
     this.opened = false;
-    // Surviving subscribers receive no final snapshot — the controller
+    // Surviving subscribers receive no final snapshot; the controller
     // is closed and there's nothing meaningful to emit.
   }
 
@@ -158,7 +158,7 @@ export class MockController implements DappBrowserController {
     const target = this.resolveTab(tab);
     this.updateState(target, (prev) => ({
       ...this.makeInitialState(url),
-      // Preserve canGoBack — navigating from a non-empty tab makes
+      // Preserve canGoBack: navigating from a non-empty tab makes
       // back-navigation possible.
       canGoBack: prev.url !== '' && prev.url !== this.homeUrl,
       canGoForward: false,
@@ -168,7 +168,7 @@ export class MockController implements DappBrowserController {
   async goBack(tab?: TabId): Promise<void> {
     this.assertOpen('goBack');
     const target = this.resolveTab(tab);
-    // The mock doesn't track full history — flip the boolean and
+    // The mock doesn't track full history; flip the boolean and
     // leave the URL alone. Tests that need real back-stack semantics
     // should drive the controller with explicit `navigate` calls.
     this.updateState(target, (prev) => ({
@@ -339,7 +339,7 @@ export class MockController implements DappBrowserController {
       const parsed = new URL(url).origin;
       // WHATWG opaque origins (e.g. `about:blank`, `data:`) serialize
       // to the literal string `'null'`. Treat those the same as
-      // unparseable inputs — no origin to grant permissions against.
+      // unparseable inputs: no origin to grant permissions against.
       if (parsed !== 'null') origin = parsed;
     } catch {
       // Non-URL inputs (e.g. search terms) leave origin empty.

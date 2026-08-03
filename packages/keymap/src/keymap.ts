@@ -3,11 +3,11 @@
  *
  * Conventions:
  *
- * - Desktop / extension uses the platform's primary modifier — Cmd on
+ * - Desktop / extension uses the platform's primary modifier: Cmd on
  *   macOS, Ctrl on Windows / Linux. The two are usually equivalent
  *   user expectations on each platform; we don't share a binding
  *   between them.
- * - Mobile platforms typically do not declare bindings here — mobile
+ * - Mobile platforms typically do not declare bindings here: mobile
  *   keyboards lack reliable modifier rails and most users drive the
  *   wallet by touch. The few mobile chords that exist are gesture
  *   names, not key codes; consumed by the mobile-platform glue.
@@ -206,7 +206,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
 
 /**
  * Find the bindings for an action on a given platform. Returns an
- * empty array if the action has no bindings on that platform — that
+ * empty array if the action has no bindings on that platform; that
  * is a normal state (mobile platforms typically have few bindings)
  * and not an error.
  */
@@ -245,7 +245,7 @@ function detectOs(): 'mac' | 'win' | 'linux' | 'ios' | 'android' {
 
 /**
  * Check whether a given `KeyboardEvent` matches a `KeyChord`. Useful
- * for the platform-side keymap listener — consumes a raw DOM event
+ * for the platform-side keymap listener: consumes a raw DOM event
  * and reports the action(s) that fired.
  */
 export function chordMatches(event: KeyboardEvent, chord: KeyChord): boolean {

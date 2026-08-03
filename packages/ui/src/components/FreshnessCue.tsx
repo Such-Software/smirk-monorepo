@@ -1,5 +1,5 @@
 /**
- * FreshnessCue — the escalating "are these balances live?" affordance shown next
+ * FreshnessCue: the escalating "are these balances live?" affordance shown next
  * to the Home total.
  *
  * Seamless balances paint an instant cached number, then a background loop keeps

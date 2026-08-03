@@ -1,8 +1,8 @@
 /**
- * Route persistence — tab + screen state survives popup close.
+ * Route persistence: tab + screen state survives popup close.
  *
  * Routes are flat strings with optional params. The popup doesn't
- * use a real URL router — Chrome MV3 popups don't have meaningful
+ * use a real URL router: Chrome MV3 popups don't have meaningful
  * URLs anyway, and Capacitor/Tauri shells don't either. Instead the
  * app interprets a route id directly.
  *
@@ -22,13 +22,13 @@
  *
  * The first path segment (`home`, `swap`, etc.) is the tab. Sub-paths
  * are drill-downs that the back-button collapses one segment at a
- * time — implemented in the Preact hook layer, not here.
+ * time, implemented in the Preact hook layer, not here.
  */
 
 import type { SessionStateStore, Route } from './session-state';
 
 /**
- * Top-level wallet tab. `browse` is desktop-only — the BottomNav only
+ * Top-level wallet tab. `browse` is desktop-only: the BottomNav only
  * renders it when an embedded-browser controller is wired (the
  * desktop shell sets `globalThis.__smirk_browser__` at boot). The
  * extension popup never surfaces `browse` because the host browser

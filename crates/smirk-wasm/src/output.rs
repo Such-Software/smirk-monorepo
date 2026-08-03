@@ -148,7 +148,7 @@ pub fn derive_commitment_mask(
 ///
 /// view_tag = first byte of Hs("view_tag" || 8Ra || output_index)
 ///
-/// Currently unused — kept for the eventual XMR view-tag scanning path
+/// Currently unused: kept for the eventual XMR view-tag scanning path
 /// (Salvium hardfork onward; lets a wallet skip output decryption when
 /// the view tag doesn't match before doing the expensive ed25519 ops).
 #[allow(dead_code)]

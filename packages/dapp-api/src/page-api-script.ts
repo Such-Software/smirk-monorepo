@@ -2,7 +2,7 @@
  * Embedded-browser injection helpers.
  *
  * Browser controllers (`@smirk/dapp-browser`) accept init scripts as
- * raw strings — they don't import any other package. This module
+ * raw strings; they don't import any other package. This module
  * provides the strings needed to bootstrap `window.smirk` inside an
  * embedded webview without the controller having to know about the
  * dapp-api package.
@@ -42,7 +42,7 @@ export type InjectionScriptOptions = {
 };
 
 /**
- * Transport descriptor — names the channel the injected page-side
+ * Transport descriptor: names the channel the injected page-side
  * code uses to send wire-format messages to the wallet.
  *
  * - `postMessage`: posts to `window.parent.postMessage(msg, '*')`,
@@ -71,7 +71,7 @@ export type InjectionTransport =
  * Threat model: the page may try to override `window.smirk` after
  * we install it. We use `defineProperty` with `writable: false,
  * configurable: false` to make that throw in strict mode and silently
- * fail otherwise — same posture as `installSmirkApi()` (page-api.ts).
+ * fail otherwise, same posture as `installSmirkApi()` (page-api.ts).
  */
 export function getPageApiInjectionScript(
   options: InjectionScriptOptions,
@@ -80,7 +80,7 @@ export function getPageApiInjectionScript(
   const safeJson = (v: unknown): string => JSON.stringify(v);
   const transportLiteral = safeJson(transport);
 
-  // The script body is concatenated as a string. Keep it small —
+  // The script body is concatenated as a string. Keep it small:
   // every embedded webview pays the parse cost on every navigation.
   // The wallet handler does the real work; this IIFE is just the
   // wire transport plus a Promise-tracking dispatcher.

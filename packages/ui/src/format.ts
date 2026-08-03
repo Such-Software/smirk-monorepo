@@ -13,7 +13,7 @@ import { type AssetDefinition, registry } from '@smirk/assets';
  *
  * @param amountAtomic Atomic units (sats, piconero, atomic-WOW, nanogrin).
  * @param assetId The registered asset id (`"btc"`, `"xmr"`, ...).
- * @param maxFractionalDigits Cap on trailing decimals shown — defaults to
+ * @param maxFractionalDigits Cap on trailing decimals shown; defaults to
  *   the asset's full precision but the UI will usually pass 6 or 8 to
  *   keep the display compact.
  *
@@ -57,7 +57,7 @@ export function formatAmountWithAsset(
   }
 
   // Render fractional part with leading zeros, then trim to `cap` digits.
-  // Optionally strip trailing zeros (default true — typical "0.5" rather
+  // Optionally strip trailing zeros (default true: typical "0.5" rather
   // than "0.50000000"). Pass `trimZeros: false` for balance displays
   // where the user wants to see the dust, à la Sparrow / Bitcoin Core.
   let fracStr = frac.toString().padStart(decimals, '0').slice(0, cap);

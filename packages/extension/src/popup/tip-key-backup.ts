@@ -22,7 +22,7 @@
  * unrecoverable. That requires losing both wallet + the prod DB
  * + every backup snapshot.
  *
- * **Encryption key.** `sha256(wallet.keys.btc.privateKey)` — same
+ * **Encryption key.** `sha256(wallet.keys.btc.privateKey)`: same
  * scheme v0.2.4's `storeTipKeyLocally` used (smirk-extension/src/
  * background/social/create.ts). Doesn't require an extra password
  * prompt because the user is already unlocked when tipping.
@@ -30,13 +30,13 @@
  * **Storage backend.** `chrome.storage.local` rather than IndexedDB
  * because it's the same backend the extension's keystore already
  * uses, survives browser close, and has a simpler API. Note the
- * 10 MiB total quota — each backup is ~200 bytes, so we'd hit
+ * 10 MiB total quota: each backup is ~200 bytes, so we'd hit
  * ~50k tips before that matters.
  *
  * **Cleanup.** Successful clawback or claim removes the local
  * backup (`removeTipKeyBackup`). Drafts that the sender cancels
  * are removed in the cancel handler too. Abandoned drafts (popup
- * closed mid-flow) leak — the sweep-from-local-backup recovery
+ * closed mid-flow) leak; the sweep-from-local-backup recovery
  * surface lists them so the user can clean them up.
  */
 
@@ -65,25 +65,25 @@ export interface TipKeyBackup {
    * Base64url-encoded URL fragment key used to derive the per-tip
    * share URL (`https://smirk.cash/tip/{id}#{fragment}`). Public tips
    * only. Without this the sender can't reconstruct the share URL
-   * after popup close — the fragment isn't persisted server-side by
+   * after popup close: the fragment isn't persisted server-side by
    * design (it's the secret that decrypts the backend's
    * `encrypted_key` payload, must never leave the client). v0.2.4
    * stored the equivalent in IndexedDB `pendingTips`; v0.3 lost the
    * affordance until 2026-06-04 when the Sent Tips ready-to-share
    * surface needed it. Older backups (pre-2026-06-04) lack this
-   * field — those tips can still be clawed back, just no Copy URL.
+   * field; those tips can still be clawed back, just no Copy URL.
    */
   urlFragmentEncoded?: string;
 }
 
 /** Derive the symmetric encryption key from the wallet's BTC private
- *  key. Stable across sessions for the same wallet — restoring from
+ *  key. Stable across sessions for the same wallet: restoring from
  *  seed recovers the same key. */
 function deriveStorageKey(btcPrivateKey: Uint8Array): Uint8Array {
   return sha256(btcPrivateKey);
 }
 
-/** Store a tip-key backup locally. Idempotent — re-storing the same
+/** Store a tip-key backup locally. Idempotent: re-storing the same
  *  tipId overwrites the previous entry. Fails silently to console.warn
  *  rather than throw so a broken local-storage backend doesn't break
  *  the on-chain tip flow. */
@@ -93,13 +93,13 @@ export async function storeTipKeyBackup(params: {
   tipAddress: string;
   amount: number;
   isPublic: boolean;
-  /** Raw per-asset key material — encrypted before storage. */
+  /** Raw per-asset key material, encrypted before storage. */
   keyMaterial: Uint8Array;
   btcPrivateKey: Uint8Array;
   /** For public tips: the URL fragment used to encrypt the backend's
    *  `encrypted_key`. Required to reconstruct the share URL after
    *  popup close. Undefined for directed tips (which use the
-   *  recipient's pubkey for encryption — no URL needed). */
+   *  recipient's pubkey for encryption: no URL needed). */
   urlFragmentEncoded?: string;
 }): Promise<void> {
   try {
@@ -158,7 +158,7 @@ export async function listTipKeyBackups(): Promise<TipKeyBackup[]> {
 
 /** Decrypt a stored backup's key material. Throws on bad key (which
  *  means the user is restoring with a different seed, or the local
- *  storage was tampered with — either way the recovery flow should
+ *  storage was tampered with; either way the recovery flow should
  *  surface the failure). */
 export function decryptTipKeyBackup(
   backup: TipKeyBackup,
@@ -168,7 +168,7 @@ export function decryptTipKeyBackup(
   return decrypt(hexToBytes(backup.keyCiphertextHex), storageKey);
 }
 
-/** Look up a single backup by tipId. Returns `null` if absent —
+/** Look up a single backup by tipId. Returns `null` if absent;
  *  the on-chain clawback flow uses this to decide whether to fall
  *  back to a "no local backup, can't sweep" error. */
 export async function getTipKeyBackup(

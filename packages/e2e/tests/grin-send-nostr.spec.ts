@@ -3,7 +3,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
 
 /**
- * grin-send-nostr — the send-side of the Nostr/Goblin grin path (P3 + federation).
+ * grin-send-nostr: the send-side of the Nostr/Goblin grin path (P3 + federation).
  *
  * Proves through the REAL send wizard that a Grin recipient can be a Nostr npub or a
  * NIP-05 name (federation), which routes the send over the gift-wrap channel instead
@@ -18,7 +18,7 @@ import { getCapabilities } from '../fixtures/capabilities.js';
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
 
-// A real, valid npub — used only for recipient-acceptance (no resolution/delivery).
+// A real, valid npub: used only for recipient-acceptance (no resolution/delivery).
 const NPUB = 'npub180cvv07tjdrrgpa0j7j7tmnyl2yr6yr7l8j4s3evf6u64th6gkwsyjh6w6';
 
 test('Grin send accepts an npub + a NIP-05 name as recipient (federation)', async ({
@@ -49,7 +49,7 @@ test('Grin send accepts an npub + a NIP-05 name as recipient (federation)', asyn
   await addr.fill('alice@smirk.cash');
   await expect(cont).toBeEnabled({ timeout: 10_000 });
 
-  // 3. Advancing with the npub reaches the amount step — recipient accepted end-to-end.
+  // 3. Advancing with the npub reaches the amount step: recipient accepted end-to-end.
   await addr.fill(NPUB);
   await expect(cont).toBeEnabled();
   await cont.click();

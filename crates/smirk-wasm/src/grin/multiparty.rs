@@ -141,7 +141,7 @@ pub fn grin_schnorr_aggregate_partials(partials_concat_hex: &str) -> Result<Stri
 /// aggregated scalar `s_total`.
 ///
 /// The result verifies as a single-signer signature against the aggregate
-/// public key `P_total` — pass it through the existing `grin_schnorr_verify`
+/// public key `P_total`; pass it through the existing `grin_schnorr_verify`
 /// with `public_key_hex = P_total`.
 #[wasm_bindgen]
 pub fn grin_schnorr_final_signature(

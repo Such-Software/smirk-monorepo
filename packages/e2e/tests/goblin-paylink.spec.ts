@@ -3,7 +3,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
 
 /**
- * goblin-paylink — the "Magick Market buyer wallet" path (P3). Pasting a GoblinPay
+ * goblin-paylink: the "Magick Market buyer wallet" path (P3). Pasting a GoblinPay
  * `goblin:`/`nostr:` checkout URI into the universal paste screen must parse it and
  * pre-fill the Grin Send flow (recipient npub → pubkey, amount from the link),
  * rather than reject it as "not a slatepack".

@@ -2,7 +2,7 @@
  * Trocador CEX-aggregator swap implementation.
  *
  * Client-direct (the wallet talks straight to `api.trocador.app`) per
- * the v0.3 architecture decision — Smirk's backend does **not** proxy
+ * the v0.3 architecture decision: Smirk's backend does **not** proxy
  * swap traffic, so we never end up as the money-transmitter in the
  * flow. The backend hosts only a webhook receiver for status pings
  * (`POST /api/v1/webhook/trocador`) plus a `swaps` table the
@@ -41,12 +41,12 @@ import type {
  *
  * **Why only BTC/LTC/XMR.** Probed 2026-06-02 against
  * api.trocador.app with the live affiliate key:
- *   - WOW: `{"error": "coin not found"}` — not in Trocador's coin
+ *   - WOW: `{"error": "coin not found"}`, not in Trocador's coin
  *     list at all (the docs called it "best-effort" but the
  *     reality is zero coverage).
  *   - GRIN: in the coin list but every quote at every reasonable
  *     amount returns `{"error": "amount higher than max or lower
- *     than min"}` — no provider has GRIN inventory.
+ *     than min"}`: no provider has GRIN inventory.
  *
  * Surfacing either in the picker just funnels users into "no
  * provider available" errors and erodes trust in the swap surface.
@@ -99,7 +99,7 @@ interface TrocadorRateResponse {
   network_from: string;
   network_to: string;
   /** Trocador's JSON often serializes amounts as numbers, sometimes
-   *  as strings. Accept both — `normalizeAmountString()` narrows to
+   *  as strings. Accept both: `normalizeAmountString()` narrows to
    *  a string for precision-safe BigInt math (avoids float drift on
    *  WOW=11 dec,
    *  XMR=12 dec). */
@@ -157,7 +157,7 @@ export interface TrocadorSwapOptions {
    * Optional webhook URL Trocador pings on status changes. When set,
    * the wallet's poll cadence in `status()` can be relaxed because
    * the backend learns of state changes via push. The webhook URL is
-   * **your** server — Trocador will POST `{trade_id, status, ...}`
+   * **your** server; Trocador will POST `{trade_id, status, ...}`
    * to it whenever the swap moves.
    */
   webhookUrl?: string;
@@ -168,7 +168,7 @@ export interface TrocadorSwapOptions {
    */
   passthrough?: string;
   /**
-   * Trocador's `markup` parameter — passed verbatim. Affects the
+   * Trocador's `markup` parameter: passed verbatim. Affects the
    * affiliate rev-share, not the user's quoted rate. Default is the
    * empty string (no markup). Configure per Trocador's onboarding
    * email if you have a specific commission split set up.
@@ -274,7 +274,7 @@ export class TrocadorSwap implements Swap {
       feeEstimate,
       // Trocador's `eta` is minutes; convert to seconds.
       etaSeconds: Math.round(best.eta * 60),
-      // Floating-rate quotes are firm "for a few minutes" — Trocador
+      // Floating-rate quotes are firm "for a few minutes"; Trocador
       // doesn't document an exact TTL, but Cake's heuristic of ~5 min
       // is the operational norm. UI should re-quote past this.
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
@@ -294,7 +294,7 @@ export class TrocadorSwap implements Swap {
    * Aggregator-shape contract: requires `toAddress` (where to-asset
    * lands) and `refundAddress` (where from-asset returns on failure).
    * Throws `SwapError` with code `not_implemented` if either is
-   * missing — better than silently sending to an empty address or
+   * missing: better than silently sending to an empty address or
    * forgetting the refund destination.
    *
    * Optional address memos can ride through `params.counterpartyData`
@@ -407,7 +407,7 @@ export class TrocadorSwap implements Swap {
 }
 
 function mapStatus(t: TrocadorTradeResponse): SwapStatus {
-  // Don't cast to TrocadorStatus — that hides unknown future states
+  // Don't cast to TrocadorStatus: that hides unknown future states
   // from the type system. The default branch handles them at runtime.
   switch (t.status) {
     case 'new':
@@ -471,7 +471,7 @@ function decimalToAtomicString(decimal: string, decimals: number): string {
   const [whole, fracRaw = ''] = decimal.split('.');
   const frac = (fracRaw + '0'.repeat(decimals)).slice(0, decimals);
   const combined = (whole ?? '0') + frac;
-  // Strip leading zeros — but keep at least one digit.
+  // Strip leading zeros, but keep at least one digit.
   const trimmed = combined.replace(/^0+/, '') || '0';
   return trimmed;
 }

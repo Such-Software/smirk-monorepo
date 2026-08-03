@@ -3,8 +3,8 @@
  *
  * Controllers are expected to consult a `HistoryStore` to drive URL-
  * bar autocomplete and the optional History panel UI. The store is
- * pluggable so platform shells can use the right persistence — e.g.
- * SQLite on desktop, NSURLCache + Core Data on iOS — without the
+ * pluggable so platform shells can use the right persistence (e.g.
+ * SQLite on desktop, NSURLCache + Core Data on iOS) without the
  * controller knowing.
  *
  * The in-memory default is process-lifetime only; suitable for
@@ -17,8 +17,8 @@
 // ======================================================================
 
 /**
- * One row of browsing history. We only record URL + title + timestamp
- * — no per-visit metadata (referrer, viewport, etc.) by design,
+ * One row of browsing history. We only record URL + title + timestamp:
+ * no per-visit metadata (referrer, viewport, etc.) by design,
  * because privacy.
  */
 export interface HistoryEntry {
@@ -63,7 +63,7 @@ export interface HistoryStore {
  * exits. Suitable for tests and as a fallback before a persistent
  * adapter is wired in.
  *
- * Linear scan on read — fine for tests and for the small N typical
+ * Linear scan on read: fine for tests and for the small N typical
  * of a session, not appropriate for production with thousands of
  * entries (consider IndexedDB / SQLite there).
  */

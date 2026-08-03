@@ -7,7 +7,7 @@
  *     Capacitor's WebView listener
  *   - Tauri WebView: window.postMessage → __TAURI__ event bridge
  *
- * The page never sees private keys or asset state — it sees only the
+ * The page never sees private keys or asset state; it sees only the
  * methods declared in `SmirkMethodMap`. Every call round-trips through
  * the transport to a wallet-side handler that does permission checks
  * + optional user approval before returning.
@@ -171,7 +171,7 @@ export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi 
 }
 
 /**
- * Standard NIP-07 provider — the `window.nostr` object any Nostr app (Magick
+ * Standard NIP-07 provider: the `window.nostr` object any Nostr app (Magick
  * Market, etc.) expects, so Smirk works as a Nostr signer out of the box.
  * `getPublicKey`/`signEvent` route to the SAME wallet-side Nostr methods as
  * `window.smirk`; `nip44`/`nip04` add DM encrypt/decrypt. This is the interop
@@ -220,7 +220,7 @@ export function createNip07Provider(transport: SmirkPageTransport): SmirkNostrPr
 }
 
 /** Install the API at `window.smirk` and dispatch the `smirk-ready`
- *  event. Idempotent — if `window.smirk` already exists (another
+ *  event. Idempotent: if `window.smirk` already exists (another
  *  Smirk instance is running, somehow) we skip rather than overwrite.
  *
  *  Pages that mount their detection listener AFTER our inject runs
@@ -231,7 +231,7 @@ export function installSmirkApi(
   transport: SmirkPageTransport,
 ): SmirkPageApi | null {
   if ((target as { smirk?: unknown }).smirk) {
-    // Another instance already installed. Don't clobber — could be a
+    // Another instance already installed. Don't clobber: could be a
     // legacy v0.2.x extension that's installed alongside v0.3, or a
     // dev-mode duplicate. Either way the user has chosen which is
     // canonical.
@@ -244,7 +244,7 @@ export function installSmirkApi(
     configurable: false,
     enumerable: true,
   });
-  // Also expose the standard NIP-07 provider at `window.nostr` — but ONLY if no
+  // Also expose the standard NIP-07 provider at `window.nostr`, but ONLY if no
   // other signer already claimed it (Alby, nos2x, another Nostr extension). We
   // never clobber the user's chosen signer; if one exists, Smirk is reachable via
   // window.smirk and the user can disable the other extension to make us primary.

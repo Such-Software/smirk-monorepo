@@ -1,16 +1,16 @@
-//! Invoice ceremony — receiver-driven (I1 → I2 → I3).
+//! Invoice ceremony: receiver-driven (I1 → I2 → I3).
 //!
 //! Mirror of the standard flow with the roles swapped. UX win: the
 //! receiver names the price (think "merchant pay-this-link") and the
 //! sender funds it.
 //!
-//! - **I1** — receiver declares amount + their output (commit +
+//! - **I1**: receiver declares amount + their output (commit +
 //!   bulletproof) + their pubkey/nonce.
-//! - **I2** — sender adds their pubkey/nonce + partial sig.
-//! - **I3** — receiver adds their partial + aggregates; produces final
+//! - **I2**: sender adds their pubkey/nonce + partial sig.
+//! - **I3**: receiver adds their partial + aggregates; produces final
 //!   kernel sig.
 //!
-//! Same multi-party Schnorr math underneath — only the slate state codes
+//! Same multi-party Schnorr math underneath: only the slate state codes
 //! and "who's first" semantics differ from the standard ceremony.
 
 use uuid::Uuid;
@@ -33,7 +33,7 @@ use super::{
 };
 
 // ============================================================================
-// I1 — receiver init (the invoice)
+// I1: receiver init (the invoice)
 // ============================================================================
 
 /// Inputs for receiver-init (I1).
@@ -44,11 +44,11 @@ pub struct ReceiverInitI1Params {
     pub kernel_features: KernelFeatures,
     pub receiver_output_blind: [u8; 32],
     pub receiver_kernel_nonce: [u8; 32],
-    /// Legacy random rewind nonce — used ONLY when `extended_private_key` is
+    /// Legacy random rewind nonce: used ONLY when `extended_private_key` is
     /// `None` (the unused low-level binding path).
     pub bp_rewind_nonce: [u8; 32],
     pub bp_private_nonce: [u8; 32],
-    /// Kernel offset — typically zero for invoices (receiver has no inputs
+    /// Kernel offset: typically zero for invoices (receiver has no inputs
     /// to balance against), but caller may provide a random value.
     pub kernel_offset: [u8; 32],
     /// Wallet 64-byte extended private key. When set (the high-level
@@ -163,7 +163,7 @@ pub fn receiver_init_i1_with_id(
 }
 
 // ============================================================================
-// I2 — sender round
+// I2: sender round
 // ============================================================================
 
 /// Inputs for sender-round (I2).
@@ -253,7 +253,7 @@ pub fn sender_round_i2(params: &SenderRoundI2Params) -> Result<SenderRoundI2Outp
 }
 
 // ============================================================================
-// I3 — receiver finalize
+// I3: receiver finalize
 // ============================================================================
 
 /// Inputs for receiver-finalize (I3).

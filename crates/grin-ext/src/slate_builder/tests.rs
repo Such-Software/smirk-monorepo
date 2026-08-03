@@ -1,4 +1,4 @@
-//! Slate-builder ceremony tests — both standard (S1→S2→S3) and invoice
+//! Slate-builder ceremony tests: both standard (S1→S2→S3) and invoice
 //! (I1→I2→I3).
 //!
 //! Helpers (`det`, `build_s1`, `run_full_ceremony`) are shared, so we keep
@@ -15,7 +15,7 @@ fn det(b: u8) -> [u8; 32] {
 }
 
 // =========================================================================
-// Standard — sender_init_s1
+// Standard: sender_init_s1
 // =========================================================================
 
 #[test]
@@ -142,7 +142,7 @@ fn context_carries_secret_state_for_finalize() {
 }
 
 // =========================================================================
-// Standard — receiver_round_s2
+// Standard: receiver_round_s2
 // =========================================================================
 
 /// Build a complete S1 slate to feed into receiver tests.
@@ -244,7 +244,7 @@ fn receiver_round_rejects_non_s1() {
 }
 
 // =========================================================================
-// Standard — sender_finalize_s3 (full ceremony)
+// Standard: sender_finalize_s3 (full ceremony)
 // =========================================================================
 
 /// Run the full S1 → S2 → S3 ceremony with deterministic inputs.
@@ -422,7 +422,7 @@ fn finalize_rejects_mismatched_slate_id() {
 }
 
 // =========================================================================
-// Invoice — I1 / I2 / I3
+// Invoice: I1 / I2 / I3
 // =========================================================================
 
 #[test]

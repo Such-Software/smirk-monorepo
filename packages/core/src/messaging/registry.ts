@@ -1,5 +1,5 @@
 /**
- * Messaging registry + init seam — parallel to chain/registry.ts + initSmirkApi.
+ * Messaging registry + init seam: parallel to chain/registry.ts + initSmirkApi.
  * `initSmirkMessaging` is called at shell startup with the relay set discovered
  * from `/capabilities` (+ the public interop relays). The provider is a swap
  * point (tests / alternate backends).

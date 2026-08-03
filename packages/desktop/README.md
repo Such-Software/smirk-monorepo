@@ -1,4 +1,4 @@
-# @smirk/desktop — Tauri desktop shell
+# @smirk/desktop: Tauri desktop shell
 
 Smirk Wallet packaged as a native desktop app for macOS, Windows, and Linux.
 
@@ -15,8 +15,8 @@ extension-API surfaces the popup uses:
 | `chrome.storage.local`     | `@tauri-apps/plugin-store` (filesystem)     |
 | `chrome.storage.session`   | In-memory `Map` (cleared on window close)   |
 | `chrome.storage.onChanged` | Custom EventTarget around the two backends  |
-| `chrome.runtime.getURL`    | Identity transform — Tauri serves from `/`  |
-| `chrome.windows.create`    | No-op — extension "pop out" only; not used by browser tabs |
+| `chrome.runtime.getURL`    | Identity transform: Tauri serves from `/`  |
+| `chrome.windows.create`    | No-op: extension "pop out" only; not used by browser tabs |
 
 ## Known limitations (v0.3.0)
 
@@ -26,7 +26,7 @@ extension-API surfaces the popup uses:
   `chrome.alarms`. Auto-lock fires correctly while the wallet window
   is open; it does not fire if you minimise / hide the window. A
   `WalletTimers` abstraction in `@smirk/core` is the planned fix.
-- **Tip-arrival notifications are silent.** Same shape — the shim
+- **Tip-arrival notifications are silent.** Same shape: the shim
   does not polyfill `chrome.notifications`. Inbox still updates on
   open; only the OS-level notification doesn't fire.
 - **`chrome.windows.create`** ("pop out the wallet to its own
@@ -93,7 +93,7 @@ workflow wraps the signed `.app` with `hdiutil` after the build instead.
 - **macOS:** Apple Developer signing identity goes in
   `tauri.conf.json::bundle.macOS.signingIdentity`. Notarization needs
   `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` env vars. Both null in
-  the committed config — the maintainer wires them per-environment.
+  the committed config; the maintainer wires them per-environment.
 - **Windows:** unsigned for v0.3.0 (SmartScreen will warn on first launch).
 - **Linux:** unsigned `.AppImage`; users verify against the repository's
   SHA256SUMS file.
@@ -114,11 +114,11 @@ release backend lives at `releases.smirk.cash/desktop/...`.
 
 ## Tracked for v0.4
 
-- No deep links (`smirk://` URL handler) — tip-claim URLs work via
+- No deep links (`smirk://` URL handler): tip-claim URLs work via
   clipboard only.
 - No system tray.
 - No autostart-on-login option.
 - In-app browser polish. The Rust plugin and the `BrowserShell` UI
   already support multiple tabs and per-tab `window.smirk`
-  injection — what defers to v0.4 is the visual tab-strip surface,
+  injection; what defers to v0.4 is the visual tab-strip surface,
   bookmarks persistence, and history-backed URL-bar autocomplete.

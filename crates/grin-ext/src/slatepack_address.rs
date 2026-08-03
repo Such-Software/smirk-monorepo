@@ -18,7 +18,7 @@
 //! ```
 //!
 //! Index 0 is the default ("primary") slatepack address. Higher indices give
-//! additional addresses derivable from the same wallet — used by
+//! additional addresses derivable from the same wallet, used by
 //! `grin-wallet`'s payment-proof derivation index, among other things.
 
 use bech32::{FromBase32, ToBase32, Variant};
@@ -57,7 +57,7 @@ impl Network {
 /// public address `slatepack_address` returns, and the key used to sign
 /// payment proofs.
 ///
-/// Production wallets should be careful with this output — it's a
+/// Production wallets should be careful with this output: it's a
 /// long-lived secret. Treat it like the user's seed.
 pub fn slatepack_address_ed25519_secret(
     mnemonic: &str,
@@ -81,7 +81,7 @@ pub fn slatepack_address_ed25519_secret(
 /// Derive the slatepack address for the given mnemonic and index, on the
 /// given network.
 ///
-/// Index 0 is the wallet's default ("primary") slatepack address — the one
+/// Index 0 is the wallet's default ("primary") slatepack address, the one
 /// `grin-wallet` shows by default. Index N produces the Nth additional
 /// address.
 pub fn slatepack_address(

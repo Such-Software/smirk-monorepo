@@ -29,7 +29,7 @@ export async function probeBackend(
         .filter(([, c]) => c.enabled)
         .map(([id]) => id)
     : [];
-  // `/capabilities` advertises no operator instance name yet — leave it unset
+  // `/capabilities` advertises no operator instance name yet, so leave it unset
   // (the picker falls back to the URL). A future backend field can populate it.
   const info: BackendProbeInfo = {
     url: r.url,

@@ -1,5 +1,5 @@
 /**
- * `@smirk/keymap` — cross-platform keyboard-shortcut registry.
+ * `@smirk/keymap`: cross-platform keyboard-shortcut registry.
  *
  * See [docs/ACCESSIBILITY.md#keyboard-map](../../../docs/ACCESSIBILITY.md#keyboard-map)
  * for the rationale and conventions.

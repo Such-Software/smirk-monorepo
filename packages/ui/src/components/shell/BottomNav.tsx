@@ -1,5 +1,5 @@
 /**
- * BottomNav — the four-tab navigation bar (UI_DESIGN.md, navigation
+ * BottomNav: the four-tab navigation bar (UI_DESIGN.md, navigation
  * summary). Used in popup mode (horizontal at the bottom) and
  * pop-out / desktop / mobile mode (vertical sidebar).
  */
@@ -31,7 +31,7 @@ const BASE_TABS: TabConfig[] = [
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
 
-// `◯` (U+25EF, GREAT CIRCLE) — same Geometric Shapes Unicode block
+// `◯` (U+25EF, GREAT CIRCLE): same Geometric Shapes Unicode block
 // as the other nav glyphs (House, Envelope, Gear, Arrow pair) so
 // the cross-platform font story is consistent. Smoke-tested on
 // Linux/WebKitGTK. Move all nav icons to inline SVG together if a
@@ -46,7 +46,7 @@ const FEED_TAB: TabConfig = { id: 'feed', label: 'Feed', icon: '≋' };
  * Feed tab renders only when the active backend advertises an operator feed
  * (`features.feed`). The app sets `globalThis.__smirk_feed__` once capabilities
  * load; a backend that runs no feed never surfaces the tab. Same opt-in idiom as
- * Browse — read per-render so a backend switch re-evaluates cleanly.
+ * Browse: read per-render so a backend switch re-evaluates cleanly.
  */
 function isFeedAvailable(): boolean {
   return Boolean(
@@ -66,7 +66,7 @@ function isFeedAvailable(): boolean {
  *
  * Per-render (not module-load) so import-order quirks under HMR /
  * tests don't lock us into a stale answer. The lookup is two field
- * reads — cheaper than a single style recompute.
+ * reads, cheaper than a single style recompute.
  */
 function isBrowseAvailable(): boolean {
   return Boolean(
@@ -106,7 +106,7 @@ export function BottomNav({ orientation = 'horizontal', badges }: BottomNavProps
         // home/asset/btc). Tapping a *different* tab uses switchTab,
         // which remembers each tab's last sub-route so coming back
         // resumes where you were. Pre-fix, every tap went through
-        // switchTab and restored the drill-down — making the Home
+        // switchTab and restored the drill-down, making the Home
         // button useless once you'd opened Send or Receive.
         const onTabClick =
           active && route.current !== t.id

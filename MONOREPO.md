@@ -14,15 +14,15 @@ The monorepo solves both. One `git clone`, one `make build`, byte-reproducible o
 
 An 18-crate vendored workspace: a fork of [monero-oxide](https://github.com/monero-oxide/monero-oxide) that adds Wownero transaction support alongside the original Monero support. All workspace members are listed in the flat root `Cargo.toml`; the inner workspace declaration was removed to comply with Cargo's nesting rules.
 
-- **Library names** (as you `use` them in Rust) are `monero_*` — `monero_oxide`, `monero_ed25519`, `monero_clsag`, etc.
+- **Library names** (as you `use` them in Rust) are `monero_*`: `monero_oxide`, `monero_ed25519`, `monero_clsag`, etc.
 - **Crates.io package names** are `wownero-*` to avoid collision with the upstream packages.
-- **Dual-coin support is built in.** `RctType::ClsagBulletproofPlus` (Monero — type 6, ring 16) and `RctType::WowneroClsagBulletproofPlus` (Wownero — type 8, ring 22) coexist; the consumer picks at runtime.
+- **Dual-coin support is built in.** `RctType::ClsagBulletproofPlus` (Monero: type 6, ring 16) and `RctType::WowneroClsagBulletproofPlus` (Wownero: type 8, ring 22) coexist; the consumer picks at runtime.
 
 See [docs/monero-wownero.md](docs/monero-wownero.md) for design notes.
 
 ### `crates/secp256k1zkp/`
 
-Vendored copy of [`grin_secp256k1zkp`](https://github.com/mimblewimble/rust-secp256k1-zkp) v0.7.15 — Grin's fork of `rust-secp256k1-zkp`. Provides Bulletproofs (BP, the original — Grin uses this, not BP+), Pedersen commitments, and aggsig that the upstream `secp256k1-zkp` Rust crate doesn't bind.
+Vendored copy of [`grin_secp256k1zkp`](https://github.com/mimblewimble/rust-secp256k1-zkp) v0.7.15: Grin's fork of `rust-secp256k1-zkp`. Provides Bulletproofs (BP, the original; Grin uses this, not BP+), Pedersen commitments, and aggsig that the upstream `secp256k1-zkp` Rust crate doesn't bind.
 
 The crate is FFI to `libsecp256k1-zkp` (C). The C source is vendored in-tree at `crates/secp256k1zkp/depend/secp256k1-zkp/` (the original release used a git submodule; we replaced it with the contents at the pinned commit so monorepo clones are self-contained).
 
@@ -47,30 +47,30 @@ Output: `crates/smirk-wasm/pkg/` (gitignored, produced by `make wasm`).
 
 Smirk's Grin / Mimblewimble protocol implementation. Built up from primitives (HMAC-SHA512, k256 / secp256k1zkp, ed25519, etc.) rather than forked from upstream `grin-wallet`, because we need to extend it with features that don't exist upstream (atomic-swap adaptor signatures, NRD-kernel time-locks, custom slate workflows).
 
-Currently shipped: seed → extended key, BIP32 child derivation, slatepack address (Grim-verified), Schnorr sign/verify (single + multi-party + adaptor), SlateV4 types + JSON round-trip + compact binary, Pedersen + Bulletproofs, slatepack codec, full slate construction (standard + invoice), NRD kernels, transaction wire-format assembly, and payment proofs — cross-validated against `grin_wallet_libwallet` 5.4.0. See [docs/grin.md](docs/grin.md) for the full status table.
+Currently shipped: seed → extended key, BIP32 child derivation, slatepack address (Grim-verified), Schnorr sign/verify (single + multi-party + adaptor), SlateV4 types + JSON round-trip + compact binary, Pedersen + Bulletproofs, slatepack codec, full slate construction (standard + invoice), NRD kernels, transaction wire-format assembly, and payment proofs, cross-validated against `grin_wallet_libwallet` 5.4.0. See [docs/grin.md](docs/grin.md) for the full status table.
 
 ### `crates/btc-ext/`
 
 Smirk's BTC and LTC support, built on [rust-bitcoin](https://github.com/rust-bitcoin/rust-bitcoin) v0.32. One crate covers both chains because Litecoin is byte-compatible with Bitcoin at the consensus and transaction layer; the only differences that matter to a wallet are address-encoding parameters, which we model in [`network.rs`](../crates/btc-ext/src/network.rs).
 
 Currently shipped:
-- **BIP32 / BIP39 derivation** — mnemonic → master xprv → child xprv along an arbitrary BIP32 path. Test-vectorized against the Trezor canonical all-abandon mnemonic.
-- **Address derivation** — P2WPKH (BIP84, `bc1q…` / `ltc1q…` / `tb1q…` / `tltc1q…`) and P2TR (BIP86 key-only, `bc1p…` / `ltc1p…`). bech32 / bech32m encoding done via the `bech32` crate so we can use LTC's HRPs (`ltc`, `tltc`) — rust-bitcoin's own `Address` type is BTC-only.
-- **PSBT signing** — base64-in / base64-out. Walks per-input `bip32_derivation` maps; signs every input whose origin matches the supplied xprv, leaves the rest untouched.
+- **BIP32 / BIP39 derivation**: mnemonic → master xprv → child xprv along an arbitrary BIP32 path. Test-vectorized against the Trezor canonical all-abandon mnemonic.
+- **Address derivation**: P2WPKH (BIP84, `bc1q…` / `ltc1q…` / `tb1q…` / `tltc1q…`) and P2TR (BIP86 key-only, `bc1p…` / `ltc1p…`). bech32 / bech32m encoding done via the `bech32` crate so we can use LTC's HRPs (`ltc`, `tltc`); rust-bitcoin's own `Address` type is BTC-only.
+- **PSBT signing**: base64-in / base64-out. Walks per-input `bip32_derivation` maps; signs every input whose origin matches the supplied xprv, leaves the rest untouched.
 
 Test vectors include the canonical BIP84 and BIP86 reference values from the BIPs themselves. See `crates/btc-ext/src/{bip32,address}.rs` for the unit tests.
 
-UTXO selection, fee estimation, and tx broadcast are deliberately out of scope here — those live in `@smirk/core` (TypeScript, infrastructure-aware) and call this crate via the WASM bridge.
+UTXO selection, fee estimation, and tx broadcast are deliberately out of scope here: those live in `@smirk/core` (TypeScript, infrastructure-aware) and call this crate via the WASM bridge.
 
 ### `crates/swap-core/`
 
-Adaptor-signature primitives and atomic swap state machine. Currently a stub — implementation lands when the protocol design has solidified. See [docs/swap-core.md](docs/swap-core.md).
+Adaptor-signature primitives and atomic swap state machine. Currently a stub: implementation lands when the protocol design has solidified. See [docs/swap-core.md](docs/swap-core.md).
 
 ## Packages (TypeScript)
 
-npm workspace at the monorepo root. All packages share `tsconfig.base.json` and use vanilla `tsc` for builds (no bundler at the lib level — bundling happens at the consumer level via Vite for the extension, etc.).
+npm workspace at the monorepo root. All packages share `tsconfig.base.json` and use vanilla `tsc` for builds (no bundler at the lib level; bundling happens at the consumer level via Vite for the extension, etc.).
 
-### `packages/wasm/` — `@smirk/wasm`
+### `packages/wasm/`: `@smirk/wasm`
 
 Thin TypeScript wrapper around the wasm-bindgen output at `crates/smirk-wasm/pkg/`. Exposes every Grin/Monero/Wownero/aggregate function organized into `monero` and `grin` namespaces with TypeScript types. Consumers must call `await initialize()` once before using.
 
@@ -80,31 +80,31 @@ await initialize();
 const addr = grin.slatepackAddress(mnemonic, 0, 'mainnet');
 ```
 
-### `packages/core/` — `@smirk/core`
+### `packages/core/`: `@smirk/core`
 
-Shared TypeScript code consumed by the browser extension, mobile app, and desktop app. Imports zero WASM — stays loadable in any context (browser, service worker, Node, Deno).
+Shared TypeScript code consumed by the browser extension, mobile app, and desktop app. Imports zero WASM: stays loadable in any context (browser, service worker, Node, Deno).
 
 Currently shipped:
-- **API client** — `SmirkApi` class + singleton `api`; covers auth, keys, link tips, social tips, wallet UTXO (BTC/LTC), wallet LWS (XMR/WOW), Grin scan + slatepack relay, prices/sparklines, blockchain heights. Bearer-token auth, 30s timeout, exponential-backoff retries on 5xx for idempotent endpoints.
-- **Crypto** — PBKDF2-SHA256 (WebCrypto, 600k iters) + XChaCha20-Poly1305 for at-rest seed encryption; secp256k1 ECDH for tip envelopes; BIP-137 Bitcoin message signing for `extensionRegister` proof-of-key-control.
-- **Address derivation + validation** — bech32 P2WPKH for BTC/LTC, Cryptonote (prefix + spend + view + Keccak checksum, Monero base58) for XMR/WOW, slatepack bech32 for Grin.
-- **HD wallet** — BIP39 mnemonic ↔ seed, BIP32 secp256k1 derivation for BTC/LTC, three derivation generations (v1 legacy / v2 buggy SLIP-10 / v3 Cake-compatible) for XMR/WOW so old wallets can be swept.
+- **API client**: `SmirkApi` class + singleton `api`; covers auth, keys, link tips, social tips, wallet UTXO (BTC/LTC), wallet LWS (XMR/WOW), Grin scan + slatepack relay, prices/sparklines, blockchain heights. Bearer-token auth, 30s timeout, exponential-backoff retries on 5xx for idempotent endpoints.
+- **Crypto**: PBKDF2-SHA256 (WebCrypto, 600k iters) + XChaCha20-Poly1305 for at-rest seed encryption; secp256k1 ECDH for tip envelopes; BIP-137 Bitcoin message signing for `extensionRegister` proof-of-key-control.
+- **Address derivation + validation**: bech32 P2WPKH for BTC/LTC, Cryptonote (prefix + spend + view + Keccak checksum, Monero base58) for XMR/WOW, slatepack bech32 for Grin.
+- **HD wallet**: BIP39 mnemonic ↔ seed, BIP32 secp256k1 derivation for BTC/LTC, three derivation generations (v1 legacy / v2 buggy SLIP-10 / v3 Cake-compatible) for XMR/WOW so old wallets can be swept.
 - **Nostr identity plane**: seed-derived identities, an identity vault, NIP-05 resolution with TOFU pinning, NIP-07 provider plumbing, NIP-98 auth, NIP-59 gift-wrap.
 - **Messaging**: NIP-17 encrypted DMs behind a swappable transport seam.
 - **Payment transports**: Grin slatepack over the backend relay or over Nostr gift-wrap, plus the client-side pending overlay.
 - **Chain data plane**: a provider seam over the API, defaulting to the backend.
 - **v0.2 to v0.3 migration**: legacy-seed detect/decrypt and the legacy-cleanup fund-safety gate.
-- **Types** — `AssetType`, tip and key shapes used at the API surface.
+- **Types**: `AssetType`, tip and key shapes used at the API surface.
 
 Chain-specific transaction crypto lives in `@smirk/wasm` (Rust). The wallet shells compose `@smirk/core` + `@smirk/wasm` + their own UI layer.
 
-### `packages/assets/` — `@smirk/assets`
+### `packages/assets/`: `@smirk/assets`
 
-Pure-data registry of every chain Smirk supports. The "what is BTC, what is XMR, what is Grin" answer in one place — decimals, ticker, display name, derivation paths, network metadata, capability flags (segwit / taproot / MWEB / payment proofs / NRD kernels / view tags / …), confirmation requirements, swap-route support.
+Pure-data registry of every chain Smirk supports. The "what is BTC, what is XMR, what is Grin" answer in one place: decimals, ticker, display name, derivation paths, network metadata, capability flags (segwit / taproot / MWEB / payment proofs / NRD kernels / view tags / …), confirmation requirements, swap-route support.
 
 Definitions are JSON-serializable and import nothing chain-specific. Crypto functions live elsewhere (`@smirk/wasm` for WASM-backed chains, `@smirk/core` for pure-JS); consumers compose registry data with adapter code at the call site.
 
-Discriminated by chain family — `utxo` / `cryptonote` / `mimblewimble` — with per-family feature blocks so chain-specific quirks (LTC's MWEB, Grin's payment proofs) don't leak into UI code as `if (asset === 'ltc')` branches.
+Discriminated by chain family (`utxo` / `cryptonote` / `mimblewimble`) with per-family feature blocks so chain-specific quirks (LTC's MWEB, Grin's payment proofs) don't leak into UI code as `if (asset === 'ltc')` branches.
 
 Static-first, dynamic-capable: the 5 built-ins (`btc`, `ltc`, `xmr`, `wow`, `grin`) register at module load; `registry.register(def)` adds further chains without recompiling the package.
 
@@ -121,11 +121,11 @@ for (const asset of listAssets({ swapRoute: 'thorchain' })) {
 
 44 unit tests cover the registry behavior plus per-asset sanity checks (WOW decimals = 11 not 12, XMR ring size = 16, Grin slate version, etc.).
 
-See [docs/UI_DESIGN.md](docs/UI_DESIGN.md) Principle 6 for the design rationale — no hardcoded `if (asset === 'btc')` branches anywhere in the wallet UI; everything iterates over the registry.
+See [docs/UI_DESIGN.md](docs/UI_DESIGN.md) Principle 6 for the design rationale: no hardcoded `if (asset === 'btc')` branches anywhere in the wallet UI; everything iterates over the registry.
 
-### `packages/extension/` — `@smirk/extension`
+### `packages/extension/`: `@smirk/extension`
 
-Browser extension (Chrome MV3 + Firefox), Vite + Preact. The canonical v0.3 Smirk wallet on browsers — full wallet flows (create/import/unlock, per-asset send/receive for BTC/LTC/XMR/WOW/Grin, social tipping with two-phase create + client-side backup, per-asset detail screens, dapp `window.smirk` injection with a privacy-toggle in Settings). See [packages/extension/README.md](packages/extension/README.md) for the current scope table and architecture notes.
+Browser extension (Chrome MV3 + Firefox), Vite + Preact. The canonical v0.3 Smirk wallet on browsers: full wallet flows (create/import/unlock, per-asset send/receive for BTC/LTC/XMR/WOW/Grin, social tipping with two-phase create + client-side backup, per-asset detail screens, dapp `window.smirk` injection with a privacy-toggle in Settings). See [packages/extension/README.md](packages/extension/README.md) for the current scope table and architecture notes.
 
 ```bash
 make ext-chrome   # builds packages/extension/dist/  (load as unpacked Chrome extension)
@@ -134,11 +134,11 @@ make ext-firefox  # same dist/, but with Firefox manifest
 
 The vite config at `packages/extension/vite.config.ts` copies the WASM bundle from `crates/smirk-wasm/pkg/` into `dist/wasm/` so the MV3 service worker can `fetch()` it at runtime, and bundles `src/content/index.ts` + `src/inject/index.ts` as standalone IIFEs (Chrome content/page scripts can't import ES modules). Run `make wasm` first if you haven't built the WASM bundle yet.
 
-### `packages/dapp-api/` — `@such-software/smirk-dapp-api`
+### `packages/dapp-api/`: `@such-software/smirk-dapp-api`
 
 Transport-agnostic dapp injection layer. Wire protocol (JSON-RPC-shaped envelope), `WalletHandler` dispatcher, `WalletProvider` / `OriginPermissionStore` / `ApprovalHandler` interfaces. The extension wires platform-specific adapters (`chrome.runtime.sendMessage`, `chrome.windows.create` for approvals, `chrome.storage.local` for permissions); future Capacitor mobile + Tauri desktop builds will swap in their own adapters around the same handler.
 
-### `packages/desktop/` — `@smirk/desktop`
+### `packages/desktop/`: `@smirk/desktop`
 
 Tauri 2.x desktop wallet shell (Windows/macOS/Linux, shipped v0.3.0) with an embedded dapp browser. Wraps the extension popup via a `chrome.*` shim (storage backed by `tauri-plugin-store`); each browser tab is a borderless `WebviewWindow` positioned over the wallet UI's frame slot.
 
@@ -164,7 +164,7 @@ Playwright end-to-end suite that drives the real extension UI against a running 
 
 ### Planned (not yet populated)
 
-- `packages/mobile/` — Capacitor app (iOS + Android), v0.4
+- `packages/mobile/`: Capacitor app (iOS + Android), v0.4
 
 ## Git subtree workflow
 

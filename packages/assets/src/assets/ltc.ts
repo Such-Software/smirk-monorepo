@@ -1,7 +1,7 @@
 import type { AssetDefinition } from '../types';
 
 /**
- * Litecoin — UTXO, native segwit by default. MWEB support is
+ * Litecoin: UTXO, native segwit by default. MWEB support is
  * roadmapped but **not yet implemented** (`features.mweb = false`);
  * once `crates/btc-ext/` (or a sibling `crates/ltc-ext/`) gains
  * MWEB transaction construction, flip this flag and the UI will
@@ -9,9 +9,9 @@ import type { AssetDefinition } from '../types';
  *
  * Note that LTC's BIP44 coin type is 2 (per SLIP-44), distinct
  * from Bitcoin's 0. Testnet shares testnet coin type 1 with all
- * Bitcoin-family testnets — this is by SLIP-44 convention.
+ * Bitcoin-family testnets; this is by SLIP-44 convention.
  *
- * Confirmations: 0 — same first-seen treatment as Bitcoin.
+ * Confirmations: 0, same first-seen treatment as Bitcoin.
  */
 export const ltc: AssetDefinition = {
   id: 'ltc',

@@ -1,18 +1,18 @@
 /**
- * `installSmirkPageApi` — runtime installer for `window.smirk`,
+ * `installSmirkPageApi`: runtime installer for `window.smirk`,
  * intended to be called by dapp pages that want to support Smirk
  * across every shipping environment without writing per-environment
  * detection code themselves.
  *
  * Three deployment shapes for the same dapp page:
  *
- *  1. **Browser extension (Smirk v0.2.x)** — the extension's content
+ *  1. **Browser extension (Smirk v0.2.x)**: the extension's content
  *     script has already installed `window.smirk` before the page's
  *     own scripts run. `installSmirkPageApi()` sees the existing
  *     surface and is a no-op. Existing dapps that target only the
  *     extension keep working with zero changes.
  *
- *  2. **Smirk desktop (v0.3.0+) embedded browser** — the dapp page
+ *  2. **Smirk desktop (v0.3.0+) embedded browser**: the dapp page
  *     loads in an iframe inside the wallet. There is no extension,
  *     no `window.smirk`. `installSmirkPageApi()` detects the parent-
  *     frame context and installs a `window.smirk` whose every
@@ -21,7 +21,7 @@
  *     approval modal; the page sees the same Promise-returning API
  *     as the extension surface.
  *
- *  3. **Standalone page (no Smirk)** — neither the extension nor a
+ *  3. **Standalone page (no Smirk)**: neither the extension nor a
  *     Smirk iframe parent is present. `installSmirkPageApi()` does
  *     nothing; `window.smirk` stays undefined and the page's normal
  *     "install Smirk" prompt covers the gap.
@@ -59,7 +59,7 @@ export interface InstallSmirkPageApiOptions {
   /**
    * Per-request timeout in milliseconds. If a postMessage round-
    * trip exceeds this, the page-side Promise rejects with a
-   * `TIMEOUT` error. Default 30s — generous because the user may
+   * `TIMEOUT` error. Default 30s, generous because the user may
    * be reading an approval prompt. Set lower in tests.
    */
   readonly timeoutMs?: number;
@@ -99,7 +99,7 @@ export function installSmirkPageApi(
 ): 'extension-present' | 'iframe-mode' | 'none' {
   if (typeof window === 'undefined') return 'none';
 
-  // Extension content script already installed window.smirk —
+  // Extension content script already installed window.smirk;
   // never overwrite. The page's existing v0.2.x integration code
   // keeps working untouched.
   if (typeof window.smirk !== 'undefined') {
@@ -108,7 +108,7 @@ export function installSmirkPageApi(
 
   const mode = options.mode ?? 'auto';
   if (mode === 'never') return 'none';
-  // 'auto' requires a parent frame distinct from self — that is
+  // 'auto' requires a parent frame distinct from self; that is
   // our signal that we're embedded inside the wallet's iframe.
   if (mode === 'auto' && window.parent === window) return 'none';
 
@@ -120,7 +120,7 @@ export function installSmirkPageApi(
   return 'iframe-mode';
 }
 
-// Internals — keep below the public surface so a reader sees the
+// Internals: keep below the public surface so a reader sees the
 // docstring + signature without scrolling.
 
 interface PendingEntry {

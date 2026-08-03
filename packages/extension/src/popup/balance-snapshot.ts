@@ -1,5 +1,5 @@
 /**
- * Balance snapshot cache — persist the last-seen balances + prices in
+ * Balance snapshot cache: persist the last-seen balances + prices in
  * `chrome.storage.session` so a reopened popup paints instantly instead of
  * flashing zeros while the network refresh runs. BigInt balances are stored as
  * strings (JSON can't carry BigInt) and revived on read. Extracted verbatim from

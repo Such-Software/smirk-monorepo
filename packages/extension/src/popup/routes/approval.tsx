@@ -32,7 +32,7 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
   const [pending, setPending] = useState<PendingApproval | null>(null);
   const [missing, setMissing] = useState(false);
 
-  // Mirror the main App's theme bootstrap — without this the
+  // Mirror the main App's theme bootstrap; without this the
   // approval popup renders with NO `--smirk-*` CSS variables set,
   // so ApprovalScreen's themed colors (asset-chip background,
   // origin text contrast, etc.) all fall back to "undefined" and
@@ -148,7 +148,7 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
   const finish = async (result: DappApprovalResult) => {
     await approvalPopupBridge.writeResult(approvalId, result);
     // Give the SW a tick to pick up the storage change before the
-    // window disappears — chrome.storage.onChanged fires async.
+    // window disappears: chrome.storage.onChanged fires async.
     setTimeout(() => window.close(), 50);
   };
 
@@ -176,7 +176,7 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
   };
 
   // Translate the dapp-api ApprovalRequest into the UI's shape. They
-  // line up 1:1 by design — this is just a name-spaced cast that
+  // line up 1:1 by design; this is just a name-spaced cast that
   // keeps the UI package decoupled from the protocol package.
   const uiRequest = request as unknown as UiApprovalRequest;
 

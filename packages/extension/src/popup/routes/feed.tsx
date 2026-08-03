@@ -48,7 +48,7 @@ export function FeedNote({ note, nowMs }: { note: DisplayNote; nowMs: number }) 
 }
 
 /**
- * Feed tab — the operator-curated public Nostr feed (kind-1 notes by the owner +
+ * Feed tab: the operator-curated public Nostr feed (kind-1 notes by the owner +
  * allowlist over the relay) plus compose. Opt-in: this route only mounts when the
  * backend advertises a `feed` capability, so the whole surface is absent on a
  * feed-less instance. Reading is always available; POSTING is capability-gated by

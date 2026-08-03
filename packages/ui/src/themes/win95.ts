@@ -1,7 +1,7 @@
 import type { Theme } from './types';
 
 /**
- * Win95 theme — chunky, gray, beveled, MS Sans Serif. The proof-of-
+ * Win95 theme: chunky, gray, beveled, MS Sans Serif. The proof-of-
  * concept second theme that stresses the token system: it needs
  * outset/inset bevels that don't translate to flat colors, so the
  * raised/sunken shadow tokens are used plus a small CSS payload for
@@ -12,7 +12,7 @@ import type { Theme } from './types';
  * 3DDKSHADOW (#0a0a0a). Title-bar gradient #0a246a → #a6caf0.
  */
 export const win95Theme: Theme = {
-  // Stable id — kept as `win95` so any persisted user selection
+  // Stable id: kept as `win95` so any persisted user selection
   // survives the rename. Display name uses the Microsoft codename
   // ("Chicago") instead of the trademark.
   id: 'win95',
@@ -34,7 +34,7 @@ export const win95Theme: Theme = {
     accentHover: '#0a246a',
     accentFg: '#ffffff',
 
-    // No borders proper — the bevel shadows are the border. Keep token
+    // No borders proper: the bevel shadows are the border. Keep token
     // values transparent so any component that draws a 1px border on
     // top of the bevel doesn't double up.
     border: 'transparent',
@@ -59,7 +59,7 @@ export const win95Theme: Theme = {
 
     // The hero feature: 2px bevel via box-shadow stacking. Outer ring
     // is dark+light to draw the chamfer, inner ring is the highlight
-    // gradient. Order matters — outer first, inner second.
+    // gradient. Order matters: outer first, inner second.
     shadowRaised:
       'inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080, inset 2px 2px #dfdfdf',
     shadowSunken:
@@ -69,7 +69,7 @@ export const win95Theme: Theme = {
   // rendering, the chunky-button bevel-active feedback, asset-list
   // sunken-well padding, and contrast resets for components that use
   // `opacity: 0.X` to mute text (the dark theme uses opacity-on-white;
-  // on a light background it makes text invisible — restore full ink).
+  // on a light background it makes text invisible; restore full ink).
   css: `
     .smirk-theme-win95 img,
     .smirk-theme-win95 svg {

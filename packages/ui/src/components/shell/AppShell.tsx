@@ -1,5 +1,5 @@
 /**
- * AppShell — header + scrollable body + bottom nav.
+ * AppShell: header + scrollable body + bottom nav.
  *
  * The chrome the action-centric redesign sits inside. Renders the
  * current tab's content via the `routes` map; consumers supply
@@ -34,7 +34,7 @@ export interface AppShellProps {
   /** Per-tab content. Each tab's render is the consumer's responsibility. */
   /**
    * Route renderers per top-level tab. `Partial` because not every
-   * shell wires every tab — the desktop adds `browse`; the extension
+   * shell wires every tab: the desktop adds `browse`; the extension
    * popup doesn't. The shell falls back to `null` for missing
    * renderers, which trivially renders nothing.
    */
@@ -48,12 +48,12 @@ export interface AppShellProps {
   /**
    * Brand mark in the header / sidebar. Defaults to text-only "Smirk
    * Wallet". Pass an icon URL to render a logo glyph alongside the
-   * label — extension/mobile/desktop each supply their own.
+   * label; extension/mobile/desktop each supply their own.
    */
   brand?: { label?: string; iconUrl?: string };
   /**
    * Extra content rendered in the header (between the brand and the
-   * pop-out button). Used for things like a refresh button on Home —
+   * pop-out button). Used for things like a refresh button on Home;
    * the consumer is responsible for hiding it on tabs where it doesn't
    * apply.
    */

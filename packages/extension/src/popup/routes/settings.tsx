@@ -38,18 +38,18 @@ const AUTO_LOCK_OPTIONS: Array<{ value: number; label: string }> = [
   // 2026-06-13: dropped the "Never (until browser closes)" /
   // -1 / MAX_SAFE_INTEGER option as part of the wrapped-key
   // session-cache hardening. AUTO_LOCK_MAX_MINUTES (24h) is the
-  // hardest upper bound now — anything beyond clamps. See
+  // hardest upper bound now: anything beyond clamps. See
   // keystore.ts file header.
   { value: AUTO_LOCK_MAX_MINUTES, label: '24 hours (maximum)' },
 ];
 
 /**
- * Settings → Assets — show/hide each registered asset.
+ * Settings → Assets: show/hide each registered asset.
  *
  * Hidden assets disappear from Home, the Send/Receive/Tip choosers,
  * and balance-poll round-trips. They're still routable directly
  * (claim notifications, external links) and the wallet still owns
- * their keys — visibility is a UI preference, not a destructive
+ * their keys; visibility is a UI preference, not a destructive
  * action.
  *
  * Footer count gives at-a-glance feedback. Auto-unhide-on-claim
@@ -153,14 +153,14 @@ function AssetsVisibilityPanel({
  * Settings tab router.
  *
  * Sub-routes:
- *   - `settings`            — the main Settings page (SettingsStub)
- *   - `settings/sent-tips`  — cross-asset Sent Tips list with
+ *   - `settings`:             the main Settings page (SettingsStub)
+ *   - `settings/sent-tips`:   cross-asset Sent Tips list with
  *                             inline Clawback + Discard Draft actions.
  *   - `settings/nostr`      (the Nostr identity vault)
  *   - `settings/backend`    (backend selection)
  *
  * Per-asset history already surfaces sent-tip rows inline in
- * AssetDetailScreen; this is the cross-asset surface — find a
+ * AssetDetailScreen; this is the cross-asset surface: find a
  * forgotten clawback-eligible tip across all 5 chains in one place.
  */
 export function SettingsRouter({
@@ -173,7 +173,7 @@ export function SettingsRouter({
 }: {
   wallet: UnlockedWallet;
   session: WalletSession | null;
-  /** Balance refresh — threaded through to SentTipsRoute so clawback
+  /** Balance refresh: threaded through to SentTipsRoute so clawback
    *  can show the recovered funds immediately. */
   onRefresh: () => Promise<void>;
   onLock: () => Promise<void>;
@@ -219,12 +219,12 @@ export function SettingsRouter({
 
 
 /**
- * Settings → Security — three sub-panels:
+ * Settings → Security. Three sub-panels:
  *   1. Seed fingerprint display (read-only identifier).
  *   2. Change password (in-place keystore rotation).
  *   3. Export raw keys (with strong warning + reveal-on-confirm).
  *
- * Each section is collapsed by default — they're rarely used and
+ * Each section is collapsed by default: they're rarely used and
  * shouldn't compete with everyday surfaces (auto-lock, theme).
  * Clicking the section header expands. Keeps the Settings tab
  * scrollable but not overwhelming.
@@ -763,8 +763,8 @@ function KeyRow({
 
 /**
  * Compact nav row used in Settings to deep-link into sub-screens
- * (Sent Tips, future: per-asset RPC config, etc.). Two lines —
- * label + hint — with a chevron at the right and a hover affordance.
+ * (Sent Tips, future: per-asset RPC config, etc.). Two lines
+ * (label + hint) with a chevron at the right and a hover affordance.
  */
 function SettingsNavRow({
   label,
@@ -826,7 +826,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
   const autoLockMinutes = sessionState.ui.autoLockMinutes ?? 0;
   const themeId = sessionState.ui.theme ?? 'default';
   const [forgetOpen, setForgetOpen] = useState(false);
-  // window.smirk injection toggle — closes the short-term ask in
+  // window.smirk injection toggle: closes the short-term ask in
   // Such-Software/smirk-extension#1. Lives in chrome.storage.local
   // (read directly by the content script at document_start) rather
   // than the session-state store, so the toggle isn't gated on a
@@ -859,7 +859,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
       // wallet so the new TTL applies immediately. Without this, a
       // user who unlocks with "Immediately" (no cache) and then
       // switches to "Never" sees no effect until the next manual
-      // unlock — defeating the toggle.
+      // unlock, defeating the toggle.
       const ks = await walletKeystore.getState();
       if (ks.kind === 'unlocked') {
         await writeSessionCache(ks.wallet, minutes);
@@ -925,7 +925,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           // Desktop-only callout: the chrome-shim does not polyfill
           // `chrome.alarms`, so the auto-lock timer only runs while
           // the wallet window is open. A user who closes the wallet
-          // does NOT relock until they reopen the app — make sure
+          // does NOT relock until they reopen the app; make sure
           // they know. Tracked for a `WalletTimers` abstraction in
           // `@smirk/core/state/platform.ts`.
           <p
@@ -1017,7 +1017,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         </select>
       </section>
 
-      {/* Assets visibility — let the user curate which coins appear
+      {/* Assets visibility: let the user curate which coins appear
           on Home, in choosers, and in balance polling. Hiding an
           asset never destroys access; the wallet still owns the keys.
           See docs/MULTI_ASSET_ARCHITECTURE.md for the long-form
@@ -1062,7 +1062,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         </p>
       </section>
 
-      {/* Security section — fingerprint display, change-password
+      {/* Security section: fingerprint display, change-password
           flow, export-raw-keys panel. Three audit-flagged TODOs
           rolled into one Settings group. */}
       <SecurityPanel wallet={wallet} />
@@ -1071,7 +1071,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           the day-to-day case (a few rows per coin); this is for
           finding a forgotten clawback-eligible tip across all 5
           chains in one view. Same affordances as the per-asset
-          rows — Clawback + Discard Draft — but in a single list. */}
+          rows (Clawback + Discard Draft) but in a single list. */}
       <SettingsNavRow
         label="Sent Tips"
         hint="Cross-asset list of every tip you've sent + inline clawback"
@@ -1079,7 +1079,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         testid="settings-sent-tips-nav"
       />
 
-      {/* Nostr identity — link the seed-derived npub for "Sign in with Nostr"
+      {/* Nostr identity: link the seed-derived npub for "Sign in with Nostr"
           (NIP-98) on any Smirk-compatible backend (Identity Phase 1). */}
       <SettingsNavRow
         label="Nostr identity"
@@ -1089,7 +1089,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
       />
 
 
-      {/* Backend selection — point the wallet at a self-hosted smirk-backend or
+      {/* Backend selection: point the wallet at a self-hosted smirk-backend or
           another operator's for max privacy (self-sovereign). */}
       <SettingsNavRow
         label="Backend"
@@ -1159,7 +1159,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
  *   3. Type-to-confirm: type the word `FORGET` to enable the
  *      destructive button
  *
- * Order matters — each gate clears the next, in sequence. Nothing
+ * Order matters: each gate clears the next, in sequence. Nothing
  * about this needs to be slick; this is the one place in the app
  * where friction is the feature.
  */

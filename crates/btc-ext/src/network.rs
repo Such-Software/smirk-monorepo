@@ -97,7 +97,7 @@ impl Network {
 
     /// Map to rust-bitcoin's [`bitcoin::Network`] for primitives that don't
     /// care about the encoding layer (BIP32 derivation, sighash). For LTC
-    /// we return the equivalent Bitcoin network — only the address-encoding
+    /// we return the equivalent Bitcoin network; only the address-encoding
     /// layer needs LTC-specific handling.
     pub fn as_bitcoin_network(self) -> bitcoin::Network {
         match self {

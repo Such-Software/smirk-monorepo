@@ -7,7 +7,7 @@
  * **Versioning.** `PROTOCOL_VERSION` bumps on any breaking shape
  * change. Page-api and wallet-handler both ship the version they
  * understand; mismatches fail closed with a clear error. We don't
- * negotiate down — old clients should be left talking to old
+ * negotiate down: old clients should be left talking to old
  * handlers, not silently degraded.
  *
  * **No transport details in here.** Anything platform-specific
@@ -64,7 +64,7 @@ export interface SmirkSignResult {
 export interface SmirkPaymentRequest {
   asset: 'btc' | 'ltc' | 'xmr' | 'wow';
   /** Human decimal amount in whole coins, e.g. "9" or "9.5". The wallet converts to
-   *  atomic units using the asset's decimals — website operators should NOT compute
+   *  atomic units using the asset's decimals; website operators should NOT compute
    *  atomic units (they range 8 (BTC) to 12 (XMR) across chains, a foot-gun). Plain
    *  decimal only (no exponent); more fractional digits than the asset supports is
    *  rejected and the payment is refused. */
@@ -126,7 +126,7 @@ export interface SmirkAppEncryptionKey {
 }
 
 // ============================================================================
-// Method dispatch table — single source of truth for what the page-side
+// Method dispatch table: single source of truth for what the page-side
 // surface and wallet-side handler agree on.
 // ============================================================================
 
@@ -179,7 +179,7 @@ export type SmirkMethodMap = {
   getAppEncryptionKey: {
     /** `context` sub-scopes the key WITHIN the origin (e.g. `sso`, `notes`), so
      *  one site can hold several unlinkable keys. Omitted = the origin's default
-     *  key. Never a cross-origin string — the handler binds to the verified origin. */
+     *  key. Never a cross-origin string: the handler binds to the verified origin. */
     params: { context?: string };
     /** The x25519 sealing key; `null` if the origin lacks/declines the e2ee scope. */
     result: SmirkAppEncryptionKey | null;
@@ -243,7 +243,7 @@ export interface SmirkWireResponse<M extends SmirkMethod = SmirkMethod> {
   };
 }
 
-/** Stable error codes — pages can branch on these. */
+/** Stable error codes: pages can branch on these. */
 export type SmirkErrorCode =
   | 'USER_REJECTED' //   user denied the approval prompt
   | 'NOT_CONNECTED' //   no permission for this origin

@@ -1,9 +1,9 @@
 /**
- * `IframeBrowserController` — a `DappBrowserController` implementation
+ * `IframeBrowserController`: a `DappBrowserController` implementation
  * backed by `<iframe>` elements rendered inside the wallet's main
  * webview, communicating with the page via `postMessage`.
  *
- * Used where the native-WebView-per-tab pattern is unreliable —
+ * Used where the native-WebView-per-tab pattern is unreliable:
  * notably Linux desktop, where WebKitGTK's accelerated compositor
  * loses its backing surface on parent-window resize and renders
  * subsequent frames as solid black (upstream tauri-apps/tauri#7537,
@@ -12,7 +12,7 @@
  * context, no race. Resize, reload, focus, and z-ordering all become
  * standard DOM operations.
  *
- * The controller is intentionally **DOM-free** — every iframe element
+ * The controller is intentionally **DOM-free**: every iframe element
  * lives in the React/Preact tree and is owned by the
  * `IframeBrowserContent` component. The controller holds the tab
  * state, the navigation history per tab, and the page-request
@@ -30,7 +30,7 @@
  *
  * Page-script injection: cross-origin iframes don't allow parent-
  * side script injection (browser same-origin policy). The page is
- * expected to install `window.smirk` itself — typically via
+ * expected to install `window.smirk` itself, typically via
  * `import { installSmirkPageApi } from '@such-software/smirk-dapp-api'`. The
  * `setInitScripts` method here is therefore a no-op, present only
  * to satisfy the interface contract. See
@@ -110,7 +110,7 @@ function newNavigationState(url: string): BrowserNavigationState {
 }
 
 /**
- * Brand a controller as "inline-rendered" — consumers can detect
+ * Brand a controller as "inline-rendered"; consumers can detect
  * this to choose whether to mount the iframe content component
  * inside the BrowserShell's frame slot.
  */
@@ -134,7 +134,7 @@ export class IframeBrowserController
 
   constructor(options: IframeControllerOptions = {}) {
     this.homeUrl = options.homeUrl ?? 'about:blank';
-    // Monotonic counter — avoids `Date.now()` in tests where time is
+    // Monotonic counter: avoids `Date.now()` in tests where time is
     // mocked, and keeps tab ordering deterministic across the run.
     let counter = 0;
     this.createdAtCounter = () => {
@@ -150,7 +150,7 @@ export class IframeBrowserController
   async open(): Promise<void> {
     if (this.opened) return;
     this.opened = true;
-    // Allocate a default tab on first open — matches the
+    // Allocate a default tab on first open: matches the
     // `DappBrowserController` conformance contract ("opens with at
     // least one tab"). `newTab` would refuse if `opened` was still
     // false; we set it above first to keep that invariant.
@@ -167,7 +167,7 @@ export class IframeBrowserController
   }
 
   // --------------------------------------------------------------------
-  // Init scripts — no-op for iframe (see file header)
+  // Init scripts: no-op for iframe (see file header)
   // --------------------------------------------------------------------
 
   async setInitScripts(_scripts: readonly string[]): Promise<void> {
@@ -214,7 +214,7 @@ export class IframeBrowserController
       const fallback = remaining[remaining.length - 1];
       this.activeTabId = fallback ? fallback.id : null;
     }
-    // If we just closed the last tab, allocate a replacement — the
+    // If we just closed the last tab, allocate a replacement: the
     // controller is "open" so a tab list of zero would be an invalid
     // intermediate state per the conformance contract.
     if (this.tabs.size === 0) {
@@ -254,7 +254,7 @@ export class IframeBrowserController
     if (!record) return;
     const target = normalizeUrl(url);
     // Truncate any "forward" history when the user navigates from a
-    // back-stepped position — matches browser semantics.
+    // back-stepped position: matches browser semantics.
     record.history = record.history.slice(0, record.historyIndex + 1);
     record.history.push(target);
     record.historyIndex = record.history.length - 1;
@@ -293,7 +293,7 @@ export class IframeBrowserController
     const target = record.history[record.historyIndex] as string;
     // Bump the per-tab reload generation. `IframeBrowserContent`
     // includes `reloadGen` in the iframe element's React key, so
-    // React unmounts the old iframe and mounts a fresh one — which
+    // React unmounts the old iframe and mounts a fresh one, which
     // is the only reliable cross-origin way to force a fresh
     // document load when the URL hasn't changed.
     record.reloadGen += 1;
@@ -304,7 +304,7 @@ export class IframeBrowserController
   /**
    * Read the per-tab reload generation. Used by
    * `IframeBrowserContent` to key its iframe elements. Returns 0
-   * for unknown tabs (defensive — the component can race with tab
+   * for unknown tabs (defensive: the component can race with tab
    * close).
    */
   getReloadGen(tab: TabId): number {
@@ -312,11 +312,11 @@ export class IframeBrowserController
   }
 
   // --------------------------------------------------------------------
-  // Frame positioning — no-ops for iframe (see file header)
+  // Frame positioning: no-ops for iframe (see file header)
   // --------------------------------------------------------------------
 
   async setFrameRect(_rect: BrowserFrameRect): Promise<void> {
-    // CSS lays the iframe out inside its slot — no positioning needed.
+    // CSS lays the iframe out inside its slot: no positioning needed.
   }
 
   async hideFrame(): Promise<void> {
@@ -366,7 +366,7 @@ export class IframeBrowserController
   }
 
   // --------------------------------------------------------------------
-  // IframeBrowserContent integration — internal use only
+  // IframeBrowserContent integration: internal use only
   // --------------------------------------------------------------------
 
   /**

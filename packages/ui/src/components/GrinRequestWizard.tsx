@@ -1,12 +1,12 @@
 /**
- * GrinRequestWizard — receiver-initiated Grin invoice flow.
+ * GrinRequestWizard: receiver-initiated Grin invoice flow.
  *
  * Three steps, mirroring SendWizard's shape but with the I1→I2→I3
  * ceremony instead of S1→S2→S3:
  *
- *   step 0: Compose — amount + (optional memo). Caller picks the fee.
- *   step 1: Exchange — display I1 slatepack, await paste of payer's I2.
- *   step 2: Done — kernel_excess + explorer link.
+ *   step 0: Compose, amount + (optional memo). Caller picks the fee.
+ *   step 1: Exchange, display I1 slatepack, await paste of payer's I2.
+ *   step 2: Done, kernel_excess + explorer link.
  *
  * State persists in `wizard.fields` under the `'grin-request'` id so
  * popup-close mid-invoice resumes here on reopen. Cancel triggers
@@ -29,7 +29,7 @@ export interface GrinRequestFields extends Record<string, unknown> {
   /** Opaque JSON the wizard hands back to onFinalize. */
   receiverContextJson?: string;
   slateId?: string;
-  /** Filled on finalize-success — kernel excess shown on Done. */
+  /** Filled on finalize-success: kernel excess shown on Done. */
   lastKernelExcessHex?: string;
   /** Last build/finalize error to surface in the Exchange step. */
   exchangeError?: string;
@@ -60,7 +60,7 @@ export type GrinRequestFinalizeOutcome =
   | { ok: false; error: string };
 
 export interface GrinRequestWizardProps {
-  /** "grin" — passed for asset-lookup convenience; could theoretically
+  /** "grin": passed for asset-lookup convenience; could theoretically
    *  support other interactive-invoice chains later. */
   assetId: string;
   parseAmount: (assetId: string, text: string) => bigint | null;
@@ -417,7 +417,7 @@ function Done({
 }) {
   const [copied, setCopied] = useState(false);
   // `kernelExcess` is the canonical commitment form (08/09 prefix) emitted
-  // by WASM `finalize_*` — same form grincoin.org indexes by.
+  // by WASM `finalize_*`: same form grincoin.org indexes by.
   const explorerUrl =
     kernelExcess && kernelExcess.length === 66
       ? `https://grincoin.org/kernel/${kernelExcess}`

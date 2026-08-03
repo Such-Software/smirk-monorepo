@@ -1,5 +1,5 @@
 /**
- * NIP-59 gift-wrap of payment payloads (P3) — the Goblin-interoperable crypto
+ * NIP-59 gift-wrap of payment payloads (P3): the Goblin-interoperable crypto
  * heart. Proves: a wrap round-trips to the exact payload; the outer 1059 leaks
  * neither sender nor content (ephemeral author, `p`-tag only); a wrong recipient
  * cannot open it; and the payload schema validates.
@@ -35,9 +35,9 @@ test('round-trips a grin offer from alice to bob', () => {
 test('the outer 1059 hides sender + content, exposes only the recipient p-tag', () => {
   const wrap = wrapPayment(alice, bob.pubkeyHex, offer);
   assert.equal(wrap.kind, GIFT_WRAP_KIND);
-  // Ephemeral author — NOT alice.
+  // Ephemeral author, NOT alice.
   assert.notEqual(wrap.pubkey, alice.pubkeyHex);
-  // Content is ciphertext — the slatepack/slateId must not appear in the clear.
+  // Content is ciphertext: the slatepack/slateId must not appear in the clear.
   assert.ok(!wrap.content.includes(offer.slateId));
   assert.ok(!wrap.content.includes('BEGINSLATEPACK'));
   // Routable to bob.

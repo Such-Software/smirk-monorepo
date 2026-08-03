@@ -2,7 +2,7 @@
  * Behavioral tests for `bootstrapAuth`'s client-side PoW bypass.
  *
  * The bypass mirrors the backend's `is_returning_user` predicate in
- * `smirk-backend/src/api/auth.rs` — a re-registration for an
+ * `smirk-backend/src/api/auth.rs`: a re-registration for an
  * already-known pubkey_hash skips PoW verification on the server,
  * so spending CPU on a solution that will be ignored is pure waste.
  *
@@ -95,17 +95,17 @@ function withMockBackend<T>(
 }
 
 /**
- * Build a real-ish UnlockedWallet — bootstrapAuth needs real
+ * Build a real-ish UnlockedWallet: bootstrapAuth needs real
  * BIP-32 keys to sign the timestamp. Using a deterministic mnemonic
  * keeps the test reproducible.
  */
 function makeUnlockedWallet(): UnlockedWallet {
   // The actual seed bytes don't need to come from a real BIP-39
-  // mnemonic for these tests — the bootstrap flow only uses
+  // mnemonic for these tests: the bootstrap flow only uses
   // wallet.fingerprint, wallet.keys.btc.{privateKey,publicKey},
   // and the various asset public keys. Need exactly 32 bytes for
   // secp256k1 private keys (signBitcoinMessage validates).
-  // Pick a fixed valid scalar — derived from the seed string hash —
+  // Pick a fixed valid scalar (derived from the seed string hash)
   // so signing succeeds deterministically.
   const fakeBytes = (seed: string): Uint8Array => {
     const buf = new Uint8Array(32);
@@ -238,7 +238,7 @@ test('bootstrapAuth: RETURNING wallet propagates xmr/wow start heights from chec
   assert.equal(body.xmr_start_height, 3_400_000);
   assert.equal(body.wow_start_height, 700_000);
   // walletBirthday is intentionally NOT sent for known wallets per
-  // the comment in wallet-flow.ts — backend already has it.
+  // the comment in wallet-flow.ts: backend already has it.
   assert.equal(
     'wallet_birthday' in body,
     false,

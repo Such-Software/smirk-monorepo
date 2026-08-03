@@ -7,7 +7,7 @@
  * `@smirk/assets`.
  *
  * The registry never validates *cryptographic* claims on
- * registration — it only enforces structural invariants (id is
+ * registration; it only enforces structural invariants (id is
  * lowercase, no duplicate id, decimals is non-negative, etc.).
  * Capability validation is the consumer's job at the point of use.
  */
@@ -64,8 +64,8 @@ export class AssetRegistry {
    * collides with an already-registered asset, or if the definition
    * fails structural validation.
    *
-   * Registering the same definition twice is an error, not a no-op
-   * — collisions usually indicate two modules trying to claim the
+   * Registering the same definition twice is an error, not a no-op;
+   * collisions usually indicate two modules trying to claim the
    * same id, which is a bug worth surfacing.
    */
   register(def: AssetDefinition): void {
@@ -157,7 +157,7 @@ export class AssetRegistry {
   }
 
   /**
-   * Remove every registered asset. Test-only — production code
+   * Remove every registered asset. Test-only: production code
    * should never call this. Re-run the bootstrap after clearing.
    */
   _clearForTests(): void {
@@ -172,7 +172,7 @@ export class AssetRegistry {
 /**
  * Cheap structural checks run at `register()` time. These catch
  * obvious mistakes (negative decimals, mainnet not in networks,
- * mixed-case id) without trying to validate cryptographic facts —
+ * mixed-case id) without trying to validate cryptographic facts;
  * those are the consumer's responsibility at the point of use.
  */
 function validateStructural(def: AssetDefinition): void {

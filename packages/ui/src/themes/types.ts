@@ -1,12 +1,12 @@
 /**
- * Theme system — types.
+ * Theme system: types.
  *
  * A theme is pure data: a set of token values that get applied to the
  * document root as CSS custom properties, plus an optional CSS payload
  * for theme-specific selectors (e.g. Win95's bevel box-shadows that
  * don't map cleanly to single-token variables).
  *
- * Components consume themes by reading the CSS variables — never by
+ * Components consume themes by reading the CSS variables, never by
  * importing theme objects directly. This keeps `@smirk/ui` components
  * theme-agnostic and lets shells (extension/mobile/desktop) inject
  * their own themes without rebuilding the component library.
@@ -16,7 +16,7 @@
  * Token values applied as CSS custom properties on the theme root.
  * Property names map 1:1 to `--smirk-<kebab>` CSS variables.
  *
- * Themes can omit tokens — missing values fall back to whatever the
+ * Themes can omit tokens; missing values fall back to whatever the
  * previous theme set, or to the default theme on first apply.
  */
 export interface ThemeTokens {
@@ -88,7 +88,7 @@ export interface ThemeTokens {
  * pixel-art icon overrides, etc).
  */
 export interface Theme {
-  /** Stable identifier — also the value stored in session state. */
+  /** Stable identifier, also the value stored in session state. */
   id: string;
   /** Human-readable name for the picker UI. */
   name: string;
@@ -98,7 +98,7 @@ export interface Theme {
   tokens: ThemeTokens;
   /**
    * Optional theme-specific CSS injected into a `<style>` element.
-   * Use sparingly — token-driven styling is preferred for portability
+   * Use sparingly: token-driven styling is preferred for portability
    * across @smirk/ui consumers. Reserve this for effects that genuinely
    * can't be expressed as a single variable (bevel box-shadows, etc).
    */

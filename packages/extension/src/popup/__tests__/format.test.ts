@@ -1,7 +1,7 @@
 /**
  * Pure popup formatters (extracted from index.tsx). These were untested inside the
  * 7k-line entry point; extraction makes them coverable. Amount round-trips are the
- * load-bearing ones — a parse/format mismatch is money shown wrong.
+ * load-bearing ones: a parse/format mismatch is money shown wrong.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

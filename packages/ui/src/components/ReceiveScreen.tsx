@@ -1,12 +1,12 @@
 /**
- * ReceiveScreen — pick asset, show address + QR.
+ * ReceiveScreen: pick asset, show address + QR.
  *
  * Mirrors SendWizard's first step (asset picker), then drops directly
- * into the receive surface. No persistence needed — receive is
+ * into the receive surface. No persistence needed: receive is
  * stateless from the wallet's POV (the address is whatever the registry
  * says about this asset's current receive address).
  *
- * QR rendering is injected — `@smirk/ui` doesn't bundle a QR library,
+ * QR rendering is injected: `@smirk/ui` doesn't bundle a QR library,
  * so consumers wire in their own (qrcode-svg, qrcode.react, etc.) via
  * the `renderQr` prop. When omitted, the address shows as text only.
  *
@@ -41,7 +41,7 @@ export interface ReceiveScreenProps {
   resolveAddress: (assetId: string) => Promise<string> | string;
   /** Optional: how to render a QR code for the given payload string. */
   renderQr?: (data: string) => ComponentChildren;
-  /** Copy-to-clipboard handler — platform-specific (extension vs mobile). */
+  /** Copy-to-clipboard handler: platform-specific (extension vs mobile). */
   onCopy?: (text: string) => void;
   /** Exit the screen (back to Home). */
   onExit: () => void;
@@ -58,7 +58,7 @@ export interface ReceiveScreenProps {
   /**
    * Optional: surface a "Request specific amount" affordance below the
    * address for assets that support it. Currently only Grin's
-   * interactive invoice flow uses this — the shell routes to a
+   * interactive invoice flow uses this; the shell routes to a
    * dedicated request wizard when invoked.
    */
   onRequestInvoice?: (assetId: string) => void;

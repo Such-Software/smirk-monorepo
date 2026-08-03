@@ -1,4 +1,4 @@
-//! Slatepack ASCII armor — the `BEGINSLATEPACK...ENDSLATEPACK` envelope.
+//! Slatepack ASCII armor: the `BEGINSLATEPACK...ENDSLATEPACK` envelope.
 //!
 //! Reference: `grin-wallet/libwallet/src/slatepack/armor.rs`. Format:
 //!
@@ -14,14 +14,14 @@
 //!   200 words (3000 chars). Makes the armored block look like a "wall of
 //!   words" that's resilient to messenger auto-formatting.
 //!
-//! This module implements the outer armor only — turning opaque bytes into
+//! This module implements the outer armor only: turning opaque bytes into
 //! a human-shareable string and back. The inner `SlatepackBin` binary
 //! format and age encryption are separate pieces.
 
 use sha2::{Digest, Sha256};
 
 // =============================================================================
-// SlatepackBin — the binary structure inside the armor
+// SlatepackBin: the binary structure inside the armor
 // =============================================================================
 //
 // Reference: `grin-wallet/libwallet/src/slatepack/types.rs::impl Writeable for SlatepackBin`.
@@ -54,15 +54,15 @@ impl SlatepackVersion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SlatepackMode {
-    /// `mode = 0` — payload is a binary slate, unencrypted.
+    /// `mode = 0`: payload is a binary slate, unencrypted.
     Plain = 0,
-    /// `mode = 1` — payload is age-encrypted to one or more recipients.
+    /// `mode = 1`: payload is age-encrypted to one or more recipients.
     /// Produced and consumed by `slatepack_encryption::pack_encrypted` /
     /// `unpack_encrypted`.
     Encrypted = 1,
 }
 
-/// A `SlatepackBin` — the binary structure that lives inside the
+/// A `SlatepackBin`: the binary structure that lives inside the
 /// `BEGINSLATEPACK...ENDSLATEPACK` armor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlatepackBin {
@@ -72,7 +72,7 @@ pub struct SlatepackBin {
     /// (e.g. `grin1abc...`). The binary serialization stores it as-is
     /// (length-prefixed ASCII), not re-encoded.
     pub sender: Option<String>,
-    /// Inner payload — either a binary slate (mode=Plain) or age-encrypted
+    /// Inner payload: either a binary slate (mode=Plain) or age-encrypted
     /// blob (mode=Encrypted). Treated as opaque bytes here.
     pub payload: Vec<u8>,
 }
@@ -276,7 +276,7 @@ pub fn armor(payload: &[u8]) -> String {
 pub fn dearmor(input: &str) -> Result<Vec<u8>, String> {
     let bytes = input.as_bytes();
 
-    // 1. Find the first '.' — everything before it is the header.
+    // 1. Find the first '.': everything before it is the header.
     let header_end = bytes
         .iter()
         .position(|b| *b == b'.')
@@ -290,7 +290,7 @@ pub fn dearmor(input: &str) -> Result<Vec<u8>, String> {
         ));
     }
 
-    // 2. Find the next '.' — everything between is the base58 payload.
+    // 2. Find the next '.': everything between is the base58 payload.
     let payload_start = header_end + 1;
     let payload_end = bytes[payload_start..]
         .iter()
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn armor_dearmor_round_trip_binary_payload() {
-        // Random-looking 256 byte payload — exercises base58 encoding length.
+        // Random-looking 256 byte payload: exercises base58 encoding length.
         let payload: Vec<u8> = (0..=255).collect();
         let armored = armor(&payload);
         let recovered = dearmor(&armored).expect("dearmor succeeds for 256-byte payload");
@@ -432,7 +432,7 @@ mod tests {
         // Flip a character in the base58 region.
         let mut chars: Vec<char> = armored.chars().collect();
         let header_end = armored.find('.').unwrap();
-        // Pick a character a few chars after the header — guaranteed to be
+        // Pick a character a few chars after the header, guaranteed to be
         // base58, not punctuation.
         let pos = header_end + 5;
         chars[pos] = if chars[pos] == 'A' { 'B' } else { 'A' };
@@ -531,7 +531,7 @@ mod tests {
 
         // Sanity: version is 1.0; mode is one of the two valid values.
         // (Real slatepacks may have empty `payload` when the slate lives
-        // inside the encrypted_meta region in encrypted mode — we don't
+        // inside the encrypted_meta region in encrypted mode, so we don't
         // assert non-empty.)
         assert_eq!(parsed.version, SlatepackVersion::V1_0);
         assert!(matches!(

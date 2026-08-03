@@ -1,12 +1,12 @@
 import type { Theme } from './types';
 
 /**
- * Nintendo 64 — Mario 64 "SELECT FILE" era. Gold-and-cardboard gilt
+ * Nintendo 64: Mario 64 "SELECT FILE" era. Gold-and-cardboard gilt
  * frames, chunky rounded cartoonish display type, primary-color blocks
  * (green/blue/red/magenta) for action surfaces, and a warm-brown
  * desktop background that reads like a wooden table.
  *
- * Era reference: SM64 menu (1996). Big, soft, friendly — the opposite
+ * Era reference: SM64 menu (1996). Big, soft, friendly, the opposite
  * of the precision pixel aesthetic of the DMG or Workbench. Gradients
  * are gentle (early-3D smooth shading), not glossy in the iPhone sense.
  *
@@ -21,7 +21,7 @@ import type { Theme } from './types';
  *   star yellow:   #ffe14a (Mario star accent)
  */
 export const n64Theme: Theme = {
-  // Stable id — kept as `n64`. Display name uses the pre-launch
+  // Stable id: kept as `n64`. Display name uses the pre-launch
   // codename "Ultra 64" rather than the final trademarked product name.
   id: 'n64',
   name: 'Ultra 64',
@@ -34,7 +34,7 @@ export const n64Theme: Theme = {
     fg: '#ffffff',
     fgMuted: '#f0d9a8',
 
-    // Mario star yellow is the call-to-action color — bright on dark.
+    // Mario star yellow is the call-to-action color: bright on dark.
     accent: '#ffe14a',
     accentHover: '#fff080',
     accentFg: '#4a2412',
@@ -50,7 +50,7 @@ export const n64Theme: Theme = {
 
     // Chunky rounded display font for the cartoonish SM64-menu vibe.
     // Extension bundles Lilita One (OFL, /fonts/) as the primary
-    // choice — see @font-face below. Fallback to any chunky display
+    // choice; see @font-face below. Fallback to any chunky display
     // font the system has, then a heavy sans as last resort.
     fontFamily:
       "'Lilita One', 'Bagel Fat One', 'Fredoka', 'Bowlby One', 'Trebuchet MS', sans-serif",

@@ -9,13 +9,13 @@
  *
  * Crypto note (verified, load-bearing): the legacy v0.2 seal is
  * **XChaCha20-Poly1305 + PBKDF2-SHA256**, BYTE-IDENTICAL to v0.3 core's
- * `decryptPrivateKey`. So the migrator REUSES core crypto — no AES-GCM, ever.
+ * `decryptPrivateKey`. So the migrator REUSES core crypto: no AES-GCM, ever.
  * The only value that crosses the version boundary is the iteration count
  * (absent => the 100k legacy cohort, NOT 600k).
  *
  * Design = CONVERGENCE, not a one-shot: the keystore reseal is one-shot
  * (detect-gated), but the identity-link and the BTC/LTC sweep are idempotent
- * post-unlock steps that no-op when already done — so a fresh v0.2 wallet, a
+ * post-unlock steps that no-op when already done, so a fresh v0.2 wallet, a
  * half-migrated wallet, and an intermediate dev-build wallet all converge to the
  * same end state.
  */
@@ -38,7 +38,7 @@ export const V03_KEYSTORE_KEY = 'smirk_keystore_v1';
 /**
  * Read-only view of the legacy v0.2 `walletState` fields this migration reads.
  * The `encryptedSeed` plaintext IS the mnemonic PHRASE (v0.2 sealed the phrase),
- * so we decrypt it and re-seal that phrase — never the raw bip39 seed.
+ * so we decrypt it and re-seal that phrase, never the raw bip39 seed.
  */
 export interface LegacyWalletState {
   /** Hex XChaCha20-Poly1305 ciphertext of the mnemonic phrase (nonce||ct||tag). */
@@ -75,7 +75,7 @@ export async function detectLegacyWallet(
  * Decrypt the legacy v0.2 seed to its mnemonic PHRASE. Reuses v0.3 core
  * `decryptPrivateKey` (byte-identical to the legacy seal). The iterations
  * selector is LOAD-BEARING: an absent `pbkdf2Iterations` means the 100k cohort,
- * NOT 600k — hardcoding 600k rejects every pre-upgrade wallet. Throws on a wrong
+ * NOT 600k; hardcoding 600k rejects every pre-upgrade wallet. Throws on a wrong
  * password / corruption (AEAD tag verify) or an invalid decoded mnemonic.
  */
 export async function decryptLegacyMnemonic(
@@ -104,11 +104,11 @@ export async function decryptLegacyMnemonic(
  * v0.3 keystore (600k), returning the unlocked wallet. Fund-critical ordering:
  *
  *  - `createWallet` writes `smirk_keystore_v1` and verify-unlocks. That write is
- *    THE crash-safe commit point — once durable, `detectLegacyWallet` flips
+ *    THE crash-safe commit point: once durable, `detectLegacyWallet` flips
  *    false, so any crash-retry re-enters as a normal v0.3 wallet and never
  *    re-migrates. `createWallet` also throws if a v0.3 keystore already exists
  *    (idempotent guard against a double-seal).
- *  - The legacy `walletState` is intentionally **kept** — cleanup is a separate
+ *  - The legacy `walletState` is intentionally **kept**: cleanup is a separate
  *    step after the user confirms the new wallet works AND any pending
  *    recoverable funds (unclaimed tips / Grin slates) are resolved. Never delete
  *    it in the same step as the keystore write.
@@ -133,7 +133,7 @@ export async function migrateLegacyWallet(
 const COIN_TYPE = { btc: 0, ltc: 2 } as const;
 
 /**
- * The legacy (pre-v0.3) BTC/LTC key + P2WPKH address at `m/44'/coin'/0'/0/0` —
+ * The legacy (pre-v0.3) BTC/LTC key + P2WPKH address at `m/44'/coin'/0'/0/0`,
  * the Smirk-specific combination v0.2.x used. For MIGRATION only: detect funds
  * sitting at the old address and sweep them to the v0.3 `m/84'` address. This is
  * a DIFFERENT child key than v0.3, so it must be derived on the `m/44'` path
@@ -175,7 +175,7 @@ const LTC_NETWORK = {
 /** Outcome of a legacy BTC/LTC sweep attempt. `swept` = a fresh broadcast this
  *  call; `already-swept` = a durable txid record existed (no-op); `skipped` =
  *  nothing to do or a non-fatal precondition failed (retried on a later
- *  unlock). Never throws for expected states — the migration must never be
+ *  unlock). Never throws for expected states: the migration must never be
  *  blocked by a dust balance, a locked wallet, or a transient scan error. */
 export interface LegacySweepResult {
   status: 'swept' | 'skipped' | 'already-swept';
@@ -186,7 +186,7 @@ export interface LegacySweepResult {
 /**
  * Sweep a v0.2 wallet's legacy `m/44'` BTC/LTC balance to its v0.3 `m/84'`
  * receive address. The seed is unchanged across the upgrade, so the old coins
- * are still ours — they just sit at an address the v0.3 wallet doesn't watch.
+ * are still ours; they just sit at an address the v0.3 wallet doesn't watch.
  * This packs every UTXO at the `m/44'` address into a single-output tx paying
  * `wallet.addresses[asset]` (the `m/84'` receive address), fee subtracted from
  * the swept amount.
@@ -200,13 +200,13 @@ export interface LegacySweepResult {
  * `skipped` and is retried after a full password unlock.
  *
  * **Signing note (load-bearing):** the m/44' UTXOs are P2WPKH locked to the raw
- * m/44' secp256k1 key, NOT to the m/84' HD path the WASM signer hardwires — so
+ * m/44' secp256k1 key, NOT to the m/84' HD path the WASM signer hardwires, so
  * this uses pure-JS raw-key signing (`@scure/btc-signer`), exactly like the
  * proven tip-claim `sweepUtxo`. `p2wpkh(pubKey)` reproduces the exact
  * scriptPubKey those UTXOs are locked to.
  *
  * @param storage MUST be a DURABLE backend (chrome.storage.local / mobile
- *   preferences / localStorage), NEVER `storage.session` — a session store dies
+ *   preferences / localStorage), NEVER `storage.session`: a session store dies
  *   on browser close and would defeat the cross-restart double-broadcast guard.
  */
 export async function sweepLegacyBtcLtc(
@@ -227,7 +227,7 @@ export async function sweepLegacyBtcLtc(
     return { status: 'skipped', reason: 'wallet locked; re-unlock required' };
   }
 
-  // 3. Destination is ALWAYS the v0.3 m/84' receive address — never the m/44'
+  // 3. Destination is ALWAYS the v0.3 m/84' receive address, never the m/44'
   //    legacy address (that would defeat the migration).
   const recipientAddress = wallet.addresses[asset];
   if (!recipientAddress) {

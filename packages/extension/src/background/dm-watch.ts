@@ -1,5 +1,5 @@
 /**
- * Background DM delivery — an alarm-driven poll that COLLECTS encrypted NIP-17
+ * Background DM delivery: an alarm-driven poll that COLLECTS encrypted NIP-17
  * gift-wraps for the user's npub and notifies. No private key here: collecting
  * needs only the PUBLIC npub (the seed stays in the popup process), so we store
  * the wraps still-encrypted and the popup decrypts them on unlock.
@@ -13,7 +13,7 @@
 import { fetchDmWraps, initSmirkMessaging, type GiftWrapEvent } from '@smirk/core';
 
 const ALARM = 'dm-poll';
-/** `{ npubHex, relayUrl }` the popup sets on unlock. Public data — safe to persist. */
+/** `{ npubHex, relayUrl }` the popup sets on unlock. Public data: safe to persist. */
 const WATCH_KEY = 'dm.watch';
 /** Collected raw (encrypted) gift-wraps, newest-first, capped. */
 const WRAPS_KEY = 'dm.wraps';

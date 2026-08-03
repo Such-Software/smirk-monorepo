@@ -4,13 +4,13 @@ import { expect, type Page } from '@playwright/test';
  * Drive the onboarding-IMPORT flow for an ALREADY-REGISTERED wallet and return
  * once the wallet is authenticated against the backend.
  *
- * IMPORTANT — do NOT `waitForResponse('/auth/extension')` to detect auth. The
+ * IMPORTANT: do NOT `waitForResponse('/auth/extension')` to detect auth. The
  * bootstrap-auth pipeline (checkRestore + register) runs in the extension's
  * OFFSCREEN document, whose network is invisible to Playwright's page/context
  * response listeners, so that wait always times out. Instead we use a real
  * backend balance rendering on Home as the auth signal: a non-zero balance only
  * appears if the offscreen auth token is valid on THIS backend (it reads 0 when
- * the offscreen `initSmirkApi` is missing — the bug this suite caught).
+ * the offscreen `initSmirkApi` is missing, the bug this suite caught).
  *
  * Defaults assume alice (SMOKE_ALICE_MNEMONIC): WOW 19.79.
  */

@@ -1,4 +1,4 @@
-//! Seed-only output recovery — view-key / bulletproof-rewind.
+//! Seed-only output recovery: view-key / bulletproof-rewind.
 //!
 //! This is the foundation of recovering a wallet's Grin balance from the
 //! seed alone (no stored output list). Given an on-chain commitment +
@@ -9,9 +9,9 @@
 //! This is a faithful re-implementation of Grin's canonical scheme in
 //! `grin/core/src/libtx/proof.rs`:
 //!
-//! - [`ProofBuilder`](https://github.com/mimblewimble/grin) — the v3 scheme
+//! - [`ProofBuilder`](https://github.com/mimblewimble/grin): the v3 scheme
 //!   (used by Smirk v3 outputs and all post-HF2 grin-wallet outputs).
-//! - `LegacyProofBuilder` — the pre-HF1 scheme (Grim-era / pre-2026 Smirk
+//! - `LegacyProofBuilder`: the pre-HF1 scheme (Grim-era / pre-2026 Smirk
 //!   outputs imported into v0.3).
 //!
 //! ## The scheme (do NOT brute-force child indices)
@@ -25,7 +25,7 @@
 //!    key = commitment (33B))`. Keyed by the **commitment**, not any path.
 //! 3. Rewinding the bulletproof with that nonce yields the value *and* a
 //!    20-byte proof message. The derivation path (`Identifier`: depth +
-//!    4×u32) is **parsed from** the message — never guessed. So depth-3
+//!    4×u32) is **parsed from** the message, never guessed. So depth-3
 //!    (Grim) vs depth-4 (Smirk v3) is irrelevant to discovery.
 //! 4. The recovered `(value, path, switch)` is confirmed by recomputing
 //!    `pedersen_commit(value, derive_blind(ext, path, value, switch))` and
@@ -81,7 +81,7 @@ pub struct RecoveredOutput {
     pub switch: SwitchCommitmentType,
     /// The 32-byte blinding factor that re-derives this output's commitment
     /// from the seed (`derive_blind(ext, &path, value, switch)`). This is
-    /// the spendable blind — recomputed locally, never recovered from the
+    /// the spendable blind: recomputed locally, never recovered from the
     /// proof.
     pub blinding_factor: [u8; 32],
 }
@@ -122,7 +122,7 @@ pub fn output_rewind_nonce(
 /// `blake2b-256(data = legacy_root_hash (32B), key = commitment (33B))`.
 ///
 /// `legacy_root_hash = derive_key(0, root_key_id, Regular)` =
-/// `blind_switch(0, master_secret)` — i.e. `derive_blind` with an empty
+/// `blind_switch(0, master_secret)`, i.e. `derive_blind` with an empty
 /// path, amount 0, and the `Regular` switch.
 pub fn legacy_output_rewind_nonce(
     legacy_root_hash: &[u8; 32],
@@ -155,7 +155,7 @@ fn keyed_blake2b_256(key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
 /// blinding factor, and the embedded 20-byte proof message (+ its length).
 ///
 /// This is like [`crate::bulletproof::bullet_proof_rewind`] but additionally
-/// returns `info.message` and `info.mlen` — the proof message carries the
+/// returns `info.message` and `info.mlen`: the proof message carries the
 /// derivation path, which the plain rewind wrapper discards.
 ///
 /// Returns `Ok(None)` if the nonce doesn't match the proof (not our output).
@@ -187,7 +187,7 @@ pub fn bullet_proof_rewind_with_message(
             blind_out.copy_from_slice(&info.blinding[..]);
             // info.message is the fixed 20-byte proof message buffer; mlen
             // is reported by the underlying lib (0 in this binding's wrapper,
-            // meaning "untruncated" — the full message buffer is valid).
+            // meaning "untruncated": the full message buffer is valid).
             let message = info.message.as_bytes().to_vec();
             Ok(Some((info.value, blind_out, message, info.mlen)))
         }
@@ -195,7 +195,7 @@ pub fn bullet_proof_rewind_with_message(
     }
 }
 
-/// Build the v3 20-byte proof message that [`check_output`] parses — the
+/// Build the v3 20-byte proof message that [`check_output`] parses: the
 /// inverse of the parser, and the same layout grin's `ProofBuilder` emits
 /// (`grin/core/src/libtx/proof.rs::proof_message`):
 ///
@@ -242,7 +242,7 @@ pub fn build_v3_proof_message(
 /// - `path` is the output's depth-4 derivation path (`[0, 0, n, 0]`, Smirk's
 ///   convention; depth is always 4).
 /// - `blinding_factor` MUST equal `derive_blind(ext, path, amount, switch)`
-///   (the same blind used for the commitment) — otherwise recovery's
+///   (the same blind used for the commitment); otherwise recovery's
 ///   recomputed commitment won't match and the output is silently dropped.
 ///
 /// Returns `(commitment, proof_bytes, rewind_nonce)`. The rewind nonce is
@@ -278,7 +278,7 @@ pub fn create_recoverable_output(
 /// (`msg[0..4]==0`, forced depth=3, switch=Regular).
 ///
 /// Returns `Some(RecoveredOutput)` only if the recomputed commitment equals
-/// `commitment` — otherwise `None` (no false positives).
+/// `commitment`; otherwise `None` (no false positives).
 pub fn check_output(
     extended_private_key: &[u8; 64],
     commitment: &[u8; COMMITMENT_LEN],
@@ -452,7 +452,7 @@ mod tests {
     }
 
     /// Empty-key BLAKE2b (rewind_hash) must NOT equal keyed BLAKE2b with the
-    /// same bytes as key — proves the key path actually changes the output.
+    /// same bytes as key: proves the key path actually changes the output.
     #[test]
     fn keyed_vs_unkeyed_differ() {
         let data = [0xABu8; 32];

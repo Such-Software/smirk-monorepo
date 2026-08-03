@@ -29,7 +29,7 @@ type HmacSha512 = Hmac<Sha512>;
 /// Compute the 64-byte extended private key our crate consumes
 /// (master = HMAC-SHA512(b"IamVoldemort", seed)). Identical to what
 /// `grin_keychain::ExtendedPrivKey::new_master(secp, hasher, seed)`
-/// produces internally — both use the same HMAC-SHA512 with the
+/// produces internally: both use the same HMAC-SHA512 with the
 /// `"IamVoldemort"` master-seed key.
 fn master_ext_from_seed(seed: &[u8]) -> [u8; 64] {
     let mut mac = HmacSha512::new_from_slice(b"IamVoldemort").expect("hmac key");
@@ -46,11 +46,11 @@ fn master_ext_from_seed(seed: &[u8]) -> [u8; 64] {
 /// match what we put in.
 ///
 /// What this catches: structural drift in our v4 slate JSON
-/// (field names, ordering quirks, type widths) — any way our output
+/// (field names, ordering quirks, type widths), any way our output
 /// disagrees with what the reference expects to read.
 #[test]
 fn s1_slate_parses_in_grin_wallet() {
-    // Deterministic inputs — fixed bytes for blinds + nonces so the test
+    // Deterministic inputs: fixed bytes for blinds + nonces so the test
     // is reproducible across runs.
     let sender_blind_excess = scalar(&[0xa1]);
     let kernel_offset = scalar(&[0xa2]);
@@ -87,7 +87,7 @@ fn s1_slate_parses_in_grin_wallet() {
         "Plain kernel feature flag is 0"
     );
 
-    // Sender's participant data is the only one filled at S1 — the
+    // Sender's participant data is the only one filled at S1; the
     // receiver hasn't responded yet. The reference Slate stores the
     // participant list inside `participant_data`. There should be
     // exactly one entry (the sender).
@@ -113,7 +113,7 @@ fn sender_blind_excess_sign_matches_grin_reference() {
     let r_change = scalar(&[0x40]);
     let offset = scalar(&[0x05]);
 
-    // Our function — what the slate-construction path consumes.
+    // Our function: what the slate-construction path consumes.
     let excess = blind::sender_blind_excess(&[r_input], &[r_change], &offset);
 
     // Expected: r_change − r_input − offset = 0x40 − 0x10 − 0x05 = 0x2b
@@ -135,7 +135,7 @@ fn sender_blind_excess_sign_matches_grin_reference() {
 /// the same derivation).
 #[test]
 fn derive_blind_matches_grin_keychain_derive_key() {
-    // Fixed test seed — 32 bytes of mixed pattern. Independent of any
+    // Fixed test seed: 32 bytes of mixed pattern. Independent of any
     // mnemonic; we just want byte-equal master keys on both sides.
     let seed: [u8; 32] = [
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
@@ -198,7 +198,7 @@ fn create_send_transaction_produces_slate_grin_wallet_accepts() {
 
     // Build a single fake input: derive its blind at a chosen path,
     // Pedersen-commit it, and pretend that's an on-chain UTXO. This
-    // sidesteps needing a real Grin testnet — we generate a
+    // sidesteps needing a real Grin testnet: we generate a
     // self-consistent UTXO the orchestrator can verify.
     let input_path = [0u32, 0, 0, 0];
     let input_amount = 5_000_000_000u64; // 5 GRIN
@@ -216,7 +216,7 @@ fn create_send_transaction_produces_slate_grin_wallet_accepts() {
             is_coinbase: false,
         }],
         amount: 1_000_000_000, // send 1 GRIN
-        fee: 8_000_000,        // 0.008 GRIN — typical 1-input 2-output fee
+        fee: 8_000_000,        // 0.008 GRIN: typical 1-input 2-output fee
         kernel_features: KernelFeatures::Plain { fee: 8_000_000 },
         change_path: [0, 0, 1, 0], // arbitrary fresh-ish path
         kernel_offset: [0u8; 32],
@@ -279,13 +279,13 @@ fn create_send_transaction_produces_slate_grin_wallet_accepts() {
 /// test catches it before any wasm rebuild or mainnet broadcast.
 #[test]
 fn full_send_round_trip_validates_against_grin_wallet() {
-    // Two separate wallets — sender and receiver have different seeds.
+    // Two separate wallets: sender and receiver have different seeds.
     let sender_seed: [u8; 32] = [0xaa; 32];
     let receiver_seed: [u8; 32] = [0xbb; 32];
     let sender_ext = master_ext_from_seed(&sender_seed);
     let receiver_ext = master_ext_from_seed(&receiver_seed);
 
-    // Sender builds an input — fake on-chain UTXO synthesized from
+    // Sender builds an input: fake on-chain UTXO synthesized from
     // the sender's keys at a chosen path.
     let input_path = [0u32, 0, 0, 0];
     let input_amount = 3_000_000_000u64;
@@ -382,7 +382,7 @@ fn full_send_round_trip_validates_against_grin_wallet() {
     // which runs every check the node does: bulletproof verify, kernel
     // signature verify, kernel sum balance against offset + commitments.
     // If any of these fails the node returns "Invalid Tx some kind of
-    // keychain error" — this test would catch the same bug without
+    // keychain error"; this test would catch the same bug without
     // needing a network roundtrip.
     let tx_json_value = finalize_out.tx_json.clone();
     let tx_json_str = serde_json::to_string(&tx_json_value).unwrap();
@@ -483,7 +483,7 @@ fn full_invoice_round_trip_validates_against_grin_wallet() {
     // Sender: build a synthetic on-chain UTXO that satisfies the
     // invoice's requested amount + fee.
     let input_path = [0u32, 0, 0, 0];
-    let input_amount = 2_000_000_000u64; // 2 GRIN — plenty
+    let input_amount = 2_000_000_000u64; // 2 GRIN, plenty
     let input_blind =
         derive_blind(&sender_ext, &input_path, input_amount, SwitchCommitmentType::Regular)
             .unwrap();
@@ -622,7 +622,7 @@ fn pubkey_to_commitment_matches_secp_from_pubkey() {
 /// (17 bytes). The wallet's standard outputs use **depth=3**: path
 /// `[0, 0, n_child]` with a trailing 0 padding the 4th slot. When
 /// `derive_key` walks the BIP32 chain it iterates only
-/// `0..p.depth` — so a stored path of `[0, 0, 26, 0]` derives
+/// `0..p.depth`, so a stored path of `[0, 0, 26, 0]` derives
 /// `m/0/0/26` (three CKD steps), NOT `m/0/0/26/0`.
 ///
 /// Our `derive_blind` walks all 4 path elements unconditionally. For
@@ -630,7 +630,7 @@ fn pubkey_to_commitment_matches_secp_from_pubkey() {
 /// created by pre-2026-05 Smirk (which still leaned on grin-wallet's
 /// depth=3 convention) and for any output created by grin-wallet /
 /// Grim with the same seed, our 4-step derivation produces a
-/// different key — and the on-chain commitment doesn't match.
+/// different key, and the on-chain commitment doesn't match.
 ///
 /// This test asserts the mismatch exists so the depth-3 fallback in
 /// `derive_input_blind_with_fallback` is mandatory. When we eventually
@@ -732,7 +732,7 @@ fn partial_sign_matches_grin_aggsig_sign_single() {
     let ref_bytes = ref_sig.to_raw_data();
     let ref_s: [u8; 32] = ref_bytes[32..64].try_into().unwrap();
 
-    // Our partial_sign — needs compressed 33-byte pubkey representations.
+    // Our partial_sign: needs compressed 33-byte pubkey representations.
     let nonce_sum_compressed = nonce_sum.serialize_vec(&secp, true);
     let pubkey_sum_compressed = pubkey_sum.serialize_vec(&secp, true);
     let mut nonce_arr = [0u8; 33];
@@ -827,7 +827,7 @@ fn partial_sign_matches_grin_aggsig_sign_single() {
 }
 
 /// Sanity: random_secret_nonce produces non-zero, never-equal scalars.
-/// Not a crypto-strength test — just a regression backstop against an
+/// Not a crypto-strength test: just a regression backstop against an
 /// accidental hardcoded-to-zero implementation.
 #[test]
 fn random_secret_nonce_is_non_zero_and_varies() {

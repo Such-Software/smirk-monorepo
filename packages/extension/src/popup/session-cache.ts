@@ -30,10 +30,10 @@ export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
   const stored = await sessionStorage.get(SESSION_CACHE_KEY);
   if (!stored) return null;
   // Revive `{__u8:hex}` (and recover a legacy numeric-object form) back to real
-  // Uint8Arrays before validating — see serializeForSessionCache in keystore.ts.
+  // Uint8Arrays before validating: see serializeForSessionCache in keystore.ts.
   const raw = reviveForSessionCache(stored);
 
-  // Parse via @smirk/core's `parseSessionCache` — rejects:
+  // Parse via @smirk/core's `parseSessionCache`. Rejects:
   //   - legacy v0.2.x { mnemonic, fingerprint, expiresAtMs } shape
   //   - missing version: 2 or missing _noMnemonic brand
   //   - any payload that re-introduces a `mnemonic` field
@@ -48,7 +48,7 @@ export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     return null;
   }
-  // Cross-check fingerprint against the keystore on disk — if the
+  // Cross-check fingerprint against the keystore on disk: if the
   // user re-imported a different wallet, the stale cache must not
   // unlock it.
   const ksState = await walletKeystore.getState();
@@ -103,7 +103,7 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
     addresses: wallet.addresses,
     expiresAtMs,
   };
-  // Serialize Uint8Array key material to `{__u8:hex}` — chrome.storage.session
+  // Serialize Uint8Array key material to `{__u8:hex}`; chrome.storage.session
   // would otherwise flatten it to a numeric-keyed object that breaks signing on
   // restore ("private key must be hex string or Uint8Array").
   await sessionStorage.set(SESSION_CACHE_KEY, serializeForSessionCache(entry));
@@ -122,7 +122,7 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
  * and stops once cleanup removes that state. `sweepLegacyBtcLtc` is itself
  * idempotent (durable per-asset txid record + empty-scan short-circuit), so
  * repeat calls across unlocks are cheap and never double-broadcast. Fully
- * non-fatal: any failure just retries on the next unlock — the seed is already
+ * non-fatal: any failure just retries on the next unlock; the seed is already
  * safe in the v0.3 keystore, this only relocates coins.
  */
 /** What the sweep actually did, per asset, so callers can tell the user the
@@ -150,7 +150,7 @@ export async function convergeLegacySweep(
     const legacy = await storage.get(LEGACY_WALLET_KEY);
     if (!legacy) return out;
     // Need the phrase to derive the m/44' key; a session-cache restore drops
-    // it — the sweep then retries after a full password unlock.
+    // it; the sweep then retries after a full password unlock.
     if (!wallet.mnemonic) return out;
     for (const asset of ['btc', 'ltc'] as const) {
       const r = await sweepLegacyBtcLtc(asset, wallet, storage);

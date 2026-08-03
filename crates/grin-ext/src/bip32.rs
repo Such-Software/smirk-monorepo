@@ -6,7 +6,7 @@
 //! derivation at path `m/0/1/0` with `SwitchCommitmentType::None`.
 //!
 //! Both variants are supported here. We don't apply Grin's "blind switch"
-//! commitment type — that's a separate Grin-specific extension used for
+//! commitment type: that's a separate Grin-specific extension used for
 //! transaction blinding factors, not for the slatepack address path.
 
 use hmac::{Hmac, Mac};
@@ -61,7 +61,7 @@ pub fn derive_child(
     let il_scalar = scalar_from_bytes(il_bytes).ok_or("Il >= curve order or zero")?;
     let child_scalar = parent_scalar + il_scalar;
 
-    // Per BIP32: if Il >= n or child_secret is zero, the derivation fails — caller
+    // Per BIP32: if Il >= n or child_secret is zero, the derivation fails; caller
     // should retry with index + 1. This is astronomically rare (< 2^-127); we
     // surface as an error here rather than retry.
     if bool::from(child_scalar.is_zero()) {

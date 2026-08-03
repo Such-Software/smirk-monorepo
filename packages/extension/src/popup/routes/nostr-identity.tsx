@@ -37,7 +37,7 @@ import { writeSessionCache } from '../session-cache';
  * identities: seed-derived (recoverable), random "burner" (seed-independent
  * compartmentalization), and `nsec`-imported (carried in from Goblin/another
  * wallet). Switch the active one, rename, remove, and link your PRIMARY (account-0)
- * identity to the backend for "Sign in with Nostr" (NIP-98) — the backend account is
+ * identity to the backend for "Sign in with Nostr" (NIP-98): the backend account is
  * bound to the stable primary, not the switchable active identity. Burner/imported private keys are
  * encrypted at rest under a mnemonic-derived key; the plaintext never leaves an
  * unlocked context. See nostr-vault.ts + @smirk/core identity-store.
@@ -189,7 +189,7 @@ export function NostrIdentityRoute({
   // action so buttons can show progress; errors surface, never throw.
   const commit = async (op: string, next: IdentityVault) => {
     if (!mnemonic) {
-      // Warm resume: a write needs the seed — surface the inline unlock instead
+      // Warm resume: a write needs the seed; surface the inline unlock instead
       // of throwing on the saveVault non-null assertion.
       promptUnlock('Enter your password to change your identities.');
       return;
@@ -219,7 +219,7 @@ export function NostrIdentityRoute({
   };
   const onAddBurner = () => {
     if (!vault || !mnemonic) return;
-    // Burner keys are random, NOT seed-derived — restoring the seed on a new
+    // Burner keys are random, NOT seed-derived; restoring the seed on a new
     // device will not bring them back. Make that explicit at creation time.
     const ok = window.confirm(
       'Create a new burner identity?\n\n' +
@@ -232,7 +232,7 @@ export function NostrIdentityRoute({
   };
   const onImport = () => {
     if (!vault || !mnemonic || !nsec.trim()) return;
-    // Imported keys are external — stored encrypted here but outside your seed.
+    // Imported keys are external: stored encrypted here but outside your seed.
     const ok = window.confirm(
       'Import this nsec?\n\n' +
         'Imported keys are stored encrypted in this wallet but are NOT part of your ' +
@@ -281,8 +281,8 @@ export function NostrIdentityRoute({
     setBusy('link');
     setError(undefined);
     try {
-      // Backend "Sign in with Nostr" binds the STABLE primary (account-0) — the same
-      // key the auth bootstrap signs with — NOT the switchable active identity, so
+      // Backend "Sign in with Nostr" binds the STABLE primary (account-0), the same
+      // key the auth bootstrap signs with, NOT the switchable active identity, so
       // compartmentalizing with a burner never changes or breaks your Smirk account.
       const primary = deriveNostrIdentity(mnemonic, 0);
       const r = await api.linkNostr(primary);
@@ -383,7 +383,7 @@ export function NostrIdentityRoute({
 
   // Download an encrypted backup of the whole identity vault so burner/imported keys
   // survive a reinstall. Sealed under the mnemonic-derived key (same trust boundary
-  // as the seed) — only THIS wallet's seed can restore it.
+  // as the seed): only THIS wallet's seed can restore it.
   const onExportBackup = async () => {
     if (!mnemonic) {
       setShowUnlock(true);
@@ -749,7 +749,7 @@ export function NostrIdentityRoute({
         </button>
       </div>
 
-      {/* Encrypted backup of the whole vault — the recovery path for burner +
+      {/* Encrypted backup of the whole vault: the recovery path for burner +
           imported keys, which are NOT re-derivable from the seed. */}
       <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -781,7 +781,7 @@ export function NostrIdentityRoute({
       </div>
 
       <div style={{ marginTop: 16 }}>
-        {/* The link binds your STABLE primary (account-0) identity to this account —
+        {/* The link binds your STABLE primary (account-0) identity to this account,
             NOT the switchable active/burner. So "linked" is a property of the account,
             independent of which identity is currently active (a burner being active must
             not read as "not linked"). */}

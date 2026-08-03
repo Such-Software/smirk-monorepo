@@ -138,7 +138,7 @@ function stubWasmInvoice(): void {
 }
 
 /** A resolver returning a single 5-GRIN spendable input at child index 0
- *  (bypasses the scan/identify path — those are covered by the overlay tests). */
+ *  (bypasses the scan/identify path; those are covered by the overlay tests). */
 function fakeResolver() {
   return {
     fetchSpendable: async () => ({
@@ -227,7 +227,7 @@ test('startGrinSend reserves inputs + change + bumps index AT BUILD TIME (not ye
   // so a concurrent flow can't re-derive the same commitment (fund loss).
   assert.equal(await overlay.pendingChangeValue([]), 3_976_000_000);
   assert.equal(await overlay.nextChildIndex(), 1);
-  // But the entry is NOT yet broadcast — a cancel here would still free it.
+  // But the entry is NOT yet broadcast; a cancel here would still free it.
   const p = await overlay.load();
   assert.equal(p.entries[SLATE_ID]?.broadcast, undefined, 'not broadcast until finalize');
 });
@@ -260,7 +260,7 @@ test('processGrinS2 marks the reserved entry broadcast + settles, WITHOUT bumpin
   // The entry is now flagged broadcast (so cancel can't free it).
   const p = await overlay.load();
   assert.equal(p.entries[SLATE_ID]?.broadcast, true, 'flagged broadcast');
-  // processGrinS2 must NOT advance the counter again — it was bumped at build.
+  // processGrinS2 must NOT advance the counter again: it was bumped at build.
   assert.equal(await overlay.nextChildIndex(), 1);
   // The exchange was settled over the send's channel (nostr).
   assert.deepEqual(calls, [`nostr.settle:${SLATE_ID}`]);
@@ -306,7 +306,7 @@ test('startGrinInvoice reserves the child index but does NOT inflate the pending
   // The receive-output index IS reserved (never reuse a child index → fund loss),
   // even though nobody has paid the invoice yet.
   assert.equal(await overlay.nextChildIndex(), 1);
-  // But the speculative incoming value must NOT count toward pending balance —
+  // But the speculative incoming value must NOT count toward pending balance:
   // creating an invoice can't inflate headline wealth before the payer commits.
   assert.equal(await overlay.pendingChangeValue([]), 0, 'no speculative pending inflation');
   // No pending entry recorded for a freshly-created invoice.
@@ -317,7 +317,7 @@ test('startGrinInvoice reserves the child index but does NOT inflate the pending
 test('processGrinI2 records the incoming as pending after a successful broadcast', async () => {
   // Finding 4: the invoice receiver's finalize+broadcast must surface the received
   // value in the pending balance until the next scan confirms it (symmetric with
-  // signIncomingGrinSlate) — the commitment + amount come from the receiver
+  // signIncomingGrinSlate): the commitment + amount come from the receiver
   // context we created at invoice time.
   const RECEIVER_COMMIT = '06'.repeat(33);
   const w = wasmGrin as unknown as Record<string, AnyFn>;
@@ -478,7 +478,7 @@ test('resolveGrinSpendable does NOT seed the counter from an unverified (even ab
   // Spendable via the key_id path (index 0x7fffffff = 2147483647).
   assert.equal(res.outputs[0]?.path[2], 0x7fffffff);
   assert.deepEqual(identifyCalls, [], 'identifyOutput must not run when key_id is present');
-  // Counter untouched — the absurd index never reached it.
+  // Counter untouched: the absurd index never reached it.
   assert.equal(await overlay.nextChildIndex(), 0);
 });
 

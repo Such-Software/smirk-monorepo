@@ -15,7 +15,7 @@
  *
  * **Why a dedicated key, not a field on the session-state store.**
  * The content script can read `chrome.storage.local` directly from
- * the content-script world without any messaging round-trip — that
+ * the content-script world without any messaging round-trip; that
  * matters because `injectSmirkAPI` is on the critical path at
  * `document_start` and any latency there is observable to the page.
  * Co-locating the flag with the rest of session state would force

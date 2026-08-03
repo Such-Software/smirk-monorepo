@@ -2,7 +2,7 @@
  * `chrome.*` compatibility shim for the Tauri webview.
  *
  * The Smirk wallet popup is built against the Chrome MV3 extension
- * API surface — `chrome.storage.local`, `chrome.storage.session`,
+ * API surface: `chrome.storage.local`, `chrome.storage.session`,
  * `chrome.runtime.getURL`, etc. Rather than fork the popup code
  * into a Tauri-specific variant, we polyfill the narrow surface the
  * popup actually uses with Tauri-native equivalents:
@@ -12,8 +12,8 @@
  * | `chrome.storage.local`    | `@tauri-apps/plugin-store` (filesystem)        |
  * | `chrome.storage.session`  | In-memory `Map` (cleared on window close)      |
  * | `chrome.storage.onChanged`| Custom EventTarget around the two backends     |
- * | `chrome.runtime.getURL`   | Identity transform — Tauri serves from /       |
- * | `chrome.windows.create`   | No-op stub — there's no "popped out" in Tauri |
+ * | `chrome.runtime.getURL`   | Identity transform: Tauri serves from /       |
+ * | `chrome.windows.create`   | No-op stub: there's no "popped out" in Tauri |
  *
  * Install order matters: this module's side-effects MUST run before
  * any popup code (which calls `chrome.*` at module top-level). See
@@ -53,7 +53,7 @@ async function getStore(): Promise<Store> {
 }
 
 // ============================================================================
-// In-memory session storage. Cleared on window close — same lifecycle as
+// In-memory session storage. Cleared on window close, same lifecycle as
 // chrome.storage.session in MV3 (popup close survives, browser close clears).
 // ============================================================================
 
@@ -85,7 +85,7 @@ function emitChange(
 }
 
 // ============================================================================
-// chrome.storage.local — backed by Tauri's filesystem store.
+// chrome.storage.local: backed by Tauri's filesystem store.
 // ============================================================================
 
 const localApi = {
@@ -146,7 +146,7 @@ const localApi = {
 };
 
 // ============================================================================
-// chrome.storage.session — backed by in-memory Map.
+// chrome.storage.session: backed by in-memory Map.
 // ============================================================================
 
 const sessionApi = {
@@ -211,7 +211,7 @@ export function installChromeShim(): void {
   const chromeShim = {
     runtime: {
       getURL(path: string): string {
-        // In Tauri, frontendDist serves from `/` — pass paths through
+        // In Tauri, frontendDist serves from `/`; pass paths through
         // verbatim. Strip a leading slash if present so callers using
         // either `icons/x.svg` or `/icons/x.svg` resolve identically.
         const clean = path.startsWith('/') ? path.slice(1) : path;
@@ -233,7 +233,7 @@ export function installChromeShim(): void {
     },
     windows: {
       async create(_options: unknown): Promise<void> {
-        // Desktop is a single first-class window — the wallet IS the
+        // Desktop is a single first-class window: the wallet IS the
         // popped-out experience. The action-popup "pop out" button
         // is a no-op here; no log because this fires every time the
         // user clicks it and the existing window stays focused.

@@ -12,7 +12,7 @@
  *                       └── push event to subscribed ports
  *
  * When the popup port disconnects (popup closed), the running job
- * continues in the offscreen document — that's the whole point of
+ * continues in the offscreen document; that's the whole point of
  * this system. Result lands in `chrome.storage.session`; the next
  * popup mount reads from there.
  *
@@ -59,7 +59,7 @@ interface ConnectedPort {
 
 const connectedPorts = new Set<ConnectedPort>();
 
-// Job id allocator — simple monotonic counter. The SW restarts wipe
+// Job id allocator: simple monotonic counter. The SW restarts wipe
 // this, but that's fine: chrome.storage.session also wipes on SW
 // restart in practice.
 let nextJobSerial = 1;
@@ -175,7 +175,7 @@ async function startJob<K extends JobKind>(args: {
       if (existing && (existing.status === 'pending' || existing.status === 'running')) {
         return existingId;
       }
-      // Stale dedup mapping pointing at a finished or missing job —
+      // Stale dedup mapping pointing at a finished or missing job:
       // clear it so we don't keep returning a useless id.
       await clearDedup(args.dedupKey);
     }
@@ -207,7 +207,7 @@ async function startJob<K extends JobKind>(args: {
   };
   // The offscreen runner is listening on chrome.runtime.onMessage;
   // its `sendMessage` reply isn't used (offscreen reports via its
-  // own unsolicited messages — see runner.ts).
+  // own unsolicited messages; see runner.ts).
   chrome.runtime.sendMessage(run).catch((e: unknown) => {
     void onJobError(id, {
       code: 'OFFSCREEN_DISPATCH_FAILED',
@@ -326,7 +326,7 @@ async function handlePortRequest(
         return;
       }
       case 'cancel': {
-        // No-op for now — the offscreen runner doesn't yet honour
+        // No-op for now: the offscreen runner doesn't yet honour
         // remote aborts. Track for v0.3.x once a real flow needs it.
         ack(conn.port, req.requestId, true);
         return;

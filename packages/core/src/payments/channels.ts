@@ -48,7 +48,7 @@ export function sendSlatepack(
  * Read BOTH inboxes and merge into one pending list for the unified Inbox tab. A
  * slateId present on both transports (e.g. a backend send later mirrored to Nostr)
  * is deduped, preferring the Nostr copy (private + authenticated sender). Each
- * transport is polled independently — one failing (offline relay, backend down)
+ * transport is polled independently: one failing (offline relay, backend down)
  * doesn't sink the other.
  */
 export async function readAllInbound(channels: SlatepackChannels): Promise<InboundSlatepack[]> {

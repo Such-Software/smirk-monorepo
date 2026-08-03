@@ -6,7 +6,7 @@
  *
  * **Scope:** ONLY publicly-derivable, non-secret operations live
  * here. Signing, payments, and tip claims all flow through the
- * approval handler (see `./approval.ts`) — that's the context that
+ * approval handler (see `./approval.ts`); that's the context that
  * holds the unlocked seed. Keeping the provider surface to public
  * material means the platform adapter can wire it up from a
  * shareable cache (e.g., a `chrome.storage.local` snapshot the

@@ -32,7 +32,7 @@ export interface NostrIdentity {
   account: number;
   /** NIP-19 public identity, `npub1...`. */
   npub: string;
-  /** x-only (schnorr) public key, 32-byte hex — the on-wire Nostr pubkey. */
+  /** x-only (schnorr) public key, 32-byte hex: the on-wire Nostr pubkey. */
   pubkeyHex: string;
   /** secp256k1 secret key (32 bytes). Stays in core; used to sign events. */
   privateKey: Uint8Array;
@@ -76,7 +76,7 @@ export function deriveNostrIdentity(mnemonic: string, account = 0, passphrase = 
 }
 
 /**
- * Build a NostrIdentity from a raw 32-byte secret key — for an imported `nsec` or
+ * Build a NostrIdentity from a raw 32-byte secret key, for an imported `nsec` or
  * a random "burner". `account` is {@link NON_DERIVED_ACCOUNT} because it isn't
  * seed-rotation-derivable; the identity store records the real source.
  */
@@ -92,7 +92,7 @@ export function nostrIdentityFromPrivkey(privateKey: Uint8Array): NostrIdentity 
 }
 
 // ── per-origin Nostr identity (opt-in dapp compartmentalization) ──────────────
-// BIP-85 purpose (83696') + a per-origin-Nostr segment (4') — disjoint from the
+// BIP-85 purpose (83696') + a per-origin-Nostr segment (4'): disjoint from the
 // wallet chains (44'/84'), the NIP-06 identity (44'/1237'), app-enc (83696'/3'),
 // and the reserved storage(1')/login(2') segments. Deterministic + recoverable
 // from the seed (reinstall keeps the same per-site npub) and unlinkable across
@@ -136,7 +136,7 @@ export function nostrOriginPath(origin: string): string {
 
 /**
  * Derive a deterministic, seed-recoverable Nostr identity SCOPED to a verified
- * origin — for opt-in per-dapp compartmentalization. Unlike a random burner it
+ * origin, for opt-in per-dapp compartmentalization. Unlike a random burner it
  * survives reinstall (re-derived from the seed); unlike account-0 it is unlinkable
  * to the user's main npub. `origin` MUST be the wallet-verified origin (the handler
  * supplies it), never a page-supplied string. `account` is
@@ -156,7 +156,7 @@ export function deriveNostrIdentityForOrigin(
 }
 
 /**
- * A fresh RANDOM "burner" identity — deliberately NOT seed-derived. Rationale
+ * A fresh RANDOM "burner" identity: deliberately NOT seed-derived. Rationale
  * (matches Goblin's stance): a leaked seed can't derive it (stronger
  * compartmentalization), and it's cross-wallet-portable as an `nsec`. The secret
  * is the ONLY backup; the identity store encrypts it at rest.

@@ -176,7 +176,7 @@ describe('actionsFromEvent', () => {
 
   it('returns the action only once even if it has multiple matching bindings', () => {
     // `browser:reload` declares both `Cmd+R` and `F5` on mac. An
-    // event matching `Cmd+R` should yield exactly one action entry —
+    // event matching `Cmd+R` should yield exactly one action entry,
     // not duplicated by both bindings firing.
     const actions = actionsFromEvent(
       fakeEvent({ key: 'r', meta: true }),
@@ -304,7 +304,7 @@ describe('DEFAULT_KEYMAP invariants', () => {
 
   it('every action has at least one desktop OR extension binding', () => {
     // Mobile-only is allowed in principle but no actions in the
-    // default keymap should be mobile-only — that's a sign the
+    // default keymap should be mobile-only: that's a sign the
     // desktop binding got dropped.
     for (const entry of DEFAULT_KEYMAP) {
       const hasDesktopOrExt = entry.bindings.some(

@@ -5,7 +5,7 @@ Transport-agnostic dapp-injection layer for Smirk Wallet.
 This package answers one question:
 
 > How does a webpage call into a wallet for `connect`,
-> `signMessage`, `requestPayment`, and friends — without coupling
+> `signMessage`, `requestPayment`, and friends, without coupling
 > the protocol to the transport (browser-extension messaging vs.
 > Tauri events vs. Capacitor bridges)?
 
@@ -48,7 +48,7 @@ Two variants ship today (`postMessage`, `tauri`), picked by the platform shell; 
 See `src/page-api-script.ts` for the IIFE that bootstraps
 `window.smirk` against the chosen transport.
 
-## Use — extension service worker
+## Use: extension service worker
 
 ```ts
 import { createWalletHandler } from '@such-software/smirk-dapp-api';
@@ -79,10 +79,10 @@ chrome.runtime.onMessage.addListener((msg, sender, send) => {
 | `requestPayment`       | ✓ (BTC, LTC, XMR, WOW)       |
 | `claimPublicTip`       | ✓           |
 | `getBackend`           | ✓           |
-| `getNostrPublicKey`    | ✓ — one-time per-origin npub grant (NIP-06 identity) |
-| `signNostrEvent`       | ✓ — NIP-98 login, notes; prompts per signature       |
-| `getAppEncryptionKey`  | ✓ — app-scoped x25519 sealing key (see below)        |
-| `appSealOpen`          | ✓ — open a `crypto_box_seal` addressed to that key   |
+| `getNostrPublicKey`    | ✓: one-time per-origin npub grant (NIP-06 identity)  |
+| `signNostrEvent`       | ✓: NIP-98 login, notes; prompts per signature        |
+| `getAppEncryptionKey`  | ✓: app-scoped x25519 sealing key (see below)         |
+| `appSealOpen`          | ✓: open a `crypto_box_seal` addressed to that key    |
 | `nostrEncrypt`         | ✓: NIP-44 (default) / NIP-04 DM encrypt; prompts on the origin's first crypto call, silent after |
 | `nostrDecrypt`         | ✓: inverse of `nostrEncrypt`                        |
 
@@ -97,7 +97,7 @@ property, so an installed Alby or nos2x stays primary.
 
 `getAppEncryptionKey(context?)` returns a deterministic, seed-derived **x25519
 public key** unique to the calling origin. Seal data to it with libsodium
-`crypto_box_seal` — the server can't read it, and writes need no wallet round-trip:
+`crypto_box_seal`; the server can't read it, and writes need no wallet round-trip:
 
 ```ts
 import sodium from 'libsodium-wrappers';
@@ -113,7 +113,7 @@ const plaintext = await window.smirk.appSealOpen(sealed, 'notes'); // Uint8Array
 ```
 
 The first call prompts a one-time "allow private storage" grant. The wallet holds
-the private half and only ever *opens* boxes — the key is never exported. `context`
+the private half and only ever *opens* boxes; the key is never exported. `context`
 sub-scopes the key so one origin can hold several unlinkable keys. The key is
 unrelated to the user's Nostr identity or funds, and stable across reinstalls
 (re-derived from the seed).

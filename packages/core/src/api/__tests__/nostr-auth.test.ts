@@ -81,7 +81,7 @@ test('linkNostr fetches a challenge, then posts a signed-action proof + nonce to
   assert.equal(body.nonce, LINK_NONCE, 'the fetched nonce is submitted');
   const ev = decodeNostrToken(body.nostr_token);
 
-  // The signed action binds u/method/purpose/challenge/payload — the exact shape
+  // The signed action binds u/method/purpose/challenge/payload, the exact shape
   // the server's verify_signed_action checks.
   const expectedPayload = descriptorSha256(
     requestDescriptor('POST', '/api/v1/auth/nostr/link', '', ''),
@@ -98,7 +98,7 @@ test('linkNostr fetches a challenge, then posts a signed-action proof + nonce to
 
 test('nostr_link descriptor payload matches the backend cross-impl KAT', () => {
   // MUST equal the pinned value in smirk-backend-core tests/nostr_auth.rs
-  // (NOSTR_LINK_DESCRIPTOR_SHA256) — the client and server bind the identical
+  // (NOSTR_LINK_DESCRIPTOR_SHA256): the client and server bind the identical
   // descriptor, so this literal is the cross-impl contract.
   const payload = descriptorSha256(requestDescriptor('POST', '/api/v1/auth/nostr/link', '', ''));
   assert.equal(payload, '8d6aaf2ed65252d1be6090415915736c40d775b9f12ade15c3af71bc02cdcc49');

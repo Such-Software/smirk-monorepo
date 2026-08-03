@@ -3,11 +3,11 @@
 //
 // 1. wasm-bindgen 0.2.95+ emits `require("env")` placeholders for any
 //    WASM imports that come from C dependencies (libsecp256k1-zkp, in
-//    our case). These are never resolvable at runtime — in a browser
+//    our case). These are never resolvable at runtime: in a browser
 //    `require` is undefined; in Node they'd throw MODULE_NOT_FOUND.
 //    Per crates/secp256k1zkp/wasm-sysroot/README.md, the C functions
 //    declared (malloc/free/calloc/abort/fprintf) are not exercised by
-//    Grin's bulletproof/Pedersen/aggsig code paths — they only need to
+//    Grin's bulletproof/Pedersen/aggsig code paths; they only need to
 //    satisfy the WASM import table at instantiate time so the module
 //    loads. We replace the broken `require("env")` calls with a single
 //    stub object whose entries are no-op functions.
@@ -59,7 +59,7 @@ const import5 = __smirk_env_stub;
 // Once `crates/smirk-wasm/src/wasm_libc_shim.rs` (added 2026-05-14)
 // resolves libsecp256k1-zkp's malloc/free/etc. via Rust shims, the
 // wasm-bindgen output stops emitting these `env` imports entirely
-// and this replace becomes a no-op — that's fine, the env-stub
+// and this replace becomes a no-op; that's fine, the env-stub
 // isn't needed anymore. We only error if we see require("env") but
 // the replace fails to consume it (would indicate a regex / output
 // format change we'd want to know about).

@@ -1,5 +1,5 @@
 /**
- * Tips API methods (link-based tipping — anyone with the URL can claim).
+ * Tips API methods (link-based tipping: anyone with the URL can claim).
  *
  * Social tipping (targeted at @user) lives in `./social.ts`.
  *
@@ -49,7 +49,7 @@ export interface TipsMethods {
 export function createTipsMethods(client: ApiClient): TipsMethods {
   return {
     async createTip(params) {
-      // POST — no retry. Could create duplicate tips.
+      // POST: no retry. Could create duplicate tips.
       return client.request('/tips', {
         method: 'POST',
         body: JSON.stringify({
@@ -77,7 +77,7 @@ export function createTipsMethods(client: ApiClient): TipsMethods {
     },
 
     async claimTip(linkId, txHash) {
-      // POST — no retry. Claim is not idempotent.
+      // POST: no retry. Claim is not idempotent.
       return client.request(`/tips/${linkId}/claim`, {
         method: 'POST',
         body: JSON.stringify({ tx_hash: txHash }),

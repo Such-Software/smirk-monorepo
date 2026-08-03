@@ -1,6 +1,6 @@
 /**
  * Pure executor for an `ApprovalApproval` decision. Runs in any
- * wallet-foreground context that holds an `UnlockedWallet` —
+ * wallet-foreground context that holds an `UnlockedWallet`:
  * the extension's standalone approval popup window, the Tauri
  * desktop's in-popup approval modal, and (future) the Capacitor
  * mobile in-app sheet.
@@ -8,7 +8,7 @@
  * The executor produces the `DappApprovalResult` that gets handed
  * back to the WalletHandler / dapp-api dispatcher. It performs the
  * privileged operations (signing, sending, claiming) using the
- * unlocked wallet directly — there is no SW round-trip and no key
+ * unlocked wallet directly; there is no SW round-trip and no key
  * material crosses the function boundary.
  *
  * Inputs come through `ExecuteApprovalDeps` so the executor stays
@@ -43,7 +43,7 @@ import { resolveNostrIdentityForOrigin } from '../popup/nostr-vault';
 /**
  * The popup-side dependencies the executor needs. We pass these in
  * rather than importing the popup's module singletons so the
- * executor can run from any callsite — extension approval window,
+ * executor can run from any callsite: extension approval window,
  * Tauri BrowseTab modal, future Capacitor approval sheet.
  */
 export interface ExecuteApprovalDeps {
@@ -92,7 +92,7 @@ export interface ExecuteApprovalDeps {
     setAccessToken(token: string): void;
   };
   loadState: () => Promise<SessionState>;
-  /** Return type is `unknown` because callers vary — popup's
+  /** Return type is `unknown` because callers vary: popup's
    * `store.update` returns the new SessionState; the executor
    * doesn't read the return value. */
   updateState: (mutator: (s: SessionState) => void) => Promise<unknown>;
@@ -101,7 +101,7 @@ export interface ExecuteApprovalDeps {
 /**
  * Run the approval. Returns the result to pass back to the dapp-api
  * `ApprovalHandler`. Throws only on programmer errors (e.g., the
- * `approval.kind` and `request.kind` disagree) — operational failures
+ * `approval.kind` and `request.kind` disagree); operational failures
  * are surfaced as `{success: false, error}` in the result.
  */
 export async function executeApproval(
@@ -118,8 +118,8 @@ export async function executeApproval(
         approved: true,
         // The UI's `ApprovalAsset` and dapp-api's `SmirkAsset` are
         // structurally identical ('btc' | 'ltc' | 'xmr' | 'wow' |
-        // 'grin') but distinct nominal types. Cast at the boundary
-        // — this is the standalone seam between the UI's approval
+        // 'grin') but distinct nominal types. Cast at the boundary:
+        // this is the standalone seam between the UI's approval
         // affordance and the dapp wire protocol.
         approvedAssets: approval.approvedAssets as unknown as SmirkAsset[],
       };
@@ -167,7 +167,7 @@ export async function executeApproval(
       );
 
       // Pull a real fee rate. send-handler doesn't fall back to a
-      // "normal" tier on its own — passing 0 makes selectUtxos
+      // "normal" tier on its own; passing 0 makes selectUtxos
       // compute fee = ceil(vsize * 0) = 0, then trip the
       // `feeSat <= 0` guard and fail every dapp UTXO payment. Use
       // the same Electrum source as the SendWizard; if that
@@ -213,7 +213,7 @@ export async function executeApproval(
         };
         await deps.updateState((s) => {
           // SessionState's pendingOutgoing is typed loosely at this
-          // boundary — the executor doesn't reach into the schema.
+          // boundary; the executor doesn't reach into the schema.
           (s.pendingOutgoing as unknown as Array<unknown>).push(entry);
         });
       }
@@ -272,13 +272,13 @@ export async function executeApproval(
       }
       // Resolve the identity the user chose to share with this origin: a per-origin
       // compartmentalized one, or their main (account-0) identity. Returned so the
-      // handler persists it on OriginPermission.nostrPubkey — getNostrPublicKey +
+      // handler persists it on OriginPermission.nostrPubkey; getNostrPublicKey +
       // signing then all act as this same identity.
       let nostrPubkey: string | undefined;
       if (approval.perOrigin) {
         // A per-origin (compartmentalized) identity is HD-derived from the seed, so
         // it needs a full unlock. On a warm resume the mnemonic is intentionally
-        // absent — falling back to the active identity here would silently persist
+        // absent; falling back to the active identity here would silently persist
         // the user's MAIN npub onto the very site they asked to compartmentalize away
         // from (an irreversible deanonymization). Refuse instead of leaking.
         if (!deps.wallet.mnemonic) {
@@ -302,7 +302,7 @@ export async function executeApproval(
         throw new Error('Pending request kind mismatch (expected signNostrEvent)');
       }
       // Resolve WHICH identity this origin signs as (its granted nostrPubkey, or
-      // the user's active identity when unset) — account-0 / per-origin / vault.
+      // the user's active identity when unset): account-0 / per-origin / vault.
       const identity = await resolveNostrIdentityForOrigin(
         deps.wallet,
         request.origin.origin,
@@ -364,7 +364,7 @@ export async function executeApproval(
     }
 
     default: {
-      // Exhaustiveness — if a new ApprovalApproval kind is added
+      // Exhaustiveness: if a new ApprovalApproval kind is added
       // upstream, TS will fail to narrow `_unreachable` to `never`.
       const _unreachable: never = approval;
       throw new Error(

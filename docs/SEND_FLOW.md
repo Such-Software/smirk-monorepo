@@ -1,4 +1,4 @@
-# Send flow — reference
+# Send flow: reference
 
 How "user taps Send → tx lands on chain" works for each of Smirk's five
 assets, as shipped in v0.3.
@@ -7,7 +7,7 @@ Send is implemented for all five assets on mainnet. BTC/LTC use a PSBT
 path; XMR/WOW use LWS unspent outputs plus a wasm RingCT signer; Grin
 runs the interactive slatepack ceremony.
 
-## Smirk's single-address scheme — read this first
+## Smirk's single-address scheme: read this first
 
 By default Smirk derives **exactly one address per chain** for every
 user: no gap-limit receive-address rotation (BIP44-style), no separate
@@ -20,8 +20,8 @@ are fixed:
 
 | Asset | Path                  | Encoding   | External-wallet import |
 |-------|-----------------------|------------|-----------------------|
-| BTC   | `m/84'/0'/0'/0/0`     | P2WPKH bech32 | Standard BIP84 — any wallet's seed-phrase import works. |
-| LTC   | `m/84'/2'/0'/0/0`     | P2WPKH bech32 | Standard BIP84 — same. |
+| BTC   | `m/84'/0'/0'/0/0`     | P2WPKH bech32 | Standard BIP84: any wallet's seed-phrase import works. |
+| LTC   | `m/84'/2'/0'/0/0`     | P2WPKH bech32 | Standard BIP84: same. |
 | XMR   | `m/44'/128'/0'/0/0`   | Cryptonote primary (not subaddress) | Cake-compatible (Cake's BIP39 mode). |
 | WOW   | `m/44'/2086'/0'/0/0`  | Cryptonote primary | Cake-compatible by the same derivation. |
 | Grin  | HMAC-SHA512 over BIP39 entropy with key `"IamVoldemort"` → ed25519 leaf | Slatepack | grin-wallet / Grim compatible. |
@@ -33,10 +33,10 @@ are fixed:
 `ENABLE_BTCLTC_FRESH_ADDRS` on, BTC/LTC change instead goes to a
 reserved `/1/j` change address; XMR/WOW change returns to the primary
 address either way. Grin's slate protocol handles change at the kernel
-level — no address needed.
+level: no address needed.
 
 This is also why the WASM `bitcoin.signPsbt` can take a `masterPath` at
-the account level (`"m/84'/0'/0'"`) — every input's `bip32_derivation`
+the account level (`"m/84'/0'/0'"`): every input's `bip32_derivation`
 entry points at the **same** leaf path `m/84'/coin'/0'/0/0`. The
 `build_psbt` test fixtures use `m/84'/0'/0'/0/0`; popup callers pass
 the same path matching what `deriveAddresses` produced at wallet
@@ -45,12 +45,12 @@ creation.
 ### BTC/LTC standardization to BIP84 (shipped 2026-05-11)
 
 Pre-v0.3, Smirk shipped BTC/LTC at the BIP44 path `m/44'/coin'/0'/0/0`
-with P2WPKH bech32 encoding — a non-standard combination industry
+with P2WPKH bech32 encoding: a non-standard combination industry
 convention doesn't recognize (BIP44 → P2PKH; BIP84 → P2WPKH; Smirk did
 neither cleanly). **Verified empirically:** for the abandon mnemonic,
 Smirk's legacy v1/v2 derivation produces
 `bc1qmxrw6qdh5g3ztfcwm0et5l8mvws4eva24kmp8m` while standard BIP84
-produces `bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu` — Smirk seed
+produces `bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu`; Smirk seed
 phrases imported into Sparrow / Electrum / Cake / Bitcoin Core showed
 "0 balance" because each of them computed the BIP84 address instead.
 
@@ -58,7 +58,7 @@ phrases imported into Sparrow / Electrum / Cake / Bitcoin Core showed
 wallets created after 2026-05-11 produce standard P2WPKH bech32
 addresses that any wallet's seed-phrase import reproduces. XMR/WOW
 remain at `m/44'/coin'/0'/0/0` since Cake's BIP39 mode uses that
-exact path for its mod-ℓ derivation — switching XMR/WOW would break
+exact path for its mod-ℓ derivation; switching XMR/WOW would break
 Cake compat.
 
 **Recovery for pre-v0.3 wallets:**
@@ -88,7 +88,7 @@ Every send, regardless of asset, goes through five stages:
 1. PREPARE        Build the unsigned transaction
                   (UTXO selection, decoy picking, slate initiation, etc.)
 2. ESTIMATE       Compute fee + final atomic amounts
-                  (depends on tx size — must come after PREPARE)
+                  (depends on tx size: must come after PREPARE)
 3. REVIEW         Show the user fee + recipient + amount, get confirmation
 4. SIGN           Crypto operations using the unlocked seed
                   (PSBT signing / CLSAG / Schnorr / etc.)
@@ -112,7 +112,7 @@ orchestrators.
 │                               Grin branch: onGrinBuildSlate / onGrinFinalize / onGrinCancel
 └── GrinRequestWizard.tsx       Receiver-initiated invoice flow
 
-packages/extension/src/popup/send-handler.ts        — generic dispatcher
+packages/extension/src/popup/send-handler.ts:         generic dispatcher
 └── send(wallet, fields, excludeInputs)
     fields = { fromAssetId, amountAtomic, toAddress, feeRateSatPerVb, sweep }
     excludeInputs = inputs already spent by still-pending sends
@@ -132,7 +132,7 @@ packages/extension/src/popup/send-handler.ts        — generic dispatcher
     `estimateFee` / `broadcastTx` for UTXO chains, `getUnspentOuts` /
     `getRandomOuts` / `submitLwsTx` for LWS.
 
-packages/extension/src/popup/grin-flows.ts          — Grin orchestrator
+packages/extension/src/popup/grin-flows.ts:           Grin orchestrator
 └── startGrinSend / processGrinS2 / cancelGrinSend
     startGrinInvoice / signGrinInvoice / processGrinI2 / signIncomingGrinSlate
     Plus slatepack codec (armor / dearmor / inspect) and the greedy fee iterator.
@@ -140,7 +140,7 @@ packages/extension/src/popup/grin-flows.ts          — Grin orchestrator
     Rust orchestrators in crates/grin-ext/src/wallet_flows.rs).
 ```
 
-Keep `@smirk/ui` pure presentation — all chain logic in
+Keep `@smirk/ui` pure presentation: all chain logic in
 `@smirk/core` + per-platform handlers in the shell.
 
 ---
@@ -157,8 +157,8 @@ Keep `@smirk/ui` pure presentation — all chain logic in
      `selected_sum >= amount + estimated_fee`. Reject if not enough.
    - Build unsigned PSBT (BIP174):
      - Inputs: each selected UTXO with `witness_utxo`, `bip32_derivation`
-       (origin = our master xprv fingerprint + path **`m/84'/coin'/0'/0/0`**
-       — native segwit BIP84; same path for every input, since Smirk uses
+       (origin = our master xprv fingerprint + path **`m/84'/coin'/0'/0/0`**,
+       native segwit BIP84; same path for every input, since Smirk uses
        a single-address scheme).
      - Outputs: `[recipient: amount, change: selected_sum - amount - fee]`
        where `change_address` = `fromAddress` (single-address scheme;
@@ -167,16 +167,16 @@ Keep `@smirk/ui` pure presentation — all chain logic in
 2. **ESTIMATE**
    - `api.estimateFee(asset)` → `{ fast, normal, slow }` sat/vB.
    - Compute virtual size: `inputs * 68 + outputs * 31 + 10` (rough P2WPKH
-     estimator — fine for v0.3, can use exact later).
+     estimator: fine for v0.3, can use exact later).
    - `fee = ceil(vsize * sat_per_vb)`.
    - If fee changes UTXO selection (e.g. adding inputs to cover fee adds
      more fee), iterate once. Coin-selection oscillation isn't a v0.3
      problem.
-3. **REVIEW** — UI shows: recipient, amount, fee (sat + USD), total.
-4. **SIGN** — `wasm.bitcoin.signPsbt(mnemonic, '', network, masterPath, psbt)`.
+3. **REVIEW**: UI shows recipient, amount, fee (sat + USD), total.
+4. **SIGN**: `wasm.bitcoin.signPsbt(mnemonic, '', network, masterPath, psbt)`.
    Returns finalized PSBT. Extract `tx_hex` from finalized PSBT via
    new `wasm.bitcoin.extractTx(psbt)` helper.
-5. **BROADCAST** — `api.broadcastTx(asset, txHex)` → `{ txid }`.
+5. **BROADCAST**: `api.broadcastTx(asset, txHex)` → `{ txid }`.
 
 ### As shipped
 
@@ -219,17 +219,17 @@ LWS daemon; ring composition matters for both privacy and validity.
      decoy-false-positive matches (same pattern as balance fetch).
    - Greedy output selection by amount.
    - `chainProviders.lws(asset).getRandomOutputs(count)` (ring size 16
-     for XMR / 22 for WOW) for each chosen real input — pull ring
+     for XMR / 22 for WOW) for each chosen real input: pull ring
      members.
 2. **ESTIMATE**
    - LWS reports per-byte fee schedule + mask. Compute tx size from
      input count, ring size, and output count (1 recipient + 1 change).
-3. **REVIEW** — UI shows recipient, amount, fee, total.
-4. **SIGN** — `wasm.monero.signTransaction(paramsJson)` with everything
+3. **REVIEW**: UI shows recipient, amount, fee, total.
+4. **SIGN**: `wasm.monero.signTransaction(paramsJson)` with everything
    the WASM signer needs: real outputs, decoys, recipient address, change
    address, OVK (fresh per-tx per `fresh_outgoing_view_key()`), fee,
    fee mask.
-5. **BROADCAST** — `chainProviders.lws(asset).broadcast(txHex)` posts
+5. **BROADCAST**: `chainProviders.lws(asset).broadcast(txHex)` posts
    the signed tx hex to LWS `/submit_raw_tx`. Only the signed tx is
    sent: withholding recipient and amount denies the LWS operator a
    sender↔recipient↔amount link.
@@ -268,15 +268,15 @@ LWS daemon; ring composition matters for both privacy and validity.
 
 ---
 
-## Grin (Mimblewimble — interactive)
+## Grin (Mimblewimble, interactive)
 
-> **Update (2026-07 — non-custodial):** Grin is now fully **non-custodial**
+> **Update (2026-07, non-custodial):** Grin is now fully **non-custodial**
 > and **scan-based**. The backend keeps no Grin outputs or wallet state; it
 > exposes only `POST /wallet/grin/scan` + `GET /wallet/grin/height` +
 > `POST /wallet/grin/broadcast` + `/relay/*`, and the client recomputes
 > balance from a view-only rewind scan (plus a client-side pending overlay)
 > on every refresh. The interactive ceremony below is otherwise unchanged,
-> but the slatepack hand-off is no longer copy-out-of-band only — each leg
+> but the slatepack hand-off is no longer copy-out-of-band only; each leg
 > now travels over one of three transports: **Nostr NIP-59 gift-wrap**
 > (federated default), **manual** copy/paste, or a **same-instance backend
 > relay** (`grin_slatepacks` mailbox). No transport assumes `api.smirk.cash`.
@@ -293,30 +293,30 @@ wallets.
 
 ### Send (sender-driven, S1→S2→S3)
 
-1. **PREPARE (S1)** — sender picks inputs (Pedersen commitments + their
+1. **PREPARE (S1)**: sender picks inputs (Pedersen commitments + their
    blinding factors), computes change blind, computes `sender_blind_excess
    = Σoutputs − Σinputs − offset` (cross-validated against
    `grin_wallet_libwallet` 5.4.0), creates the kernel nonce, and emits
    the S1 slate via `grin_create_send_transaction`.
-2. **HAND-OFF** — S1 is wrapped in a slatepack (`SlatepackBin` v1.0 →
+2. **HAND-OFF**: S1 is wrapped in a slatepack (`SlatepackBin` v1.0 →
    ASCII armor `BEGINSLATEPACK. … . ENDSLATEPACK.`). The leg travels
    over Nostr NIP-59 gift-wrap, manual copy/paste, or a same-instance
    backend relay.
-3. **SIGN (S2 — receiver)** — receiver pastes S1, runs
+3. **SIGN (S2, receiver)**: receiver pastes S1, runs
    `grin_sign_incoming_send_slate` which adds their output (Pedersen
    commit + Bulletproof), their partial sig, and pubkeys. Returns S2 as
    another armored slatepack.
-4. **FINALIZE (S3 — sender)** — sender pastes S2, runs
+4. **FINALIZE (S3, sender)**: sender pastes S2, runs
    `grin_finalize_send_slate` which verifies the receiver's partial,
    aggregates partials → final Schnorr signature, verifies the kernel
    sig against `(sum_of_commitments − offset_G)`, and returns both the
    wire bytes and `tx_json`, the JSON-shaped Transaction.
-5. **BROADCAST** — `chainProviders.grin().broadcast({ tx })`, backed by
+5. **BROADCAST**: `chainProviders.grin().broadcast({ tx })`, backed by
    `api.broadcastGrinTransaction({ tx })`, where `tx` is the `tx_json`
    from `grin_finalize_send_slate`. Grin's `/v2/foreign
    push_transaction` takes the JSON Transaction object, not wire-format
    hex. Kernel excess from the final slate doubles as the on-chain
-   identifier shown in the "Done" screen —
+   identifier shown in the "Done" screen:
    `https://grincoin.org/kernel/${kernelExcess}`.
 
 ### Invoice (receiver-driven, I1→I2→I3)
@@ -332,28 +332,28 @@ TX. UI surface is `GrinRequestWizard` reached from the Receive screen's
 ### Where the code lives
 
 ```
-crates/grin-ext/src/wallet_flows.rs      — 6 Rust orchestrators
-crates/smirk-wasm/src/grin/wallet_flows.rs  — wasm-bindgen wrappers + JSON DTOs
-packages/wasm/src/index.ts               — typed TS facades (grin.* namespace)
-packages/extension/src/popup/grin-flows.ts  — extension orchestrator:
+crates/grin-ext/src/wallet_flows.rs:       6 Rust orchestrators
+crates/smirk-wasm/src/grin/wallet_flows.rs:   wasm-bindgen wrappers + JSON DTOs
+packages/wasm/src/index.ts:                typed TS facades (grin.* namespace)
+packages/extension/src/popup/grin-flows.ts:   extension orchestrator:
   startGrinSend / processGrinS2 / cancelGrinSend
   startGrinInvoice / signGrinInvoice / processGrinI2 / signIncomingGrinSlate
   armorSlate / dearmorSlate / inspectSlatepack
-  calcGrinFee — (inputs×1 + outputs×21 + max(1, kernels)×3) × 500_000
+  calcGrinFee:  (inputs×1 + outputs×21 + max(1, kernels)×3) × 500_000
                 nanogrin, matching grin_core::global::DEFAULT_ACCEPT_FEE_BASE
-  resolveGrinFee(total, amount, numInputs) — decides fee vs change:
+  resolveGrinFee(total, amount, numInputs) decides fee vs change:
                 a surplus above the 2-output fee produces a change
                 output, otherwise the surplus is folded into the fee
                 and no change output is emitted
-packages/ui/src/components/SendWizard.tsx  — Grin Exchange step
-packages/ui/src/components/GrinRequestWizard.tsx  — invoice wizard
+packages/ui/src/components/SendWizard.tsx:   Grin Exchange step
+packages/ui/src/components/GrinRequestWizard.tsx:   invoice wizard
 ```
 
 ### Cross-implementation interop
 
 The slate v4 compact-binary codec (`crates/grin-ext/src/slate_bin.rs`,
-ported from grin v4_bin.rs) is what makes Smirk↔grin-wallet interop work
-— same wire bytes as `SlatepackBin` produced by grin-wallet 5.x. Verified
+ported from grin v4_bin.rs) is what makes Smirk↔grin-wallet interop work:
+same wire bytes as `SlatepackBin` produced by grin-wallet 5.x. Verified
 end-to-end by the round-trip cross-validation tests in
 `crates/grin-ext/tests/grin_wallet_compat.rs` (S1→S2→S3 + I1→I2→I3
 against `grin_wallet_libwallet` 5.4.0 as a dev-dep oracle). See
@@ -361,17 +361,17 @@ against `grin_wallet_libwallet` 5.4.0 as a dev-dep oracle). See
 
 ### Edge cases for v0.3
 
-- **Persistence across popup close** — Mimblewimble's interactive flow
+- **Persistence across popup close**: Mimblewimble's interactive flow
   *must* survive popup-close (the receiver may take hours to respond).
   Wizard state lives in session storage via `useWizard<GrinFields>`;
   resuming the wizard re-renders the Exchange step with the same
   pre-built S1 + same sender context.
-- **Payment proofs** — Rust + WASM support exists (ed25519 receipt
+- **Payment proofs**: Rust + WASM support exists (ed25519 receipt
   over `(amount, kernel_commitment, sender_address)`); not surfaced in
   the UI.
-- **NRD kernels (relative timelocks)** — primitives exist; not used for
+- **NRD kernels (relative timelocks)**: primitives exist; not used for
   normal sends. Reserved for swap-refund paths.
-- **Slate expiry** — `cancelGrinSend` frees a pre-broadcast exchange's
+- **Slate expiry**: `cancelGrinSend` frees a pre-broadcast exchange's
   reserved inputs; a reservation left alone ages out on the overlay's
   backstop. A cancel after broadcast is refused, since freeing inputs
   that are genuinely spent in-flight would let a later send build a
@@ -407,14 +407,14 @@ the recipient returns a signed slatepack.
 ### Testing strategy: small mainnet amounts, no testnets
 
 Smirk does not exercise testnet (BTC testnet3 / signet / LTC testnet /
-XMR stagenet / Grin testnet) — production has always been mainnet-only,
+XMR stagenet / Grin testnet); production has always been mainnet-only,
 and that posture continues. Validation strategy:
 
-1. **Send the smallest sensible amount** — e.g. 1000 sat (~\$0.001 at any
+1. **Send the smallest sensible amount**: e.g. 1000 sat (~\$0.001 at any
    recent BTC price), 0.0001 XMR, 0.001 GRIN. Total dollar exposure for
    a full 5-asset end-to-end sweep: under \$1.
-2. **Receiver = dev's other wallet** — Cake / Sparrow / a second Smirk
-   install — so a successful receive proves both sides of the path.
+2. **Receiver = dev's other wallet**: Cake / Sparrow / a second Smirk
+   install, so a successful receive proves both sides of the path.
 3. **Watch mempool acceptance** + first confirmation on a public
    explorer. If the tx propagates and confirms, the signing + broadcast
    path is correct.

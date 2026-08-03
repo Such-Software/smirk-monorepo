@@ -16,7 +16,7 @@
  * onboarding animations.
  *
  * Network failure handling: if the challenge fetch fails, the wallet
- * should NOT block onboarding — the backend will accept the
+ * should NOT block onboarding: the backend will accept the
  * registration with no `altcha_solution` field while
  * `POW_REQUIRED=false`. Caller should treat solve failures as a soft
  * warning and continue. Once `POW_REQUIRED=true`, of course, the
@@ -30,7 +30,7 @@ import { solveChallenge, type Challenge, type Solution } from 'altcha-lib';
  * Rust `altcha::Payload` struct in `smirk-backend/src/api/auth.rs`
  * (the `ExtensionRegisterRequest.altcha_solution` field). The
  * `challenge` here is the FULL original Challenge the server signed,
- * NOT the Solution's internal `challenge` hash field — that wrapping
+ * NOT the Solution's internal `challenge` hash field: that wrapping
  * is the bug we hit in 2026-06 when the SW bootstrap handler shipped
  * a bare Solution. Lock it at the type level so a future regression
  * is a compile error, not a runtime 422.
@@ -39,7 +39,7 @@ export interface AltchaPayload {
   challenge: Challenge;
   solution: Solution;
 }
-// `altcha-lib/algorithms/pbkdf2` pulls `node:crypto` + `node:util` —
+// `altcha-lib/algorithms/pbkdf2` pulls `node:crypto` + `node:util`:
 // fine under Node.js but breaks Vite's browser bundle. The `web/`
 // variant uses `crypto.subtle.deriveKey` directly, which works in
 // the extension popup, the desktop Tauri webview, and any modern
@@ -59,8 +59,8 @@ const SOLVE_TIMEOUT_MS = 30_000;
  * Solve the backend's current PoW challenge and return the payload to
  * forward to `extensionRegister({ altchaSolution: ... })`.
  *
- * Returns `null` if the challenge fetch fails or the solver times out
- * — caller should pass through to registration without `altchaSolution`,
+ * Returns `null` if the challenge fetch fails or the solver times out;
+ * caller should pass through to registration without `altchaSolution`,
  * which the backend accepts in graceful-migration mode.
  *
  * Optional `signal` lets the caller cancel mid-solve (e.g. user

@@ -12,7 +12,7 @@ expected to follow when adding new code in this surface.
 
 If you're new to the codebase, read this end-to-end before opening a
 PR. The architecture is small but it depends on each layer staying
-inside its lane — drift is what introduces spaghetti.
+inside its lane; drift is what introduces spaghetti.
 
 ## TL;DR
 
@@ -30,7 +30,7 @@ the `DappBrowserController` interface and wires the platform-specific
 transport between embedded webview and wallet handler. The UI shell
 and the controller interface are platform-agnostic.
 
-The extension does **not** use `dapp-browser` — the host browser IS
+The extension does **not** use `dapp-browser`: the host browser IS
 the browser there. The extension uses only `@such-software/smirk-dapp-api`.
 
 ## Layered architecture
@@ -77,22 +77,22 @@ the browser there. The extension uses only `@such-software/smirk-dapp-api`.
                     └───────────────────────────────────────────────────┘
 ```
 
-## Package boundaries — what belongs where
+## Package boundaries: what belongs where
 
 The cardinal rule: each package answers **one** question. If you're
 unsure where a new file belongs, identify which question it answers.
 
-### `@such-software/smirk-dapp-api` — wallet RPC
+### `@such-software/smirk-dapp-api`: wallet RPC
 
 Answers: *"How does a webpage talk to a wallet?"*
 
 Contains:
 
 - Wire-protocol types (`SmirkWireRequest`, `SmirkWireResponse`)
-- `installSmirkApi(window, transport)` — page-side
-- `createWalletHandler(deps)` — wallet-side dispatcher
+- `installSmirkApi(window, transport)`: page-side
+- `createWalletHandler(deps)`: wallet-side dispatcher
 - `WalletProvider`, `ApprovalHandler`, `OriginPermissionStore` interfaces
-- `getPageApiInjectionScript()` — returns the script source string
+- `getPageApiInjectionScript()`: returns the script source string
   that browser controllers can inject into new webviews
 
 Does **not** contain:
@@ -100,7 +100,7 @@ Does **not** contain:
 - Anything about how pages are rendered (no webviews, no DOM, no UI)
 - Anything platform-specific (no `chrome.*`, no `WKWebView`, no Tauri)
 
-### `@smirk/dapp-browser` — embedded browser shell
+### `@smirk/dapp-browser`: embedded browser shell
 
 Answers: *"How does an app embed a browseable web surface?"*
 
@@ -117,13 +117,13 @@ Does **not** contain:
 - UI components (use `@smirk/ui`)
 - Platform implementations (use `packages/desktop`, `packages/mobile`)
 
-### `@smirk/ui/components/browser/` — visual chrome
+### `@smirk/ui/components/browser/`: visual chrome
 
 Answers: *"What does the URL bar / tab strip / chrome look like?"*
 
 Contains:
 
-- `BrowserShell` — composes URL bar + tab strip + frame area
+- `BrowserShell`: composes URL bar + tab strip + frame area
 - `BrowserUrlBar`, `BrowserTabStrip`, `IframeBrowserContent`
 - React props are typed against `DappBrowserController` (the interface,
   not any specific implementation)
@@ -133,7 +133,7 @@ Does **not** contain:
 - Platform code (works against any controller impl, including
   `MockController` for dev)
 
-### `packages/desktop`, `packages/mobile` — composition + native glue
+### `packages/desktop`, `packages/mobile`: composition + native glue
 
 The wallet shells:
 
@@ -149,7 +149,7 @@ and the controller impl (webview management). Nothing else.
 ## How the layers connect
 
 The connection is made in the wallet shell, not in either package.
-This is intentional — keeps `dapp-browser` ignorant of `dapp-api`, and
+This is intentional: keeps `dapp-browser` ignorant of `dapp-api`, and
 `dapp-api` ignorant of any browser.
 
 ```ts
@@ -182,7 +182,7 @@ between them is small, in one place, easy to audit.
 
 ## Webview positioning
 
-Embedded webviews are **native OS-level objects** — `WKWebView` on iOS,
+Embedded webviews are **native OS-level objects**: `WKWebView` on iOS,
 Android `WebView`, `WebKitGTK`, etc. They cannot be embedded as DOM
 elements inside our React/Preact UI tree. We have to position them as
 overlays over the wallet UI by absolute coordinates.
@@ -222,7 +222,7 @@ interface DappBrowserController {
 
 Single-tab impls always allocate exactly one tab; `newTab` either
 returns the existing tab id or throws `NotSupportedError`. The UI
-treats one-tab and many-tab the same way — `BrowserTabStrip` collapses
+treats one-tab and many-tab the same way: `BrowserTabStrip` collapses
 itself when only one tab is present.
 
 This avoids the trap of bolting on multi-tab later and having to
@@ -232,15 +232,15 @@ rewrite the UI.
 
 | Layer                                    | v0.3.0 desktop | v0.4 mobile | v0.4+ polish |
 | ---------------------------------------- | -------------- | ----------- | ------------ |
-| `@such-software/smirk-dapp-api` (already shipped)      | unchanged      | unchanged   | —            |
-| `@smirk/dapp-browser` types + interface  | ship           | ship        | —            |
-| `BrowserShell` + sub-components          | ship           | ship        | —            |
-| `TauriBrowserController` + Rust plugin   | ship           | —           | —            |
-| Capacitor iOS plugin + controller        | —              | ship        | —            |
-| Capacitor Android plugin + controller    | —              | ship        | —            |
-| Multi-tab UI polish                      | —              | —           | v0.4+        |
-| Bookmarks persistence                    | —              | —           | v0.4+        |
-| History persistence + autocomplete       | —              | —           | v0.4+        |
+| `@such-software/smirk-dapp-api` (already shipped)      | unchanged      | unchanged   | -            |
+| `@smirk/dapp-browser` types + interface  | ship           | ship        | -            |
+| `BrowserShell` + sub-components          | ship           | ship        | -            |
+| `TauriBrowserController` + Rust plugin   | ship           | -           | -            |
+| Capacitor iOS plugin + controller        | -              | ship        | -            |
+| Capacitor Android plugin + controller    | -              | ship        | -            |
+| Multi-tab UI polish                      | -              | -           | v0.4+        |
+| Bookmarks persistence                    | -              | -           | v0.4+        |
+| History persistence + autocomplete       | -              | -           | v0.4+        |
 
 **v0.3.0 desktop browser architecture.** Each browser tab is a
 borderless Tauri `WebviewWindow` positioned over the wallet's
@@ -262,7 +262,7 @@ controller at boot.
 
 ## Conventions
 
-These apply throughout this surface. They're not aspirational — PRs
+These apply throughout this surface. They're not aspirational: PRs
 that violate them get sent back. They exist because this code is
 public-facing and read by people who didn't write it.
 
@@ -286,7 +286,7 @@ public-facing and read by people who didn't write it.
 ### Commenting
 
 - **JSDoc on every exported symbol.** Even if the name is
-  self-explanatory, include the *why* — what problem this exists to
+  self-explanatory, include the *why*: what problem this exists to
   solve, what surprising trade-offs were made.
 - **Inline comments are for the why, never the what.** Code already
   says what it does; comments explain rationale, edge cases, prior
@@ -294,12 +294,12 @@ public-facing and read by people who didn't write it.
 - **Cite specific file paths and line numbers** when referencing other
   code. Format: `path/to/file.ts:42` (linkable in most IDEs).
 - **No emoji in code or comments.** Slack, GitHub issues, release
-  notes — fine. Source files, no.
+  notes: fine. Source files, no.
 - **No undated TODOs.** Every TODO either has an owner
   `// TODO(@username):` or an issue link `// TODO(#123):`. Otherwise
   it's a comment, not a TODO, and don't tag it as one.
 - **Section dividers** using a 70-char-wide `// ====` line for long
-  files. Use sparingly — a file long enough to need dividers is
+  files. Use sparingly: a file long enough to need dividers is
   usually long enough to split.
 
 ### Module organization
@@ -325,7 +325,7 @@ public-facing and read by people who didn't write it.
 ### Platform parity
 
 - **Same interface, different impls.** Never branch on platform inside
-  a controller method body — that's a sign the interface is leaking.
+  a controller method body: that's a sign the interface is leaking.
   If you find yourself writing `if (isTauri) ... else if (isCapacitor)`
   inside a controller method, refactor.
 - **Same behaviour at the API surface.** A `controller.navigate(url)`
@@ -338,14 +338,14 @@ public-facing and read by people who didn't write it.
 1. This document.
 2. `packages/dapp-api/README.md` (existing).
 3. `packages/dapp-browser/README.md`.
-4. `packages/dapp-browser/src/controller.ts` — the interface.
-5. `packages/dapp-browser/src/mock-controller.ts` — a complete impl
+4. `packages/dapp-browser/src/controller.ts`: the interface.
+5. `packages/dapp-browser/src/mock-controller.ts`: a complete impl
    small enough to read in 5 minutes.
-6. `packages/ui/src/components/browser/BrowserShell.tsx` — how the UI
+6. `packages/ui/src/components/browser/BrowserShell.tsx`: how the UI
    consumes the controller.
-7. Platform impls — pick desktop or mobile depending on which you're
+7. Platform impls: pick desktop or mobile depending on which you're
    touching.
 
 ## License
 
-MIT OR Apache-2.0 — matches the rest of the monorepo.
+MIT OR Apache-2.0: matches the rest of the monorepo.

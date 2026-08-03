@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * Swap wizard — open the Trocador Swap wizard and drive PairStep →
+ * Swap wizard: open the Trocador Swap wizard and drive PairStep →
  * QuoteStep against the REAL extension UI.
  *
  * Flow under test (packages/ui/src/components/SwapTab.tsx):
@@ -11,17 +11,17 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *   receive/refund address inputs + "Confirm swap").
  *
  * Trocador is client-direct (packages/swap/src/trocador.ts): the popup
- * hits `https://api.trocador.app/new_rate` straight from the POPUP page
- * — NOT the local smirk-backend-core, and NOT the offscreen document.
+ * hits `https://api.trocador.app/new_rate` straight from the POPUP page,
+ * NOT the local smirk-backend-core, and NOT the offscreen document.
  * Because the request originates from the popup page, `page.route` can
  * intercept it. We return a stubbed quote in Trocador's real response
  * shape to keep this deterministic and free of an external rate service
  * (and its per-pair minimums / inventory). The UI code path exercised
- * is 100% real — only the upstream provider HTTP is stubbed.
+ * is 100% real; only the upstream provider HTTP is stubbed.
  *
  * Auth: we import alice via the shared `importAndUnlock` helper. The
  * helper drives the full onboarding-import flow and returns once the
- * wallet is authenticated — detected by a REAL backend balance
+ * wallet is authenticated, detected by a REAL backend balance
  * rendering on Home (alice's WOW 19.79), NOT by waiting on the
  * bootstrap `/auth/extension` POST. That POST fires from the
  * extension's OFFSCREEN document, whose network is invisible to
@@ -105,7 +105,7 @@ test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)',
 
   // ---- Auth/onboarding: import alice (already-registered) ----
   // Returns once authenticated; auth is proven by alice's real backend
-  // balance (WOW 19.79) rendering on Home — never by an offscreen
+  // balance (WOW 19.79) rendering on Home, never by an offscreen
   // /auth/extension wait.
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
   footage.mark('wallet-ready', 'unlocked wallet, before the flow under test');
@@ -116,7 +116,7 @@ test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)',
   // ---- Navigate to the Swap tab ----
   await page.getByTestId('nav-tab-swap').click();
 
-  // The Swap surface is gated on VITE_TROCADOR_API_KEY at build time —
+  // The Swap surface is gated on VITE_TROCADOR_API_KEY at build time;
   // if unset the tab shows a "disabled in this build" message and the
   // provider row never renders. The dist ships a key, so assert the
   // real provider row appears.
@@ -140,7 +140,7 @@ test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)',
   // Tiny amount: at or below any realistic balance so the client-side
   // "insufficient" guard (parsedAmount > balance) never disables the
   // button. When the session balance is null the guard is a no-op
-  // anyway. The real min is irrelevant — /new_rate is stubbed.
+  // anyway. The real min is irrelevant: /new_rate is stubbed.
   await page.getByTestId('swap-pair-amount').fill('0.0001');
 
   const getQuote = page.getByTestId('swap-pair-get-quote');

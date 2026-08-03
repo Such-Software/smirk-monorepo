@@ -1,4 +1,4 @@
-//! Transaction wire-format assembly — finalized slate → broadcastable TX.
+//! Transaction wire-format assembly: finalized slate → broadcastable TX.
 
 use wasm_bindgen::prelude::*;
 
@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 /// aggregated kernel signature into broadcastable Grin transaction bytes.
 ///
 /// Inputs are encoded as concatenated `(features_byte || 33-byte commit)`
-/// pairs in `inputs_concat_hex` — i.e. each input is 34 hex bytes long
+/// pairs in `inputs_concat_hex`, i.e. each input is 34 hex bytes long
 /// (68 hex chars).
 ///
 /// Outputs are encoded as a JSON array string: `[{"f": 0, "c": "...",

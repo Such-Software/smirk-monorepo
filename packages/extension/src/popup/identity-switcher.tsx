@@ -13,7 +13,7 @@ import {
  * Always-visible active-identity chip in the app header (flows to both the popup
  * Header and the desktop SidebarNav via AppShell.headerActions). Reuses the
  * accessible IdentityPicker; switching here changes the wallet's GLOBAL active
- * identity — what Feed / Messages default to. Persisting the switch writes the
+ * identity: what Feed / Messages default to. Persisting the switch writes the
  * vault, so it needs the unlocked mnemonic; on a warm resume the chip stays a
  * read-only indicator (the optimistic selection reverts on the next load).
  */

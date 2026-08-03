@@ -2,14 +2,14 @@
 //!
 //! Backed by the vendored `crates/secp256k1zkp/` (Grin's
 //! `grin_secp256k1zkp` v0.7.15, patched for wasm32). This is **BP**, not
-//! BP+ — Grin never adopted Bulletproofs+.
+//! BP+; Grin never adopted Bulletproofs+.
 
 use wasm_bindgen::prelude::*;
 
 /// Create a Pedersen commitment to `(value, blinding_factor)`.
 ///
 /// `blinding_factor_hex` is 32 bytes (64 hex chars).
-/// Returns 33 bytes (66 hex chars) — the commitment.
+/// Returns 33 bytes (66 hex chars): the commitment.
 #[wasm_bindgen]
 pub fn grin_pedersen_commit(value: u64, blinding_factor_hex: &str) -> Result<String, JsValue> {
     let mut blind = [0u8; 32];

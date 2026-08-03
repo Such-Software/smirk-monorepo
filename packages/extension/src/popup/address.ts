@@ -1,7 +1,7 @@
 /**
  * Address validation + receive-address resolution for the popup. Pure (no React,
  * no module state); extracted from index.tsx. The actual codecs live in
- * @smirk/core (regression-tested in packages/core address.test.ts) — this is the
+ * @smirk/core (regression-tested in packages/core address.test.ts); this is the
  * per-asset dispatch + user-facing error shaping.
  */
 
@@ -26,7 +26,7 @@ import {
 /**
  * Per-asset address validation. Returns `null` when `addr` decodes correctly for
  * the asset, or a short user-facing reason string. For CryptoNote chains it points
- * at the first out-of-alphabet character — copy-paste from chat often injects
+ * at the first out-of-alphabet character: copy-paste from chat often injects
  * `0`/`O`/`I`/`l` or HTML gunk that a generic "invalid" message doesn't help with.
  */
 export function validateAddress(assetId: string, addr: string): string | null {
@@ -131,7 +131,7 @@ export async function resolveAddressForAsset(
 
 /**
  * Validate a SEND recipient. Same as {@link validateAddress}, but for Grin it
- * ALSO accepts a Nostr `npub` (or raw x-only hex) — a send to an npub routes over
+ * ALSO accepts a Nostr `npub` (or raw x-only hex): a send to an npub routes over
  * the gift-wrap channel instead of a slatepack address, so the sender doesn't need
  * to know the recipient's Grin address (the Goblin-interoperable path). Returns
  * null when valid, else a short reason.
@@ -148,7 +148,7 @@ export function validateSendRecipient(assetId: string, addr: string): string | n
       }
     }
     // A NIP-05 name (federation): alice@goblin.st. Only the FORMAT is checked
-    // here — resolution against the domain's /.well-known/nostr.json happens at
+    // here; resolution against the domain's /.well-known/nostr.json happens at
     // send time (a network call, not run per keystroke).
     if (isNip05Name(t)) return null;
   }

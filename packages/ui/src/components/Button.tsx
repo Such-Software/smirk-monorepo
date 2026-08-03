@@ -1,9 +1,9 @@
 /**
- * Button — full-width primary / secondary CTA for in-flow screens.
+ * Button: full-width primary / secondary CTA for in-flow screens.
  *
  * Distinct from `ActionButton` (which is a column-stacked tile for the
  * Home tab's verb row). `Button` is the rectangular labelled button you
- * use for "Continue", "Create wallet", "Send", "Unlock" — anywhere a
+ * use for "Continue", "Create wallet", "Send", "Unlock": anywhere a
  * flow needs a clear primary action.
  *
  * Sizes are roomy by default (height 44px, horizontal padding 16px) so
@@ -18,12 +18,12 @@ export interface ButtonProps {
   onClick?: () => void;
   disabled?: boolean;
   /**
-   * `primary` — Smirk purple, the default for the main CTA on a screen.
-   * `secondary` — outlined / muted, for the side action (Cancel, Back).
-   * `danger` — red tint, for destructive confirms.
+   * `primary`: Smirk purple, the default for the main CTA on a screen.
+   * `secondary`: outlined / muted, for the side action (Cancel, Back).
+   * `danger`: red tint, for destructive confirms.
    */
   variant?: 'primary' | 'secondary' | 'danger';
-  /** Submit type for forms — defaults to `'button'` to avoid surprise form submits. */
+  /** Submit type for forms; defaults to `'button'` to avoid surprise form submits. */
   type?: 'button' | 'submit';
   /** Render at full container width (default). Pass `false` for inline. */
   fullWidth?: boolean;
@@ -31,7 +31,7 @@ export interface ButtonProps {
   /**
    * Stable hook for e2e automation, rendered as `data-testid`. Inert
    * in production. Most CTAs route through this component, so the e2e
-   * harness relies on it for selector stability — see the smoke-e2e
+   * harness relies on it for selector stability; see the smoke-e2e
    * harness page objects.
    */
   testid?: string;

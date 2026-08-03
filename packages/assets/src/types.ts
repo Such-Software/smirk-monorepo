@@ -1,17 +1,17 @@
 /**
- * Asset definition types — the data shape every chain in the Smirk
+ * Asset definition types: the data shape every chain in the Smirk
  * wallet conforms to.
  *
  * Three layers:
  *
- * 1. **Identity** — id, ticker, displayName, decimals. The metadata
+ * 1. **Identity**: id, ticker, displayName, decimals. The metadata
  *    every UI surface needs to render an asset.
  *
- * 2. **Behavioral classification** — `addressKind` (does the chain
+ * 2. **Behavioral classification**: `addressKind` (does the chain
  *    use addresses or interactive slatepacks?) and `family` (UTXO,
  *    CryptoNote, Mimblewimble) with per-family capability data.
  *
- * 3. **Network parameters** — per-network identifiers and
+ * 3. **Network parameters**: per-network identifiers and
  *    derivation-path hints. Encoding details (HRP, version bytes)
  *    live in the Rust crypto crates; this layer only carries the
  *    information the UI / orchestration code needs.
@@ -41,9 +41,9 @@ export type AssetId = string;
 /**
  * How does the user actually send funds with this asset?
  *
- * - `address`     — Classic flow: enter recipient address, amount,
+ * - `address`     : Classic flow: enter recipient address, amount,
  *                   click send. BTC/LTC/XMR/WOW.
- * - `interactive` — Slatepack-style: build a slate, exchange with
+ * - `interactive` : Slatepack-style: build a slate, exchange with
  *                   counterparty, finalize. Grin (and future MW
  *                   chains, Beam, MWC).
  *
@@ -52,7 +52,7 @@ export type AssetId = string;
 export type AddressKind = 'address' | 'interactive';
 
 // ============================================================================
-// Chain family — discriminated by behavioral / cryptographic shape
+// Chain family: discriminated by behavioral / cryptographic shape
 // ============================================================================
 
 /**
@@ -109,7 +109,7 @@ export interface CryptonoteFamilyData {
      */
     integratedAddresses: boolean;
     /**
-     * View tags (XMR Salvium hardfork onward — speeds up output scan).
+     * View tags (XMR Salvium hardfork onward; speeds up output scan).
      */
     viewTags: boolean;
   };
@@ -172,8 +172,8 @@ export interface NetworkInfo {
 /**
  * Cross-chain swap routing options for an asset.
  *
- * - `thorchain` — Aggregator (THORChain), v0.3 swap implementation.
- * - `native`    — Peer-to-peer adaptor-signature swap, v0.4+ work
+ * - `thorchain` : Aggregator (THORChain), v0.3 swap implementation.
+ * - `native`    : Peer-to-peer adaptor-signature swap, v0.4+ work
  *                 (`crates/swap-core/`).
  *
  * An asset can support multiple. The Swap UI's aggregator-vs-native
@@ -206,7 +206,7 @@ export interface AssetDefinition {
   /**
    * Decimals shown by default in compact balance lists (Home,
    * choosers). Smaller than `decimals` for low-precision-relevant
-   * assets — XMR/Grin at 12/9 atomic decimals would render 0.000004
+   * assets: XMR/Grin at 12/9 atomic decimals would render 0.000004
    * unit-blocks of zeros that aren't useful at a glance. Hover
    * tooltips and the AssetDetail screen still show full precision.
    *
@@ -215,7 +215,7 @@ export interface AssetDefinition {
   displayDecimals?: number;
 
   /**
-   * Stable icon identifier — typically the same as `id`. The
+   * Stable icon identifier: typically the same as `id`. The
    * consumer (extension popup, mobile app) maps this to an actual
    * file path.
    */
@@ -258,7 +258,7 @@ export interface AssetDefinition {
    *
    * v0.3 ships THORChain (aggregator); v0.4+ adds native P2P
    * adaptor-signature swaps. Empty array means "swap not yet
-   * supported for this asset" — the asset is still tip-able and
+   * supported for this asset"; the asset is still tip-able and
    * sendable, just not in the Swap tab.
    */
   swapRoutes: ReadonlyArray<SwapRoute>;
@@ -307,8 +307,8 @@ export interface AssetDefinition {
    *
    * Set to `true` for v0.3's five built-ins (BTC/LTC/XMR/WOW/Grin) so
    * the upgrade is a no-op for existing users. Future additions (ETH,
-   * stablecoins, additional UTXO chains) should default to `false`
-   * — the user opts in via Settings → Assets rather than getting a
+   * stablecoins, additional UTXO chains) should default to `false`:
+   * the user opts in via Settings → Assets rather than getting a
    * surprise new row in their Home tab after an extension update.
    */
   defaultVisible: boolean;

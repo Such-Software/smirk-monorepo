@@ -4,14 +4,14 @@
  * wires its transport to `window.postMessage`.
  *
  * **Why this file is separate from the content script.** Content
- * scripts run in an isolated world — they share the page's DOM but
+ * scripts run in an isolated world: they share the page's DOM but
  * NOT its `window` object. To expose `window.smirk` to page-side
  * JS we have to either (a) inject this script as a `<script>` tag
  * from the content script, OR (b) use chrome.scripting.executeScript
  * in MAIN world from the service worker. We use (a) because (b)
  * doesn't reliably fire at document_start (race with page scripts).
  *
- * **Bundle format.** IIFE, no module imports — page CSP often
+ * **Bundle format.** IIFE, no module imports: page CSP often
  * forbids `<script type="module">` from non-self origins. Vite config
  * outputs this entry as `iife` format.
  *
@@ -46,7 +46,7 @@ const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
 window.addEventListener('message', (ev: MessageEvent) => {
   // event.source === window: filter out messages from other frames
-  // (iframes, popouts) — we only respond to our own page's traffic.
+  // (iframes, popouts): we only respond to our own page's traffic.
   if (ev.source !== window) return;
   const data = ev.data as Partial<SmirkWireResponse> | null;
   if (
@@ -64,7 +64,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
   p.resolve(data as SmirkWireResponse);
 });
 
-// Generic at the call boundary — the JS body is the same for every M
+// Generic at the call boundary: the JS body is the same for every M
 // (we just round-trip the envelope), so the function is generic and
 // returns the typed response the caller asked for. Without the generic
 // header here, TS rejects the assignment against `SmirkPageTransport`

@@ -1,4 +1,4 @@
-//! Grin keychain derivation — BIP32 + switch commitment adjustment.
+//! Grin keychain derivation: BIP32 + switch commitment adjustment.
 //!
 //! Grin builds blinding factors from a wallet's extended private key in
 //! two steps:
@@ -7,7 +7,7 @@
 //!    path (typically 4 levels of `u32`).
 //! 2. If the output uses a "switch commitment" (the default for all
 //!    spendable outputs since Hard Fork 2), adjust the child key via
-//!    `blind_switch(amount, child_key)` — an HMAC-style offset using
+//!    `blind_switch(amount, child_key)`, an HMAC-style offset using
 //!    the secp256k1-zkp `J` generator that makes Pedersen commitments
 //!    quantum-resistant under a future cryptographic migration.
 //!
@@ -50,7 +50,7 @@ pub fn derive_blind(
     match switch {
         SwitchCommitmentType::None => Ok(secret),
         SwitchCommitmentType::Regular => {
-            // The "Commit" context flag is required for blind_switch —
+            // The "Commit" context flag is required for blind_switch:
             // it pulls in the generator tables needed for the J offset.
             let secp = Secp256k1::with_caps(ContextFlag::Commit);
             let child = SecretKey::from_slice(&secp, &secret)
@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    /// Switch=Regular depends on the amount — changing the amount
+    /// Switch=Regular depends on the amount: changing the amount
     /// changes the resulting scalar (the J-offset depends on the
     /// commitment, which depends on the amount).
     #[test]

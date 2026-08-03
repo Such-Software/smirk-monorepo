@@ -2,14 +2,14 @@ import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
 /**
- * send-compose-xmr — drive the REAL Send wizard for Monero (XMR) from
+ * send-compose-xmr: drive the REAL Send wizard for Monero (XMR) from
  * Home through Asset → Address → Compose and land on the read-only
  * Review step. We deliberately STOP at Review and never click
  * `send-review-submit`, so nothing is broadcast.
  *
  * Auth/onboarding: import the ALREADY-REGISTERED wallet alice via the
  * shared `importAndUnlock` helper. It drives the full onboarding-import
- * flow and returns once the wallet is authenticated — detected by a REAL
+ * flow and returns once the wallet is authenticated, detected by a REAL
  * backend balance rendering on Home (alice's WOW 19.79), NOT by waiting
  * on the bootstrap `/auth/extension` POST.
  *
@@ -19,12 +19,12 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  * extension')` ALWAYS times out. The prior version of this spec did
  * exactly that and timed out at 30s every run. For the balance signal we
  * instead lean on `/wallet/lws/balance`, which fires from the POPUP page
- * (via refreshBalances → fetchAllBalances) and IS capturable — never
+ * (via refreshBalances → fetchAllBalances) and IS capturable, never
  * offscreen.
  *
  * Preconditions:
  *   - extension built with VITE_SMIRK_BACKEND_URL=http://127.0.0.1:8080/api/v1
- *     and VITE_SMIRK_API_STYLE=namespaced (dist already is — do NOT rebuild).
+ *     and VITE_SMIRK_API_STYLE=namespaced (dist already is: do NOT rebuild).
  *   - seed env sourced:
  *       set -a && . <monorepo>/packages/smoke-tests/secrets/smoke-mnemonics.env && set +a
  *
@@ -44,7 +44,7 @@ const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
 
 // A real, checksum-valid mainnet Monero standard address (getmonero.org
 // donation address). It only needs to pass the client-side
-// `isValidXmrAddress` decode+checksum on the Address step — nothing is
+// `isValidXmrAddress` decode+checksum on the Address step; nothing is
 // ever sent to it.
 const XMR_RECIPIENT =
   '44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A';
@@ -75,7 +75,7 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
 
   // --- Onboarding: import alice (returning user → no PoW, no gate) -------
   // Returns once authenticated; auth is proven by alice's real backend
-  // balance (WOW 19.79) rendering on Home — never by an offscreen
+  // balance (WOW 19.79) rendering on Home, never by an offscreen
   // /auth/extension wait. Do NOT wait on that POST; it fires offscreen and
   // is invisible to Playwright (the bug the old version tripped on).
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
@@ -88,7 +88,7 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
   // Wait for a real (authenticated, non-401) XMR/LWS balance so the
   // Compose step has a non-zero balance to validate against. This
   // /wallet/lws/balance hit originates from the POPUP page (refreshBalances
-  // → fetchAllBalances), so — unlike the offscreen bootstrap-auth POST — it
+  // → fetchAllBalances), so (unlike the offscreen bootstrap-auth POST) it
   // IS visible to page.waitForResponse. If it's already warm/cached we
   // tolerate the timeout and fall back to reading the balance the Compose
   // screen renders below.
@@ -98,19 +98,19 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
       { timeout: 40_000 },
     )
     .catch(() => {
-      /* balance may already be cached/warm — tolerate and rely on the
+      /* balance may already be cached/warm: tolerate and rely on the
          balance-derived amount logic below. */
     });
 
   // --- Send wizard: Home → XMR → Address → Compose → Review -------------
   await page.getByTestId('home-action-send').click();
 
-  // Step 0 — pick XMR.
+  // Step 0: pick XMR.
   const xmrPick = page.getByTestId('send-asset-xmr');
   await expect(xmrPick).toBeVisible({ timeout: 15_000 });
   await xmrPick.click();
 
-  // Step 1 — recipient address.
+  // Step 1: recipient address.
   const addr = page.getByTestId('send-address-input');
   await expect(addr).toBeVisible();
   await addr.fill(XMR_RECIPIENT);
@@ -118,7 +118,7 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
   await expect(addrContinue).toBeEnabled();
   await addrContinue.click();
 
-  // Step 2 — compose amount. Read the balance the wizard shows and pick a
+  // Step 2: compose amount. Read the balance the wizard shows and pick a
   // small fraction of it so the amount is positive but below balance
   // (XMR has no fee picker; Continue is gated on amount ≤ balance).
   const amountInput = page.getByTestId('send-amount-input');
@@ -140,16 +140,16 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
 
   const composeContinue = page.getByTestId('send-compose-continue');
   // For XMR the button reads "Continue to review". It stays disabled until
-  // the amount validates against balance — assert it enabled so a stale/
+  // the amount validates against balance; assert it enabled so a stale/
   // zero balance produces a clear failure here rather than a silent stall.
   await expect(composeContinue).toContainText(/Continue to review/i);
   await expect(composeContinue).toBeEnabled({ timeout: 15_000 });
   await composeContinue.click();
 
-  // --- Step 3 — Review reached (read-only). Assert, do NOT submit. -------
+  // --- Step 3: Review reached (read-only). Assert, do NOT submit. -------
   // The presence of the Send button is the definitive "we're on Review"
   // signal; the ReviewRows echo back what we entered. All assertions here
-  // are pure UI (no offscreen network) — the meaningful outcome is the
+  // are pure UI (no offscreen network); the meaningful outcome is the
   // review screen rendering fee/amount/confirm affordances.
   const reviewSubmit = page.getByTestId('send-review-submit');
   await expect(reviewSubmit).toBeVisible({ timeout: 15_000 });

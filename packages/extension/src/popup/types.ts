@@ -1,7 +1,7 @@
 import type { BootstrapAuthResult, Balances, Prices } from '@smirk/core';
 
 /**
- * Live wallet session — auth bootstrap + fetched balances. Re-derived
+ * Live wallet session: auth bootstrap + fetched balances. Re-derived
  * whenever the user unlocks (or transitions empty → unlocked via
  * onboarding). Lives in module memory only; SW restart drops it and
  * the user re-enters their password. Per the audit posture: no

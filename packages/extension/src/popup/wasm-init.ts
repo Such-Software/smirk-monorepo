@@ -3,7 +3,7 @@ import { initialize as initSmirkWasm } from '@smirk/wasm';
 /**
  * Lazy WASM-init verifier: defers `initSmirkWasm()` until the first
  * spent-output verification call. We don't block the popup's first
- * paint on WASM (~150-200KB) — load on demand when balance fetch
+ * paint on WASM (~150-200KB): load on demand when balance fetch
  * actually needs it.
  *
  * The no-modules glue can't auto-resolve the .wasm URL when bundled into

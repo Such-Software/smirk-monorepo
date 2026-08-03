@@ -3,7 +3,7 @@ import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
 
 /**
- * Feed tab — the operator-curated Nostr feed, which is capability-gated: the tab
+ * Feed tab. The operator-curated Nostr feed, which is capability-gated: the tab
  * appears ONLY when the backend advertises `features.feed`. This locks that
  * gating (a feed-less backend must NOT show the tab) and, when a feed IS
  * advertised, that the Feed screen renders without erroring.

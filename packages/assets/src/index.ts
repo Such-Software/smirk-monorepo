@@ -1,9 +1,9 @@
 /**
- * `@smirk/assets` — registry of every chain Smirk supports.
+ * `@smirk/assets`: registry of every chain Smirk supports.
  *
  * Pure-data definitions: decimals, family classification, capability
  * flags, network params, confirmation requirements. Imports nothing
- * chain-specific — definitions are JSON-serializable and trivially
+ * chain-specific; definitions are JSON-serializable and trivially
  * testable.
  *
  * Crypto functions (validate, derive, sign) live in `@smirk/wasm`
@@ -12,7 +12,7 @@
  * code at the call site.
  *
  * Built-ins register at module load. Add a new asset later via
- * `registry.register(myAsset)` — no recompile needed.
+ * `registry.register(myAsset)`: no recompile needed.
  *
  * @example
  * ```ts
@@ -84,7 +84,7 @@ const builtInRegistry = new AssetRegistry();
  * Bootstrap order matters: `list()` returns assets in registration
  * order, and the wallet UI renders the asset list in that order.
  *
- * Current ordering reflects rough "user familiarity" — most-recognized
+ * Current ordering reflects rough "user familiarity": most-recognized
  * chains first, with the interactive Grin chain last so the UI can
  * visually separate or batch-treat the slatepack-paradigm row.
  */
@@ -100,7 +100,7 @@ for (const def of BUILT_INS) {
  */
 export const registry: AssetRegistry = builtInRegistry;
 
-/** Convenience helpers — most callers should use these. */
+/** Convenience helpers: most callers should use these. */
 
 export function getAsset(id: string) {
   return registry.get(id);

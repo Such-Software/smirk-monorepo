@@ -7,14 +7,14 @@
  * We accept both the `goblin:` and `nostr:` schemes. Parsing is pure + total:
  * every field is validated and decoded here, so the send-review UI gets a
  * structured, prefilled request it can render without re-parsing. A throw means
- * "not a pay-link we can honor" — the caller surfaces it, never guesses.
+ * "not a pay-link we can honor"; the caller surfaces it, never guesses.
  *
- *   - `amount`  — GRIN, decimal; also converted to nanogrin (1 GRIN = 1e9 nano).
- *   - `proof`   — a `grin1…` proof address; its PRESENCE turns on native Grin
+ *   - `amount`:   GRIN, decimal; also converted to nanogrin (1 GRIN = 1e9 nano).
+ *   - `proof`:    a `grin1…` proof address; its PRESENCE turns on native Grin
  *                 payment-proof mode (the recipient wants a signed payment proof).
- *   - `order`   — opaque `MM-<hex>` invoice id, echoed back in a payment-request tag.
- *   - `notify`  — a watcher npub the wallet gift-wraps the proof to on settlement.
- *   - `count`   — batch invoice count (≥1).
+ *   - `order`:    opaque `MM-<hex>` invoice id, echoed back in a payment-request tag.
+ *   - `notify`:   a watcher npub the wallet gift-wraps the proof to on settlement.
+ *   - `count`:    batch invoice count (≥1).
  */
 
 import { decode as nip19decode } from 'nostr-tools/nip19';
@@ -23,7 +23,7 @@ export interface GoblinPayRequest {
   scheme: 'goblin' | 'nostr';
   /** The recipient exactly as given (npub or nprofile). */
   recipient: string;
-  /** Decoded x-only pubkey hex — what the payment channel addresses. */
+  /** Decoded x-only pubkey hex: what the payment channel addresses. */
   recipientPubkeyHex: string;
   /** Relay hints from an nprofile, if any (empty for a bare npub). */
   recipientRelays: string[];
@@ -78,7 +78,7 @@ export function parseGoblinPayUri(uri: string): GoblinPayRequest {
   const scheme = schemeMatch[1]!.toLowerCase() as 'goblin' | 'nostr';
   const rest = schemeMatch[2]!;
 
-  // Split "<entity>?<query>" — the entity is opaque (bech32), so parse by hand
+  // Split "<entity>?<query>": the entity is opaque (bech32), so parse by hand
   // rather than via URL (which mangles a schemeless authority).
   const q = rest.indexOf('?');
   const entity = (q === -1 ? rest : rest.slice(0, q)).replace(/^\/\//, '');

@@ -1,4 +1,4 @@
-//! Payment proofs — the receiver's ed25519-signed receipt over `(amount,
+//! Payment proofs: the receiver's ed25519-signed receipt over `(amount,
 //! kernel_commitment, sender_address)`.
 //!
 //! Useful for dispute resolution, audit trails, escrow, and merchant flows.

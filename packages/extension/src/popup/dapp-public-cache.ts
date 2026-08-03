@@ -6,7 +6,7 @@ import { bytesToHex } from './format';
 /**
  * Project an `UnlockedWallet` into the public-material shape the
  * background SW reads when servicing dapp `getPublicKeys` /
- * `getAddresses` calls. Public material only — no private bytes
+ * `getAddresses` calls. Public material only: no private bytes
  * leave this function. Written into `chrome.storage.local` on every
  * unlock transition; cleared on lock / destroy.
  */
@@ -39,7 +39,7 @@ export function dappPublicCacheFor(
   //
   // autoLockMinutes is clamped to [0, AUTO_LOCK_MAX_MINUTES]. The
   // pre-2026-06-13 "Never" sentinel (negative / MAX_SAFE_INTEGER)
-  // was dropped — legacy stored values self-heal to the 24h cap.
+  // was dropped; legacy stored values self-heal to the 24h cap.
   const clampedAutoLock = clampAutoLockMinutes(autoLockMinutes);
   const sessionExpiresAtMs =
     clampedAutoLock === 0

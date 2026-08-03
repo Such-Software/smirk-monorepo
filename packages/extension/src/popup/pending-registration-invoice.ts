@@ -66,7 +66,7 @@ export async function clearPendingRegistrationInvoice(
 /** Force a fresh mint: drop this wallet's pending record unconditionally so the
  *  next onboarding attempt requests a new invoice instead of re-attaching a dead
  *  one. Distinct from {@link clearPendingRegistrationInvoice} only in
- *  intent — both are fingerprint-scoped. */
+ *  intent: both are fingerprint-scoped. */
 export async function resetPendingRegistrationInvoice(
   fingerprint: string,
 ): Promise<void> {

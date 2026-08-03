@@ -1,16 +1,16 @@
 /**
- * Multi-identity vault — "one wallet, many Nostr identities" (P2, the Goblin
+ * Multi-identity vault: "one wallet, many Nostr identities" (P2, the Goblin
  * interop plan). Holds a set of identities the user switches between:
- *   - `derived`  — seed-derived NIP-06 hardened accounts (recoverable from the
+ *   - `derived`:   seed-derived NIP-06 hardened accounts (recoverable from the
  *                  mnemonic; no secret stored here);
- *   - `burner`   — fresh RANDOM keys, deliberately seed-independent (a leaked seed
- *                  can't derive them — Goblin's compartmentalization);
- *   - `imported` — an `nsec` carried in from another wallet (e.g. Goblin).
+ *   - `burner`:    fresh RANDOM keys, deliberately seed-independent (a leaked seed
+ *                  can't derive them: Goblin's compartmentalization);
+ *   - `imported`:  an `nsec` carried in from another wallet (e.g. Goblin).
  *
- * Burner/imported SECRETS never live in this vault in the clear — the host
+ * Burner/imported SECRETS never live in this vault in the clear: the host
  * (wallet) injects an `encrypt`/`decrypt` bound to the unlocked keystore, and only
  * the ciphertext is persisted. Derived identities store no secret (re-derived on
- * demand). A `label` is a PRIVATE local tag — never published to any relay.
+ * demand). A `label` is a PRIVATE local tag: never published to any relay.
  *
  * This module is pure over the vault object; persistence + secret crypto are the
  * host's concern. `resolvePostingIdentity()` (notes.ts) is the seam that reads the
@@ -29,15 +29,15 @@ import {
 
 export type IdentitySource = 'derived' | 'burner' | 'imported';
 
-/** A stored identity descriptor. No secret material — see the module header. */
+/** A stored identity descriptor. No secret material: see the module header. */
 export interface StoredIdentity {
-  /** x-only pubkey hex — the stable id + what's shown before unlock. */
+  /** x-only pubkey hex: the stable id + what's shown before unlock. */
   pubkeyHex: string;
   npub: string;
   source: IdentitySource;
   /** For `derived`: the hardened NIP-06 account index. Absent otherwise. */
   account?: number;
-  /** PRIVATE local label — NEVER published (kind-0 or otherwise). */
+  /** PRIVATE local label: NEVER published (kind-0 or otherwise). */
   label?: string;
 }
 
@@ -118,7 +118,7 @@ export function resolveIdentity(
   return nostrIdentityFromPrivkey(decrypt(ct));
 }
 
-/** Resolve the ACTIVE identity — the one posting/DM/login should use. */
+/** Resolve the ACTIVE identity: the one posting/DM/login should use. */
 export function resolveActiveIdentity(
   vault: IdentityVault,
   mnemonic: string,
@@ -208,7 +208,7 @@ export function renameIdentity(
 /**
  * Remove an identity. Refuses to remove the last one. If it was active, activates
  * a survivor. Drops any stored secret. NOTE: a burner/imported key removed here is
- * gone unless separately backed up (nsec) — the caller must confirm.
+ * gone unless separately backed up (nsec): the caller must confirm.
  */
 export function removeIdentity(vault: IdentityVault, pubkeyHex: string): IdentityVault {
   if (vault.identities.length <= 1) throw new Error('cannot remove the last identity');
@@ -224,8 +224,8 @@ export function removeIdentity(vault: IdentityVault, pubkeyHex: string): Identit
 // Burner + imported keys are NOT seed-derived, so they vanish on reinstall unless
 // backed up. These build a single portable, encrypted blob of the WHOLE vault so a
 // user can carry every identity (roster + labels + burner/imported secrets) across
-// devices. The whole JSON is sealed under the host's mnemonic-derived key — same
-// trust boundary as the seed — so the file never leaks the PRIVATE labels/roster in
+// devices. The whole JSON is sealed under the host's mnemonic-derived key (same
+// trust boundary as the seed), so the file never leaks the PRIVATE labels/roster in
 // the clear, and a wrong-seed restore fails cleanly on the Poly1305 tag.
 
 const BACKUP_KIND = 'smirk-nostr-vault-backup';
@@ -259,7 +259,7 @@ export function buildVaultBackup(
   return JSON.stringify(env, null, 2);
 }
 
-/** Read the fingerprint stamped on a backup WITHOUT decrypting — lets a caller warn
+/** Read the fingerprint stamped on a backup WITHOUT decrypting: lets a caller warn
  *  "this backup is from a different wallet" before prompting for anything. Returns
  *  null if the text isn't a recognizable backup envelope. */
 export function peekVaultBackupFingerprint(text: string): string | null {
@@ -292,7 +292,7 @@ export function parseVaultBackup(text: string, open: DecryptSecret): IdentityVau
 }
 
 /** Merge an imported vault INTO a base (the reinstalled wallet's seeded vault).
- *  Dedupe by pubkeyHex (base wins on conflict — keeps the live secret + label),
+ *  Dedupe by pubkeyHex (base wins on conflict: keeps the live secret + label),
  *  append the incoming's new identities + their (already-sealed) secrets, and adopt
  *  the incoming `active` only if it survives the merge. Pure. */
 export function mergeVault(base: IdentityVault, incoming: IdentityVault): IdentityVault {

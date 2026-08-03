@@ -8,7 +8,7 @@
 //! converted to its X25519 counterpart. The same conversion produces an
 //! X25519 secret from the recipient's ed25519 spend key, used to decrypt.
 //!
-//! The encrypted bytes are not just the raw payload — they're a small
+//! The encrypted bytes are not just the raw payload; they're a small
 //! header + payload structure:
 //!
 //! ```text
@@ -18,7 +18,7 @@
 //! ```
 //!
 //! For now we always emit an **empty metadata block** (length 2, opt_flags
-//! 0 — the bytes `00 00 00 02 00 00`). This is compatible with `grin-wallet`'s
+//! 0: the bytes `00 00 00 02 00 00`). This is compatible with `grin-wallet`'s
 //! decoder, which sees zero senders + zero recipients and then the payload.
 //! Populating the metadata with sender/recipient info is a follow-up.
 
@@ -115,7 +115,7 @@ pub fn encrypt_to_recipient(
 /// Decrypt an age-encrypted payload using the recipient's 32-byte ed25519
 /// secret seed.
 ///
-/// Returns just the inner payload bytes — the metadata header is stripped.
+/// Returns just the inner payload bytes; the metadata header is stripped.
 pub fn decrypt_with_secret(
     encrypted_payload: &[u8],
     ed25519_secret: &[u8; 32],
@@ -191,7 +191,7 @@ mod tests {
     use super::*;
 
     /// Derive an (ed25519_secret_seed, ed25519_pubkey) keypair from arbitrary
-    /// 32 bytes — used to fabricate test recipients. We use ed25519-dalek's
+    /// 32 bytes: used to fabricate test recipients. We use ed25519-dalek's
     /// SigningKey for the conversion, which matches Grin's convention.
     fn keypair_from_seed(seed: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
         use ed25519_dalek::SigningKey;

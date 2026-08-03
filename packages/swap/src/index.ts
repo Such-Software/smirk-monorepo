@@ -1,5 +1,5 @@
 /**
- * `@smirk/swap` — swap orchestration layer.
+ * `@smirk/swap`: swap orchestration layer.
  *
  * The wallet UI talks to a `Swap`. This package owns the interface and
  * the aggregator-style implementations. `TrocadorSwap` is the one that

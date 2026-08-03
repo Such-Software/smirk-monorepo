@@ -23,7 +23,7 @@ export interface SocialLookupResponse {
 
 /**
  * One linked third-party social account (Telegram, Discord, and any
- * platform we add later — Matrix, Bluesky, etc.). Wire shape matches
+ * platform we add later: Matrix, Bluesky, etc.). Wire shape matches
  * the backend's `SocialAccountInfo`. `platform` is intentionally a
  * string, not a closed union, so the client picks up new platforms
  * automatically when the backend rolls them out.
@@ -143,11 +143,11 @@ export interface PublicTipInfo {
   /** Hex-encoded AES-GCM ciphertext of the spend key. Useless without
    *  the URL fragment key that lives only on the sharer/receiver side. */
   encrypted_key: string | null;
-  /** Per-tip sweep destination — populated for public tips. */
+  /** Per-tip sweep destination, populated for public tips. */
   tip_address: string | null;
   funding_confirmations: number;
   confirmations_required: number;
-  /** Convenience flag — true iff funding has enough confirmations
+  /** Convenience flag: true iff funding has enough confirmations
    *  AND the tip is still pending/claiming. */
   is_claimable: boolean;
 }
@@ -171,7 +171,7 @@ export interface SocialMethods {
    * enforces 3-32 chars, `[a-z0-9_]`, unique across users; rejects
    * with `VALIDATION_ERROR` on shape, `CONFLICT` on already-taken.
    *
-   * Auth required — caller must have already run `bootstrapAuth` so
+   * Auth required: caller must have already run `bootstrapAuth` so
    * the api client has a valid JWT.
    */
   setMySmirkUsername(
@@ -210,7 +210,7 @@ export interface SocialMethods {
    *   broadcasts on-chain and calls `attachSocialTipFunding(tip_id,
    *   txid)` to commit. Closes the v0.2.x atomicity gap where a
    *   failed POST after broadcast stranded funds + key forever.
-   * - **Single-call legacy** (v0.2.x): pass `funding_txid` — backend
+   * - **Single-call legacy** (v0.2.x): pass `funding_txid`; backend
    *   creates the tip in `pending_confirmation` / `pending` directly.
    *   Still works for backwards compatibility; new code should
    *   prefer the draft flow.
@@ -235,7 +235,7 @@ export interface SocialMethods {
   ): Promise<ApiResponse<CreateSocialTipResponse>>;
 
   /**
-   * Cancel a draft tip — sender abandons before broadcast (or after
+   * Cancel a draft tip: sender abandons before broadcast (or after
    * a failed broadcast). Only valid from the 'draft' state. Tips
    * with funding already attached use `clawbackSocialTip` instead
    * because the funds are on-chain.
@@ -270,7 +270,7 @@ export interface SocialMethods {
    * Moves tip from `claiming` to `claimed` (first-wins semantics).
    *
    * Response includes the **winning** `sweep_txid` recorded on the
-   * row — caller compares to their own broadcast txid to detect
+   * row; caller compares to their own broadcast txid to detect
    * race loss (public tips: multiple URL-holders can race; whoever
    * confirms first wins the chain race; loser sees the winner's
    * txid here). When `sweep_txid !== yourBroadcastTxid`, the
@@ -319,7 +319,7 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
       // No retry: the backend's set-username endpoint mutates state
       // and a second POST with a different value (the user typed
       // another name in the brief retry window) would silently
-      // overwrite the first. Single shot — caller surfaces the error
+      // overwrite the first. Single shot: caller surfaces the error
       // and lets the user retry explicitly.
       const cleanUsername = username.startsWith('@') ? username.slice(1) : username;
       return client.request<{ username: string }>('/users/me/username', {
@@ -329,7 +329,7 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async getMySmirkUsername() {
-      // Read-only — retryable on 5xx / network. Backend returns the
+      // Read-only, retryable on 5xx / network. Backend returns the
       // raw `Option<String>` as the JSON body: `"my-handle"` or `null`.
       return client.retryableRequest<string | null>('/users/me/username', {
         method: 'GET',
@@ -344,7 +344,7 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
       if (client.getWalletApiStyle() === 'namespaced') {
         return { data: { socials: [] } };
       }
-      // Read-only — retryable. Empty `socials` array is a valid
+      // Read-only, retryable. Empty `socials` array is a valid
       // response (user has no linked platforms).
       return client.retryableRequest<LinkedSocialsResponse>('/socials/me', {
         method: 'GET',
@@ -352,11 +352,11 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async createSocialTip(req) {
-      // POST — no retry. Could create duplicate tips for the legacy
+      // POST, no retry. Could create duplicate tips for the legacy
       // single-call path. For the v0.3 draft path, the create POST is
       // idempotent at the wallet level (the sender's tip private key
       // is regenerated per submit attempt, so a duplicate would have
-      // a different tip_address anyway), but we still don't retry —
+      // a different tip_address anyway), but we still don't retry:
       // a duplicate draft is wasted DB space, not a fund-loss risk.
       return client.request<CreateSocialTipResponse>('/tips/social', {
         method: 'POST',
@@ -365,7 +365,7 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async attachSocialTipFunding(tipId, fundingTxid) {
-      // Retryable: backend dedupes on (tip_id, funding_txid) — same
+      // Retryable: backend dedupes on (tip_id, funding_txid); same
       // pair is a no-op. Retrying a flaky network is exactly what we
       // want here because the sender already broadcast on-chain and
       // we MUST get the txid attached.
@@ -404,7 +404,7 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async claimSocialTip(tipId) {
-      // POST — no retry. Claim is not idempotent.
+      // POST, no retry. Claim is not idempotent.
       return client.request<{
         success: boolean;
         encrypted_key: string | null;
@@ -420,7 +420,7 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
     },
 
     async confirmTipSweep(tipId, sweepTxid) {
-      // Retry OK — confirm-sweep is idempotent (first-wins).
+      // Retry OK: confirm-sweep is idempotent (first-wins).
       return client.retryableRequest<{
         sweep_txid: string | null;
         status: string;

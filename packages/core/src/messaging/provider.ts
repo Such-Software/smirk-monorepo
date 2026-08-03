@@ -1,5 +1,5 @@
 /**
- * MessagingProvider seam — the messaging plane (identity + encrypted delivery),
+ * MessagingProvider seam: the messaging plane (identity + encrypted delivery),
  * parallel to the ChainProvider seam. Nostr is the default (and interop
  * standard), but the wallet talks to this interface, so another relay backend or
  * a different messaging protocol can be swapped in without touching callers.
@@ -22,7 +22,7 @@ export interface MessagingProvider {
 
   /**
    * Publish an ALREADY-BUILT gift-wrap (kind 1059) to `relays`. Unlike
-   * {@link sendDm} (which wraps plaintext), this takes a caller-constructed wrap —
+   * {@link sendDm} (which wraps plaintext), this takes a caller-constructed wrap,
    * used by the payment transport, whose kind-14 rumor carries a structured
    * payload, not DM text. Same 1059 rail, same relays. Resolves once at least one
    * relay accepts.
@@ -41,7 +41,7 @@ export interface MessagingProvider {
   }): DmSubscription;
 
   /**
-   * Fetch (poll) the raw, still-ENCRYPTED gift-wraps addressed to `pubkeyHex` —
+   * Fetch (poll) the raw, still-ENCRYPTED gift-wraps addressed to `pubkeyHex`:
    * a one-shot query (not a live subscription). The background poller uses this
    * without the private key (collecting wraps needs only the public npub); the
    * caller decrypts later. `sinceSec` bounds the window.
@@ -53,7 +53,7 @@ export interface MessagingProvider {
   }): Promise<GiftWrapEvent[]>;
 
   /**
-   * Read a recipient's DM-inbox relay list (NIP-17 / kind 10050) — the `relay`
+   * Read a recipient's DM-inbox relay list (NIP-17 / kind 10050): the `relay`
    * tags of their latest kind-10050 event. Used to route a DM to where the
    * recipient actually reads (cross-wallet delivery). Empty if they publish none.
    */
@@ -61,7 +61,7 @@ export interface MessagingProvider {
 
   /**
    * Publish our DM-inbox relay list (NIP-17 / kind 10050) so senders know where
-   * to deliver — advertising `inboxRelays` as our preferred inbox.
+   * to deliver, advertising `inboxRelays` as our preferred inbox.
    */
   publishDmRelayList(params: {
     identity: NostrIdentity;

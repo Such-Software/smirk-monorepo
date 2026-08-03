@@ -1,5 +1,5 @@
 /**
- * `DappBrowserController` — the platform-implementation seam for
+ * `DappBrowserController`: the platform-implementation seam for
  * embedded-browser support across desktop (Tauri) and mobile
  * (Capacitor / iOS / Android).
  *
@@ -20,7 +20,7 @@
  *    `newTab` has only ever been called once).
  *  - `subscribe` is the only reactive interface. Controllers MUST
  *    emit on every navigation state change of every tab AND on tab
- *    list / active-tab changes — UIs cannot derive state from
+ *    list / active-tab changes; UIs cannot derive state from
  *    one-shot reads alone.
  *  - Lifecycle: `open()` is idempotent. `close()` destroys all tabs
  *    and frees the underlying webview resources. Calling any other
@@ -58,7 +58,7 @@ export interface DappBrowserController {
 
   /**
    * Allocate the underlying webview resource and (if no tabs exist
-   * yet) open one tab to a default URL. Idempotent — calling on an
+   * yet) open one tab to a default URL. Idempotent: calling on an
    * already-open controller is a no-op.
    *
    * Returns once the webview is ready to receive `navigate` etc.
@@ -83,7 +83,7 @@ export interface DappBrowserController {
    *
    * MUST be called before `open()` for the scripts to apply to the
    * initial tab. Updates after `open()` apply only to tabs created
-   * subsequently — existing tabs are not reloaded.
+   * subsequently; existing tabs are not reloaded.
    *
    * Why an array: multiple init scripts compose cleanly (e.g. the
    * wallet API plus an instrumentation hook). Order is preserved.
@@ -107,7 +107,7 @@ export interface DappBrowserController {
    * Close a tab. If the closed tab was active, the controller picks
    * a replacement active tab (typically the most-recently-used). If
    * the last tab is closed, the controller MAY allocate a fresh
-   * `about:blank` tab or MAY enter a no-tab state — check the impl's
+   * `about:blank` tab or MAY enter a no-tab state; check the impl's
    * docs.
    */
   closeTab(id: TabId): Promise<void>;
@@ -131,7 +131,7 @@ export interface DappBrowserController {
   /**
    * Navigate the given tab (or the active tab if omitted) to `url`.
    * Resolves once the navigation has *committed* (the controller has
-   * told the webview to load the URL) — does NOT wait for the page
+   * told the webview to load the URL); it does NOT wait for the page
    * to finish loading. Watch the subscription stream for the
    * `isLoading: false` transition if you need load-complete.
    *
@@ -155,7 +155,7 @@ export interface DappBrowserController {
   goForward(tab?: TabId): Promise<void>;
 
   /**
-   * Reload the current page. Equivalent to the user hitting reload —
+   * Reload the current page. Equivalent to the user hitting reload;
    * does NOT bypass the HTTP cache (use `reload({ hard: true })`
    * once that overload is added, post-MVP, for cache-bypass).
    */
@@ -171,7 +171,7 @@ export interface DappBrowserController {
    * change.
    *
    * Implementations typically debounce / coalesce rapid calls (e.g.
-   * during a window resize) — repeated identical rects MUST be safe
+   * during a window resize); repeated identical rects MUST be safe
    * to send.
    */
   setFrameRect(rect: BrowserFrameRect): Promise<void>;
@@ -188,7 +188,7 @@ export interface DappBrowserController {
   // --------------------------------------------------------------------
 
   /**
-   * Subscribe to all state changes — tab list, active tab, per-tab
+   * Subscribe to all state changes: tab list, active tab, per-tab
    * navigation state. Listener is called immediately with the current
    * snapshot, then on every subsequent change.
    *

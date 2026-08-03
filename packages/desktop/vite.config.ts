@@ -57,7 +57,7 @@ function serveDir(prefix: string, fsRoot: string) {
   return (req: { url?: string }, res: { setHeader: (k: string, v: string) => void; statusCode: number; end: () => void }, next: () => void) => {
     if (!req.url || !req.url.startsWith(prefix)) return next();
     // Strip the prefix + any query string. `sub` never has a leading
-    // slash — `resolve(root, sub)` joins it as a sub-path.
+    // slash; `resolve(root, sub)` joins it as a sub-path.
     const sub = req.url.slice(prefix.length).split('?')[0]!;
     if (!sub) return next();
     const path = resolve(root, sub);

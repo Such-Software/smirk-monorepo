@@ -12,17 +12,17 @@ It's authoritative when something in another doc disagrees with it.
 
 Smirk ships to three surfaces over the v0.3 → v0.5 arc:
 
-- **Extension** (Chrome MV3 + Firefox MV3) — primary today
-- **Desktop** (Tauri bundled WebView) — v0.3.0, including the
+- **Extension** (Chrome MV3 + Firefox MV3): primary today
+- **Desktop** (Tauri bundled WebView): v0.3.0, including the
   embedded dapp browser: one `WebviewWindow` per browser tab on macOS
   and Windows, composited over the wallet UI; an in-process iframe
   controller on Linux, where WebKitGTK loses its compositor surface
   on parent-window resize
-- **Mobile** (Capacitor bundled WebView) — v0.4
+- **Mobile** (Capacitor bundled WebView): v0.4
 
 All three are essentially "Preact app in a WebView." They differ on
 storage backends, background process model, platform permissions
-(clipboard, biometrics, notifications), and WASM loading rules — but
+(clipboard, biometrics, notifications), and WASM loading rules, but
 the wallet logic, UI components, address derivation, signing, and API
 client are 100% shared. The monorepo is structured to make that
 sharing easy without entangling the shells.
@@ -37,26 +37,26 @@ deep OS integration ever forces this, it's a v0.5+ conversation.
 ```
 smirk-monorepo/
 ├── packages/
-│   ├── assets/        @smirk/assets       — pure-data asset registry
-│   ├── core/          @smirk/core         — wallet logic, API, keystore, HD
-│   ├── ui/            @smirk/ui           — Preact components (shell-agnostic)
-│   ├── wasm/          @smirk/wasm         — WASM facade over `crates/smirk-wasm`
-│   ├── swap/          @smirk/swap         — swap orchestration (Trocador aggregator today; ThorchainSwap is a stub; native signing planned)
-│   ├── dapp-api/      @such-software/smirk-dapp-api — the page-injected `window.smirk` protocol
-│   ├── dapp-browser/  @smirk/dapp-browser — `DappBrowserController` plus tab/navigation types
-│   ├── keymap/        @smirk/keymap       — cross-platform shortcut registry
-│   ├── extension/     @smirk/extension    — Chrome MV3 / Firefox MV3 shell
-│   ├── mobile/        @smirk/mobile       — (future) Capacitor shell
-│   ├── desktop/       @smirk/desktop      — Tauri shell
-│   ├── e2e/           @smirk/e2e          — Playwright end-to-end suite
-│   └── smoke-tests/   @smirk/smoke-tests  — two-wallet mainnet harness
+│   ├── assets/        @smirk/assets       : pure-data asset registry
+│   ├── core/          @smirk/core         : wallet logic, API, keystore, HD
+│   ├── ui/            @smirk/ui           : Preact components (shell-agnostic)
+│   ├── wasm/          @smirk/wasm         : WASM facade over `crates/smirk-wasm`
+│   ├── swap/          @smirk/swap         : swap orchestration (Trocador aggregator today; ThorchainSwap is a stub; native signing planned)
+│   ├── dapp-api/      @such-software/smirk-dapp-api : the page-injected `window.smirk` protocol
+│   ├── dapp-browser/  @smirk/dapp-browser : `DappBrowserController` plus tab/navigation types
+│   ├── keymap/        @smirk/keymap       : cross-platform shortcut registry
+│   ├── extension/     @smirk/extension    : Chrome MV3 / Firefox MV3 shell
+│   ├── mobile/        @smirk/mobile       : (future) Capacitor shell
+│   ├── desktop/       @smirk/desktop      : Tauri shell
+│   ├── e2e/           @smirk/e2e          : Playwright end-to-end suite
+│   └── smoke-tests/   @smirk/smoke-tests  : two-wallet mainnet harness
 └── crates/
-    ├── smirk-wasm/    — Rust→WASM crypto facade (XMR/WOW/BTC/LTC signing, Grin)
-    ├── grin-ext/      — Grin / Mimblewimble protocol, 6 wallet orchestrators, slate v4 (JSON+bin), cross-validated against grin-wallet
-    ├── btc-ext/       — BTC + LTC: BIP84/BIP86 derivation, PSBT build/sign/extract
-    ├── secp256k1zkp/  — vendored grin_secp256k1zkp v0.7.15 + wasm32 patches
-    ├── swap-core/     — Rust adaptor-sig primitives (v0.4+)
-    └── monero-oxide/  — vendored fork of monero-oxide (Monero + Wownero)
+    ├── smirk-wasm/    : Rust→WASM crypto facade (XMR/WOW/BTC/LTC signing, Grin)
+    ├── grin-ext/      : Grin / Mimblewimble protocol, 6 wallet orchestrators, slate v4 (JSON+bin), cross-validated against grin-wallet
+    ├── btc-ext/       : BTC + LTC: BIP84/BIP86 derivation, PSBT build/sign/extract
+    ├── secp256k1zkp/  : vendored grin_secp256k1zkp v0.7.15 + wasm32 patches
+    ├── swap-core/     : Rust adaptor-sig primitives (v0.4+)
+    └── monero-oxide/  : vendored fork of monero-oxide (Monero + Wownero)
 ```
 
 ### Dependency rule (one-way, top to bottom)
@@ -104,7 +104,7 @@ you're about to break this. Use the `PlatformStorage` interface.
 | Address validation, encoding | `@smirk/core/address` | Pure |
 | Asset registry (decimals, families, capabilities) | `@smirk/assets` | Pure data |
 | Preact components (Home, Send, Receive, Onboarding, Settings, etc.) | `@smirk/ui` | Render the same in any WebView |
-| Popup state machine, route persistence, wizard scaffold | `@smirk/core/state` | Generic — wired to a `PlatformStorage` |
+| Popup state machine, route persistence, wizard scaffold | `@smirk/core/state` | Generic: wired to a `PlatformStorage` |
 | Swap orchestration interface + TrocadorSwap | `@smirk/swap` | HTTP only |
 | Grin slate orchestration (S1/S2/S3 + I1/I2/I3) | `packages/extension/src/popup/grin-flows.ts` (extension-side; folds into `@smirk/core` when mobile lands) | Calls into `@smirk/wasm` `grin.*` for crypto |
 | Pending-outgoing tri-state reconciliation | `@smirk/core/state/pending-outgoing` | Generic across all five chains; per-family input identifiers |
@@ -130,7 +130,7 @@ you're about to break this. Use the `PlatformStorage` interface.
 
 **Problem:** wasm-bindgen 0.2.95+ with `--target web` emits
 `import * from "env"` placeholders at the top of the JS glue. The
-`env` module isn't real — it's a marker that a bundler (Webpack with
+`env` module isn't real: it's a marker that a bundler (Webpack with
 the wasm plugin, etc.) is expected to resolve. Vite/Rollup don't do
 that out of the box; the popup tries to instantiate WASM and gets
 `LinkError: Import #0 "env" "malloc": function import requires a
@@ -138,15 +138,15 @@ callable`.
 
 **Resolution options** (decreasing complexity, increasing portability):
 
-1. **`--target no-modules`** — single-file IIFE-style glue. No `import`
+1. **`--target no-modules`**: single-file IIFE-style glue. No `import`
    statements. Self-contained. Works in any WebView (extension,
    Capacitor, Tauri). Slight payload increase. **Recommended for
    v0.3.**
 2. **`--target web` + Vite plugin** (`vite-plugin-wasm` or hand-rolled
    `resolveId` for `env`). More moving parts.
-3. **`--target bundler` + Webpack** — works but requires us to ship a
+3. **`--target bundler` + Webpack**: works but requires us to ship a
    Webpack pipeline alongside Vite. No.
-4. **Pin to wasm-bindgen 0.2.92** — last version without the env
+4. **Pin to wasm-bindgen 0.2.92**: last version without the env
    placeholders. Works but tech-debts us into an old wasm-bindgen.
 
 The build script lives at `crates/smirk-wasm/build.sh`. Whoever
@@ -279,7 +279,7 @@ foregrounded for hours; need a real session-token store that:
 - Optionally biometric-gated to read
 
 Implementations:
-- Extension: in-memory only (popup re-auths on open — fast enough)
+- Extension: in-memory only (popup re-auths on open, fast enough)
 - Mobile: iOS Keychain / Android Keystore via Capacitor
 - Desktop: OS keychain (Tauri keychain plugin)
 
@@ -311,7 +311,7 @@ in-app dapp browser later. Will not switch to Electron.
 pre-injects `window.smirk` is *more* valuable for Smirk than for
 typical wallets, because Smirk publishes the dapps the wallet
 launches. ETH L1 may be added in v0.5+, which separately re-opens
-WalletConnect v2 — but that's WebSocket relay, not browser-bundled.
+WalletConnect v2, but that's WebSocket relay, not browser-bundled.
 
 **Why Tauri over Electron:**
 
@@ -323,7 +323,7 @@ WalletConnect v2 — but that's WebSocket relay, not browser-bundled.
 | Native Rust IPC | No (Node bridge) | Yes (`tauri::command`) |
 | Dapp browser pattern | Mature (`BrowserView`) | `WebviewWindow::new()` |
 
-The Rust-IPC win is structural — bypassing WASM for the crypto path
+The Rust-IPC win is structural: bypassing WASM for the crypto path
 on desktop is a v0.5+ optimization Electron forecloses. The
 bundle/memory wins are immediate.
 
@@ -331,9 +331,9 @@ bundle/memory wins are immediate.
 
 | Platform | Engine | Status |
 |---|---|---|
-| Windows | WebView2 (Chromium) | First-class — same engine as Edge |
-| macOS | WKWebView (WebKit) | First-class — Safari engine |
-| Linux | WebKitGTK | Weakest link — historical bugs in Web Crypto, WebGL, newer JS features |
+| Windows | WebView2 (Chromium) | First-class: same engine as Edge |
+| macOS | WKWebView (WebKit) | First-class: Safari engine |
+| Linux | WebKitGTK | Weakest link: historical bugs in Web Crypto, WebGL, newer JS features |
 
 WebKitGTK already costs the Linux build a separate browser path
 (`packages/desktop/src/main.ts` selects an iframe-backed controller
@@ -367,7 +367,7 @@ WebKitGTK with no workaround).
   be too aggressive for swap-round timing.
 - **Pop-out window as default on extension?** Chrome MV3 popup is
   capped at 600px. Mobile/desktop have no such cap. We could detect
-  small popup mode and auto-suggest popout. Punted — UX call.
+  small popup mode and auto-suggest popout. Punted: UX call.
 
 ---
 

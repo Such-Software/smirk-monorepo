@@ -11,7 +11,7 @@
  *
  * Side effects:
  *   - `api.setAccessToken(token)` on success.
- *   - No cache writes here — the caller decides what cache layer to
+ *   - No cache writes here: the caller decides what cache layer to
  *     populate (the popup already calls `writeBootstrapCache` and
  *     we don't want to step on that flow).
  *
@@ -47,7 +47,7 @@ function buildKeysList(
   wallet: UnlockedWallet,
 ): ReadonlyArray<{ asset: string; publicKey: string }> {
   // Mirrors `@smirk/core.buildKeysList` (which isn't exported). Same
-  // shape, same XMR/WOW spend-key convention — see the comment in
+  // shape, same XMR/WOW spend-key convention; see the comment in
   // wallet-flow.ts on why this exact ordering matters for restore.
   return [
     { asset: 'btc', publicKey: bytesToHex(wallet.keys.btc.publicKey) },
@@ -70,7 +70,7 @@ export async function bootstrapAuthInExtension(
    * Registration-gate credentials for a gated backend. Sent to `/auth/extension`
    * only when present. Under `registration_mode: "any"` pass AT MOST ONE. The
    * `pollAttempt` counter makes each pay-to-register retry a fresh job (fresh
-   * signature) — the payment poll increments it each iteration.
+   * signature); the payment poll increments it each iteration.
    */
   gate?: {
     inviteCode?: string;
@@ -107,7 +107,7 @@ export async function bootstrapAuthInExtension(
       await clearPendingRegistrationInvoice(wallet.fingerprint);
       return bootstrap;
     } catch (e) {
-      // A wallet already registered on THIS backend (its seed is known — e.g. it
+      // A wallet already registered on THIS backend (its seed is known, e.g. it
       // onboarded via the BTC path before npub-native existed) can't npub-register:
       // by design its npub links via the authenticated /auth/nostr/link flow, not
       // bootstrap. Fall back to BTC auth, which signs the existing account in.
@@ -124,7 +124,7 @@ export async function bootstrapAuthInExtension(
     }
   }
 
-  // ── BTC path (offscreen job) — legacy backends AND the npub→BTC fallback ──
+  // ── BTC path (offscreen job): legacy backends AND the npub→BTC fallback ──
   const timestamp = Math.floor(Date.now() / 1000);
   const message = `smirk-auth-${timestamp}`;
   const signature = signBitcoinMessage(message, wallet.keys.btc.privateKey);

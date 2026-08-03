@@ -100,7 +100,7 @@ export interface WalletUtxoMethods {
    * UTXOs across several owned addresses, each tagged with its owning address
    * and (client-re-attached) master path. `refs` carries both the address to
    * query and the master path; only the addresses are sent to the server, and
-   * every returned UTXO's `masterPath` is filled in locally from `refs` — the
+   * every returned UTXO's `masterPath` is filled in locally from `refs`: the
    * path is never taken from the server response (money gate G9).
    */
   getUtxosMulti(
@@ -128,7 +128,7 @@ export interface WalletUtxoMethods {
 
 // UTXO route paths per backend dialect. `flat` = legacy backend; `namespaced`
 // = smirk-backend-core. Note `fees`→`fee` (plural→singular) on the namespaced
-// side — not a clean prefix swap, hence the explicit table.
+// side, not a clean prefix swap, hence the explicit table.
 const UTXO_PATHS = {
   flat: {
     balance: '/wallet/balance',
@@ -151,7 +151,7 @@ const utxoPath = (client: ApiClient, key: keyof (typeof UTXO_PATHS)['flat']): st
 
 /**
  * Multi-address route table. Only the namespaced (smirk-backend-core) dialect
- * exposes these — they map to the FEATURE_UTXO_MULTI_ADDRESS routes and 404
+ * exposes these: they map to the FEATURE_UTXO_MULTI_ADDRESS routes and 404
  * when that backend flag is off. The flat/legacy backend has no equivalent,
  * so the client flag (ENABLE_BTCLTC_FRESH_ADDRS) should only be turned on
  * against a namespaced backend that advertises the feature.
@@ -261,7 +261,7 @@ export function createWalletUtxoMethods(client: ApiClient): WalletUtxoMethods {
     },
 
     async broadcastTx(asset, txHex) {
-      // POST — no retry. Broadcasting twice could double-spend in theory
+      // POST, no retry. Broadcasting twice could double-spend in theory
       // (the server dedupes by txid, but better safe).
       return client.request(utxoPath(client, 'broadcast'), {
         method: 'POST',
@@ -427,7 +427,7 @@ export function createWalletUtxoMethods(client: ApiClient): WalletUtxoMethods {
         for (const u of r.data!.utxos) {
           const masterPath = pathByAddress.get(u.address);
           // A UTXO whose address we didn't ask about (server returned something
-          // unexpected) has no client-side path — drop it rather than sign
+          // unexpected) has no client-side path: drop it rather than sign
           // against a guessed path. Money gate G9: no path, no spend.
           if (masterPath === undefined) continue;
           tagged.push({

@@ -1,6 +1,6 @@
 /**
  * Multi-identity vault (P2): derived + burner + imported identities, switch/rename/
- * remove, and correct active-identity resolution. Secret crypto is injected — the
+ * remove, and correct active-identity resolution. Secret crypto is injected: the
  * test uses a trivial reversible "cipher" (hex) to prove the store only ever holds
  * ciphertext for burner/imported keys and never for derived ones.
  */

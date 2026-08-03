@@ -46,7 +46,7 @@ function toHex(b: Uint8Array): string {
 // --- session-cache Uint8Array round-trip (the auto-unlock sign-in bug) --------
 
 /** Simulate chrome.storage.session, which serializes a Uint8Array into a plain
- *  numeric-keyed object — the exact mangling that broke restore. */
+ *  numeric-keyed object: the exact mangling that broke restore. */
 const throughStorage = (v: unknown): unknown => JSON.parse(JSON.stringify(v));
 
 function fakeKeys() {
@@ -90,7 +90,7 @@ test('derivedKeysUsable gates on real 32-byte BTC/LTC signing keys', () => {
 test('clampAutoLockMinutes: rejects negative values to the cap (legacy -1 = "Never" → 24h)', () => {
   // Pre-2026-06-13 v0.2.4 wrote -1 to mean "Never (until browser
   // closes)". After this fix that sentinel self-heals to the cap
-  // — no migration script needed.
+  // with no migration script needed.
   assert.equal(clampAutoLockMinutes(-1), AUTO_LOCK_MAX_MINUTES);
   assert.equal(clampAutoLockMinutes(-100), AUTO_LOCK_MAX_MINUTES);
 });
@@ -233,7 +233,7 @@ test('restoreUnlockedFromCache: returned wallet has NO mnemonic and NO seed', ()
 });
 
 test('restoreUnlockedFromCache: any future field that would carry the seed is omitted by construction', () => {
-  // Inspect the returned object's own keys — if the implementation
+  // Inspect the returned object's own keys: if the implementation
   // ever adds a `mnemonic` or `seed` property here, this test
   // fails. (Object.keys excludes prototype props.)
   const w = restoreUnlockedFromCache({

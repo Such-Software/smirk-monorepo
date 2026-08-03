@@ -1,15 +1,15 @@
 /**
- * MigrationWizard — the wallet-side UI for upgrading a v0.2 wallet to v0.3.
+ * MigrationWizard: the wallet-side UI for upgrading a v0.2 wallet to v0.3.
  *
  * Shown (instead of onboarding) when the popup detects a legacy `walletState`
- * with no v0.3 keystore yet. The heavy lifting — decrypt the legacy seed,
- * re-seal it under the v0.3 keystore, bootstrap auth, link the Nostr identity —
+ * with no v0.3 keystore yet. The heavy lifting (decrypt the legacy seed,
+ * re-seal it under the v0.3 keystore, bootstrap auth, link the Nostr identity)
  * is done by the platform shell via `onMigrate`; this component owns the
  * password prompt, the progress/error surface, and the "upgraded" screen
  * (including the own-backend privacy note).
  *
  * Voice: minimal + technical, a light smirk. Trust posture mirrors
- * ApprovalScreen — everything is inert text, no page input.
+ * ApprovalScreen: everything is inert text, no page input.
  */
 import { useState } from 'preact/hooks';
 import { Button } from './Button';
@@ -26,7 +26,7 @@ export interface MigrationWizardProps {
    *  actually happened to the legacy BTC/LTC funds, and is shown verbatim on the
    *  done screen. Returning nothing falls back to a claim-free message. */
   onMigrate: (password: string) => Promise<string | void>;
-  /** Finish — flip the shell to the unlocked wallet. */
+  /** Finish: flip the shell to the unlocked wallet. */
   onDone: () => void;
   /** Optional doge-PoW image shown during the bootstrap `onMigrate` runs. */
   dogeMiningImageUrl?: string;

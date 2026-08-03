@@ -3,7 +3,7 @@
  * `WalletHandlerDispatch` from `@such-software/smirk-dapp-api`.
  *
  * **Why a separate file from `background/index.ts`.** The SW root
- * file is the boot script — it has to stay short, predictable, and
+ * file is the boot script: it has to stay short, predictable, and
  * import-only-what-it-must (MV3 SW eviction means every wake-up
  * re-evaluates the file, so heavy top-level work multiplies startup
  * latency for unrelated events like alarms). The dapp dispatcher is
@@ -15,7 +15,7 @@
  * `sendResponse` from a Promise resolution. If we forgot the `true`,
  * chrome would close the channel synchronously and the page would
  * get `chrome.runtime.lastError: "The message port closed before a
- * response was received."` — exactly the bug we've seen before on
+ * response was received."`, exactly the bug we've seen before on
  * cross-context messaging.
  */
 
@@ -48,10 +48,10 @@ export function installDappBridge(): void {
   });
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!isWireRequest(message)) return; // not ours — let other listeners handle it
+    if (!isWireRequest(message)) return; // not ours: let other listeners handle it
     const origin = deriveOrigin(sender);
     if (!origin) {
-      // No verifiable origin (e.g., a popup-side message). Refuse —
+      // No verifiable origin (e.g., a popup-side message). Refuse:
       // permissions are origin-scoped and an unknown origin can't
       // satisfy any of them.
       sendResponse({
@@ -104,7 +104,7 @@ function isWireRequest(m: unknown): m is SmirkWireRequest {
 /** Derive `OriginContext` from `chrome.runtime.MessageSender`.
  *  Content-script-sourced messages carry `sender.tab.url` (full URL
  *  of the page running the content script) and optionally `sender.tab.favIconUrl`.
- *  The origin is the source-of-truth — siteName / favicon are
+ *  The origin is the source-of-truth; siteName / favicon are
  *  best-effort cosmetics for the approval UI. */
 function deriveOrigin(
   sender: chrome.runtime.MessageSender,

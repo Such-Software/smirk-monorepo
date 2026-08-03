@@ -1,11 +1,11 @@
 import type { AssetDefinition } from '../types';
 
 /**
- * Wownero — CryptoNote chain, RingCT type 8
+ * Wownero: CryptoNote chain, RingCT type 8
  * (`WowneroClsagBulletproofPlus`), 22-member rings.
  *
  * 11 atomic-units-per-WOW decimal places (1 WOW = 1e11 atomic).
- * The "11 not 12" gotcha catches wallets — gets a regression test
+ * The "11 not 12" gotcha catches wallets; gets a regression test
  * in the registry suite.
  *
  * Confirmations: 4. WOW's faster blocks (~2 min) and the wallet's

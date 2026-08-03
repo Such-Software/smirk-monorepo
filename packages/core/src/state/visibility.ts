@@ -1,25 +1,25 @@
 /**
- * Visibility helpers — single source of truth for "which assets does
+ * Visibility helpers: single source of truth for "which assets does
  * the user want surfaced right now."
  *
  * Show/Hide is a UI preference layered on top of the asset registry:
  * the wallet still owns keys for every registered asset, but the user
  * can hide assets they don't use so they don't clutter the Home tab,
- * the asset chooser, etc. — and so the backend doesn't burn round-
+ * the asset chooser, etc., and so the backend doesn't burn round-
  * trips fetching balances they'll never see.
  *
  * **Why a dedicated helper instead of inline filters.** Every surface
  * that lists assets needs to honour the user's choice the same way.
  * Inlining `state.ui.hiddenAssets.includes(asset.id)` everywhere
  * makes adding (or changing the semantics of) visibility a search-
- * and-replace job — and inevitably one site forgets, and the wallet
+ * and-replace job, and inevitably one site forgets, and the wallet
  * shows assets in TipMaker that it doesn't show on Home. This module
  * is the *only* place the visibility decision is computed.
  *
  * Companion to the capability flags on `@smirk/assets` (sendable,
  * receivable, dappBridge, socialTipping): visibility is a *user*
  * preference, capabilities are *asset* facts. A surface filters by
- * BOTH — "the user wants this visible AND the asset supports this
+ * BOTH: "the user wants this visible AND the asset supports this
  * feature." See `docs/MULTI_ASSET_ARCHITECTURE.md` for the long-form
  * rationale on capability-driven feature inclusion vs hardcoded
  * inclusion lists.
@@ -28,10 +28,10 @@
  * ```ts
  * import { visibleAssetIds, isAssetVisible } from '@smirk/core';
  *
- * // Filter a list of asset ids — Home tab, balance poller, ...
+ * // Filter a list of asset ids: Home tab, balance poller, ...
  * const visible = visibleAssetIds(sessionState, listAssets());
  *
- * // One-shot check — auto-unhide-on-claim flow
+ * // One-shot check: auto-unhide-on-claim flow
  * if (!isAssetVisible(sessionState, 'wow')) {
  *   await store.update(s => {
  *     s.ui.hiddenAssets = s.ui.hiddenAssets.filter(id => id !== 'wow');
@@ -50,13 +50,13 @@ import type { SessionState } from './session-state';
 
 /**
  * Project a list of asset definitions through the user's hidden-set.
- * Returns the visible subset in the same order the input was given —
+ * Returns the visible subset in the same order the input was given;
  * we don't impose our own ordering, that's the caller's UI concern.
  *
  * Assets the registry doesn't know about can't be "hidden" (the
  * stored hide-list is just a string array; we don't validate
  * registration). Stale ids in `hiddenAssets` from a previous build
- * are silently ignored — they'll be cleaned up the next time the
+ * are silently ignored; they'll be cleaned up the next time the
  * user toggles in Settings.
  */
 export function visibleAssetIds<T extends Pick<AssetDefinition, 'id'>>(

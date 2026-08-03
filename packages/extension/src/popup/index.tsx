@@ -1,5 +1,5 @@
 /**
- * Smirk popup — the action-popup wallet UI entry point.
+ * Smirk popup: the action-popup wallet UI entry point.
  *
  * The single largest file in the repo. It's structured top-down,
  * roughly: imports → module-level singletons → `App` component →
@@ -75,7 +75,7 @@ import {
   deriveAllKeys,
   type WalletApiStyle,
   // Capabilities: memoized session cache + opt-in feature gates. Everything is
-  // opt-in — a minimal backend may advertise no prices/tips/grin/feed, so we
+  // opt-in: a minimal backend may advertise no prices/tips/grin/feed, so we
   // gate reads + hide surfaces instead of firing calls that 404.
   loadCapabilities,
   initSmirkMessaging,
@@ -203,7 +203,7 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Drop Grin wizard slots whose `startedAt` is more than 7 days old.
- * Matches the backend relay's row TTL — once `grin_slatepacks.expires_at`
+ * Matches the backend relay's row TTL: once `grin_slatepacks.expires_at`
  * fires server-side, the local wizard has no counterparty left to
  * resume against. Runs once on popup mount; visual age indicators on
  * Inbox rows (1h "Stale", 24h "Expiring") are independent and never
@@ -238,7 +238,7 @@ function recentTipRecipients(
  * passed straight to InboxTab as `tips`.
  *
  * Backend `getReceivedTips` returns the full history (any status);
- * we filter to ones that are still actionable for the recipient —
+ * we filter to ones that are still actionable for the recipient:
  * status='pending' (funding-waiting OR ready-to-claim, distinguished
  * inside the component by `fundingConfirmations >= confirmationsRequired`).
  *
@@ -275,7 +275,7 @@ async function fetchTipInbox(): Promise<{
     // tips in `claiming` state. Public-tip `encrypted_key` is
     // sealed with the URL fragment, not the recipient's BTC
     // pubkey, so the Inbox `Claim` path (which uses recipient-key
-    // ECIES) can't decrypt it — every retry surfaces "Decryption
+    // ECIES) can't decrypt it; every retry surfaces "Decryption
     // failed: bad point: got length 33". Active claims (≤ 2 min
     // old by `claimed_at`, which `mark_tip_claiming` stamps on
     // every attempt including retries) stay visible so the user
@@ -284,7 +284,7 @@ async function fetchTipInbox(): Promise<{
     // dapp-claim attempt and the only recovery is re-pasting the
     // URL via `+ Paste tip link`. Targeted tips
     // (`is_public === false`) ignore this filter because their
-    // `encrypted_key` IS sealed with the recipient's BTC pubkey —
+    // `encrypted_key` IS sealed with the recipient's BTC pubkey;
     // the Inbox path handles them natively.
     .filter((t) => {
       if (!t.is_public) return true;
@@ -299,7 +299,7 @@ async function fetchTipInbox(): Promise<{
     // chain produces a first confirmation well inside an hour under
     // normal mempool conditions (BTC ~10m, LTC ~2.5m, XMR/WOW ~2m,
     // Grin ~1m), so a 24h zero-conf row is the sender's funding tx
-    // having died in the mempool — the tip will never be claimable.
+    // having died in the mempool; the tip will never be claimable.
     // We hide rather than rendering "0/X stale" rows to keep the
     // Inbox actionable.
     //
@@ -307,7 +307,7 @@ async function fetchTipInbox(): Promise<{
     // these from `pending` to a terminal `expired` status after
     // ~48h with no funding progress, so the server-of-truth matches
     // the client view. Until then, the row still exists in the
-    // database — hidden but not deleted.
+    // database, hidden but not deleted.
     .filter((t) => !isTipStale(t.funding_confirmations ?? 0, t.created_at))
     .map((t) => {
       // Render sender attribution only when the sender (a) opted in
@@ -343,7 +343,7 @@ function inboundToInboxItem(s: InboundSlatepack): InboxItem {
     // counterparty pubkey so respond/cancel can gift-wrap back to the sender.
     relayId: s.channel === 'nostr' ? encodeNostrRelayRef(s.slateId, s.counterpartyRef) : s.id,
     slateId: s.slateId,
-    // Display: a Nostr counterparty is a pubkey — show a short npub, not raw hex.
+    // Display: a Nostr counterparty is a pubkey; show a short npub, not raw hex.
     // (Routing to them lives in relayId, so this field is display-only.)
     counterpartyUserId:
       s.channel === 'nostr'
@@ -359,7 +359,7 @@ function inboundToInboxItem(s: InboundSlatepack): InboxItem {
 /**
  * Load the Grin inbox. With the unlocked `identity`, merge BOTH transports (the
  * backend relay + the Nostr gift-wrap inbox) via {@link readAllInbound} so a
- * payment sent over Nostr — including from a Goblin wallet — shows up here.
+ * payment sent over Nostr, including from a Goblin wallet, shows up here.
  * Without it (locked / no seed), fall back to the backend-only path so the inbox
  * still works pre-identity.
  */
@@ -369,7 +369,7 @@ async function fetchGrinInbox(
 ): Promise<{ items: InboxItem[]; loading: boolean; error: string | null }> {
   if (wallet) {
     try {
-      // The ACTIVE identity drives the inbox — a burner/imported identity sees
+      // The ACTIVE identity drives the inbox: a burner/imported identity sees
       // gift-wraps addressed to IT, not always account 0. Works on a warm resume
       // (no mnemonic) for the default identity via the cached account-0 key.
       const resolved = await getActiveNostrIdentityFromWallet(wallet);
@@ -412,7 +412,7 @@ async function fetchGrinInbox(
   return { items, loading: false, error: null };
 }
 
-// The client-only Grin pending overlay (v3 is non-custodial — no server output
+// The client-only Grin pending overlay (v3 is non-custodial: no server output
 // store) is the shared `grinOverlay` singleton exported from ./grin-flows, so
 // this popup, the tip/claim handler, and the inbox actions all mutate ONE
 // instance over the single chrome.storage slot. Imported above.
@@ -567,7 +567,7 @@ function nextStaleSince(balances: Balances | null, prior: number | null): number
 
 /** True when a refresh got NO fresh data: every asset we actually attempted came
  *  back with an `error` (i.e. the backend/chains were unreachable). Drives the
- *  freshness cue's "updates are failing" signal — a whole-cloth failure, not a
+ *  freshness cue's "updates are failing" signal: a whole-cloth failure, not a
  *  single flaky chain (one erroring asset among successes returns false, so a
  *  transient blip never trips the escalating warning). Assets skipped for
  *  visibility/derivation return zeroed with no error and are ignored here. */
@@ -592,7 +592,7 @@ function allAttemptedBalancesFailed(
 
 function App() {
   const [walletState, setWalletState] = useState<WalletState | null>(null);
-  // True when a legacy v0.2 walletState exists but no v0.3 keystore yet — the
+  // True when a legacy v0.2 walletState exists but no v0.3 keystore yet; the
   // MigrationWizard shows instead of onboarding. Resolved in refresh().
   const [needsMigration, setNeedsMigration] = useState(false);
   const [session, setSession] = useState<WalletSession | null>(null);
@@ -602,7 +602,7 @@ function App() {
   // walletState change.
   const walletStateRef = useRef<WalletState | null>(walletState);
   walletStateRef.current = walletState;
-  // Backend-derived identity that survives an import — Smirk handle
+  // Backend-derived identity that survives an import: Smirk handle
   // and/or linked third-party socials (Telegram, Discord, future
   // platforms). Set inside the onboarding `onComplete` callback after
   // bootstrap so the setup wizard can swap the reserve-handle prompt
@@ -634,7 +634,7 @@ function App() {
   const paymentInvoiceRef = useRef<string | null>(null);
   // The minted invoice's display details, cached so a PaymentStep REMOUNT (back
   // then forward) reuses the same invoice instead of minting a second one and
-  // stranding the first — a double-charge risk.
+  // stranding the first: a double-charge risk.
   const paymentInvoiceDetailsRef = useRef<
     { payTo: string; amount: string; currency: string } | null
   >(null);
@@ -674,7 +674,7 @@ function App() {
             return;
           }
         } catch {
-          /* network failure — retry below */
+          /* network failure: retry below */
         }
         if (attempt < 3) {
           await new Promise((res) => setTimeout(res, 800 * (attempt + 1)));
@@ -820,7 +820,7 @@ function App() {
       setSession((prev) => prev ?? ({ refreshing: true } as WalletSession));
     }
     try {
-      // Prices are unauthenticated — kick them off in parallel with
+      // Prices are unauthenticated; kick them off in parallel with
       // auth so they don't sit behind the bootstrap round-trip on
       // cold start. Saves ~500ms on every fresh popup.
       const pricesPromise = fetchPrices(api).catch(
@@ -896,7 +896,7 @@ function App() {
               grin: { confirmed: 0n, pending: 0n },
             };
             // Keep the last-known value (flagged stale) if this fetch errored and
-            // we already had a good number — don't flash the row to 0.
+            // we already had a good number; don't flash the row to 0.
             const prior = base[assetId];
             const next =
               balance.error && prior && !prior.error
@@ -959,7 +959,7 @@ function App() {
     }
   };
 
-  /** Refresh balances + prices — assumes a session already exists. */
+  /** Refresh balances + prices; assumes a session already exists. */
   const refreshBalances = async (wallet: UnlockedWallet, bootstrap: BootstrapAuthResult) => {
     setSession((prev) => (prev ? { ...prev, refreshing: true } : prev));
     try {
@@ -1012,7 +1012,7 @@ function App() {
       // Reconcile pendingOutgoing against the freshly-fetched balances
       // before storing. Two-pass:
       //   1. Per-asset, run reconcilePendingOutgoing against the new
-      //      verifiedSpentInputs set (XMR/WOW path — primary signal).
+      //      verifiedSpentInputs set (XMR/WOW path: primary signal).
       //   2. Drop any remaining entries past their per-asset age-out
       //      (timing backstop; covers BTC/LTC which don't surface
       //      verifiedSpentInputs and any chain where reconciliation
@@ -1082,7 +1082,7 @@ function App() {
   useEffect(() => {
     void refresh();
     // Kick off WASM load in the background. Grin inbox actions (sign /
-    // pay / finalize) all call into wasmGrin synchronously — if the
+    // pay / finalize) all call into wasmGrin synchronously; if the
     // user clicks an Inbox row before this resolves they get
     // "Cannot read properties of undefined (reading '__wbindgen_free')"
     // from the wasm-bindgen shim. Each Grin handler also awaits
@@ -1094,7 +1094,7 @@ function App() {
     // the relay drops a row, the local wizard slot it was tracking has
     // no counterparty left to talk to. Shorter visual indicators (1h
     // "Stale", 24h "Expiring") live on each Inbox row but don't drop
-    // anything — the user can still cancel/resume manually. Only the
+    // anything; the user can still cancel/resume manually. Only the
     // 7-day floor wipes local state, in lockstep with the backend.
     void sweepStaleGrinWizards();
   }, []);
@@ -1103,13 +1103,13 @@ function App() {
   // (grin-wallet/Grim-compatible derivation, via wasm) once the wallet
   // is unlocked AND wasm is up. The bootstrap registered
   // `wallet.addresses.grin` which comes from @smirk/core's
-  // `deriveGrinKey` — a custom SHA256 path that doesn't match what
+  // `deriveGrinKey`: a custom SHA256 path that doesn't match what
   // wasm's `slatepack_address_secret` produces, so senders encrypted
   // to one pubkey and receivers decrypted with another. Every
   // Smirk→Smirk encrypted Grin send was failing at age decrypt with
   // "No matching keys found" because of this mismatch.
   //
-  // Idempotent on the backend (UPSERT) — runs once per unlocked
+  // Idempotent on the backend (UPSERT): runs once per unlocked
   // session as a cheap fixup. Address compatibility for existing
   // pending slatepacks is not preserved; users with rows pending
   // against the LEGACY address must cancel + re-send.
@@ -1119,7 +1119,7 @@ function App() {
     // that means the register POST goes out unauthenticated, the
     // backend returns 401 with a non-JSON body, the client returns
     // "Unknown error", and the wallets row is never updated to the
-    // canonical address — leaving senders encrypting to the legacy
+    // canonical address, leaving senders encrypting to the legacy
     // address and receivers unable to decrypt. `session.bootstrap.userId`
     // is set BEFORE the token is attached to the request layer (the
     // global token), so gate on the live token instead of just the
@@ -1136,7 +1136,7 @@ function App() {
         // Register the CANONICAL bech32 slatepack address under the grin key so
         // username→address discovery AND the address→npub/user lookup
         // (find_user_by_grin_address WHERE public_key = addr) match. buildKeysList
-        // stored @smirk/core's custom-derived hex at auth — the wrong value — so
+        // stored @smirk/core's custom-derived hex at auth (the wrong value), so
         // re-register the canonical address here (idempotent UPSERT).
         //
         // v3 has no seed-only "recovery" step: POST /wallet/grin/scan already IS
@@ -1154,11 +1154,11 @@ function App() {
   }, [walletState, session?.bootstrap?.userId]);
 
   // Auto-link the PRIMARY (account-0) Nostr identity once the user has claimed a
-  // handle but hasn't linked yet — so `<handle>@<domain>` resolves and the verified
+  // handle but hasn't linked yet, so `<handle>@<domain>` resolves and the verified
   // kind-0 profile publishes without a manual Settings step. This is the "claiming a
   // name should just work on Nostr" path, and it also back-fills existing users who
   // claimed a handle before linking existed. Gated on a fresh unlock (the NIP-98 link
-  // must be signed with the seed) + auth; idempotent — a no-op once `nostrPubkey` is
+  // must be signed with the seed) + auth; idempotent: a no-op once `nostrPubkey` is
   // set. linkPrimaryNostrIdentity both links and publishes the profile.
   useEffect(() => {
     if (walletState?.kind !== 'unlocked' || !walletState.wallet.mnemonic) return;
@@ -1174,7 +1174,7 @@ function App() {
         if (declined[NOSTR_LINK_DECLINED_KEY]) return;
         setNostrLinkPrompt(me.data.username);
       } catch {
-        /* non-fatal — the user can always Link in Settings → Nostr identities */
+        /* non-fatal: the user can always Link in Settings → Nostr identities */
       }
     })();
   }, [walletState, session?.bootstrap?.userId]);
@@ -1204,7 +1204,7 @@ function App() {
     try {
       await linkPrimaryNostrIdentity(mnemonic);
     } catch {
-      /* non-fatal — Settings → Nostr identities still offers Link */
+      /* non-fatal: Settings → Nostr identities still offers Link */
     }
   };
   const declineNostrLink = () => {
@@ -1214,7 +1214,7 @@ function App() {
 
   // Apply persisted theme on boot and whenever it changes. Subscribing
   // here (not inside a deep child) means the theme swaps cleanly even
-  // when no tab is rendering — e.g. the Settings picker changes the
+  // when no tab is rendering: e.g. the Settings picker changes the
   // theme while Home is mounted, the picker doesn't have to know
   // about every other tab.
   useEffect(() => {
@@ -1225,7 +1225,7 @@ function App() {
     return store.subscribe((s) => apply(s.ui.theme ?? 'default'));
   }, []);
 
-  // Grin inbox poller — fetch pending slatepacks every 30 s while the
+  // Grin inbox poller: fetch pending slatepacks every 30 s while the
   // popup is open and the wallet is unlocked. The poll is gated on
   // wallet+session being ready so it never races initial auth.
   // Refresh fires immediately on first ready-state, then on the
@@ -1240,13 +1240,13 @@ function App() {
     ) {
       return undefined;
     }
-    // Backend's Grin endpoints key by user UUID — NOT the local seed
+    // Backend's Grin endpoints key by user UUID, NOT the local seed
     // fingerprint. bootstrap.userId is the only acceptable identifier.
     const userId = session.bootstrap.userId;
     let alive = true;
     const tick = async () => {
       setGrinInbox((s) => ({ ...s, loading: true }));
-      // Fetch Grin slatepacks + received tips in parallel — both go
+      // Fetch Grin slatepacks + received tips in parallel: both go
       // to the same Inbox surface so a single 30s tick refreshes
       // everything. Tip poll failure is silent (kept null in state
       // so InboxTab still renders Grin sections normally); slatepack
@@ -1254,7 +1254,7 @@ function App() {
       //
       // Grin slatepack relay is asset-specific: skip the round-trip
       // entirely when the user has hidden Grin. Tip poll is per-
-      // user (not per-asset) so it always runs — incoming tips for
+      // user (not per-asset) so it always runs: incoming tips for
       // any asset, hidden or not, need to surface in the Inbox so
       // the user can claim them.
       const sess = await store.load();
@@ -1339,7 +1339,7 @@ function App() {
     if (anyScanning) return undefined; // the 8s scan poll owns this window
 
     const handle = setInterval(() => {
-      // Don't poll a backgrounded popout — only refresh what the user can see.
+      // Don't poll a backgrounded popout; only refresh what the user can see.
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void refreshBalances(walletState.wallet, session.bootstrap);
     }, BACKGROUND_REFRESH_MS);
@@ -1515,7 +1515,7 @@ function App() {
             const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
             await writeSessionCache(wallet, minutes);
             // Reuse an invoice already minted this session (a PaymentStep remount
-            // must not mint a second one and strand the first — F8). The refs
+            // must not mint a second one and strand the first: F8). The refs
             // persist across the remount; on a full popup close the wizard isn't
             // shown again (keystore now exists) so bootstrap resumes instead.
             if (paymentInvoiceRef.current && paymentInvoiceDetailsRef.current) {
@@ -1525,7 +1525,7 @@ function App() {
             const inv = await api.createPaymentInvoice(btcPub);
             if (inv.error || !inv.data) {
               // Already registered on this backend (a re-import): no payment
-              // needed — the gate is bypassed server-side. Register directly.
+              // needed: the gate is bypassed server-side. Register directly.
               if (/already registered/i.test(inv.error ?? '')) {
                 const b = await bootstrapAuthInExtension(api, wallet);
                 await finishOnboardRegister(wallet, b);
@@ -1665,7 +1665,7 @@ function App() {
     // `session` is briefly an empty `{}` cast between the bootstrap kick-off
     // and the bootstrapAuth resolution (see `startSession`), so a truthiness
     // check on `session` alone is not enough. Guard on bootstrap.userId
-    // being present too — otherwise `refreshBalances` derefs
+    // being present too; otherwise `refreshBalances` derefs
     // `bootstrap.userId` inside `fetchAllBalances` and explodes with
     // "Cannot read properties of undefined (reading 'userId')".
     session?.bootstrap?.userId
@@ -1714,7 +1714,7 @@ function App() {
       tips: s.tips.filter((t) => t.tipId !== item.tipId),
     }));
     // Auto-unhide the asset if the user had hidden it. Claiming money
-    // is an explicit "I want to see this" signal — leaving the swept
+    // is an explicit "I want to see this" signal; leaving the swept
     // funds invisible because the user hid the asset weeks ago would
     // be confusing. They can re-hide from Settings if they prefer.
     await store.update((s) => {
@@ -1733,18 +1733,18 @@ function App() {
   };
 
   // Render a "Setting up wallet…" placeholder only while we have
-  // NOTHING to show — no balance snapshot, no live data. If a
+  // NOTHING to show: no balance snapshot, no live data. If a
   // snapshot is in `session.balances` (the typical case after the
   // first successful bootstrap), render the Home tab with stale
   // numbers + the refreshing-spinner header so users don't see the
-  // doge on every unlock — they only see it during a cold start.
+  // doge on every unlock; they only see it during a cold start.
   //
   // Bootstrap-dependent effects (tip inbox, etc.) already guard on
   // `session.bootstrap.userId` being non-empty (search for the
   // identical guard in this file). The snapshot path stamps
   // `userId: ''` as a placeholder for exactly that reason.
   if (!session?.balances) {
-    // A failed bootstrap must surface its error + a retry — NOT sit forever on the
+    // A failed bootstrap must surface its error + a retry, NOT sit forever on the
     // "Setting up wallet…" placeholder (which reads as an infinite hang).
     if (session?.error) {
       return (
@@ -1798,7 +1798,7 @@ function App() {
                   await onClaimTipHandler({
                     tipId,
                     assetId,
-                    // Fields below aren't read by the handler — supply
+                    // Fields below aren't read by the handler; supply
                     // benign defaults so the InboxTipItem cast holds.
                     amountAtomic: 0n,
                     senderDisplay: null,
@@ -1827,7 +1827,7 @@ function App() {
               onClaimTip={onClaimTipHandler}
             />
           ),
-          // Feed is opt-in — present only when the backend advertises an operator
+          // Feed is opt-in: present only when the backend advertises an operator
           // feed. BottomNav shows the tab off the same capability (globalThis flag).
           ...(capHasFeed(caps)
             ? { feed: <FeedRoute wallet={walletState.wallet} caps={caps} /> }
@@ -1850,7 +1850,7 @@ function App() {
                 // The JWT is per-backend; drop it + the caches + the session so
                 // the unlocked-shell effect re-bootstraps against the new backend.
                 api.setAccessToken(null);
-                // Capabilities are per-backend too — drop the memoized copy so
+                // Capabilities are per-backend too; drop the memoized copy so
                 // gating re-evaluates against the new instance's advertisement.
                 invalidateCapabilities();
                 await clearBootstrapCache();
@@ -1870,7 +1870,7 @@ function App() {
               }}
             />
           ),
-          // `browse` is desktop-only — the desktop shell installs
+          // `browse` is desktop-only: the desktop shell installs
           // `globalThis.__smirk_browser__` at boot and the
           // BottomNav renders the tab only when the controller is
           // present. Extension users never see it.
@@ -1927,7 +1927,7 @@ function HomeRouter({
     tipId: string,
     assetId: InboxTipItem['assetId'],
   ) => Promise<{ ok: boolean; error?: string }>;
-  /** Backend capabilities — gates the fiat headline (prices) + Tip action (tips).
+  /** Backend capabilities: gates the fiat headline (prices) + Tip action (tips).
    *  Null reads permissive (legacy/loading), so nothing hides by accident. */
   caps: BackendCapabilities | null;
 }) {
@@ -1963,7 +1963,7 @@ function HomeRouter({
         parseAmount={parseAmount}
         resolveBalance={(assetId) => {
           // Read confirmed balance from current session. Returns 0n if
-          // not yet loaded — Compose surfaces this as "Insufficient
+          // not yet loaded; Compose surfaces this as "Insufficient
           // funds" if user tries to send before balances arrive.
           const b = (session?.balances as Record<string, { confirmed: bigint } | undefined> | undefined)?.[assetId];
           return b?.confirmed ?? 0n;
@@ -1971,7 +1971,7 @@ function HomeRouter({
         resolveFeeRates={async (assetId) => {
           if (assetId !== 'btc' && assetId !== 'ltc') {
             // Other assets (XMR/WOW/Grin) don't use sat/vB tiers. Stub
-            // with nulls — Compose will surface "Loading…" / error.
+            // with nulls; Compose will surface "Loading…" / error.
             return { fast: null, normal: null, slow: null };
           }
           const r = await chainProviders.utxo(assetId).estimateFee();
@@ -1990,7 +1990,7 @@ function HomeRouter({
           // we replay the same greedy largest-first selection the send
           // handler will run, against the user's actual unspent
           // outputs. Falls back to 1-in if amount is unknown so the
-          // hint never goes stale waiting for selection — but the UI
+          // hint never goes stale waiting for selection, but the UI
           // gates display on amountAtomic > 0 anyway (see SendWizard
           // useEffect).
           if (assetId === 'grin') {
@@ -2034,7 +2034,7 @@ function HomeRouter({
           // same numbers the send-handler uses at sign time). Input
           // count: 1 by default (typical send out of our single-address
           // scheme), or the actual spendable-output count when sweep
-          // mode is requested — sweep TX size scales linearly with
+          // mode is requested: sweep TX size scales linearly with
           // input count, so a 1-input estimate would massively
           // under-report the fee for fragmented wallets.
           if (assetId !== 'xmr' && assetId !== 'wow') return null;
@@ -2066,7 +2066,7 @@ function HomeRouter({
           const result = await send(wallet, fields, excludeInputs);
           if (result.ok && result.amountAtomic !== undefined && result.feeAtomic !== undefined) {
             // Carry through the wizard's stashed `pendingContext` (if
-            // any) — set by non-vanilla entry points like the Trocador
+            // any), set by non-vanilla entry points like the Trocador
             // prefill so the resulting Activity row says "Swap deposit
             // → XMR (CDNQ…)" and taps back to the right surface.
             // Vanilla sends from the Home action bar default to
@@ -2152,14 +2152,14 @@ function HomeRouter({
           await ensureWasmInit();
           let recipientUserId: string | undefined;
           // If the recipient field is a Nostr npub OR a NIP-05 name
-          // (alice@goblin.st — federation), route the send over the gift-wrap
+          // (alice@goblin.st: federation), route the send over the gift-wrap
           // channel instead of a grin slatepack address. npub/hex resolve
           // synchronously; a NIP-05 name resolves against the domain's
           // /.well-known/nostr.json here at send time.
           let recipientPubkeyHex = recipientNpubToHex(toAddress);
           if (!recipientPubkeyHex && isNip05Name(toAddress)) {
             // Federation: resolve the name to a key via the TOFU-pinning resolver,
-            // and show the user WHICH key before paying — a name is only a lookup;
+            // and show the user WHICH key before paying: a name is only a lookup;
             // the key is what's authoritative ("follow the key, not the name").
             const res = await nip05Resolver.resolve(toAddress, { homeDomain: instanceHomeDomain() });
             if (!res.ok) {
@@ -2187,7 +2187,7 @@ function HomeRouter({
             recipientPubkeyHex = res.resolution.pubkeyHex;
           }
           // Bare grin1 slatepack address: look up its registered owner so we can
-          // route over a channel (finding #1 fix — address→npub/user bridge).
+          // route over a channel (finding #1 fix: address→npub/user bridge).
           // Prefer the owner's npub (Nostr, Goblin-interoperable); else their
           // backend user_id (same-instance relay); else fall through to manual.
           if (!recipientPubkeyHex && !isNip05Name(toAddress)) {
@@ -2364,7 +2364,7 @@ function HomeRouter({
     );
   }
 
-  // Asset detail drill-down — tapping a coin row on Home lands here.
+  // Asset detail drill-down: tapping a coin row on Home lands here.
   // Pulls per-chain history + sparkline; renders BalanceCard + sparkline
   // + action row + activity list. Per-chain shape adapters live in
   // `loadAssetHistory` below.
@@ -2486,18 +2486,18 @@ function HomeRouter({
             // the S2 back via the relay's `sign` endpoint so the
             // sender's queue advances and the row moves from
             // pending_to_sign → pending_to_finalize on their side.
-            // Manual-paste flows have no relayId — sender gets the S2
+            // Manual-paste flows have no relayId; sender gets the S2
             // from the clipboard copy instead.
             // Relay back the S2 so the sender's `pending_to_finalize`
             // counter ticks immediately. If this fails the receiver is
-            // still in a valid state — their S2 is in `signed.s2_armored`
+            // still in a valid state: their S2 is in `signed.s2_armored`
             // and they can hand it to the sender out-of-band. Surface
             // the failure so the UI can render a "copy manually" hint
             // instead of silently lying about success.
             // Deliver the S2 back over the item's transport: a Nostr gift-wrap
             // item (relayId packs the counterparty) is answered with a gift-wrap
             // response; a backend item hits the relay's `sign` endpoint. Either
-            // way the receiver is still valid on failure — their S2 is in
+            // way the receiver is still valid on failure: their S2 is in
             // `signed.s2_armored` for manual hand-off.
             let relayDeliveryFailed = false;
             if (relayId) {
@@ -2531,7 +2531,7 @@ function HomeRouter({
   // Inbox → "+ Paste a slatepack" universal entry point. Inspects the
   // sta field and routes to the appropriate downstream wizard so the
   // user never has to know if they have an S1 / S2 / I1 / I2 in their
-  // clipboard — they just paste once and we figure out what to do.
+  // clipboard; they just paste once and we figure out what to do.
   if (route.current === 'home/inbox/paste') {
     return (
       <InboxPasteRouter
@@ -2541,8 +2541,8 @@ function HomeRouter({
             return { ok: false, error: 'Wallet not unlocked' };
           }
           // A GoblinPay pay-link (goblin:/nostr:) isn't a slatepack. Parse it
-          // and pre-fill the Send flow — Grin to the recipient npub, amount from
-          // the link — so pasting a Magick Market checkout URI lands the user at
+          // and pre-fill the Send flow (Grin to the recipient npub, amount from
+          // the link) so pasting a Magick Market checkout URI lands the user at
           // send review. This is the "be a valid Magick Market buyer" path.
           const pasted = armored.trim();
           if (isGoblinPayUri(pasted)) {
@@ -2569,7 +2569,7 @@ function HomeRouter({
           }
           await ensureWasmInit();
           // Derive the slatepack secret upfront so we can decrypt
-          // encrypted slatepacks. Plain slatepacks work too — wasm's
+          // encrypted slatepacks. Plain slatepacks work too; wasm's
           // unpackWithSecret handles both modes.
           const secretKeyHex = wasmGrin.slatepackAddressSecret(wallet.mnemonic, 0);
           let inspected;
@@ -2648,7 +2648,7 @@ function HomeRouter({
 
   // Inbox → "+ Paste tip link" entry point for public tips shared as
   // smirk.cash/tip/<id>#<fragment> URLs. Public tips never appear in
-  // the received-tips list (they're not addressed to a username) — this
+  // the received-tips list (they're not addressed to a username); this
   // is the only path for the URL holder to claim. Parses the URL,
   // fetches via getPublicSocialTip (unauthenticated, server doesn't
   // know who is claiming), decrypts the spend key with the fragment,
@@ -2747,7 +2747,7 @@ function HomeRouter({
               overlay: grinOverlay,
             });
             // See `signGrinSlatepack` rationale at the receiver-S2
-            // handler above — receiver is in a valid state regardless,
+            // handler above: receiver is in a valid state regardless,
             // surface a flag for the UI to render a fallback hint.
             let relayDeliveryFailed = false;
             if (relayId) {
@@ -2782,7 +2782,7 @@ function HomeRouter({
 
   // `home/tip` opens the Tip composer with the default-asset heuristic.
   // `home/tip/<assetId>` arrives from a per-asset detail screen's Tip
-  // button and pre-selects that asset — much less surprising than
+  // button and pre-selects that asset, much less surprising than
   // landing on whatever asset has the biggest balance.
   if (route.current === 'home/tip' || route.current.startsWith('home/tip/')) {
     const tipPrefilledAsset = route.current.startsWith('home/tip/')
@@ -2844,7 +2844,7 @@ function HomeRouter({
             grinPending: grinOverlay,
             ...(grinRewindHash ? { grinRewindHash } : {}),
             // Record pendingOutgoing on tip broadcast so the sender's
-            // balance reflects the deduction immediately — matches the
+            // balance reflects the deduction immediately; matches the
             // SendWizard onSubmit flow above. Without this, XMR/WOW
             // tips look like nothing happened for ~1-2 minutes (until
             // LWS reflects the spend), which is what made the failed
@@ -2879,7 +2879,7 @@ function HomeRouter({
   // Default: Home root.
 
   // Sent public tips whose funding has buried past the per-asset
-  // confirmation gate — the URL we minted at create time is now safe
+  // confirmation gate: the URL we minted at create time is now safe
   // to actually distribute. v0.2.4 surfaced this as a banner on its
   // WalletView; v0.3 dropped it and senders had no cue. We poll on
   // mount + every 60s so a tip that matures while Home is open
@@ -2927,7 +2927,7 @@ function HomeRouter({
     // Headline shows total wealth on chain (confirmed + pending +
     // locked). We deliberately do NOT subtract pendingOutgoing here:
     // doing so would double-count for the ~2 min window between LWS
-    // picking up the spend and the entry aging out — legacy commit
+    // picking up the spend and the entry aging out: legacy commit
     // 839e001's exact failure mode. The user instead sees the in-flight
     // amount in the `sending` subtitle and on each asset row, while
     // the headline reflects the natural LWS state.
@@ -2936,7 +2936,7 @@ function HomeRouter({
   })();
   // Note: the headline used to surface aggregated pending/locked/
   // sending here as a fiat subtitle (`+ $X pending · 🔒 $Y locked`).
-  // Pulled in 2026-05-13 — the per-asset rows already show which
+  // Pulled in 2026-05-13: the per-asset rows already show which
   // coin has what state, which is strictly more useful than the
   // wallet-wide aggregate. Removing it also cures a popup scrollbar
   // that appeared when the subtitle pushed the headline card past
@@ -2945,7 +2945,7 @@ function HomeRouter({
 
   // Collect any asset that LWS reports as still catching up. These
   // are the wallets where the displayed balance is provisional until
-  // the scanner reaches the chain tip — and where "0" is "waiting"
+  // the scanner reaches the chain tip, and where "0" is "waiting"
   // rather than "broken". UX needs to make that distinction obvious.
   const scanningAssets = balances
     ? (Object.entries(balances) as Array<[string, { scanProgress?: { scannedHeight: number; blockchainHeight: number; fraction: number } }]>).filter(
@@ -2960,7 +2960,7 @@ function HomeRouter({
         denominationLabel: showFiat && balances ? 'USD' : '',
         hidden: balancesHidden,
         onToggleHidden: toggleBalancesHidden,
-        // onCycleDenomination intentionally omitted — UnifiedBalance
+        // onCycleDenomination intentionally omitted: UnifiedBalance
         // suppresses the pointer cursor when the handler is absent so
         // users don't get a misleading "click me" affordance. Wire
         // this when denomination cycling lands (tracked for v0.3.x).
@@ -2989,7 +2989,7 @@ function HomeRouter({
         // Defense-in-depth: for chains with a `locked` concept, once
         // LWS reflects the spend (locked > 0), the change output is
         // already on-chain & accounted for. Suppress all in-flight
-        // adjustments — subtracting on top would double-count, the
+        // adjustments: subtracting on top would double-count, the
         // legacy-839e001 failure mode.
         const lwsReflectsSpend =
           hasLockedConcept &&
@@ -3172,7 +3172,7 @@ function HomeRouter({
 // ----- Stubbed wallet ops (replaced incrementally) -----
 //
 // SECURITY GUARD: stubs accept anything that resembles a string and return
-// fake success — they exist purely so the popup can be exercised visually
+// fake success; they exist purely so the popup can be exercised visually
 // before the real wallet wiring lands. They MUST NOT ship in a release
 // build. The block below trips at module-load time when the build sets
 // `VITE_SMIRK_RELEASE=true` (only set by the release pipeline, never by
@@ -3189,7 +3189,7 @@ if (import.meta.env.VITE_SMIRK_RELEASE === 'true') {
 
 
 // ============================================================================
-// Approval mode — the SW opens us as a standalone popup window with URL
+// Approval mode: the SW opens us as a standalone popup window with URL
 // `popup.html#approval/<id>` when a dapp asks for user consent. We mount
 // `<ApprovalApp />` instead of the normal `<App />` in that case. Same
 // build, same wallet singletons, different UI.

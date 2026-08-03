@@ -6,7 +6,7 @@
  * backend's `ExtensionRegisterRequest` struct (in
  * `smirk-backend/src/api/auth.rs`) deserializes this; any
  * camel→snake mismatch or envelope-shape regression here lands as
- * an HTTP 422 in production — and we lived that on 2026-06-11 when
+ * an HTTP 422 in production, and we lived that on 2026-06-11 when
  * the SW bootstrap handler shipped a bare Solution instead of the
  * `{ challenge, solution }` envelope.
  *

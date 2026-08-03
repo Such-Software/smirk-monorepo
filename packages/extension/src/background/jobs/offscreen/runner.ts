@@ -1,5 +1,5 @@
 /**
- * Offscreen-document runner — receives `OffscreenJobRequest` messages
+ * Offscreen-document runner: receives `OffscreenJobRequest` messages
  * from the SW coordinator, dispatches to the matching handler in
  * `handlers/registry.ts`, and posts results back.
  *
@@ -8,15 +8,15 @@
  *
  *   1. **Survives SW eviction.** If the toolbar popup closes mid-
  *      job the SW's port disconnects and the SW becomes evictable.
- *      The offscreen document is a regular Chrome render process —
+ *      The offscreen document is a regular Chrome render process:
  *      it keeps running until the SW explicitly closes it.
  *   2. **Access to Web Crypto + Workers.** `crypto.subtle` is
  *      available inside the SW too, but `altcha-lib`'s solver
- *      sometimes wants Workers (and future handlers — Grin
- *      finalize, etc. — definitely will). The offscreen doc gets
+ *      sometimes wants Workers (and future handlers, e.g. Grin
+ *      finalize, definitely will). The offscreen doc gets
  *      both.
  *
- * The runner is intentionally chatty about logging — it's the one
+ * The runner is intentionally chatty about logging: it's the one
  * piece of the system the user can't see, so console output to its
  * own DevTools is the only way to debug a stuck solve.
  */
@@ -36,7 +36,7 @@ import type {
 // The offscreen document is a SEPARATE JS context with its own `@smirk/core`
 // `api` singleton, so it must be pointed at the configured backend exactly like
 // the SW (background/index.ts) and the popup (popup/index.tsx). Without this,
-// bootstrap-auth — which runs HERE — registers/authenticates against the
+// bootstrap-auth, which runs HERE, registers/authenticates against the
 // production default (backend.smirk.cash) regardless of VITE_SMIRK_BACKEND_URL,
 // which silently breaks every self-hosted / non-production deployment (the token
 // it returns is then rejected by the actual configured backend). It happens to
@@ -111,7 +111,7 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
       });
     });
 
-  // Don't return true — we never use sendResponse here, only the
+  // Don't return true: we never use sendResponse here, only the
   // unsolicited messages above.
   return false;
 });

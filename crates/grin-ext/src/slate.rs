@@ -1,4 +1,4 @@
-//! Grin Slate v4 wire format — JSON parsing + serialization.
+//! Grin Slate v4 wire format: JSON parsing + serialization.
 //!
 //! Reference: `grin-wallet/libwallet/src/slate_versions/v4.rs`. Field names
 //! and types match the upstream JSON format exactly so a slate produced by
@@ -27,7 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Top-level Slate v4. JSON wire format matches `SlateV4` upstream exactly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlateV4 {
-    /// Versioning info — encoded as `"MAJOR:MINOR"` in JSON.
+    /// Versioning info, encoded as `"MAJOR:MINOR"` in JSON.
     #[serde(with = "version_compat_serde")]
     pub ver: VersionCompatInfoV4,
 
@@ -35,7 +35,7 @@ pub struct SlateV4 {
     /// canonical 36-char UUID string in JSON.
     pub id: String,
 
-    /// Slate state — `"S1"`/`"S2"`/`"S3"`/`"I1"`/`"I2"`/`"I3"`/`"NA"`.
+    /// Slate state: `"S1"`/`"S2"`/`"S3"`/`"I1"`/`"I2"`/`"I3"`/`"NA"`.
     pub sta: SlateStateV4,
 
     /// Offset (blinding factor), modified by each participant inserting
@@ -65,12 +65,12 @@ pub struct SlateV4 {
     #[serde(skip_serializing_if = "u8_is_zero")]
     pub feat: u8,
 
-    /// TTL — block height at which wallets should refuse to process.
+    /// TTL: block height at which wallets should refuse to process.
     #[serde(with = "string_or_u64", default)]
     #[serde(skip_serializing_if = "u64_is_zero")]
     pub ttl: u64,
 
-    /// Participant data — public blinding factor + nonce + optional partial
+    /// Participant data: public blinding factor + nonce + optional partial
     /// signature for each participant in the transaction.
     pub sigs: Vec<ParticipantDataV4>,
 
@@ -150,7 +150,7 @@ pub struct CommitsV4 {
     #[serde(with = "hex_serde_33")]
     pub c: [u8; 33],
 
-    /// Optional rangeproof — opaque ~676 bytes for BP+. Omitted on inputs;
+    /// Optional rangeproof: opaque ~676 bytes for BP+. Omitted on inputs;
     /// present on outputs once the proof is computed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(with = "option_hex_serde_vec")]

@@ -17,7 +17,7 @@ const THEME_CLASS_PREFIX = 'smirk-theme-';
  * the theme's optional `css` payload, and tags `<html>` with a
  * `smirk-theme-<id>` class so theme-specific CSS selectors can target.
  *
- * Idempotent — calling repeatedly with the same theme is a no-op
+ * Idempotent: calling repeatedly with the same theme is a no-op
  * beyond the DOM writes. Calling with a different theme cleanly
  * replaces the previous one.
  *

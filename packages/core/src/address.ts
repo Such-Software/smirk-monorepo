@@ -1,10 +1,10 @@
 /**
  * Address derivation and validation for all supported chains.
  *
- * - **BTC/LTC** — P2WPKH (bech32, `bc1q…` / `ltc1q…`).
- * - **XMR/WOW** — Cryptonote standard address (prefix + spend + view +
+ * - **BTC/LTC**: P2WPKH (bech32, `bc1q…` / `ltc1q…`).
+ * - **XMR/WOW**: Cryptonote standard address (prefix + spend + view +
  *   4-byte Keccak checksum, encoded with Monero base58).
- * - **Grin** — slatepack address (ed25519 pubkey, bech32-encoded with
+ * - **Grin**: slatepack address (ed25519 pubkey, bech32-encoded with
  *   the `grin` HRP). Not an on-chain address; used for slate
  *   encryption and Tor-onion derivation.
  *
@@ -292,7 +292,7 @@ function getEncodedBlockSize(blockSize: number): number {
 
 /**
  * Grin slatepack address from a 32-byte ed25519 public key.
- * Format: `grin1…` (bech32 — Grin uses standard bech32, NOT bech32m).
+ * Format: `grin1…` (bech32: Grin uses standard bech32, NOT bech32m).
  *
  * Slatepack addresses are not on-chain (Mimblewimble has no addresses);
  * they're used for slate encryption during interactive tx building and
@@ -361,7 +361,7 @@ export function isValidWowAddress(address: string): boolean {
 }
 
 /**
- * True iff `address` is a valid `grin1…` slatepack address — bech32
+ * True iff `address` is a valid `grin1…` slatepack address: bech32
  * (NOT bech32m), 32-byte ed25519 public-key payload.
  */
 export function isValidGrinSlatepackAddress(address: string): boolean {

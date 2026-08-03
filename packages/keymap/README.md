@@ -31,7 +31,7 @@ first for context.
 ## Conventions
 
 - **Mac uses Cmd, Win / Linux use Ctrl.** They are not shared
-  bindings — each platform gets its own.
+  bindings: each platform gets its own.
 - **Mobile platforms have no keyboard bindings** in the default
   keymap. Mobile equivalents are gestures or in-app buttons, declared
   by the mobile-platform glue.

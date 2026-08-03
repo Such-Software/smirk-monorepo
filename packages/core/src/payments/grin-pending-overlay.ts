@@ -1,5 +1,5 @@
 /**
- * GrinPendingOverlay — the MINIMAL client-only bridge between broadcasting a
+ * GrinPendingOverlay: the MINIMAL client-only bridge between broadcasting a
  * Grin tx and the next `/wallet/grin/scan` that reflects it.
  *
  * Grin has no custodial output store: balance + spendable UTXOs come from
@@ -8,21 +8,21 @@
  * need a tiny local overlay to:
  *
  *   1. EXCLUDE just-spent inputs from selection (so a second send can't pick a
- *      UTXO whose spend is in-flight — a double-spend / "input already spent"
+ *      UTXO whose spend is in-flight: a double-spend / "input already spent"
  *      reject), and
  *   2. SHOW unconfirmed change / incoming outputs as `pending` until scan
  *      confirms them.
  *
- * It is NOT an output store and NOT authoritative balance/spent bookkeeping —
+ * It is NOT an output store and NOT authoritative balance/spent bookkeeping:
  * every value is re-derived from scan; the overlay only carries the
  * confirmation-gap delta. Entries clear SCAN-DRIVEN (proof the spend confirmed),
  * with a 7-day age-out backstop mirroring the relay TTL so a stuck/cancelled tx
  * can never wedge input selection.
  *
- * It also owns `nextChildIndex` — the monotonic BIP32 change/receive counter.
+ * It also owns `nextChildIndex`: the monotonic BIP32 change/receive counter.
  * With the server output store gone there is no `next_child_index` field; the
  * client MUST own it. Reusing an index re-derives an IDENTICAL commitment, which
- * makes the second output unspendable and silently loses funds — so the counter
+ * makes the second output unspendable and silently loses funds, so the counter
  * is money-critical and lives here alongside the pending entries it protects.
  *
  * Pure over an injected {@link GrinPendingStore} (no `chrome.*` import) so
@@ -32,11 +32,11 @@
 
 /** One in-flight tx, keyed by its broadcast slateId. */
 export interface GrinPendingEntry {
-  /** Input commitments this tx consumes — EXCLUDE from selection until mined. */
+  /** Input commitments this tx consumes: EXCLUDE from selection until mined. */
   spentCommits: string[];
-  /** Unconfirmed change we produced (send side) — shown as pending until scanned. */
+  /** Unconfirmed change we produced (send side): shown as pending until scanned. */
   change?: { commit: string; value: number };
-  /** Our new output (receive side) — shown as pending until scanned. */
+  /** Our new output (receive side): shown as pending until scanned. */
   incoming?: { commit: string; value: number };
   /**
    * True once the tx was actually broadcast (send flow: {@link processGrinS2}).
@@ -45,7 +45,7 @@ export interface GrinPendingEntry {
    * genuinely spent in-flight and must NOT be freed by a cancel (double-spend).
    */
   broadcast?: boolean;
-  /** Unix seconds — for the age-out backstop. */
+  /** Unix seconds: for the age-out backstop. */
   broadcastAt: number;
 }
 
@@ -78,7 +78,7 @@ export interface CommitLike {
 
 export const EMPTY_GRIN_PENDING: GrinPending = { entries: {}, nextChildIndex: 0 };
 
-/** 7 days in seconds — mirrors the backend relay TTL. */
+/** 7 days in seconds: mirrors the backend relay TTL. */
 export const GRIN_PENDING_TTL_SECS = 7 * 24 * 60 * 60;
 
 function clone(p: GrinPending): GrinPending {
@@ -120,7 +120,7 @@ export function addPendingEntry(
   return next;
 }
 
-/** Union of every entry's spent input commitments — the selection exclude set. */
+/** Union of every entry's spent input commitments: the selection exclude set. */
 export function selectablePendingSpentSet(p: GrinPending): Set<string> {
   const set = new Set<string>();
   for (const e of Object.values(p.entries)) {
@@ -133,7 +133,7 @@ export function selectablePendingSpentSet(p: GrinPending): Set<string> {
  * Sum of unconfirmed change + incoming values whose commit is NOT yet present in
  * the scan output set. Feeds `AssetBalance.pending`. Once a commit appears in
  * scan it's counted by the confirmed/locked balance instead, so it drops out
- * here — no double counting.
+ * here: no double counting.
  */
 export function pendingChangeValue(p: GrinPending, scanOutputs: readonly CommitLike[]): number {
   const scanned = new Set(scanOutputs.map((o) => o.commit));
@@ -220,11 +220,11 @@ export class GrinPendingOverlay {
    * two concurrent mint flows read the SAME index → duplicate commitment → fund
    * loss) and also keeps a concurrent index bump from clobbering an entry write
    * (or vice-versa). Read-only helpers (`load`, `selectablePendingSpent`,
-   * `pendingChangeValue`, `nextChildIndex`) don't need it — `load` clones.
+   * `pendingChangeValue`, `nextChildIndex`) don't need it: `load` clones.
    *
    * The lock is keyed on the store's stable {@link GrinPendingStore.key} and
    * lives in {@link GLOBAL_OVERLAY_LOCKS}, so serialization holds ACROSS overlay
-   * instances over the same storage slot — even if a code path constructs its own
+   * instances over the same storage slot, even if a code path constructs its own
    * overlay instead of sharing the singleton. Only when the store reports no key
    * (a unique in-memory store) does it fall back to this per-instance chain.
    */
@@ -233,7 +233,7 @@ export class GrinPendingOverlay {
   private enqueue<T>(op: () => Promise<T>): Promise<T> {
     const key = this.store.key;
     // Chain after whatever is currently queued for this storage key (across all
-    // instances) — or, keyless, after this instance's own tail. Run `op` whether
+    // instances); or, keyless, after this instance's own tail. Run `op` whether
     // the predecessor settled or rejected, so one failed op never wedges the
     // queue.
     const prev =
@@ -276,9 +276,9 @@ export class GrinPendingOverlay {
   }
 
   /**
-   * Drop a single PRE-BROADCAST entry (explicit user cancel — its reserved inputs
+   * Drop a single PRE-BROADCAST entry (explicit user cancel: its reserved inputs
    * become selectable again). Fail-safe: an entry flagged `broadcast` is NEVER
-   * removed here — its inputs are genuinely spent in-flight and freeing them would
+   * removed here: its inputs are genuinely spent in-flight and freeing them would
    * let a later send re-select them and build a double-spend. A broadcast entry
    * only ever retires scan-driven (reconcile) or via the 7-day backstop.
    */
@@ -319,12 +319,12 @@ export class GrinPendingOverlay {
 
   /**
    * ATOMICALLY reserve the next child index: read the current counter, persist
-   * counter+1, and return the reserved value — all inside the serialization mutex
+   * counter+1, and return the reserved value, all inside the serialization mutex
    * so two concurrent mint flows can never be handed the same index. This is the
    * money-critical allocation primitive: every flow that mints a new output MUST
    * derive its path from a value returned here (not from a read-now / bump-later
    * pair, which races). A reserved index that ends up unused (e.g. a send that
-   * produced no change, or a build that failed) is simply skipped — harmless,
+   * produced no change, or a build that failed) is simply skipped: harmless,
    * since the counter only ever moves forward and never re-hands a value.
    */
   reserveNextChildIndex(): Promise<number> {
@@ -355,12 +355,12 @@ export class GrinPendingOverlay {
 }
 
 /**
- * In-memory store — the test/default adapter.
+ * In-memory store: the test/default adapter.
  *
  * Pass `key` to opt this store into the process-global per-key serialization
  * lock (see {@link GrinPendingStore.key}). Two overlays built over the SAME
  * store object already share state; giving them the SAME key makes their
- * load-modify-save serialize across instances too — which is what the
+ * load-modify-save serialize across instances too, which is what the
  * multi-instance interleaving test exercises. Omit `key` (the default) for
  * ordinary single-overlay tests so each store stays isolated.
  */

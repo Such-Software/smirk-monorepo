@@ -123,7 +123,7 @@ export function AssetDetailRoute({
               return [] as AssetDetailTxRow[];
             })
           : Promise.resolve([] as AssetDetailTxRow[]),
-        // Sparkline only for a priced asset — skip the request (and its 404) for an
+        // Sparkline only for a priced asset: skip the request (and its 404) for an
         // asset the feed carries no quote for (e.g. WOW) or a no-prices backend.
         capAllowsPrices(peekCapabilities()) &&
         (session?.prices as Record<string, number | null> | null | undefined)?.[assetId] != null
@@ -175,7 +175,7 @@ export function AssetDetailRoute({
         : {})}
       {...(sparkline ? { sparkline } : {})}
       // Prepend in-flight outgoing rows so the user sees their just-
-      // broadcast tx immediately — Home's `↑ X sending` subline and
+      // broadcast tx immediately; Home's `↑ X sending` subline and
       // this Activity row come from the same `pendingOutgoing` source.
       history={[...pendingRows, ...history]}
       loading={loading}
@@ -184,7 +184,7 @@ export function AssetDetailRoute({
       onReceive={onReceive}
       onTip={onTip}
       onOpenExplorer={(row) => {
-        // Tip rows are tracked by tip_id, not chain-level — no
+        // Tip rows are tracked by tip_id, not chain-level; no
         // explorer URL applies. Skip silently for those.
         if (row.kind === 'tip-sent' || row.kind === 'tip-received') return;
         // Pending-outgoing rows route by context: swap-deposit jumps
@@ -277,7 +277,7 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
     }
   }
 
-  // Orphan local backups — backend has no row, user can still
+  // Orphan local backups: backend has no row, user can still
   // recover (Sent Tips screen surfaces these via the asset-detail
   // tip-sent variant tagged hasLocalBackup).
   if (sentResp.data?.tips) {
@@ -304,7 +304,7 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
       // Mirror the InboxTab stale filter: abandoned 0-conf tips
       // older than the cutoff don't belong in the per-asset history
       // either. Claimed / clawed-back / claiming tips are NOT
-      // subject to this — `claiming` rows are retry-eligible (see
+      // subject to this: `claiming` rows are retry-eligible (see
       // InboxTab fetcher comment) and need to stay visible so the
       // user can take the retry action; terminal states stay so the
       // user sees full history.
@@ -315,7 +315,7 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
         continue;
       }
       // For public tips the counterparty is the share-URL stranger,
-      // not a known sender — leave the "public link" label.
+      // not a known sender; leave the "public link" label.
       // For targeted tips: show the sender's @handle when they opted
       // in AND have one set; otherwise "anonymous". Matches
       // InboxTipItem.senderDisplay rendering so the InboxTab and
@@ -365,7 +365,7 @@ async function loadAssetHistory(
     if (!addr) return [];
     // Fresh-address mode (ENABLE_BTCLTC_FRESH_ADDRS): aggregate history across
     // the whole address book via the multi endpoint. With the flag off (or no
-    // account xpub) this falls through to the single primary-address read —
+    // account xpub) this falls through to the single primary-address read:
     // identical to before, and index 0 is always in the scan set regardless.
     const accountXpub = (
       wallet.keys as unknown as Record<string, { accountXpub?: string }>
@@ -388,7 +388,7 @@ async function loadAssetHistory(
     const r = await chainProviders.lws(assetId).getHistory(addr, viewKeyHex);
     if (r.error || !r.data) return [];
     return r.data.transactions.map((t): AssetDetailTxRow => {
-      // Atomic amounts are strings (may exceed 2^53) — compare + sum as BigInt.
+      // Atomic amounts are strings (may exceed 2^53); compare + sum as BigInt.
       // total_received > 0 means we received; spent_outputs presence means we sent.
       // LWS rows can be both (change): direction = 'in' if net positive, else 'out'.
       const received = BigInt(t.total_received) > 0n;
@@ -406,11 +406,11 @@ async function loadAssetHistory(
   }
   if (assetId === 'grin') {
     // Grin on v3 is non-custodial: `POST /wallet/grin/scan` returns the current
-    // UTXO set only — no send/receive log — and Mimblewimble commitments carry no
+    // UTXO set only (no send/receive log) and Mimblewimble commitments carry no
     // amount/direction a third party could reconstruct. So history comes from the
     // client-side append-only tx journal (grin-tx-journal.ts), which records each
-    // flow's metadata at build/finalize/sign/tip time. Purely DISPLAY — it never
-    // gates spending — and best-effort: a bad journal yields [], never a throw.
+    // flow's metadata at build/finalize/sign/tip time. Purely DISPLAY (it never
+    // gates spending) and best-effort: a bad journal yields [], never a throw.
     const entries = await readGrinJournal().catch(() => []);
     return entries.map(grinJournalEntryToRow);
   }

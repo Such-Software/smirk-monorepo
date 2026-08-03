@@ -3,12 +3,12 @@
  *
  * Two distinct crypto surfaces live here:
  *
- * 1. **Local seed/private-key storage** — PBKDF2(password) → AES-equivalent
+ * 1. **Local seed/private-key storage**: PBKDF2(password) → AES-equivalent
  *    encryption (we use XChaCha20-Poly1305 from @noble/ciphers, but the
  *    KDF is canonical PBKDF2-SHA256 via WebCrypto). Salts are 16 bytes,
  *    iterations default to OWASP 2023's 600k.
  *
- * 2. **Tip envelope encryption** — secp256k1 ECDH between an ephemeral
+ * 2. **Tip envelope encryption**: secp256k1 ECDH between an ephemeral
  *    sender keypair and the recipient's BTC public key, hashed to 32
  *    bytes via SHA-256, used as the symmetric key for the tip's actual
  *    secret material.
@@ -17,7 +17,7 @@
  * for `extensionRegister` proof-of-key-control during wallet bootstrap.
  *
  * Chain-specific transaction crypto lives in `@smirk/wasm` (Rust). This
- * module is pure WebCrypto + audited @noble libraries — no network, no
+ * module is pure WebCrypto + audited @noble libraries: no network, no
  * I/O, safe to call from any context.
  */
 
@@ -63,7 +63,7 @@ export function deriveSharedSecret(
 /**
  * Encrypt with a 32-byte key.
  *
- * Output format: `nonce(24) || ciphertext || tag(16)` — the nonce is
+ * Output format: `nonce(24) || ciphertext || tag(16)`; the nonce is
  * prepended so callers don't need to track it separately. The Poly1305
  * tag is appended automatically by the AEAD construction.
  */
@@ -169,7 +169,7 @@ export async function decryptPrivateKey(
  *
  * Generates an ephemeral secp256k1 keypair, ECDHs against the recipient,
  * and uses the result as the symmetric key. The ephemeral pubkey is
- * returned alongside the ciphertext — the recipient ECDHs with their
+ * returned alongside the ciphertext; the recipient ECDHs with their
  * own private key + this ephemeral pubkey to recover the same secret.
  */
 export function createEncryptedTipPayload(
@@ -199,7 +199,7 @@ export function decryptTipPayload(
 }
 
 /**
- * Public tip — the symmetric key lives in the URL fragment (`#…`),
+ * Public tip: the symmetric key lives in the URL fragment (`#…`),
  * which never reaches the server. Anyone who has the URL can decrypt;
  * the server only sees the ciphertext.
  */
@@ -290,7 +290,7 @@ export function signBitcoinMessage(message: string, privateKey: Uint8Array): str
  * the 64-byte signature `R || s`.
  *
  * **Why a custom signer instead of `ed25519.sign(seed, msg)`.** Smirk
- * stores the private spend / Grin keys as raw 32-byte scalars — they
+ * stores the private spend / Grin keys as raw 32-byte scalars: they
  * were derived from the wallet's HD seed via SHA256 (Cryptonote) or
  * `grin-ext` HMAC (Grin), not via the standard ed25519 seed-clamping
  * step. Passing the scalar bytes to `ed25519.sign` would re-hash and
@@ -314,7 +314,7 @@ export function signBitcoinMessage(message: string, privateKey: Uint8Array): str
  * `slatepack` pubkey). Mismatched (A, a) produces a verifiable-but-
  * meaningless signature against the wrong identity.
  *
- * @param message Arbitrary message bytes — signed raw, no pre-hash.
+ * @param message Arbitrary message bytes (signed raw, no pre-hash).
  * @param privateScalar 32-byte little-endian scalar.
  * @param publicKey 32-byte compressed ed25519 point matching `privateScalar`.
  * @returns 64-byte signature `R || s`.
@@ -336,8 +336,8 @@ export function signEd25519WithScalar(
   const a = leBytesToBigInt(privateScalar);
 
   // Deterministic nonce: r = SHA512(SHA512(a_bytes) || m) mod L.
-  // Two-pass hash matches the legacy v0.2.x extension byte-for-byte
-  // — backend already accepts signatures from that derivation, so
+  // Two-pass hash matches the legacy v0.2.x extension byte-for-byte:
+  // backend already accepts signatures from that derivation, so
   // any deviation here would silently re-break smirk.cash login.
   const scalarHash = sha512(privateScalar);
   const nonceInput = new Uint8Array(scalarHash.length + message.length);
@@ -346,7 +346,7 @@ export function signEd25519WithScalar(
   const rHash = sha512(nonceInput);
   const r = leBytesToBigInt(rHash) % L;
 
-  // R = r * G — compressed-point bytes for inclusion in the
+  // R = r * G: compressed-point bytes for inclusion in the
   // signature and in the challenge hash. Matches the ExtendedPoint
   // accessor used elsewhere in @smirk/core (hd.ts derives public
   // CryptoNote keys with the same call shape).

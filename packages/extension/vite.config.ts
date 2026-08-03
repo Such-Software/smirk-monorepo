@@ -23,7 +23,7 @@ function copyDirRecursive(src: string, dest: string) {
  * Bundle content.ts and inject.ts as standalone IIFE scripts.
  *
  * Chrome MV3 content scripts and `<script src=...>`-injected page
- * scripts are classic scripts — they CAN'T import ES modules. The
+ * scripts are classic scripts: they CAN'T import ES modules. The
  * popup + background can use the regular Vite/Rollup ES-module
  * pipeline, but these two entries need a separate single-file IIFE
  * bundle each. We invoke esbuild directly (already a Vite transitive
@@ -32,7 +32,7 @@ function copyDirRecursive(src: string, dest: string) {
  *
  * **Why not just add them to rollupOptions.input?** Vite/Rollup
  * support per-output formats but not per-entry formats in a single
- * build — adding them would either force the whole bundle to IIFE
+ * build; adding them would either force the whole bundle to IIFE
  * (breaks popup chunking) or leak ES-module syntax into content.js.
  * A side esbuild call is the path of least breakage.
  */
@@ -53,7 +53,7 @@ function bundleClassicScripts() {
             format: 'iife',
             platform: 'browser',
             target: 'chrome100',
-            // Inject.js may end up in a CSP-restricted page — keep it
+            // Inject.js may end up in a CSP-restricted page; keep it
             // small and dependency-free. Same for content.js (runs in
             // every page's content-script world). Minify mostly for
             // size, not obfuscation.
@@ -114,7 +114,7 @@ function copyMonorepoAssets() {
 
       // Copy bundled theme fonts (pixel + chunky display fonts the
       // built-in themes reference via @font-face). Loaded from a
-      // chrome-extension:// path at runtime — same-origin to the popup.
+      // chrome-extension:// path at runtime, same-origin to the popup.
       if (existsSync('assets/fonts')) {
         copyDirRecursive('assets/fonts', 'dist/fonts');
       }
@@ -133,7 +133,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Disable modulepreload polyfill — it touches `document`, which the
+    // Disable modulepreload polyfill: it touches `document`, which the
     // MV3 service worker doesn't have.
     modulePreload: false,
     rollupOptions: {

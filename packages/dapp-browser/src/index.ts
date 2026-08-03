@@ -1,5 +1,5 @@
 /**
- * `@smirk/dapp-browser` — embedded-browser shell abstraction for
+ * `@smirk/dapp-browser`: embedded-browser shell abstraction for
  * Smirk's desktop (Tauri) and mobile (Capacitor) wallets.
  *
  * See [docs/EMBEDDED_BROWSER.md](../../../docs/EMBEDDED_BROWSER.md)

@@ -3,8 +3,8 @@
  *
  * Bookmarks are the primary surface for "I want to come back here"
  * and the most common entry point for repeat dapp visits. The
- * persistence interface is intentionally small — flat list, no
- * folders — because the alternative (full folder tree, drag-and-
+ * persistence interface is intentionally small (flat list, no
+ * folders) because the alternative (full folder tree, drag-and-
  * drop reorder) is a project of its own and not a v0.3 must-have.
  */
 
@@ -39,7 +39,7 @@ export interface BookmarkStore {
 
   /**
    * Replace the title and/or favicon of an existing bookmark. URL is
-   * immutable — to change URL, remove and re-add. Throws if id is
+   * immutable: to change URL, remove and re-add. Throws if id is
    * unknown.
    */
   update(

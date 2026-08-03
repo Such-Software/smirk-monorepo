@@ -8,13 +8,13 @@
  *
  * The cache key is the api base URL, so switching backends is a natural cache
  * miss → refetch. A failed fetch caches `null` (a legacy pre-/capabilities backend
- * or an unreachable one) — the `capAllows*` gates read `null` as permissive, so
+ * or an unreachable one): the `capAllows*` gates read `null` as permissive, so
  * old behavior is preserved and nothing is hidden mid-load.
  */
 
 import type { BackendCapabilities } from './capabilities';
 
-/** Minimal structural view of the api client — avoids importing the concrete
+/** Minimal structural view of the api client: avoids importing the concrete
  *  class (and its transitive deps) into this leaf module. */
 export interface CapabilitiesApi {
   getBaseUrl(): string;

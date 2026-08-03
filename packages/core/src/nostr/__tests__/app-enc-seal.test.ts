@@ -2,7 +2,7 @@
  * Cross-impl KAT for the dapp e2ee open path. libsodium (the reference) SEALS;
  * our `@noble`-only `sealOpen` / `appSealOpen` OPENS. This is the contract that
  * lets a dapp seal to the wallet's app pubkey with stock libsodium (offline, no
- * wallet call) and trust the wallet can read it back — byte-exact, forever.
+ * wallet call) and trust the wallet can read it back: byte-exact, forever.
  *
  * `crypto_box_seal` is anonymous: seal needs only the recipient pubkey; open needs
  * the secret key. A subtly-wrong `crypto_box` assembly fails the Poly1305 tag

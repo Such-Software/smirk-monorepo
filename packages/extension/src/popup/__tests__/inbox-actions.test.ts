@@ -4,10 +4,10 @@
  * cancelGrinSend), or they stay excluded from selection until the 7-day age-out
  * (stuck funds). The pre-broadcast guard must still refuse to free a tx that has
  * already broadcast (double-spend). Covered here via the injectable overlay seam
- * on freeInboxReservedInputs — the transport side (channelsFor) needs the network
+ * on freeInboxReservedInputs; the transport side (channelsFor) needs the network
  * and is exercised elsewhere.
  */
-import './_chrome-stub'; // MUST be first — installs chrome.storage before singletons.ts loads.
+import './_chrome-stub'; // MUST be first: installs chrome.storage before singletons.ts loads.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GrinPendingOverlay, createMemoryGrinPendingStore } from '@smirk/core';
