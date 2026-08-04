@@ -3171,21 +3171,16 @@ function HomeRouter({
 /** Format a USD amount with thousands separators and 2-decimal precision. */
 // ----- Stubbed wallet ops (replaced incrementally) -----
 //
-// SECURITY GUARD: stubs accept anything that resembles a string and return
-// fake success; they exist purely so the popup can be exercised visually
-// before the real wallet wiring lands. They MUST NOT ship in a release
-// build. The block below trips at module-load time when the build sets
-// `VITE_SMIRK_RELEASE=true` (only set by the release pipeline, never by
-// `npm run build:chrome` during development). Vite replaces the env
-// access with a literal at build time, so the throw becomes a real
-// top-level throw and Chrome refuses to load the extension.
-if (import.meta.env.VITE_SMIRK_RELEASE === 'true') {
-  throw new Error(
-    '[smirk] stub wallet ops detected in a release build. Replace ' +
-      'stubValidateAddress / stubSubmit / stubResolveAddress with real ' +
-      'wallet wiring before shipping. (See docs/SECURITY_AUDIT.md M2.)',
-  );
-}
+// The v0.2-era stub wallet ops (stubValidateAddress / stubSubmit /
+// stubResolveAddress) are gone: every path is wired to the real wallet. The
+// tripwire that used to live here threw unconditionally whenever
+// VITE_SMIRK_RELEASE=true, so once the stubs were replaced it could only ever
+// break a release build. That is why the flag was never set by anything that
+// cuts zips, and why it has gated nothing for the whole v0.3 cycle.
+//
+// Removed rather than "fixed": a guard whose condition can no longer occur is
+// not protection, it is a landmine. If a future tripwire needs the release
+// flag, it is now free to use it and will actually run.
 
 
 // ============================================================================
