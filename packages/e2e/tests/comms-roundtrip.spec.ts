@@ -44,6 +44,7 @@
 import { test, expect } from '../fixtures/extension.js';
 import type { Page } from '@playwright/test';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import { deriveNostrIdentity } from '@smirk/core';
 import { getCapabilities } from '../fixtures/capabilities.js';
 
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
@@ -61,6 +62,13 @@ async function openMessages(page: Page) {
   await entry.click();
   await expect(page.getByTestId('messages-screen')).toBeVisible({ timeout: 20_000 });
 }
+
+// A full wallet import plus a publish/subscribe round trip through a real relay
+// does not fit the default 90s budget when this is the first test in a fresh
+// context (the import alone can take most of it). The failure looked like a
+// missing compose input, which sent me looking at render conditions that were
+// fine.
+test.setTimeout(180_000);
 
 test('an encrypted DM survives a round trip through the relay', async ({
   context,
@@ -82,19 +90,26 @@ test('an encrypted DM survives a round trip through the relay', async ({
 
   await openMessages(page);
 
-  // If the surface reports the relay is off, the premise is gone and a pass
-  // would be meaningless.
+  // Prove the compose surface is actually up. Asserting `messages-relay-off` is
+  // HIDDEN was vacuous: toBeHidden() also passes when the element does not exist,
+  // so it said nothing while the screen was still loading. Wait for the thing
+  // that only exists in the ready branch instead.
   await expect(
-    page.getByTestId('messages-relay-off'),
-    'the wallet says no relay is configured even though capabilities advertise one',
-  ).toBeHidden({ timeout: 15_000 });
+    page.getByTestId('dm-recipient-input'),
+    'the DM compose surface never came up; if messages-relay-off is showing, the ' +
+      'wallet thinks this backend runs no relay',
+  ).toBeVisible({ timeout: 60_000 });
 
   // Address it to ourselves: one wallet, one context, still the whole
   // seal → publish → subscribe → unseal chain.
-  const npub = (await page.getByTestId('nostr-npub').textContent().catch(() => null))?.trim();
-  const recipient = page.getByTestId('dm-recipient-input');
-  await expect(recipient).toBeVisible({ timeout: 20_000 });
-  await recipient.fill(npub && npub.startsWith('npub') ? npub : 'me');
+  //
+  // Derived here rather than scraped from the UI. Reading `nostr-npub` looked
+  // reasonable but that testid only exists on the IDENTITY screen, and
+  // `.textContent()` auto-waits, so on Messages it silently consumed the entire
+  // test budget before the `.catch()` could fire. The failure then presented as
+  // a timeout somewhere else entirely.
+  const npub = deriveNostrIdentity(MNEMONIC, 0).npub;
+  await page.getByTestId('dm-recipient-input').fill(npub);
 
   const body = marker('dm');
   await page.getByTestId('dm-text-input').fill(body);

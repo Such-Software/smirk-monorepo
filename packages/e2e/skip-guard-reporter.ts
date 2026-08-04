@@ -39,21 +39,6 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
     match: 'nostr-identity.spec',
     reason: 'requires FEATURE_NOSTR_IDENTITY=true on the backend under test',
   },
-  {
-    match: 'federation-backend-switch.spec',
-    reason:
-      'needs a SECOND independent backend (FED_BACKEND_URL) with its own DB and ' +
-      'peppers — a mock would prove nothing about federation. Belongs in CI tier B. ' +
-      'Note it also has a known navigation bug (the popup does not route by URL ' +
-      'hash), so expect work beyond just providing the instance',
-  },
-  {
-    match: 'comms-roundtrip.spec',
-    reason:
-      'requires a REAL relay (messaging.relay_url + features.nostr_relay). ' +
-      'See the spec header for the docker one-liner; do not aim it at production, ' +
-      'the feed test publishes a public note',
-  },
 ];
 
 /**
