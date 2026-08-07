@@ -37,9 +37,18 @@ body {
   overflow: hidden;
 }
 
-/* When opened as a pop-out window (chrome.windows.create), the body
-   gets resized — let the layout fill the viewport instead. */
-@media (min-width: 481px) {
+/* When the surface is NOT Chrome's action popup, fill the viewport instead.
+   Two independent tells, because either one alone misses a real surface:
+
+   min-width 481px  catches the pop-out window (chrome.windows.create) and
+                    desktop, which are wider than the popup ceiling.
+   min-height 700px catches a PHONE. Chrome caps an action popup at 800x600,
+                    so no popup can ever be 700px tall, while every phone is.
+                    Without this the width test alone fails on mobile: a 390px
+                    wide viewport is under 481, so the app rendered as a 380x600
+                    box pinned to the top of an 844px screen with dead space
+                    below it. Found while capturing phone-shaped store frames. */
+@media (min-width: 481px), (min-height: 700px) {
   html,
   body {
     width: 100%;

@@ -30,6 +30,17 @@ export const MARKETING_SHOTS = ['1', 'on', 'true', 'yes'].includes(
   (process.env.MARKETING_SHOTS ?? '').toLowerCase(),
 );
 
+/**
+ * Which surface the marketing capture is shooting. See the viewport note in the
+ * context fixture for why one shape cannot serve both store families.
+ *   popup  the real Chrome popup, for the Chrome Web Store and AMO
+ *   phone  a phone screen, for the App Store and Google Play
+ */
+export const MARKETING_VARIANT = process.env.MARKETING_VARIANT === 'phone' ? 'phone' : 'popup';
+
+export const MARKETING_VIEWPORT =
+  MARKETING_VARIANT === 'phone' ? { width: 390, height: 844 } : { width: 380, height: 600 };
+
 export const CAPTURE_VIDEO = ['1', 'on', 'true', 'yes'].includes(
   (process.env.CAPTURE_VIDEO ?? '').toLowerCase(),
 );
@@ -92,18 +103,24 @@ export const test = base.extend<{
       ...(CAPTURE_VIDEO
         ? { recordVideo: { dir: VIDEO_DIR, size: VIDEO_SIZE }, viewport: VIDEO_SIZE }
         : {}),
-      // Marketing stills: phone-shaped AND high-DPI. Kept separate from
-      // CAPTURE_VIDEO because recording while screenshotting produces neither a
-      // good clip nor a sharp frame.
-      // 380x600 is the ACTUAL Chrome popup size, and at 3x it renders
-      // 1140x1800. The video viewport (500x900) was the obvious reuse but it is
-      // wrong for stills: it clears the 481px breakpoint into the wide layout,
-      // so content sits in a short block with a large dead area beneath it and
-      // the wallet reads as empty. At the true popup size the content fills the
-      // frame, which is also what a store visitor will actually see.
-      ...(MARKETING_SHOTS && !CAPTURE_VIDEO
-        ? { viewport: { width: 380, height: 600 }, deviceScaleFactor: 3 }
-        : {}),
+      // Marketing stills: high-DPI, at the shape of the surface being sold.
+      // Kept separate from CAPTURE_VIDEO because recording while screenshotting
+      // produces neither a good clip nor a sharp frame.
+      //
+      // The video viewport (500x900) was the obvious reuse and is wrong for
+      // stills: it clears the 481px breakpoint into the wide layout, so content
+      // sits in a short block with dead area beneath and the wallet reads as
+      // empty.
+      //
+      // Two variants, because one shape cannot serve both store families:
+      //   popup  380x600  the ACTUAL Chrome popup, for the Chrome/AMO listing
+      //   phone  390x844  a phone screen, for the App Store and Play listings
+      // 380x600 is aspect 0.63 and an iPhone 6.7" canvas is 0.46, so a popup
+      // frame CANNOT fill a mobile canvas at any scale and leaves a dead band
+      // no captioning can hide. 390x844 is 0.462 against the canvas' 0.461, so
+      // it fills. It is also honest: the mobile app is this same UI full-screen
+      // on a phone, so it is the shape a store visitor will actually get.
+      ...(MARKETING_SHOTS && !CAPTURE_VIDEO ? { viewport: MARKETING_VIEWPORT, deviceScaleFactor: 3 } : {}),
     });
     await use(context);
     await context.close();

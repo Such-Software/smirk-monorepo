@@ -12,17 +12,22 @@
  * and composition separate means re-wording a caption never means re-driving the
  * browser, and the raw frames stay reusable for docs and the site.
  *
- * Captured at deviceScaleFactor 2 so a 500x900 popup yields 1000x1800 — enough
- * to downscale cleanly into every target (Chrome 1280x800, AMO, iOS 6.7"
- * 1290x2796, Play 1080x1920) without upscaling artifacts.
+ * Run it TWICE, once per surface shape. A 380x600 popup is aspect 0.63 and an
+ * iPhone 6.7" canvas is 0.46, so a popup frame cannot fill a mobile listing at
+ * any scale; it leaves a dead band that no captioning hides. So the mobile
+ * stores get a phone-shaped pass:
  *
  *   MARKETING_SHOTS=1 npx playwright test tests/marketing-shots.spec.ts
+ *   MARKETING_SHOTS=1 MARKETING_VARIANT=phone npx playwright test tests/marketing-shots.spec.ts
+ *
+ * Captured at deviceScaleFactor 3, so every target downscales rather than
+ * upscaling into softness.
  *
  * Gated so it never runs in the normal suite: it is slow, it needs a funded
  * wallet, and its output is a deliverable rather than an assertion.
  */
 
-import { test, expect } from '../fixtures/extension.js';
+import { test, expect, MARKETING_VARIANT } from '../fixtures/extension.js';
 import type { Page } from '@playwright/test';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { mkdirSync } from 'node:fs';
@@ -32,10 +37,13 @@ const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
 const ENABLED = process.env.MARKETING_SHOTS === '1';
 
 /** Disposable build output, per the workstation storage contract: raw artifacts
- *  go to ~/Build, and only approved deliverables are promoted to Marketing Media. */
+ *  go to ~/Build, and only approved deliverables are promoted to Marketing Media.
+ *
+ *  Split by variant so the popup and phone passes do not overwrite each other:
+ *  the compositor picks the source shape that fits each store's canvas. */
 const OUT =
   process.env.MARKETING_OUT ??
-  join(process.env.HOME ?? '/tmp', 'Build', 'smirk-marketing', 'raw');
+  join(process.env.HOME ?? '/tmp', 'Build', 'smirk-marketing', 'raw', MARKETING_VARIANT);
 
 test.skip(!ENABLED, 'marketing capture: set MARKETING_SHOTS=1 (produces deliverables, not assertions)');
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
