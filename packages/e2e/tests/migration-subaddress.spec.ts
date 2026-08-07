@@ -117,7 +117,15 @@ test('a migrated v0.2.4 wallet can issue per-payment subaddresses', async ({
 
   // Authenticated Home. Alice's real WOW balance proves the session bootstrapped
   // rather than merely rendering a cached snapshot.
-  await expect(page.locator('#root')).toContainText('19.79', { timeout: 60_000 });
+  // A real balance set, not a specific figure: the live-money gate spends from
+  // this wallet, so pinning today's holdings makes the suite fail on success.
+  await expect(page.getByTestId('home-total-balance')).toBeVisible({ timeout: 60_000 });
+  await expect
+    .poll(async () => (await page.getByTestId('home-total-balance').textContent())?.trim() ?? '', {
+      timeout: 60_000,
+      message: 'migrated wallet never got a real balance set from the backend',
+    })
+    .toMatch(/\d/);
   footage.mark('migrated-home', 'migrated wallet on Home with real balances');
 
   // Now the point of the test: subaddresses on a migrated wallet.

@@ -20,6 +20,16 @@ const EXTENSION_DIST =
 import { homedir } from 'node:os';
 import { Footage } from './footage.js';
 
+/**
+ * Marketing capture: same phone-shaped viewport as demo video, but at 2x device
+ * scale so a 500x900 popup renders 1000x1800. Store listings want 1290x2796
+ * (iOS 6.7") and 1280x800 (Chrome), and downscaling a 2x capture is clean while
+ * upscaling a 1x one is visibly soft.
+ */
+export const MARKETING_SHOTS = ['1', 'on', 'true', 'yes'].includes(
+  (process.env.MARKETING_SHOTS ?? '').toLowerCase(),
+);
+
 export const CAPTURE_VIDEO = ['1', 'on', 'true', 'yes'].includes(
   (process.env.CAPTURE_VIDEO ?? '').toLowerCase(),
 );
@@ -81,6 +91,18 @@ export const test = base.extend<{
       // mobile-portrait viewport so the clips are phone-shaped. Off by default.
       ...(CAPTURE_VIDEO
         ? { recordVideo: { dir: VIDEO_DIR, size: VIDEO_SIZE }, viewport: VIDEO_SIZE }
+        : {}),
+      // Marketing stills: phone-shaped AND high-DPI. Kept separate from
+      // CAPTURE_VIDEO because recording while screenshotting produces neither a
+      // good clip nor a sharp frame.
+      // 380x600 is the ACTUAL Chrome popup size, and at 3x it renders
+      // 1140x1800. The video viewport (500x900) was the obvious reuse but it is
+      // wrong for stills: it clears the 481px breakpoint into the wide layout,
+      // so content sits in a short block with a large dead area beneath it and
+      // the wallet reads as empty. At the true popup size the content fills the
+      // frame, which is also what a store visitor will actually see.
+      ...(MARKETING_SHOTS && !CAPTURE_VIDEO
+        ? { viewport: { width: 380, height: 600 }, deviceScaleFactor: 3 }
         : {}),
     });
     await use(context);
