@@ -39,6 +39,18 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
     match: 'nostr-identity.spec',
     reason: 'requires FEATURE_NOSTR_IDENTITY=true on the backend under test',
   },
+  // The two below are OPT-IN by design, not environment gaps. They are excused
+  // unconditionally because their default state is "did not run", and that is
+  // correct: one spends real money and the other produces deliverables rather
+  // than assertions. Neither should ever be enabled by accident.
+  {
+    match: 'subaddress-spend-live.spec',
+    reason: 'SPENDS REAL FUNDS; opt in with E2E_LIVE_MONEY=1 (CI tier B only)',
+  },
+  {
+    match: 'marketing-shots.spec',
+    reason: 'produces store deliverables, not assertions; opt in with MARKETING_SHOTS=1',
+  },
 ];
 
 /**

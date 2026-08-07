@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Smirk Wallet",
   "version": "0.3.0",
-  "description": "Non-custodial multi-currency tip wallet for Telegram, Discord, and more",
+  "description": "Non-custodial Bitcoin, Litecoin, Monero, Wownero and Grin wallet with a built-in Nostr identity. Your keys never leave your device.",
   "permissions": [
     "storage",
     "alarms",
