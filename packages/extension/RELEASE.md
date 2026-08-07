@@ -64,11 +64,17 @@ npm test --workspaces --if-present
 # 1. Bump version in the three files listed above + commit
 
 # 2. Build deps + chrome variant
-make ext-chrome
+#    VITE_SMIRK_RELEASE=true IS REQUIRED. It arms the tripwire that refuses to
+#    boot a build still carrying the stub wallet ops (stubValidateAddress
+#    accepts any 4 chars; stubSubmit reports success without broadcasting). See
+#    SECURITY_AUDIT M2. `make ext-chrome` alone does NOT set it, because dev and
+#    smoke builds must stay buildable, so it has to be set here or a release can
+#    ship with Send validating nothing.
+VITE_SMIRK_RELEASE=true make ext-chrome
 ( cd packages/extension/dist && zip -r -X ../releases/smirk-wallet-chrome-v0.3.0.zip . )
 
 # 3. Build firefox variant (overwrites dist/)
-make ext-firefox
+VITE_SMIRK_RELEASE=true make ext-firefox
 ( cd packages/extension/dist && zip -r -X ../releases/smirk-wallet-firefox-v0.3.0.zip . )
 
 # 4. Source archive for AMO (deterministic: tied to git HEAD)
