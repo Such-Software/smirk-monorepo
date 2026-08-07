@@ -36,6 +36,18 @@ import { join } from 'node:path';
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
 const ENABLED = process.env.MARKETING_SHOTS === '1';
 
+/**
+ * `MARKETING_CLAIM_HANDLE=<name>` claims a Smirk handle on the capture wallet
+ * before the identity shot. Opt-in because it WRITES to the backend under test.
+ *
+ * Worth knowing what the resulting frame promises: the handle is a NIP-05 name
+ * served from the backend's /.well-known/nostr.json, so it resolves only while
+ * that operator is up. The KEYPAIR is derived from the seed and is unaffected,
+ * so losing the server costs the name and nothing else: same npub, same
+ * followers, same threads. Copy on this frame should not imply otherwise.
+ */
+const CLAIM_HANDLE = process.env.MARKETING_CLAIM_HANDLE ?? '';
+
 /** Disposable build output, per the workstation storage contract: raw artifacts
  *  go to ~/Build, and only approved deliverables are promoted to Marketing Media.
  *
@@ -116,6 +128,39 @@ test('capture the wallet surfaces used in store listings', async ({
   if (await nostrNav.isVisible({ timeout: 10_000 }).catch(() => false)) {
     await nostrNav.click();
     await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({ timeout: 20_000 });
+
+    // Optionally claim a handle first, so the frame shows the feature working
+    // rather than the "No Smirk handle is claimed" empty state, which sat
+    // directly under a headline about being paid by name.
+    //
+    // WRITES TO WHATEVER BACKEND THIS RUNS AGAINST, and a handle binds to the
+    // wallet's identity, so it is opt-in and never fires by accident. Claiming
+    // an already-claimed name is a no-op here: the absent-block is simply not
+    // rendered and we fall through to the shot.
+    if (CLAIM_HANDLE) {
+      // Settle FIRST. The handle panel only renders once the backend /me call
+      // resolves, so checking immediately after the screen mounts reports "no
+      // panel" on a wallet that simply had not finished loading, and the claim
+      // is skipped silently.
+      await settle(page, 2500);
+      const absent = page.getByTestId('nostr-handle-absent');
+      if (await absent.isVisible({ timeout: 20_000 }).catch(() => false)) {
+        await page.getByTestId('nostr-claim-handle-input').fill(CLAIM_HANDLE);
+        await page.getByTestId('nostr-claim-handle-btn').click();
+        const claimErr = page.getByTestId('nostr-claim-handle-error');
+        if (await claimErr.isVisible({ timeout: 10_000 }).catch(() => false)) {
+          throw new Error(
+            `could not claim "${CLAIM_HANDLE}": ${(await claimErr.textContent())?.trim()}`,
+          );
+        }
+        await expect(
+          page.getByTestId('nostr-handle'),
+          'claim reported no error but no handle rendered',
+        ).toBeVisible({ timeout: 20_000 });
+        console.log(`[shot] claimed handle: ${CLAIM_HANDLE}`);
+      }
+    }
+
     await settle(page);
     await shot(page, '06-nostr-identity');
     await page.getByTestId('nav-tab-settings').click();
