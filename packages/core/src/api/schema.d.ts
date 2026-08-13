@@ -80,10 +80,24 @@ export interface paths {
          *     request also carries a `rotation_signature` that verifies against the BTC key
          *     already on file for that user (proving control of the seed-derived key, not
          *     merely knowledge of the fingerprint, which `check_restore` discloses and is
-         *     not secret). A bare fingerprint match WITHOUT a valid rotation proof is
-         *     treated as a brand-new identity: a fresh user row is created on the new
-         *     `pubkey_hash` and the matched victim row is never modified. The rotation path
-         *     is gated by PoW exactly like any other new-pubkey registration.
+         *     not secret). That proof signs a dedicated message, NOT the login message: see
+         *     [`rotation_message`], which binds a rotation-specific prefix, the new
+         *     `pubkey_hash`, the timestamp and this instance's canonical public API URL, so
+         *     a captured login signature is worthless here and a proof minted for one
+         *     instance does not verify on another. A bare fingerprint match WITHOUT a valid
+         *     rotation proof is treated as a brand-new identity: a fresh user row is created
+         *     on the new `pubkey_hash` and the matched victim row is never modified. The
+         *     rotation path is gated by PoW exactly like any other new-pubkey registration.
+         *
+         *     ## Adopting a `pubkey_hash` onto a keyless row
+         *
+         *     A row minted by [`nostr_register`] carries no `pubkey_hash`, so that wallet's
+         *     first call here matches nothing by pubkey. When the fingerprint matches such a
+         *     row AND the BTC key on file for it is exactly the key submitted (whose control
+         *     this request already proved), it is the same wallet: the submitted
+         *     `pubkey_hash` is adopted onto that row (`is_new=false`) instead of minting a
+         *     second identity that would strand the handle, tips and premium state. If the
+         *     row already has a `pubkey_hash`, or the BTC keys differ, nothing is adopted.
          */
         post: operations["extension_register"];
         delete?: never;
@@ -1621,18 +1635,26 @@ export interface components {
              */
             payment_invoice_id?: string | null;
             /**
-             * @description Derivation-rotation proof: BIP-137 base64 signature of the SAME
-             *     `smirk-auth-{signed_timestamp}` message under the BTC key ALREADY ON FILE
-             *     for the user identified by `seed_fingerprint`. Required to re-point an
-             *     existing user row; without it (or if it does not verify against the stored
-             *     key) a fingerprint match is treated as a brand-new identity and the
-             *     existing row is never touched. See [`extension_register`].
+             * @description Derivation-rotation proof: BIP-137 base64 signature under the BTC key
+             *     ALREADY ON FILE for the user identified by `seed_fingerprint`, over the
+             *     DEDICATED rotation message
+             *     `smirk-rotate-v1|{public_api_url}|{pubkey_hash}|{signed_timestamp}`, where
+             *     `public_api_url` is this instance's canonical API base with any trailing
+             *     `/` removed and `pubkey_hash` is `hex(SHA256(submitted btc public_key))`.
+             *     It is deliberately NOT the login message: a captured login signature must
+             *     be useless as a rotation proof, and a proof minted for one instance must
+             *     not verify on another. Required to re-point an existing user row; without
+             *     it (or if it does not verify against the stored key) a fingerprint match is
+             *     treated as a brand-new identity and the existing row is never touched. See
+             *     [`extension_register`].
              */
             rotation_signature?: string | null;
             /**
              * @description Seed fingerprint `hex(SHA256(SHA256(seed))[..])`. Used for restore and to
              *     LOCATE a candidate user row for the derivation-rotation path. By itself it
-             *     is NOT authority: a rotation also requires `rotation_signature` below.
+             *     is NOT authority: re-pointing an existing row additionally requires either
+             *     `rotation_signature` below or that the row's on-file BTC key is exactly the
+             *     one submitted in `keys` (whose control this request already proves).
              */
             seed_fingerprint?: string | null;
             /**
