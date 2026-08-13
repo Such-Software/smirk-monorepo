@@ -11,12 +11,16 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
-## [0.3.1] - 2026-08-13
+## [0.3.0] - 2026-08-13
 
-A correctness and privacy release. v0.3.0 was tagged but never submitted to
-either store, so this is the first build the stores see. Everything below came
-out of a pre-ship review of the whole tree, and every item was reproduced in the
-code before it was changed.
+The stable v0.3.0 release. It carries the v0.3.0-rc1 feature drop plus a round of
+cross-chain compatibility, balance and send reliability, real-money validation, the
+self-hostable backend components that make Smirk federated end to end, and a
+Nostr-identity overhaul finished during the release window.
+
+A full pre-ship review of the tree landed before the first store submission, and
+its fixes are folded in below. Nothing here shipped to users earlier: v0.3.0 was
+tagged during development and re-cut at the reviewed commit.
 
 - **Taproot addresses work.** Sending to a `bc1p…` / `ltc1p…` recipient was
   rejected outright, in Send and in the Swap tab's receive and refund fields.
@@ -53,15 +57,6 @@ code before it was changed.
   windows the policy promises are now enforced rather than merely configured.
 - **Connected sites are visible and revocable** in Settings, and a site can no
   longer spam approval windows.
-
-## [0.3.0] - 2026-07-18
-
-The stable v0.3.0 release. It builds on the v0.3.0-rc1 feature drop with a round
-of cross-chain compatibility, balance and send reliability, real-money
-validation, the self-hostable backend components that make Smirk federated
-end to end, and a Nostr-identity overhaul finished during the release window
-(the store builds were regenerated as these landed).
-
 - **Desktop wallet.** The Tauri 2.x shell for Windows, macOS and Linux ships
   alongside the extension, sharing the same code path and carrying the embedded
   dapp browser. Capacitor mobile is deferred to v0.4.

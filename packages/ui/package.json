@@ -1,6 +1,6 @@
 {
   "name": "@smirk/ui",
-  "version": "0.3.1",
+  "version": "0.3.0",
   "description": "Shared Preact components for the Smirk wallet UI — same primitives across extension, mobile (Capacitor), and desktop (Tauri). Asset-registry-driven, no hardcoded chains.",
   "type": "module",
   "main": "./dist/index.js",

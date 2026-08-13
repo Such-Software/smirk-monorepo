@@ -1,4 +1,4 @@
-# Store listings: Smirk Wallet v0.3.1
+# Store listings: Smirk Wallet v0.3.0
 
 Source of truth for what goes in the Chrome Web Store and addons.mozilla.org
 listings. Edit here, paste from here, so the two stores cannot drift apart.
@@ -269,7 +269,7 @@ the root of the source archive:
       cargo install wasm-bindgen-cli --version 0.2.121
 
     Build
-      unzip smirk-wallet-source-v0.3.1.zip -d smirk
+      unzip smirk-wallet-source-v0.3.0.zip -d smirk
       cd smirk
       npm ci
       make ext-firefox

@@ -69,7 +69,7 @@ npm test --workspaces --if-present
 
 # Set this once. Every step below reads it, so a release cannot end up with the
 # tag saying one version and a zip filename saying another.
-VERSION=0.3.1
+VERSION=0.3.0
 
 # 1. Bump every shipped version in lockstep, both manifests included, + commit
 node scripts/bump-version.mjs "$VERSION"
@@ -146,7 +146,7 @@ or an unpinned dependency.
 1. Sign in to the [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole).
 2. Open the existing Smirk Wallet listing.
 3. **Package** → **Upload new package** → choose
-   `smirk-wallet-chrome-v0.3.1.zip`.
+   `smirk-wallet-chrome-v0.3.0.zip`.
 4. Update **Store listing** copy if any user-facing changes warrant it.
 5. **Privacy practices**: answer from `store/LISTING.md` "Data
    disclosures", which is the source of truth and cites the call behind
@@ -173,9 +173,9 @@ mandatory.
 
 1. Sign in to the [AMO developer dashboard](https://addons.mozilla.org/en-US/developers/).
 2. Open the existing Smirk Wallet listing (gecko id `wallet@smirk.cash`).
-3. **New version** → upload `smirk-wallet-firefox-v0.3.1.zip`.
+3. **New version** → upload `smirk-wallet-firefox-v0.3.0.zip`.
 4. When prompted for source code, upload
-   `smirk-wallet-source-v0.3.1.zip`.
+   `smirk-wallet-source-v0.3.0.zip`.
 5. In **Notes to reviewers**, paste the build instructions block
    below: reviewers re-run it to confirm the upload zip matches the
    source. It is the short form of the `README.md` in `store/LISTING.md`
