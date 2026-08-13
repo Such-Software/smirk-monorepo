@@ -143,8 +143,15 @@ async function dispatchInner<M extends SmirkMethod>(
         );
       }
       const approvedAssets = decision.approvedAssets;
-      // Persist (merge with existing if the user is upgrading scope).
+      // Persist by MERGING into the existing record. `set` is a whole-record
+      // replace (the store keeps only grantedAt), so building a fresh literal
+      // here would silently drop every scope this origin already holds (nostr,
+      // nostrPubkey, e2ee, nostrCryptSeen, nostrSession) and a plain page
+      // reload calling connect() again would re-prompt for all of them.
+      // connect() only ever widens: the asset list, the captured site
+      // metadata, and lastUsedAt.
       const next: OriginPermission = {
+        ...(existing ?? {}),
         origin: origin.origin,
         assets: existing
           ? Array.from(new Set([...existing.assets, ...approvedAssets]))
@@ -497,18 +504,22 @@ async function dispatchInner<M extends SmirkMethod>(
         data,
         firstGrant: firstCrypt,
       });
-      if (decision.approved && firstCrypt) {
-        // Remember that the user has now seen what the scope covers. `set` is an
-        // upsert that preserves grantedAt, so this does not look like a re-grant.
-        await deps.permissions.set({ ...perm, nostrCryptSeen: true });
-      }
       if (!decision.approved) {
         throw new HandlerError('USER_REJECTED', 'User declined the encryption request');
       }
       if (decision.kind !== 'nostrCrypt') {
         throw new HandlerError('INTERNAL', `Approval handler returned wrong kind: ${decision.kind}`);
       }
-      await touch(deps.permissions, perm);
+      if (firstCrypt) {
+        // Remember that the user has now seen what the scope covers. `set` is an
+        // upsert that preserves grantedAt, so this does not look like a re-grant.
+        // Mutually exclusive with touch(): touch rebuilds the WHOLE record from
+        // the stale `perm` snapshot, which would erase the flag we just wrote and
+        // re-prompt on every single encrypt/decrypt.
+        await deps.permissions.set({ ...perm, nostrCryptSeen: true, lastUsedAt: Date.now() });
+      } else {
+        await touch(deps.permissions, perm);
+      }
       return decision.data;
     }
 

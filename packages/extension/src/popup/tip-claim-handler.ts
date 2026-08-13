@@ -790,11 +790,16 @@ async function sweepXmrWow(
     },
     decoys: decoyPool.slice(i * (ringSize - 1), (i + 1) * (ringSize - 1)),
   }));
-  const sweepAmountNum = Number(sweepAmount);
+  // Decimal string, never `Number()`: a tip funded above 2^53 atomic units
+  // would be silently rounded by a JS number and the signer would pay the
+  // rounded amount. `TxDestination.amount` deserializes with `de_u64_flex`,
+  // which takes a decimal string or a number. Same contract the main send path
+  // uses (see send-handler.ts).
+  const sweepAmountStr = sweepAmount.toString();
 
   const params = {
     inputs,
-    destinations: [{ address: recipientAddress, amount: sweepAmountNum }],
+    destinations: [{ address: recipientAddress, amount: sweepAmountStr }],
     change_address: tipAddress, // padding output goes back to tip addr
     fee_per_byte: per_byte_fee,
     fee_mask,

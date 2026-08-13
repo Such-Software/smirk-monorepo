@@ -38,17 +38,20 @@ export function SwapRouter({
   // Webhook URL pointing at *our* backend's receiver. Trocador POSTs
   // status changes here; receiver authenticates via the per-swap
   // webhook_token passed in `passthrough`.
-  // VITE_SMIRK_BACKEND_URL is the full API base and already INCLUDES `/api/v1`
-  // (e.g. `https://api.smirk.cash/api/v1`), while the webhook path below is
-  // absolute from the server root. Strip the suffix before appending, or every
-  // build with an explicit backend URL emits `/api/v1/api/v1/webhook/trocador`.
-  // Only the bare default happened to be correct.
-  const backendBase =
-    import.meta.env.VITE_SMIRK_BACKEND_URL ?? 'https://backend.smirk.cash';
+  // Read the RESOLVED backend off the api singleton, the same source every other
+  // call site here uses (api.createSwap / getSwap / listSwaps). Taking it from
+  // the BUILD-TIME VITE_SMIRK_BACKEND_URL instead meant a user pointed at their
+  // own instance still had every swap reported to the default backend, and the
+  // webhook wrote to a backend that had no row for the trade.
+  // The base already INCLUDES `/api/v1` (e.g. `https://api.smirk.cash/api/v1`),
+  // while the webhook path below is absolute from the server root. Strip the
+  // suffix before appending, or we emit `/api/v1/api/v1/webhook/trocador`.
+  const backendBase = api.getBaseUrl();
   const webhookBase = backendBase.replace(/\/api\/v1\/?$/, '');
   const webhookUrl = `${webhookBase}/api/v1/webhook/trocador`;
 
-  // Instantiate TrocadorSwap once per mount with build-time config.
+  // Instantiate TrocadorSwap once per mount: build-time API key plus the
+  // webhook pointed at whichever backend this wallet is configured for.
   // passthrough is set on a per-trade basis (random token), not here.
   const trocador = useMemo(
     () =>

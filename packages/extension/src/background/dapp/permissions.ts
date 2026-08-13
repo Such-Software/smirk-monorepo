@@ -49,6 +49,10 @@ export function chromeStoragePermissionStore(): OriginPermissionStore {
       const out: OriginPermission[] = [];
       for (const [k, v] of Object.entries(all)) {
         if (!k.startsWith(KEY_PREFIX)) continue;
+        // Settings renders this list, so one corrupt value under the
+        // prefix must not take the whole screen down with it.
+        if (!v || typeof v !== 'object') continue;
+        if (typeof (v as OriginPermission).origin !== 'string') continue;
         out.push(v as OriginPermission);
       }
       // Most-recently-used first: matches the Settings UI's expected

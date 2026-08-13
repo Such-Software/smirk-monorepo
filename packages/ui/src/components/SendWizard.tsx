@@ -29,7 +29,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
 import type { AssetDefinition } from '@smirk/assets';
-import { applyRelayFloor } from '@smirk/core';
+import { applyRelayFloor, RELAY_FLOOR_SAT_PER_VB } from '@smirk/core';
 import { useWizard } from '../state/hooks';
 import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
@@ -202,6 +202,24 @@ export interface SendWizardProps {
   ) => Promise<bigint | null>;
 
   /**
+   * How many inputs a MAX sweep of `assetId` would actually spend, for the
+   * UTXO chains (BTC/LTC) whose fee the Compose screen computes locally from
+   * the picked sat/vB rate.
+   *
+   * MUST be the size of the exact input set `sendBtcLtc` will sweep: every
+   * UTXO the wallet's address book reports MINUS the ones already spent by a
+   * still-pending send (the shell's `recentlySpentInputs` exclusion). The fee
+   * scales at 68 vbytes per input, so a wrong count here is a wrong "you will
+   * send X" on Compose.
+   *
+   * Return `null` when the count isn't knowable (asset isn't UTXO, listing
+   * failed, wallet not loaded): Compose then falls back to a 1-input estimate
+   * and labels the sweep amount as approximate rather than promising a number
+   * it cannot stand behind.
+   */
+  resolveSweepInputCount?: (assetId: string) => Promise<number | null>;
+
+  /**
    * Build, sign, and broadcast. Wizard advances to "done" on success.
    * `sweep: true` → 1-output tx, `amountAtomic` is the final recipient
    * amount the Compose screen computed (= balance − fee).
@@ -364,6 +382,9 @@ export function SendWizard(props: SendWizardProps) {
           resolveFeeRates={props.resolveFeeRates}
           {...(props.resolveSendFeeEstimate
             ? { resolveSendFeeEstimate: props.resolveSendFeeEstimate }
+            : {})}
+          {...(props.resolveSweepInputCount
+            ? { resolveSweepInputCount: props.resolveSweepInputCount }
             : {})}
           onChange={(state) => {
             // Persist on every edit so closing the popup mid-Compose
@@ -725,15 +746,18 @@ function EnterAddress({
 
 /**
  * Vsize estimator for fee preview. Mirrors `estimateVsize` in
- * `packages/extension/src/popup/send-handler.ts`. We assume 1 input:
- * the typical case for Smirk's single-address scheme. The real
- * selection in the send-handler uses the actual input count; for the
- * Compose-screen fee preview, 1-input is a reasonable estimate.
+ * `packages/extension/src/popup/send-handler.ts` byte for byte: 68 vbytes
+ * per P2WPKH input, 31 per output, 10 of overhead.
+ *
+ * The input count is a real parameter, not a hardcoded 1. A MAX sweep spends
+ * EVERY spendable UTXO (`selectUtxosForSweep`), so a 1-input preview
+ * under-reports the fee by 68 vbytes × rate per extra UTXO, and Compose would
+ * offer the user a send amount larger than the one that gets broadcast.
  *
  * sweep mode → 1 output (no change), non-sweep → 2 outputs.
  */
-function estimateVsize(numOutputs: number): number {
-  return 1 * 68 + numOutputs * 31 + 10;
+function estimateVsize(numInputs: number, numOutputs: number): number {
+  return numInputs * 68 + numOutputs * 31 + 10;
 }
 
 /**
@@ -743,8 +767,11 @@ function estimateVsize(numOutputs: number): number {
  * one floor; see that module for the full rationale (1.0 sat/vB at the
  * relay minimum is rejected by public LTC Electrum servers).
  *
- * **Does NOT apply to the Custom tier.** Custom is the explicit-knob;
- * if a user types 0.5 deliberately, they get 0.5.
+ * Applies to the Custom tier too. `send()` floors whatever rate it is
+ * handed before building the tx, so a custom 0.5 sat/vB was displayed as
+ * 0.5 here and signed at 1.1: the fee shown was not the fee paid. We
+ * floor at input time instead and say so, so the number on screen is the
+ * number that gets signed.
  */
 const applyFloor = applyRelayFloor;
 
@@ -752,12 +779,16 @@ const applyFloor = applyRelayFloor;
  * Compute fee in atomic units for a tier rate.
  *
  * For BTC/LTC: rate is sat/vB, vsize is vbytes → fee = ceil(vsize × rate).
+ * Identical to the handler's `Math.ceil(estimateVsize(n, outs) * rate)`, so a
+ * preview built with the same `numInputs` the handler will select produces the
+ * same fee the tx is signed with.
+ *
  * XMR/WOW/Grin never reach this estimator: `usesFeePicker` is UTXO-only,
  * and their fee comes from `resolveSendFeeEstimate` and the send-handler
  * at sign time.
  */
-function feeForTier(ratePerVb: number, sweep: boolean): number {
-  return Math.ceil(estimateVsize(sweep ? 1 : 2) * ratePerVb);
+function feeForTier(ratePerVb: number, sweep: boolean, numInputs: number): number {
+  return Math.ceil(estimateVsize(numInputs, sweep ? 1 : 2) * ratePerVb);
 }
 
 function Compose({
@@ -771,6 +802,7 @@ function Compose({
   resolveBalance,
   resolveFeeRates,
   resolveSendFeeEstimate,
+  resolveSweepInputCount,
   onChange,
   onContinue,
 }: {
@@ -787,6 +819,8 @@ function Compose({
     assetId: string,
     options?: { sweep?: boolean; amountAtomic?: bigint },
   ) => Promise<bigint | null>;
+  /** See {@link SendWizardProps.resolveSweepInputCount}. */
+  resolveSweepInputCount?: (assetId: string) => Promise<number | null>;
   /**
    * Fires on every state change (amount text, fee tier, custom rate,
    * sweep toggle). Parent uses this to persist Compose state into
@@ -837,10 +871,14 @@ function Compose({
   // popup-close + reopen path restores exactly what was typed.
   // Otherwise the React-local state above is destroyed on unmount and
   // the user re-mounts to an empty Compose screen.
+  // Persist the FLOORED custom rate, not the raw keystrokes: this value is
+  // what Review displays and what `onSubmit` ships, and `send()` floors it
+  // again on the way to the signer. Persisting the raw number is how the
+  // displayed rate and the signed rate drifted apart.
   const parsedCustom = parseFloat(customRateText);
   const customForPersist =
     !isNaN(parsedCustom) && parsedCustom > 0 && customRateText.trim() !== ''
-      ? parsedCustom
+      ? applyFloor(parsedCustom)
       : undefined;
   useEffect(() => {
     onChange({ amountText, tier, customRate: customForPersist, sweep });
@@ -920,26 +958,60 @@ function Compose({
     };
   }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep, parsedAmountForEstimate]);
 
-  // Selected rate for the standard tiers passes through `applyFloor` so
-  // we never ship a rate at the protocol minimum that some nodes round
-  // up against. Custom is verbatim: explicit override.
+  // How many inputs a BTC/LTC sweep will really spend. `sendBtcLtc` selects
+  // EVERY spendable UTXO, and each one adds 68 vbytes, so pricing the preview
+  // at one input showed the user a send amount larger than the tx we broadcast.
+  // `null` means "not known" (no resolver wired, lookup failed, still in
+  // flight); the preview then falls back to one input and says so below.
+  const [sweepInputCount, setSweepInputCount] = useState<number | null>(null);
+  useEffect(() => {
+    setSweepInputCount(null);
+    if (!usesFeePicker || !sweep || !resolveSweepInputCount) return;
+    let alive = true;
+    resolveSweepInputCount(assetId).then(
+      (n) => {
+        if (alive && n !== null && Number.isInteger(n) && n > 0) setSweepInputCount(n);
+      },
+      () => {
+        // Leave it null and keep the approximate label. A failed UTXO listing
+        // must not disable Send: the handler prices the real input set anyway.
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [assetId, usesFeePicker, sweep, resolveSweepInputCount]);
+
+  // Non-sweep sends fund recipient + change out of the typical single input;
+  // a sweep uses the real count when we have it. Falling back to 1 keeps the
+  // pre-existing behaviour for the "unknown" case, which the caveat labels.
+  const previewInputCount = sweep ? (sweepInputCount ?? 1) : 1;
+  const sweepCountUnknown = sweep && usesFeePicker && sweepInputCount === null;
+
+  // Every rate, tier or custom, passes through `applyFloor`: `send()` floors
+  // before signing, so anything we show unfloored is a fee the user never
+  // actually pays. When the floor bites on a custom rate we say so below
+  // rather than quietly swapping the number under them.
   const customRateNum = parseFloat(customRateText);
   const customRateValid =
     !isNaN(customRateNum) && customRateNum > 0 && customRateText.trim() !== '';
+  const customRateFloored = customRateValid ? applyFloor(customRateNum) : null;
+  const customRateWasRaised = customRateValid && customRateNum < RELAY_FLOOR_SAT_PER_VB;
   const electrumRate: number | null = tier === 'custom' ? null : (tiers?.[tier] ?? null);
   const selectedRate: number | null =
     tier === 'custom'
-      ? customRateValid
-        ? customRateNum
-        : null
+      ? customRateFloored
       : electrumRate !== null
         ? applyFloor(electrumRate)
         : null;
   const selectedFeeSat =
-    selectedRate !== null ? feeForTier(selectedRate, sweep) : null;
+    selectedRate !== null ? feeForTier(selectedRate, sweep, previewInputCount) : null;
 
   // In sweep mode, amount is implicit: balance − fee.
-  //  - UTXO: fee comes from the user-picked tier (selectedFeeSat).
+  //  - UTXO: fee comes from the user-picked tier (selectedFeeSat), priced
+  //    over `previewInputCount`, which is the same input set the handler
+  //    sweeps whenever the shell can report it. Preview and broadcast then
+  //    agree exactly, because both compute ceil(estimateVsize(n, 1) * rate).
   //  - Non-UTXO (XMR/WOW): fee comes from the live estimate we
   //    fetched via resolveSendFeeEstimate. The estimate is for 1
   //    input but the actual sweep may consume more; the handler
@@ -1062,6 +1134,20 @@ function Compose({
 
       {validationError && <FieldError>{validationError}</FieldError>}
 
+      {/* Sweep with an unknown input count: the number above is priced for a
+          single UTXO, and the broadcast prices every one the wallet holds.
+          Say that out loud rather than presenting an exact-looking amount the
+          tx will undershoot. */}
+      {sweepCountUnknown && !validationError && (
+        <div
+          data-testid="send-sweep-approx-note"
+          style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', padding: '4px 0' }}
+        >
+          Approximate: the fee shown assumes one input. Sweeping several
+          coins costs more, so you may receive slightly less than this.
+        </div>
+      )}
+
       {/* Recipient: read-only here, tap to edit goes back. Empty
           string is the Grin "manual slatepack" sentinel; show a
           label instead of an empty value. */}
@@ -1096,7 +1182,10 @@ function Compose({
               const displayRate =
                 electrum !== null && electrum !== undefined ? applyFloor(electrum) : null;
               const active = tier === t;
-              const fee = displayRate !== null ? feeForTier(displayRate, sweep) : null;
+              const fee =
+                displayRate !== null
+                  ? feeForTier(displayRate, sweep, previewInputCount)
+                  : null;
               return (
                 <button
                   key={t}
@@ -1151,6 +1240,19 @@ function Compose({
             </button>
             {tier === 'custom' && !customRateValid && (
               <FieldError>Enter a positive number for the custom fee rate.</FieldError>
+            )}
+            {/* The floor is applied again inside `send()`, so a sub-floor
+                custom rate never reaches the network. Tell the user here
+                instead of showing a rate that isn't the one we sign. */}
+            {tier === 'custom' && customRateWasRaised && (
+              <div
+                data-testid="send-custom-fee-floored"
+                style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', padding: '4px 0' }}
+              >
+                Raised to {RELAY_FLOOR_SAT_PER_VB} sat/vB: the network relay
+                minimum. Lower rates are rejected by the nodes we broadcast
+                through.
+              </div>
             )}
           </div>
         )}
@@ -1212,7 +1314,9 @@ function Compose({
             onContinue({
               amountText,
               tier,
-              customRate: tier === 'custom' && customRateValid ? customRateNum : undefined,
+              // Floored, so Review and the signer agree with what was shown here.
+              customRate:
+                tier === 'custom' && customRateFloored !== null ? customRateFloored : undefined,
               sweep,
             })
           }
@@ -1365,15 +1469,19 @@ function Review({
     };
   }, [assetId, feeTier, resolveFeeRates, usesFeePicker]);
 
-  // Same rate-resolution as Compose: standard tiers get the relay floor
-  // (so 'normal' at 1.0 sat/vB displays + ships as 1.1); Custom is
-  // verbatim. For non-picker assets the rate is meaningless: the
-  // dispatcher ignores feeRateSatPerVb for XMR/WOW/Grin.
+  // Same rate-resolution as Compose: every rate gets the relay floor, so
+  // 'normal' at 1.0 sat/vB displays + ships as 1.1 and a custom 0.5 displays
+  // + ships as 1.1. Compose already floored `customFeeRate` before persisting
+  // it; flooring again here keeps the Review row honest for a `wizard.fields`
+  // value written by an older build. For non-picker assets the rate is
+  // meaningless: the dispatcher ignores feeRateSatPerVb for XMR/WOW/Grin.
   const electrumRate = feeTier === 'custom' ? null : (tiers?.[feeTier] ?? null);
   const rate: number | null = !usesFeePicker
     ? 0
     : feeTier === 'custom'
-      ? (customFeeRate ?? null)
+      ? customFeeRate !== undefined
+        ? applyFloor(customFeeRate)
+        : null
       : electrumRate !== null
         ? applyFloor(electrumRate)
         : null;

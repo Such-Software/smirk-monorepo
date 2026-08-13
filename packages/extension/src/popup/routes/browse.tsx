@@ -106,13 +106,12 @@ export function BrowseTab({
 
   useEffect(() => {
     // Desktop uses a LIVE provider that reads `walletStateRef`
-    // directly, not the chrome-shim-backed public cache. Two reasons:
-    // (1) the cache's `sessionExpiresAtMs` is stamped to `Date.now()`
-    // for `autoLockMinutes = 0` (the default), which the SW provider
-    // treats as expired → every dapp call from the desktop browser
-    // would come back `LOCKED`. (2) BrowseTab has direct access to
-    // the unlocked wallet in this React tree, so going through a
-    // cache adds a stale-read failure mode for no benefit. The
+    // directly, not the chrome-shim-backed public cache: BrowseTab has
+    // direct access to the unlocked wallet in this React tree, so going
+    // through a cache adds a stale-read failure mode for no benefit.
+    // (This used to cite a second reason, that auto-lock 0 stamped the
+    // cache as already expired and made every desktop dapp call return
+    // `LOCKED`. That write is fixed, see `dappPublicCacheFor`.) The
     // permission store still uses the chrome-shim: per-origin
     // permissions DO want to persist across wallet locks.
     const provider = createLiveWalletProvider(() => {

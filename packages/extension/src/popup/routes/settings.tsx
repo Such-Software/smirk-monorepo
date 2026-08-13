@@ -7,13 +7,16 @@ import {
   type UnlockedWallet,
 } from '@smirk/core';
 import { useRoute, useSessionState, listThemes } from '@smirk/ui';
-import { listAssets } from '@smirk/assets';
+import { getAsset, listAssets } from '@smirk/assets';
+import type { OriginPermission } from '@such-software/smirk-dapp-api';
 import { store, sessionStorage, walletKeystore } from '../singletons';
-import { bytesToHex } from '../format';
+import { bytesToHex, feedTimeAgo } from '../format';
 import { settingsInputStyle } from '../ui-shared';
 import { writeSessionCache } from '../session-cache';
+import { clearCachedActiveNostrKey } from '../nostr-vault';
 import { browserController } from '../browser-controller';
 import { isInjectDisabled, setInjectDisabled } from '../../background/dapp/inject-policy';
+import { chromeStoragePermissionStore } from '../../background/dapp/permissions';
 import type { WalletSession } from '../types';
 import { SentTipsRoute } from './sent-tips';
 import { NostrIdentityRoute } from './nostr-identity';
@@ -146,6 +149,224 @@ function AssetsVisibilityPanel({
         owns the keys — hiding never destroys access.
       </p>
     </section>
+  );
+}
+
+/** The same `chrome.storage.local` records the service worker consults on
+ *  every dapp call, so a revoke here binds on the very next call with no
+ *  messaging round-trip. Constructing the store is free (a plain object). */
+const dappPermissions = chromeStoragePermissionStore();
+
+/** Compact age (`3d`) for a unix-ms stamp, or null when a legacy record
+ *  never wrote the field. */
+function grantAge(ms: number | undefined, nowMs: number): string | null {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return null;
+  return feedTimeAgo(Math.floor(ms / 1000), nowMs);
+}
+
+/**
+ * What a connected site can do, in plain language. Deliberately describes
+ * the effect rather than the scope name: "read your encrypted messages" is
+ * something a user can act on, `nostr: true` is not.
+ */
+function siteCapabilities(perm: OriginPermission, nowMs: number): string[] {
+  const out: string[] = [];
+  const assets = Array.isArray(perm.assets) ? perm.assets : [];
+  if (assets.length > 0) {
+    const tickers = assets
+      .map((a) => getAsset(a)?.ticker ?? a.toUpperCase())
+      .join(', ');
+    out.push(
+      `Sees your ${tickers} addresses and public keys, and can ask you to sign or pay. Every payment still needs your approval.`,
+    );
+  }
+  if (perm.nostr) {
+    out.push(
+      'Uses your Nostr identity: it can post as you, and read and write messages encrypted to that identity, without asking again.',
+    );
+  }
+  if (perm.nostrSession && perm.nostrSession.expiresAt > nowMs) {
+    out.push(
+      'Signs everyday Nostr events without a prompt until the session you allowed runs out. Payments and logins always prompt.',
+    );
+  }
+  if (perm.e2ee) {
+    out.push('Stores data on its own servers that only your wallet can unscramble.');
+  }
+  if (out.length === 0) {
+    out.push('Connected, but nothing is granted yet.');
+  }
+  return out;
+}
+
+/**
+ * Settings → Connected sites: every origin holding a standing grant, what
+ * that grant lets it do, and a one-click revoke.
+ *
+ * Why this has to exist: the Nostr scope covers encrypt/decrypt with no
+ * further prompt, so a site that once got it can read every message
+ * addressed to that identity for as long as the grant stands. A permission
+ * with no visible off-switch is not a permission the user really gave.
+ */
+function ConnectedSitesPanel() {
+  const [sites, setSites] = useState<OriginPermission[] | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  useEffect(() => {
+    void dappPermissions.list().then(setSites);
+  }, []);
+
+  const revoke = async (origin: string) => {
+    setRevoking(origin);
+    try {
+      await dappPermissions.remove(origin);
+      setSites(await dappPermissions.list());
+    } finally {
+      setRevoking(null);
+    }
+  };
+
+  return (
+    <section style={{ marginTop: 20 }}>
+      <label
+        style={{
+          display: 'block',
+          fontSize: 12,
+          opacity: 0.8,
+          marginBottom: 6,
+        }}
+      >
+        Connected sites
+      </label>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 8,
+          padding: '6px 8px',
+        }}
+        data-testid="settings-connected-sites"
+      >
+        {sites === null && (
+          <p style={{ fontSize: 12, opacity: 0.55, margin: '4px 0', lineHeight: 1.4 }}>
+            Loading…
+          </p>
+        )}
+        {sites !== null && sites.length === 0 && (
+          <p style={{ fontSize: 12, opacity: 0.55, margin: '4px 0', lineHeight: 1.4 }}>
+            No sites are connected. When you connect one it shows up here, and
+            you can take its access back at any time.
+          </p>
+        )}
+        {sites?.map((perm) => (
+          <ConnectedSiteRow
+            key={perm.origin}
+            perm={perm}
+            busy={revoking === perm.origin}
+            onRevoke={() => void revoke(perm.origin)}
+          />
+        ))}
+      </div>
+      <p
+        style={{
+          fontSize: 11,
+          opacity: 0.55,
+          margin: '6px 0 0',
+          lineHeight: 1.4,
+        }}
+      >
+        Revoking applies to the site&apos;s next request: it has to ask you
+        again from scratch. Nothing about your funds or your recovery phrase
+        changes.
+      </p>
+    </section>
+  );
+}
+
+function ConnectedSiteRow({
+  perm,
+  busy,
+  onRevoke,
+}: {
+  perm: OriginPermission;
+  busy: boolean;
+  onRevoke: () => void;
+}) {
+  const now = Date.now();
+  const granted = grantAge(perm.grantedAt, now);
+  const used = grantAge(perm.lastUsedAt, now);
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '8px 4px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Origin first, site name second: the name comes from the page's
+              own <title>, so a site could call itself anything. The origin
+              is the part the browser guarantees. The cached favicon is
+              deliberately not rendered: fetching it would ping the site
+              every time you open Settings. */}
+          <div
+            style={{
+              fontSize: 12,
+              fontFamily: 'var(--smirk-font-family-mono, monospace)',
+              wordBreak: 'break-all',
+              lineHeight: 1.3,
+            }}
+          >
+            {perm.origin}
+          </div>
+          {perm.siteName && (
+            <div style={{ fontSize: 11, opacity: 0.55, lineHeight: 1.3 }}>
+              {perm.siteName}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={onRevoke}
+          disabled={busy}
+          style={{
+            flexShrink: 0,
+            padding: '4px 10px',
+            background: 'rgba(239, 68, 68, 0.10)',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            borderRadius: 6,
+            color: '#ef4444',
+            fontFamily: 'inherit',
+            fontSize: 11,
+            cursor: busy ? 'wait' : 'pointer',
+          }}
+        >
+          {busy ? 'Revoking…' : 'Revoke'}
+        </button>
+      </div>
+      <ul
+        style={{
+          margin: 0,
+          paddingLeft: 16,
+          fontSize: 11,
+          opacity: 0.7,
+          lineHeight: 1.5,
+        }}
+      >
+        {siteCapabilities(perm, now).map((cap) => (
+          <li key={cap}>{cap}</li>
+        ))}
+      </ul>
+      {granted && (
+        <div style={{ fontSize: 10, opacity: 0.45 }}>
+          Connected {granted} ago{used ? ` · last used ${used} ago` : ''}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -854,6 +1075,11 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
       // Immediate-lock chosen: wipe any existing session-cache so the
       // new policy takes effect now, not when the old timer expires.
       await sessionStorage.remove(SESSION_CACHE_KEY);
+      // A non-default active Nostr identity's key is cached separately, on
+      // the session cache's original TTL. Dropping only the keystore cache
+      // would leave that private key readable for up to 24h after the user
+      // asked to lock immediately. Same pair the lock handler clears.
+      await clearCachedActiveNostrKey();
     } else {
       // Re-stamp the session cache against the currently-unlocked
       // wallet so the new TTL applies immediately. Without this, a
@@ -1061,6 +1287,12 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           Takes effect on next page load for each tab.
         </p>
       </section>
+
+      {/* Connected sites: the off-switch for every standing dapp grant.
+          Sits next to the injection toggle because both answer the same
+          question (what can websites do with this wallet), and it is what
+          makes the broad host permission defensible. */}
+      <ConnectedSitesPanel />
 
       {/* Security section: fingerprint display, change-password
           flow, export-raw-keys panel. Three audit-flagged TODOs

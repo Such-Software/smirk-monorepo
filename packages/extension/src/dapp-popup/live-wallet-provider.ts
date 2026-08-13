@@ -12,10 +12,13 @@
  * read the unlocked wallet directly. Going through the cache here
  * would add a stale-read failure mode for no benefit, and one such
  * failure mode actually bit us during v0.3.0 smoke testing: with
- * `autoLockMinutes = 0` (the default), the popup writes the cache
- * with `sessionExpiresAtMs = now`, which the cache provider then
- * treats as already expired, so every desktop dapp call comes back
- * as `LOCKED` even when the wallet is plainly unlocked.
+ * `autoLockMinutes = 0` (the default), the popup wrote the cache with
+ * `sessionExpiresAtMs = now`, which the cache provider treated as
+ * already expired, so every desktop dapp call came back as `LOCKED`
+ * even when the wallet was plainly unlocked. That write is fixed now
+ * (auto-lock 0 omits the stamp entirely, see `dappPublicCacheFor`), so
+ * it is no longer the reason to avoid the cache here; the reason below
+ * is. Kept as the record of why this provider exists.
  *
  * This provider reads the live wallet via a `getWallet` callback:
  * BrowseTab passes a ref-reader so the provider always sees the

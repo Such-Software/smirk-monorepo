@@ -43,6 +43,15 @@ import {
  *  registered on the backend and must authenticate via the BTC path instead. */
 const NOSTR_FALLBACK_TO_BTC = 'SMIRK_NOSTR_FALLBACK_TO_BTC';
 
+/** The capabilities read decides which auth path this wallet takes, so a read we
+ *  could not complete has to stop the bootstrap (see the call site). Retryable:
+ *  the popup shows `message` and the next unlock tries again. */
+function capabilitiesUnreadable(detail: string): Error {
+  return new Error(
+    `Could not read the backend's capabilities (${detail}). Check your connection and try again.`,
+  );
+}
+
 function buildKeysList(
   wallet: UnlockedWallet,
 ): ReadonlyArray<{ asset: string; publicKey: string }> {
@@ -92,16 +101,36 @@ export async function bootstrapAuthInExtension(
   const effectiveGate = paymentInvoiceId ? { ...gate, paymentInvoiceId } : gate;
 
   // Capabilities-gated: a backend advertising npub-native auth gets the NIP-98
-  // bootstrap (no BTC signature); a legacy backend keeps the BTC offscreen-job
-  // path. A failed/absent capabilities read falls back to the legacy path.
-  let nostrNative = false;
-  try {
-    const caps = await api.getCapabilities();
-    nostrNative = !!caps.data?.features?.nostr_native_auth;
-  } catch {
-    /* treat as a legacy (BTC) backend */
+  // bootstrap (no BTC signature); a legacy backend, which answers 200 with the
+  // flag simply absent, keeps the BTC offscreen-job path.
+  //
+  // An ERRORED read is "unknown", never "legacy". Guessing legacy forks the
+  // user's identity: a wallet that registered npub-natively has a NULL
+  // `pubkey_hash` on the backend, so the BTC path does not recognise it and
+  // mints a SECOND account for the same seed. Fail closed with a retryable
+  // error instead, mirroring the onboarding wizard, which also refuses to treat
+  // an unresolved capabilities read as permissive. Note `getCapabilities`
+  // reports network/HTTP failures as `{ error }` rather than throwing, so both
+  // shapes have to be handled.
+  const caps = await api.getCapabilities().catch((e: unknown) => {
+    throw capabilitiesUnreadable(e instanceof Error ? e.message : String(e));
+  });
+  if (caps.error || !caps.data) {
+    throw capabilitiesUnreadable(caps.error ?? 'empty /capabilities response');
   }
-  if (nostrNative && wallet.mnemonic) {
+  const nostrNative = caps.data.features?.nostr_native_auth === true;
+
+  if (nostrNative) {
+    // npub-native backend, but no mnemonic in hand: the v2 session cache
+    // deliberately drops it (keystore.ts `mnemonic?: string`), which is the
+    // NORMAL state after a warm restore. Signing the NIP-98 register event
+    // needs it, and falling through to the BTC path is precisely what mints the
+    // duplicate account, so ask for the one thing that fixes it.
+    if (!wallet.mnemonic) {
+      throw new Error(
+        'Signing in needs the unlocked mnemonic: re-unlock the wallet',
+      );
+    }
     try {
       const bootstrap = await bootstrapViaNostr(api, wallet, keys, effectiveGate);
       await clearPendingRegistrationInvoice(wallet.fingerprint);

@@ -26,9 +26,11 @@
  * install, or wallet locked at SW boot), we report `isUnlocked: false`
  * and every sensitive method comes back as `LOCKED` to the dapp.
  *
- * **Staleness.** We do NOT auto-expire the cache from the SW: the
- * popup is responsible for clearing it on lock. If the popup is
- * killed mid-flow without clearing (e.g., user force-quits Chrome),
+ * **Staleness.** The SW auto-expires the cache only for an entry that
+ * carries a `sessionExpiresAtMs`, i.e. one written with an auto-lock
+ * of N > 0 minutes. Under the default auto-lock of 0 there is no such
+ * stamp and the popup is responsible for clearing it on lock. If the
+ * popup is killed mid-flow without clearing (e.g., user force-quits Chrome),
  * the cache will linger; the worst that happens is `isUnlocked`
  * returns true while the user thinks they're locked. The actual
  * signing flow will still re-prompt for password inside the approval
@@ -69,14 +71,20 @@ export interface DappPublicCache {
   unlockedAt: number;
   /**
    * Unix ms when the session-cache auto-lock TTL expires, capped at
-   * `AUTO_LOCK_MAX_MINUTES` (24h) from the write; `Date.now()` when
-   * auto-lock is immediate, which makes the cache stale the moment it
-   * is written. There is no "Never" sentinel. Used by
-   * the SW provider to detect "wallet was unlocked but the session
-   * has since timed out and the popup hasn't been opened to clear
-   * the cache". Per Finding 13 in the v0.3.0 pre-ship audit. Optional
-   * for backward compat: pre-2026-06-04 cache entries lack this
-   * field and fall back to the legacy "presence == unlocked" check.
+   * `AUTO_LOCK_MAX_MINUTES` (24h) from the write. There is no "Never"
+   * sentinel. Used by the SW provider to detect "wallet was unlocked
+   * but the session has since timed out and the popup hasn't been
+   * opened to clear the cache". Per Finding 13 in the v0.3.0 pre-ship
+   * audit.
+   *
+   * ABSENT means "no expiry to enforce", NOT "expired": entries fall
+   * back to the "presence == unlocked" check below. Two writers leave
+   * it out: pre-2026-06-04 cache entries (backward compat), and any
+   * write made with auto-lock 0, the default, where there is no
+   * session cache to outlive the popup and `clearDappPublicCache()`
+   * on lock / destroy is the only thing that ends the entry. Stamping
+   * `Date.now()` for that case made the entry born-stale and reported
+   * the wallet LOCKED to every dapp; see `dappPublicCacheFor`.
    */
   sessionExpiresAtMs?: number;
 }
@@ -121,9 +129,13 @@ export function chromePublicCacheProvider(): WalletProvider {
  * reporting "unlocked" until the next popup interaction. We now
  * additionally enforce `sessionExpiresAtMs > now`, defensively
  * clearing the stale entry from storage so the next read is fast.
- * Backward compat: entries without `sessionExpiresAtMs` (pre-fix
- * cache writes) fall through to the legacy "presence == unlocked"
- * behavior. New writes always populate the field.
+ * Entries without `sessionExpiresAtMs` fall through to the
+ * "presence == unlocked" behavior: that covers pre-fix cache writes
+ * AND every write made under the default auto-lock of 0, where the
+ * entry is scoped to the popup session and only an explicit
+ * `clearDappPublicCache()` ends it. Do not "fix" a missing field by
+ * treating it as expired: that reports LOCKED to dapps on the
+ * default configuration.
  */
 async function readCache(): Promise<DappPublicCache | null> {
   const res = await chrome.storage.local.get(PUBLIC_CACHE_KEY);

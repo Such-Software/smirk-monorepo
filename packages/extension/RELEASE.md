@@ -6,12 +6,18 @@ before cutting a release: every step affects what users see.
 
 ## Versioning
 
-Bump these three places together. They must match exactly or the
-build refuses to load in one of the stores:
+Never hand-edit a version. `node scripts/bump-version.mjs <semver>`
+writes every shipped artifact in one pass and aborts if any target is
+missing, unparseable, or carries a malformed version, which is what
+keeps these three from drifting apart (they must match exactly or the
+build refuses to load in one of the stores):
 
 - `packages/extension/package.json` `version`
 - `packages/extension/manifest.json` `version`
 - `packages/extension/manifest.firefox.json` `version`
+
+`--check` verifies without writing (exit 1 if anything would change) and
+`--print` lists what every target is at right now.
 
 Tag the release commit `v0.X.Y` (no leading `v` prefix in
 `manifest.json` itself).
@@ -61,20 +67,21 @@ make wasm
 npm run typecheck --workspaces --if-present
 npm test --workspaces --if-present
 
-# 1. Bump version in the three files listed above + commit
+# 1. Bump every shipped version in lockstep, both manifests included, + commit
+node scripts/bump-version.mjs 0.3.0
 
 # 2. Build deps + chrome variant
-#    VITE_SMIRK_RELEASE=true IS REQUIRED. It arms the tripwire that refuses to
-#    boot a build still carrying the stub wallet ops (stubValidateAddress
-#    accepts any 4 chars; stubSubmit reports success without broadcasting). See
-#    SECURITY_AUDIT M2. `make ext-chrome` alone does NOT set it, because dev and
-#    smoke builds must stay buildable, so it has to be set here or a release can
-#    ship with Send validating nothing.
-VITE_SMIRK_RELEASE=true make ext-chrome
+#    There is NO release-only env flag. VITE_SMIRK_RELEASE used to arm a
+#    tripwire that refused to boot a build still carrying the v0.2-era stub
+#    wallet ops; the stubs are gone, so the tripwire could only ever break a
+#    release build, and it was deleted in 4a31da5. Nothing reads the flag now,
+#    so setting it changes nothing and leaving it unset guards nothing. What
+#    actually protects the send path is step 0: run it, and do not ship on red.
+make ext-chrome
 ( cd packages/extension/dist && zip -r -X ../releases/smirk-wallet-chrome-v0.3.0.zip . )
 
 # 3. Build firefox variant (overwrites dist/)
-VITE_SMIRK_RELEASE=true make ext-firefox
+make ext-firefox
 ( cd packages/extension/dist && zip -r -X ../releases/smirk-wallet-firefox-v0.3.0.zip . )
 
 # 4. Source archive for AMO (deterministic: tied to git HEAD)
@@ -135,10 +142,18 @@ or an unpinned dependency.
 3. **Package** → **Upload new package** → choose
    `smirk-wallet-chrome-v0.3.0.zip`.
 4. Update **Store listing** copy if any user-facing changes warrant it.
-5. **Privacy practices**: re-confirm the disclosures (no remote
-   code, no PII collection: the extension is fully client-side
-   except for backend tipping calls that the user explicitly opts
-   into).
+5. **Privacy practices**: answer from `store/LISTING.md` "Data
+   disclosures", which is the source of truth and cites the call behind
+   every answer. There is no remote code, and the seed, the private
+   spend keys and the Nostr secret key never leave the device, but this
+   is NOT a zero-transmission extension: a light wallet sends the user's
+   own receive address plus the Monero/Wownero view key and the Grin
+   `rewind_hash` to the backend, which is how it gets a balance without
+   downloading the chain. So the financial, authentication, PII and
+   personal-communications boxes are all ticked, and the three
+   certifications (not sold, not repurposed, not used for
+   creditworthiness) are all signed. Declaring "collects nothing" here
+   is a false declaration, and it contradicts the manifest.
 6. **Submit for review**. Typical turnaround: 1–3 business days for
    the first review on a new version with permission changes; a few
    hours for re-reviews with no permission changes.
@@ -157,16 +172,21 @@ mandatory.
    `smirk-wallet-source-v0.3.0.zip`.
 5. In **Notes to reviewers**, paste the build instructions block
    below: reviewers re-run it to confirm the upload zip matches the
-   source.
+   source. It is the short form of the `README.md` in `store/LISTING.md`
+   ("AMO: source code submission"), which is the source of truth for
+   these steps; if one changes, change both.
 
    ```
-   Reproducible build instructions (Linux/macOS, Node 20+, Rust stable):
+   Reproducible build instructions (Linux/macOS, Node 22.x, GNU make,
+   rustc 1.95.0):
 
    # Prerequisites. The extension embeds a WebAssembly bundle compiled from the
    # Rust sources in crates/, so the build needs a Rust toolchain. v0.3.0 was
    # built with rustc 1.95.0; another rustc yields functionally-equivalent but
    # not byte-identical wasm.
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   rustup toolchain install 1.95.0
+   rustup default 1.95.0
    rustup target add wasm32-unknown-unknown
    # The wasm-bindgen CLI must match the version in Cargo.lock (0.2.121 for
    # v0.3.0); a version mismatch fails the build.
@@ -174,16 +194,21 @@ mandatory.
 
    unzip smirk-wallet-source-v0.3.0.zip -d smirk
    cd smirk
-   npm install
+   # ci, not install: the committed package-lock.json is the only source of
+   # dep versions.
+   npm ci
    # Builds wasm + every workspace lib in derived topological order
    # (scripts/build-workspaces.mjs) + the firefox extension. No hand-maintained
-   # build list to fall out of sync.
+   # build list to fall out of sync. The wasm step is not optional:
+   # crates/smirk-wasm/pkg/ is gitignored and therefore absent from this
+   # archive, and vite fails with "WASM bundle missing" without it.
    make ext-firefox
    # Note: Cargo.lock references two git sources (jwinterm/grin-wallet and
    # mimblewimble/grin). These are DEV-ONLY cross-validation test deps of the
    # grin-ext crate; they are NOT compiled by the extension build. `make wasm`
-   # builds `cargo -p smirk-wasm`, which resolves entirely from crates.io + the
-   # vendored crates in this archive, so the build does not fetch them.
+   # runs `cargo build -p smirk-wasm`, which resolves from crates.io plus the
+   # sibling path crates under crates/ that ship in this archive, so the build
+   # does not fetch them.
    # Compare the freshly-built dist against the uploaded package by CONTENT
    # (the zip's own bytes vary by file mtime, so verify files, not the archive):
    mkdir _uploaded && ( cd _uploaded && unzip -q ../smirk-wallet-firefox-v0.3.0.zip )
@@ -223,8 +248,11 @@ CHANGELOG.md, which is the source of truth):
   the password screen depending on flow.
 - Permission cleanup: `scripting` and `activeTab` removed from the
   manifest (they were never used).
-- AMO listing now correctly declares `"required": ["none"]` for the
-  Firefox data-collection-permissions screen.
+- AMO listing now declares what the wallet actually transmits on the
+  Firefox data-collection-permissions screen
+  (`financialAndPaymentInfo`, `authenticationInfo`,
+  `personallyIdentifyingInfo`, `personalCommunications`) instead of
+  `"none"`, matching the Chrome disclosures in `store/LISTING.md`.
 
 ## Rollback
 

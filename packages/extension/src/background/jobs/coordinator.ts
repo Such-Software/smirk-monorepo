@@ -16,6 +16,11 @@
  * this system. Result lands in `chrome.storage.session`; the next
  * popup mount reads from there.
  *
+ * Runtimes with no `chrome.offscreen` (Firefox MV3) run the handler in
+ * THIS context instead of dispatching it; see `runJobLocally`. Every
+ * downstream step (state writes, port events, dedup, GC) is identical,
+ * so `awaitJob` / `subscribe` can't tell the two apart.
+ *
  * State storage:
  *   - `chrome.storage.session.smirk:job:<id>` → `JobState`
  *   - `chrome.storage.session.smirk:job:dedup:<key>` → in-flight id
@@ -28,6 +33,7 @@
  */
 
 import type {
+  JobContext,
   JobKind,
   JobState,
   JobStatus,
@@ -41,6 +47,7 @@ import {
   JOBS_STORAGE_PREFIX,
   OFFSCREEN_PATH,
 } from './types';
+import { HANDLERS } from './handlers/registry';
 import { api } from '@smirk/core';
 
 const DEDUP_PREFIX = `${JOBS_STORAGE_PREFIX}dedup:`;
@@ -125,16 +132,21 @@ async function clearDedup(key: string): Promise<void> {
 
 let offscreenReady: Promise<void> | null = null;
 
+/** `chrome.offscreen` is Chrome-only: Firefox MV3 does not implement it at
+ *  all. Callers must branch on this rather than assume it exists. */
+function offscreenApi(): typeof chrome.offscreen | undefined {
+  return (chrome as unknown as { offscreen?: typeof chrome.offscreen })
+    .offscreen;
+}
+
 async function ensureOffscreen(): Promise<void> {
   if (!offscreenReady) {
-    offscreenReady = (async () => {
+    const attempt = (async () => {
       // Newer Chrome surfaces `hasDocument`; older ones list contexts.
-      const offscreen = (
-        chrome as unknown as { offscreen?: typeof chrome.offscreen }
-      ).offscreen;
+      const offscreen = offscreenApi();
       if (!offscreen) {
         throw new Error(
-          'chrome.offscreen unavailable — likely a non-Chrome runtime',
+          'chrome.offscreen unavailable, likely a non-Chrome runtime',
         );
       }
       try {
@@ -154,8 +166,68 @@ async function ensureOffscreen(): Promise<void> {
         }
       }
     })();
+    // Only a SUCCESSFUL attempt is worth memoizing. Keeping a rejected promise
+    // here let one transient createDocument failure fail every later job until
+    // the SW happened to restart, which for `bootstrap-auth` means the user
+    // simply cannot sign in. Drop the memo so the next call retries.
+    void attempt.catch(() => {
+      if (offscreenReady === attempt) offscreenReady = null;
+    });
+    offscreenReady = attempt;
   }
   return offscreenReady;
+}
+
+/**
+ * Run a job in the background context instead of an offscreen document.
+ *
+ * Firefox MV3 has no `chrome.offscreen`, and the only job kind is
+ * `bootstrap-auth` (the whole registration/login pipeline), so refusing to run
+ * without an offscreen document left Firefox unable to sign in at all. Its
+ * background script is an event page with a full DOM and Workers, so the
+ * handler runs there directly. What we give up is the offscreen document's
+ * "survives SW eviction" property, which Chrome still gets.
+ *
+ * Mirrors offscreen/runner.ts: same registry lookup, same `JobContext`, same
+ * progress/done/error reporting, except the results go straight into the state
+ * writers rather than round-tripping through `chrome.runtime` messages. The
+ * backend does not need forwarding either: this context IS the one whose
+ * `api` singleton the offscreen request would have copied.
+ */
+function runJobLocally(id: string, kind: JobKind, input: unknown): void {
+  const handler = HANDLERS[kind];
+  if (!handler) {
+    void onJobError(id, {
+      code: 'UNKNOWN_KIND',
+      message: `no handler registered for kind '${String(kind)}'`,
+    });
+    return;
+  }
+
+  const controller = new AbortController();
+  const ctx: JobContext = {
+    id,
+    signal: controller.signal,
+    reportProgress(progress) {
+      void onJobProgress(id, progress);
+    },
+  };
+
+  // Cast for the same reason runner.ts casts: `handler.run` is parameterised
+  // on one `JobKind`, and we looked it up from the union at runtime.
+  (handler.run as (input: unknown, ctx: JobContext) => Promise<unknown>)(
+    input,
+    ctx,
+  )
+    .then((result) => {
+      void onJobDone(id, result);
+    })
+    .catch((e: unknown) => {
+      void onJobError(id, {
+        code: 'HANDLER_THREW',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    });
 }
 
 // ============================================================================
@@ -192,9 +264,31 @@ async function startJob<K extends JobKind>(args: {
   await writeState(initial);
   if (args.dedupKey) await writeDedup(args.dedupKey, id);
 
-  // Move to 'running' once we hand off to the offscreen runner.
-  await ensureOffscreen();
+  // Move to 'running' once we hand off to whichever runner this browser has.
+  const offscreenAvailable = offscreenApi() !== undefined;
+  if (offscreenAvailable) {
+    try {
+      await ensureOffscreen();
+    } catch (e: unknown) {
+      // A failed handoff must not leave the job sitting at 'pending': the dedup
+      // mapping written above outlives the throw, so the NEXT start for the same
+      // key returns this id and `awaitJob` waits forever on a job nobody is
+      // running. Record the failure (which releases the dedup key, wakes
+      // subscribers, and schedules GC), then surface it to the caller as before.
+      await onJobError(id, {
+        code: 'OFFSCREEN_CREATE_FAILED',
+        message: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
+  }
   await writeState({ ...initial, status: 'running' });
+
+  if (!offscreenAvailable) {
+    // Firefox MV3 (no chrome.offscreen): run it here. See runJobLocally.
+    runJobLocally(id, args.kind, args.input);
+    return id;
+  }
 
   const run: OffscreenJobRequest = {
     type: 'run',

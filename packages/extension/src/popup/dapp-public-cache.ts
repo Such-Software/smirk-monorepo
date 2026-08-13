@@ -40,10 +40,20 @@ export function dappPublicCacheFor(
   // autoLockMinutes is clamped to [0, AUTO_LOCK_MAX_MINUTES]. The
   // pre-2026-06-13 "Never" sentinel (negative / MAX_SAFE_INTEGER)
   // was dropped; legacy stored values self-heal to the 24h cap.
+  //
+  // A clamped 0 (the DEFAULT) means "no session cache", not "expire
+  // this cache immediately": there is no TTL to mirror, because the
+  // entry's lifetime is the popup session and `clearDappPublicCache()`
+  // on lock / destroy is what ends it. Stamping `Date.now()` here made
+  // every default-config entry born-stale, so the SW's `readCache()`
+  // deleted it on the very next read and the whole `window.smirk`
+  // surface reported LOCKED seconds after the user approved a connect.
+  // Omit the field instead: `readCache()` treats an entry without it as
+  // "presence means unlocked", which is exactly the contract we want.
   const clampedAutoLock = clampAutoLockMinutes(autoLockMinutes);
   const sessionExpiresAtMs =
     clampedAutoLock === 0
-      ? Date.now() // immediate lock: cache is stale the moment we write it
+      ? undefined
       : Date.now() + clampedAutoLock * 60_000;
   // Public material for the dapp bridge's getNostrPublicKey() / getBackend()
   // (SW provider reads these from the cache; no seed in the SW). Prefer the
@@ -62,6 +72,6 @@ export function dappPublicCacheFor(
     ...(nostrPublicKey ? { nostrPublicKey } : {}),
     backendUrl: api.getBaseUrl(),
     unlockedAt: Date.now(),
-    sessionExpiresAtMs,
+    ...(sessionExpiresAtMs !== undefined ? { sessionExpiresAtMs } : {}),
   };
 }
