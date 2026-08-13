@@ -11,6 +11,49 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
+## [0.3.1] - 2026-08-13
+
+A correctness and privacy release. v0.3.0 was tagged but never submitted to
+either store, so this is the first build the stores see. Everything below came
+out of a pre-ship review of the whole tree, and every item was reproduced in the
+code before it was changed.
+
+- **Taproot addresses work.** Sending to a `bc1p…` / `ltc1p…` recipient was
+  rejected outright, in Send and in the Swap tab's receive and refund fields.
+  The signer always supported taproot; only the address check did not. It now
+  accepts exactly what the signer can pay, so an address that passes the form
+  can no longer fail at the last step.
+- **Websites can talk to the wallet again.** On the default auto-lock setting
+  the dapp bridge reported the wallet as locked seconds after you approved a
+  connection, so `window.smirk` returned nothing to every site.
+- **Firefox can create and restore a wallet.** Registration and sign-in ran only
+  through a Chrome-only mechanism, so the Firefox build could not complete
+  either. Chrome also no longer gets stuck if that mechanism fails once.
+- **One account per wallet.** Signing in after a "stay unlocked" session could
+  create a second, empty account instead of returning you to yours, leaving your
+  handle, tips and premium behind on the first one.
+- **Your Nostr identity stops broadcasting when you stop using it.** The
+  background direct-message poller kept announcing your npub to the relay after
+  locking, after switching backend, and after "Forget this wallet".
+- **Burner identities never quietly fall back.** If the active identity could
+  not be unlocked, the wallet used your main identity instead of saying so.
+- **Public tip keys are encrypted at rest**, rather than sitting beside the
+  value they protect.
+- **The fee you see is the fee you sign.** A custom fee rate below the relay
+  minimum was displayed as typed and quietly raised at broadcast; a MAX sweep now
+  says when its fee is an estimate.
+- **Grin slates from a counterparty are parsed safely.** A crafted slatepack
+  could desynchronise the parser on the wasm build and, on the same input, crash
+  it. Both are rejected now.
+- **Sending across chains is blocked.** A Monero address could be used as a
+  Wownero destination and the reverse, which would have destroyed the funds.
+- **The store listings and privacy policy describe what actually happens.** The
+  previous declarations said no data was collected, while balances and history
+  are served from view keys the wallet sends to the backend. The retention
+  windows the policy promises are now enforced rather than merely configured.
+- **Connected sites are visible and revocable** in Settings, and a site can no
+  longer spam approval windows.
+
 ## [0.3.0] - 2026-07-18
 
 The stable v0.3.0 release. It builds on the v0.3.0-rc1 feature drop with a round

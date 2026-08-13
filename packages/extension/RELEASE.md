@@ -67,8 +67,13 @@ make wasm
 npm run typecheck --workspaces --if-present
 npm test --workspaces --if-present
 
+# Set this once. Every step below reads it, so a release cannot end up with the
+# tag saying one version and a zip filename saying another.
+VERSION=0.3.1
+
 # 1. Bump every shipped version in lockstep, both manifests included, + commit
-node scripts/bump-version.mjs 0.3.0
+node scripts/bump-version.mjs "$VERSION"
+node scripts/bump-version.mjs "$VERSION" --check   # refuses to pass if any file lagged
 
 # 2. Build deps + chrome variant
 #    There is NO release-only env flag. VITE_SMIRK_RELEASE used to arm a
@@ -77,32 +82,33 @@ node scripts/bump-version.mjs 0.3.0
 #    release build, and it was deleted in 4a31da5. Nothing reads the flag now,
 #    so setting it changes nothing and leaving it unset guards nothing. What
 #    actually protects the send path is step 0: run it, and do not ship on red.
+mkdir -p packages/extension/releases
 make ext-chrome
-( cd packages/extension/dist && zip -r -X ../releases/smirk-wallet-chrome-v0.3.0.zip . )
+( cd packages/extension/dist && zip -r -X "../releases/smirk-wallet-chrome-v$VERSION.zip" . )
 
 # 3. Build firefox variant (overwrites dist/)
 make ext-firefox
-( cd packages/extension/dist && zip -r -X ../releases/smirk-wallet-firefox-v0.3.0.zip . )
+( cd packages/extension/dist && zip -r -X "../releases/smirk-wallet-firefox-v$VERSION.zip" . )
 
 # 4. Source archive for AMO (deterministic: tied to git HEAD)
-git archive --format=zip --output=packages/extension/releases/smirk-wallet-source-v0.3.0.zip HEAD
+git archive --format=zip --output="packages/extension/releases/smirk-wallet-source-v$VERSION.zip" HEAD
 
 # 5. Checksums: publish these in the GitHub release notes
 ( cd packages/extension/releases &&
-  sha256sum smirk-wallet-chrome-v0.3.0.zip \
-            smirk-wallet-firefox-v0.3.0.zip \
-            smirk-wallet-source-v0.3.0.zip \
-    > SHA256SUMS-v0.3.0.txt )
+  sha256sum "smirk-wallet-chrome-v$VERSION.zip" \
+            "smirk-wallet-firefox-v$VERSION.zip" \
+            "smirk-wallet-source-v$VERSION.zip" \
+    > "SHA256SUMS-v$VERSION.txt" )
 
 # 6. Commit the checksum file: it is the in-repo release record. Only a text
 #    file under releases/ changes, so the tagged tree still builds the shipped
 #    bytes.
-git add packages/extension/releases/SHA256SUMS-v0.3.0.txt
-git commit -m "chore: record v0.3.0 extension checksums"
+git add "packages/extension/releases/SHA256SUMS-v$VERSION.txt"
+git commit -m "chore: record v$VERSION extension checksums"
 
 # 7. Tag + push: tag the EXACT commit the uploaded zips were built from
-git tag v0.3.0
-git push origin main v0.3.0
+git tag "v$VERSION"
+git push origin main "v$VERSION"
 ```
 
 > **Tag at the built commit, and re-tag if you re-ship.** A reviewer
@@ -140,7 +146,7 @@ or an unpinned dependency.
 1. Sign in to the [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole).
 2. Open the existing Smirk Wallet listing.
 3. **Package** → **Upload new package** → choose
-   `smirk-wallet-chrome-v0.3.0.zip`.
+   `smirk-wallet-chrome-v0.3.1.zip`.
 4. Update **Store listing** copy if any user-facing changes warrant it.
 5. **Privacy practices**: answer from `store/LISTING.md` "Data
    disclosures", which is the source of truth and cites the call behind
@@ -167,9 +173,9 @@ mandatory.
 
 1. Sign in to the [AMO developer dashboard](https://addons.mozilla.org/en-US/developers/).
 2. Open the existing Smirk Wallet listing (gecko id `wallet@smirk.cash`).
-3. **New version** → upload `smirk-wallet-firefox-v0.3.0.zip`.
+3. **New version** → upload `smirk-wallet-firefox-v0.3.1.zip`.
 4. When prompted for source code, upload
-   `smirk-wallet-source-v0.3.0.zip`.
+   `smirk-wallet-source-v0.3.1.zip`.
 5. In **Notes to reviewers**, paste the build instructions block
    below: reviewers re-run it to confirm the upload zip matches the
    source. It is the short form of the `README.md` in `store/LISTING.md`
