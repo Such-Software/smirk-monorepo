@@ -27,6 +27,18 @@
  * background/social/create.ts). Doesn't require an extra password
  * prompt because the user is already unlocked when tipping.
  *
+ * **Everything secret is encrypted, including the URL fragment.**
+ * Until 2026-08 the public-tip URL fragment sat NEXT TO the
+ * ciphertext in cleartext. That fragment decrypts the copy of the
+ * key the backend serves UNAUTHENTICATED to anyone holding the tip
+ * UUID, so a reader of the Chrome profile (stolen laptop,
+ * unencrypted backup, forensic image) could sweep every unclaimed
+ * public tip WITHOUT the wallet password: exactly the at-rest attack
+ * this module exists to blunt. It is now sealed under the same
+ * wallet-derived key. Records written before that still decrypt
+ * (the plaintext form is read as-is) and are re-written encrypted
+ * the next time they are read.
+ *
  * **Storage backend.** `chrome.storage.local` rather than IndexedDB
  * because it's the same backend the extension's keystore already
  * uses, survives browser close, and has a simpler API. Note the
@@ -42,6 +54,8 @@
 
 import { sha256 } from '@noble/hashes/sha256';
 import { encrypt, decrypt, bytesToHex, hexToBytes } from '@smirk/core';
+
+import { walletKeystore } from './singletons';
 
 const STORAGE_PREFIX = 'smirk:tip-key-backup:';
 
@@ -62,16 +76,32 @@ export interface TipKeyBackup {
    *  n_child + amount + features). */
   keyCiphertextHex: string;
   /**
-   * Base64url-encoded URL fragment key used to derive the per-tip
-   * share URL (`https://smirk.cash/tip/{id}#{fragment}`). Public tips
-   * only. Without this the sender can't reconstruct the share URL
-   * after popup close: the fragment isn't persisted server-side by
-   * design (it's the secret that decrypts the backend's
-   * `encrypted_key` payload, must never leave the client). v0.2.4
-   * stored the equivalent in IndexedDB `pendingTips`; v0.3 lost the
-   * affordance until 2026-06-04 when the Sent Tips ready-to-share
-   * surface needed it. Older backups (pre-2026-06-04) lack this
-   * field; those tips can still be clawed back, just no Copy URL.
+   * Hex-encoded ciphertext (same wallet-derived key as
+   * `keyCiphertextHex`) of the base64url URL fragment key used to
+   * derive the per-tip share URL
+   * (`https://smirk.cash/tip/{id}#{fragment}`). Public tips only.
+   * Without it the sender can't reconstruct the share URL after
+   * popup close: the fragment isn't persisted server-side by design
+   * (it's the secret that decrypts the backend's `encrypted_key`
+   * payload, must never leave the client). v0.2.4 stored the
+   * equivalent in IndexedDB `pendingTips`; v0.3 lost the affordance
+   * until 2026-06-04 when the Sent Tips ready-to-share surface
+   * needed it. Older backups (pre-2026-06-04) have no fragment at
+   * all; those tips can still be clawed back, just no Copy URL.
+   */
+  urlFragmentCiphertextHex?: string;
+  /**
+   * The PLAINTEXT fragment. Two meanings, both handled by the read
+   * helpers below:
+   *   - on a record straight out of storage: a pre-2026-08 backup,
+   *     written before the fragment was encrypted at rest (see the
+   *     file header). Still readable, and re-written in the
+   *     encrypted form on the next read.
+   *   - on a record RETURNED by `listTipKeyBackups` /
+   *     `getTipKeyBackup`: the decrypted fragment, hydrated in
+   *     memory for an unlocked wallet so share-URL call sites keep
+   *     reading one field.
+   * Never written in this form.
    */
   urlFragmentEncoded?: string;
 }
@@ -81,6 +111,91 @@ export interface TipKeyBackup {
  *  seed recovers the same key. */
 function deriveStorageKey(btcPrivateKey: Uint8Array): Uint8Array {
   return sha256(btcPrivateKey);
+}
+
+/** The fragment is base64url text; seal it under the same key as the
+ *  key material. */
+function encryptFragment(fragment: string, storageKey: Uint8Array): string {
+  return bytesToHex(encrypt(new TextEncoder().encode(fragment), storageKey));
+}
+
+function decryptFragment(ciphertextHex: string, storageKey: Uint8Array): string {
+  return new TextDecoder().decode(decrypt(hexToBytes(ciphertextHex), storageKey));
+}
+
+/** Storage key of the wallet unlocked RIGHT NOW, or null when locked.
+ *  Every read site already runs behind an unlocked wallet, so resolving
+ *  the key here keeps their call signatures unchanged; a locked wallet
+ *  legitimately gets no fragment back. */
+async function activeStorageKey(): Promise<Uint8Array | null> {
+  try {
+    const state = await walletKeystore.getState();
+    if (state.kind !== 'unlocked') return null;
+    const btcPrivateKey = state.wallet.keys?.btc?.privateKey;
+    return btcPrivateKey ? deriveStorageKey(btcPrivateKey) : null;
+  } catch (err) {
+    console.warn('[tip-key-backup] failed to read wallet state:', err);
+    return null;
+  }
+}
+
+/** Upgrade a pre-2026-08 record whose fragment sat next to the
+ *  ciphertext in cleartext. Best effort: on failure the legacy record
+ *  stays as it is and the next read tries again. */
+async function rewriteLegacyFragment(
+  record: TipKeyBackup,
+  storageKey: Uint8Array,
+): Promise<void> {
+  if (!record.urlFragmentEncoded) return;
+  // Only the OWNING wallet may re-key a record. Backups are keyed by
+  // tipId, not by wallet, so a re-imported DIFFERENT seed lists the
+  // previous wallet's rows too, and re-encrypting one under the wrong
+  // key would lose that share URL for good. The key ciphertext is
+  // authenticated, so a clean decrypt is the proof.
+  try {
+    decrypt(hexToBytes(record.keyCiphertextHex), storageKey);
+  } catch {
+    return;
+  }
+  try {
+    const upgraded: TipKeyBackup = { ...record };
+    delete upgraded.urlFragmentEncoded;
+    upgraded.urlFragmentCiphertextHex = encryptFragment(
+      record.urlFragmentEncoded,
+      storageKey,
+    );
+    await chrome.storage.local.set({
+      [`${STORAGE_PREFIX}${record.tipId}`]: upgraded,
+    });
+  } catch (err) {
+    console.warn('[tip-key-backup] failed to re-encrypt a legacy fragment:', err);
+  }
+}
+
+/** In-memory view of a stored record with `urlFragmentEncoded` filled
+ *  in, migrating the legacy plaintext form on the way past. */
+async function hydrateFragment(
+  record: TipKeyBackup,
+  storageKey: Uint8Array | null,
+): Promise<TipKeyBackup> {
+  if (record.urlFragmentEncoded) {
+    // Legacy record: readable as-is, and this read is the "next touch"
+    // that upgrades it.
+    if (storageKey) await rewriteLegacyFragment(record, storageKey);
+    return record;
+  }
+  if (!record.urlFragmentCiphertextHex || !storageKey) return record;
+  try {
+    return {
+      ...record,
+      urlFragmentEncoded: decryptFragment(record.urlFragmentCiphertextHex, storageKey),
+    };
+  } catch (err) {
+    // Wrong seed or tampered storage. The tip is still clawback-able
+    // via keyCiphertextHex; only the share URL is unavailable.
+    console.warn('[tip-key-backup] failed to decrypt url fragment:', err);
+    return record;
+  }
 }
 
 /** Store a tip-key backup locally. Idempotent: re-storing the same
@@ -113,8 +228,15 @@ export async function storeTipKeyBackup(params: {
       createdAt: Date.now(),
       isPublic: params.isPublic,
       keyCiphertextHex: bytesToHex(ciphertext),
+      // Encrypted, never cleartext: this fragment opens the copy of the
+      // key the backend hands out unauthenticated (see the file header).
       ...(params.urlFragmentEncoded
-        ? { urlFragmentEncoded: params.urlFragmentEncoded }
+        ? {
+            urlFragmentCiphertextHex: encryptFragment(
+              params.urlFragmentEncoded,
+              storageKey,
+            ),
+          }
         : {}),
     };
     await chrome.storage.local.set({
@@ -140,14 +262,22 @@ export async function removeTipKeyBackup(tipId: string): Promise<void> {
 
 /** List all locally-stored tip backups. Used by the Sent Tips UI
  *  to surface orphan drafts (backend lost the row but we have the
- *  key locally) and to reconcile against backend `getSentSocialTips`. */
-export async function listTipKeyBackups(): Promise<TipKeyBackup[]> {
+ *  key locally) and to reconcile against backend `getSentSocialTips`.
+ *  Returned records carry the DECRYPTED `urlFragmentEncoded` when the
+ *  wallet is unlocked; pass `btcPrivateKey` to be explicit about which
+ *  wallet, otherwise the currently-unlocked one is used. */
+export async function listTipKeyBackups(
+  btcPrivateKey?: Uint8Array,
+): Promise<TipKeyBackup[]> {
   try {
     const all = await chrome.storage.local.get(null);
+    const storageKey = btcPrivateKey
+      ? deriveStorageKey(btcPrivateKey)
+      : await activeStorageKey();
     const out: TipKeyBackup[] = [];
     for (const [k, v] of Object.entries(all)) {
       if (!k.startsWith(STORAGE_PREFIX)) continue;
-      out.push(v as TipKeyBackup);
+      out.push(await hydrateFragment(v as TipKeyBackup, storageKey));
     }
     return out.sort((a, b) => b.createdAt - a.createdAt);
   } catch (err) {
@@ -168,16 +298,43 @@ export function decryptTipKeyBackup(
   return decrypt(hexToBytes(backup.keyCiphertextHex), storageKey);
 }
 
+/** Decrypt a stored backup's share-URL fragment (public tips only).
+ *  Returns null when the record has no fragment or it can't be read
+ *  with this wallet's key. Call sites holding the unlocked wallet can
+ *  use this instead of relying on the hydrated field. */
+export function decryptTipKeyBackupFragment(
+  backup: TipKeyBackup,
+  btcPrivateKey: Uint8Array,
+): string | null {
+  // Pre-2026-08 record: the fragment is already in the clear.
+  if (backup.urlFragmentEncoded) return backup.urlFragmentEncoded;
+  if (!backup.urlFragmentCiphertextHex) return null;
+  try {
+    return decryptFragment(
+      backup.urlFragmentCiphertextHex,
+      deriveStorageKey(btcPrivateKey),
+    );
+  } catch (err) {
+    console.warn('[tip-key-backup] failed to decrypt url fragment:', err);
+    return null;
+  }
+}
+
 /** Look up a single backup by tipId. Returns `null` if absent;
  *  the on-chain clawback flow uses this to decide whether to fall
  *  back to a "no local backup, can't sweep" error. */
 export async function getTipKeyBackup(
   tipId: string,
+  btcPrivateKey?: Uint8Array,
 ): Promise<TipKeyBackup | null> {
   try {
     const result = await chrome.storage.local.get(`${STORAGE_PREFIX}${tipId}`);
-    const value = result[`${STORAGE_PREFIX}${tipId}`];
-    return (value as TipKeyBackup) ?? null;
+    const value = result[`${STORAGE_PREFIX}${tipId}`] as TipKeyBackup | undefined;
+    if (!value) return null;
+    const storageKey = btcPrivateKey
+      ? deriveStorageKey(btcPrivateKey)
+      : await activeStorageKey();
+    return hydrateFragment(value, storageKey);
   } catch (err) {
     console.warn('[tip-key-backup] failed to get:', err);
     return null;

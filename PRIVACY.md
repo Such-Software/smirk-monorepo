@@ -9,11 +9,15 @@ Smirk is **non-custodial**: your seed phrase and private spend keys are generate
 and stored on your device and are never transmitted to any backend. What the
 backend does receive, to power balances and optional features:
 
-- **Monero/Wownero view keys**, so the light-wallet-server can scan the chain for
-  your incoming funds (a view key cannot spend).
+- **Monero/Wownero view keys**, sent together with the matching **public
+  address**, so the light-wallet-server can scan the chain for your incoming
+  funds and return your balance, history and spendable outputs (a view key can
+  read your incoming transactions but cannot spend).
 - A **Grin `rewind_hash`**, a view-only credential derived from your public root
   key, so the Grin light-wallet-server can rewind the UTXO set and return your
-  outputs. It can read but never spend, and the scan stores nothing server-side.
+  outputs. It can read but never spend. Scanning **registers** it with the Grin
+  light-wallet-server, which retains it and keeps scanning new blocks against it
+  so later scans are fast; it stays on that server until the operator removes it.
 - **Public addresses** (BTC/LTC) to look up balances via Electrum/Fulcrum, and
   **signed transaction bytes** to broadcast. Recipient address and amount are not
   transmitted on broadcast.

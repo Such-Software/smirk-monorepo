@@ -69,7 +69,10 @@ longer the whole of it.
     RUN YOUR OWN SERVER
     Smirk talks to a backend for chain data. The default is ours; the wallet
     lets you point it at your own, and the server is open source so you can run
-    it yourself. It never sees your seed or your keys either way.
+    it yourself. To show a Monero, Wownero or Grin balance without downloading
+    the whole chain, the wallet hands that server a view-only key: it can see
+    payments coming in, it can never spend. Your seed and your spend keys stay
+    on your device either way, so no server can move your money.
 
     OPEN SOURCE
     https://github.com/Such-Software/smirk-monorepo
@@ -117,7 +120,7 @@ compare the answer against the code.
 
 | Permission | Justification |
 | --- | --- |
-| `storage` | Stores the password-encrypted seed, wallet settings and per-site permission grants locally. Nothing in it is transmitted. |
+| `storage` | Stores the password-encrypted seed, wallet settings and per-site permission grants locally. The seed and the spend keys derived from it never leave the device, and neither do the permission grants; what the wallet does send to a backend is listed under Data disclosures below. |
 | `alarms` | Wakes the service worker on a schedule to refresh balances and to enforce the auto-lock timeout. MV3 service workers are killed when idle, so a timer alone cannot do this. |
 | `notifications` | Notifies the user when a payment arrives or a site is waiting on an approval. |
 | `offscreen` | The wallet's cryptography runs in an offscreen document. Key derivation and signing need a DOM-bearing context that MV3 service workers do not provide. |
@@ -148,17 +151,66 @@ Settings screen and visible in screenshot 08.
 
 ## Data disclosures (Chrome Privacy tab)
 
-Answer as follows, all of which the code supports:
+A light wallet is not a zero-transmission extension, and answering as if it were
+is a false declaration. Smirk does not custody funds and cannot spend them, but
+it does send chain-lookup data to a Smirk backend, because that is how a light
+wallet gets a balance without downloading the chain. Declare that plainly.
+Reviewers compare these answers against the code, so each one below cites the
+call that justifies it.
 
-- Does not collect or use personally identifiable information
-- Does not collect health, financial or payment information (the wallet holds
-  the user's own keys locally; nothing is collected)
-- Does not collect authentication information
-- Does not collect personal communications, location, web history or user
-  activity
-- Not being sold to third parties
-- Not being used or transferred for purposes unrelated to the single purpose
-- Not being used or transferred to determine creditworthiness or for lending
+Tick these data types:
+
+- **Financial and payment information** (`packages/core/src/api/wallet-lws.ts`,
+  `wallet-utxo.ts`, `grin.ts`). To show balances and build transactions the
+  wallet sends, per asset: the user's own public receive address; for
+  Monero/Wownero, the account's private VIEW key; for Grin, a `rewind_hash`
+  view credential. The backend runs the light-wallet servers that scan the chain
+  with those credentials and return balance, transaction history and unspent
+  outputs. It also sends already-signed transaction bytes for broadcast. A view
+  key and a `rewind_hash` are read-only by construction: they reveal incoming
+  transactions, they cannot authorize a spend.
+- **Authentication information** (same files, plus
+  `packages/core/src/api/auth.ts`). The Monero/Wownero view key and the Grin
+  `rewind_hash` are credentials, so declare them here as well rather than
+  arguing about which box they belong in. The wallet also holds a backend
+  session token, and authenticates requests by signing them with a key that
+  never leaves the device.
+- **Personally identifiable information** (`packages/core/src/api/auth.ts`,
+  `social.ts`). On first run the wallet registers a one-way SHA-256 **seed
+  fingerprint** plus the per-chain **public** keys, which is what lets someone
+  send the user a tip. Claiming a handle publishes a `name@domain` NIP-05
+  address, and linking Telegram/Discord stores that link. The handle and the
+  Nostr identity are public by design; the user chooses whether to have them.
+- **Personal communications** (Nostr features). Nostr direct messages are
+  end-to-end encrypted on the device and relayed as ciphertext; Feed posts are
+  public by design. The wallet transmits both, so declare it.
+
+Do NOT tick these, and the code backs that up:
+
+- Health information: never touched.
+- Location: no geolocation API, no location lookup. The backend sees request IPs
+  as any server does and stores them only as a salted one-way hash for
+  rate-limiting.
+- Web history and user activity: the content script announces the wallet and
+  relays only messages a page explicitly sends it. Per-site permission grants
+  stay in local `storage`; no browsing data, page content or site list is
+  transmitted.
+
+Certifications, all three of which we can sign:
+
+- Not being sold to third parties.
+- Not being used or transferred for purposes unrelated to the single purpose.
+  Everything above is used only to look up chain data for the user's own wallet,
+  route tips to them, and deliver messages they chose to send.
+- Not being used or transferred to determine creditworthiness or for lending.
+
+What never leaves the device, and say so in the same breath so the disclosure
+does not read as worse than it is: the seed phrase, every private SPEND key, the
+Nostr secret key and the encryption password. All signing happens locally.
+Nobody holding what the backend receives can move the user's funds. The backend
+is open source and self-hostable, so a user who does not want to send this to us
+can point the wallet at their own server (see the "RUN YOUR OWN SERVER"
+paragraph in the detailed description).
 
 Single purpose statement:
 
@@ -166,22 +218,93 @@ Single purpose statement:
     balances, sends and receives payments, and lets websites request payments
     and signatures with the user's explicit approval.
 
+### Firefox: `data_collection_permissions`
+
+AMO asks the same question in the manifest rather than in a web form, so
+`manifest.firefox.json` carries the same answer in Mozilla's vocabulary. The two
+must never disagree:
+
+    "data_collection_permissions": {
+      "required": [
+        "financialAndPaymentInfo",
+        "authenticationInfo",
+        "personallyIdentifyingInfo",
+        "personalCommunications"
+      ]
+    }
+
+One entry per ticked bullet above, in the same order. `"none"` is only for an
+extension that transmits nothing, which a light wallet is not, and Mozilla
+requires the key on new submissions. `technicalAndInteraction` is deliberately
+absent: Mozilla accepts it only in `optional`, and everything listed above is
+required for the wallet to function, so there is nothing here a user could
+decline and still have working balances. The seed fingerprint is therefore
+declared under `personallyIdentifyingInfo`, the stricter of the two readings.
+
 ## AMO: source code submission
 
 AMO requires a source upload whenever the submitted files are minified or
-bundled, which ours are. Reviewers must be able to reproduce the exact `.zip`
-byte for byte. Include a `README.md` at the root of the source archive:
+bundled, which ours are. The reviewer has to rebuild `dist/` from that archive,
+so the instructions must cover the Rust/WASM toolchain too, not just npm. The
+archive is `git archive HEAD`, `crates/smirk-wasm/pkg/` is gitignored and so is
+absent from it, and `@smirk/wasm`'s own `build` script is only `tsc`: the
+compiled bundle comes from the root `Makefile`'s `wasm` target, which needs
+cargo. A reviewer handed npm-only steps gets `[copy-monorepo-assets] WASM bundle
+missing` from the vite plugin and the review stalls. Include a `README.md` at
+the root of the source archive:
 
     Build environment
-      Node 22.x, npm 10.x, Linux
+      Linux x86_64 (macOS arm64 also reproduces)
+      Node 22.x (the workspace `engines` field requires >=20), npm as shipped
+        with that Node release
+      GNU make
+      Rust 1.95.0 via rustup, with the wasm32-unknown-unknown target
+      wasm-bindgen CLI 0.2.121, which MUST match the version in Cargo.lock
+
+    Toolchain setup
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+      rustup toolchain install 1.95.0
+      rustup default 1.95.0
+      rustup target add wasm32-unknown-unknown
+      cargo install wasm-bindgen-cli --version 0.2.121
 
     Build
+      unzip smirk-wallet-source-v0.3.0.zip -d smirk
+      cd smirk
       npm ci
-      node scripts/build-workspaces.mjs libs
-      VITE_SMIRK_RELEASE=true npm run build:firefox -w @smirk/extension
+      make ext-firefox
+
+    `make ext-firefox` runs two steps and both are required, in this order.
+    Run them by hand if you would rather not use make:
+
+      1. make wasm, because crates/smirk-wasm/pkg/ is gitignored and is
+         therefore NOT in this archive. It is exactly:
+
+           RUSTFLAGS="--remap-path-prefix=$PWD=/smirk --remap-path-prefix=$HOME/.cargo=/cargo" \
+             cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
+           wasm-bindgen --target no-modules \
+             --out-dir crates/smirk-wasm/pkg \
+             target/wasm32-unknown-unknown/release/smirk_wasm.wasm
+           node crates/smirk-wasm/postprocess.mjs
+
+         The --remap-path-prefix flags keep the build directory and cargo home
+         out of the binary, which is what makes the .wasm byte-identical no
+         matter where it is built. The postprocess step replaces the
+         require("env") C-import placeholders with no-ops and appends the ESM
+         export, so it cannot be skipped.
+
+      2. node scripts/build-workspaces.mjs firefox, which builds every
+         workspace library in derived topological order and then runs
+         build:firefox in @smirk/extension.
 
     Output
       packages/extension/dist/, which is what the submitted zip contains.
+
+    Cargo.lock references two git sources (jwinterm/grin-wallet and
+    mimblewimble/grin). They are DEV-ONLY cross-validation test deps of the
+    grin-ext crate and are not compiled by this build: `cargo build -p
+    smirk-wasm` resolves from crates.io plus the sibling path crates under
+    crates/, which are all present in this archive, so nothing fetches them.
 
 Note that `build:firefox` is `vite build && cp manifest.firefox.json
 dist/manifest.json`: it writes to the SAME `dist/` as `build:chrome` and only
@@ -206,7 +329,14 @@ Both stores require these and reject placeholders:
 ## Pre-submit checklist
 
 - [ ] `manifest.json` and `manifest.firefox.json` versions match the git tag
-- [ ] Both zips built with `VITE_SMIRK_RELEASE=true`
+      (`node scripts/bump-version.mjs <semver> --check` exits 0 only when every
+      shipped file, both manifests included, is already at that version)
+- [ ] Tests and typecheck pass on the exact commit the zips were built from.
+      There is no release-only build flag any more: `VITE_SMIRK_RELEASE` has no
+      readers left in the source, so setting it changes nothing and its absence
+      guards nothing
+- [ ] The data disclosures above still match the code, and the Firefox
+      `data_collection_permissions` list still matches those disclosures
 - [ ] Screenshots captured against production, not a local backend
 - [ ] Every caption describes what its own frame shows
 - [ ] https://smirk.cash/privacy resolves

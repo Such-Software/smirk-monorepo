@@ -411,18 +411,55 @@ fn build_output_with_decoys(
 // Address parsing helpers
 // ============================================================================
 
-/// Parse a Monero or Wownero address.
+/// The chain a signing request spends on.
+///
+/// Everything that differs between the two (ring size, RCT type, and which
+/// address prefixes a destination may carry) hangs off this, so an
+/// unrecognized `coin` string is an error rather than a silent default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Coin {
+    Xmr,
+    Wow,
+}
+
+impl Coin {
+    fn parse(coin: &str) -> Result<Self, String> {
+        match coin.to_lowercase().as_str() {
+            "xmr" => Ok(Coin::Xmr),
+            "wow" => Ok(Coin::Wow),
+            other => Err(format!("Unknown coin '{}': expected 'xmr' or 'wow'", other)),
+        }
+    }
+}
+
+/// Parse a Monero or Wownero address, for the coin being spent.
 ///
 /// Monero addresses use single-byte prefixes (18, 19, 42, etc.) which monero-oxide handles.
-/// Wownero addresses use multi-byte varint prefixes (4146, 6810, 12208) which we parse manually.
-fn parse_address(address: &str, network: Network) -> Result<MoneroAddress, String> {
-    // Try Monero first
-    if let Ok(addr) = MoneroAddress::from_str(network, address) {
-        return Ok(addr);
+/// Wownero addresses use multi-byte varint prefixes (4146, 4148, 12208) which we parse manually.
+///
+/// Only the parser belonging to `coin` may accept. The two prefix sets are
+/// disjoint, so trying both (which is what we used to do) means a Monero
+/// address is a constructible destination for a Wownero spend and vice versa:
+/// the transaction signs and broadcasts on the source chain, but the output is
+/// owned by keys on a chain that never sees it, and the funds are gone. No
+/// caller validates the destination against the asset before us, so this is
+/// the gate.
+fn parse_address(address: &str, network: Network, coin: Coin) -> Result<MoneroAddress, String> {
+    match coin {
+        Coin::Xmr => MoneroAddress::from_str(network, address).map_err(|e| {
+            if parse_wownero_address(address, network).is_ok() {
+                "this is a Wownero address; a Monero transaction cannot pay it".to_string()
+            } else {
+                format!("{}", e)
+            }
+        }),
+        Coin::Wow => {
+            if MoneroAddress::from_str(network, address).is_ok() {
+                return Err("this is a Monero address; a Wownero transaction cannot pay it".to_string());
+            }
+            parse_wownero_address(address, network)
+        }
     }
-
-    // Try Wownero (multi-byte varint prefixes)
-    parse_wownero_address(address, network)
 }
 
 /// Parse a Wownero address manually.
@@ -554,8 +591,9 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         return Err("No destinations provided".to_string());
     }
 
-    // Normalize coin type
-    let coin_lower = params.coin.to_lowercase();
+    // Which chain we're spending on. Gates the ring size and RCT type below,
+    // and (money gate) which address prefixes a destination may carry.
+    let coin = Coin::parse(&params.coin)?;
 
     // Parse keys
     let view_key = parse_hex_32(&params.view_key)?;
@@ -570,7 +608,7 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     // Check ring size:
     // - XMR: 16 (15 decoys + 1 real)
     // - WOW: 22 (21 decoys + 1 real) - required since HF v9
-    let expected_decoys = if coin_lower == "wow" { 21 } else { 15 };
+    let expected_decoys = if coin == Coin::Wow { 21 } else { 15 };
     for (i, input) in params.inputs.iter().enumerate() {
         if input.decoys.len() != expected_decoys {
             return Err(format!(
@@ -602,13 +640,13 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     // Parse destination addresses (supports both Monero and Wownero)
     let mut payments: Vec<(MoneroAddress, u64)> = Vec::new();
     for dest in &params.destinations {
-        let addr = parse_address(&dest.address, network)
+        let addr = parse_address(&dest.address, network, coin)
             .map_err(|e| format!("Invalid address '{}': {}", dest.address, e))?;
         payments.push((addr, dest.amount));
     }
 
     // Parse change address (supports both Monero and Wownero)
-    let change_addr = parse_address(&params.change_address, network)
+    let change_addr = parse_address(&params.change_address, network, coin)
         .map_err(|e| format!("Invalid change address '{}': {}", params.change_address, e))?;
 
     // Create fee rate
@@ -622,7 +660,7 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     let change = Change::fingerprintable(Some(change_addr));
 
     // Use Wownero-specific RCT type for WOW (ring size 22 = 21 decoys)
-    let rct_type = if params.coin.to_lowercase() == "wow" {
+    let rct_type = if coin == Coin::Wow {
         RctType::WowneroClsagBulletproofPlus
     } else {
         RctType::ClsagBulletproofPlus

@@ -37,7 +37,8 @@
   "web_accessible_resources": [
     {
       "resources": ["inject.js"],
-      "matches": ["http://*/*", "https://*/*"]
+      "matches": ["http://*/*", "https://*/*"],
+      "use_dynamic_url": true
     }
   ],
   "icons": {

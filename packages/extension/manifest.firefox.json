@@ -44,8 +44,14 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "wallet@smirk.cash",
+      "strict_min_version": "115.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "financialAndPaymentInfo",
+          "authenticationInfo",
+          "personallyIdentifyingInfo",
+          "personalCommunications"
+        ]
       }
     }
   }

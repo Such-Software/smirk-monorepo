@@ -75,6 +75,16 @@ export interface InstallSmirkPageApiOptions {
   readonly mode?: 'auto' | 'force' | 'never';
 
   /**
+   * Origin of the wallet frame this page talks to, e.g.
+   * `'https://wallet.smirk.cash'` or `'tauri://localhost'`. When set,
+   * requests are posted ONLY to that origin and responses from any
+   * other origin are ignored. Leave unset when the embedder's origin
+   * isn't known ahead of time: the transport still refuses any
+   * response that didn't come from the frame it sent the request to.
+   */
+  readonly walletOrigin?: string;
+
+  /**
    * Called once when the page-side runtime is wired. Use this to
    * dispatch your own `smirk-ready` event or update UI state. Not
    * called when the install is a no-op (extension already present,
@@ -115,7 +125,7 @@ export function installSmirkPageApi(
   const channel = options.channel ?? DEFAULT_POSTMESSAGE_CHANNEL;
   const timeoutMs = options.timeoutMs ?? 30_000;
 
-  installPostMessageRuntime(channel, timeoutMs);
+  installPostMessageRuntime(channel, timeoutMs, options.walletOrigin);
   options.onReady?.();
   return 'iframe-mode';
 }
@@ -137,7 +147,11 @@ interface WireResponse {
   error?: { code: string; message: string };
 }
 
-function installPostMessageRuntime(channel: string, timeoutMs: number): void {
+function installPostMessageRuntime(
+  channel: string,
+  timeoutMs: number,
+  walletOrigin: string | undefined,
+): void {
   const pending = new Map<number, PendingEntry>();
   let nextId = 1;
 
@@ -164,12 +178,26 @@ function installPostMessageRuntime(channel: string, timeoutMs: number): void {
             params: params ?? {},
           },
         },
-        '*',
+        walletOrigin ?? '*',
       );
     });
   }
 
   window.addEventListener('message', (ev: MessageEvent) => {
+    // Only the frame we posted the request TO may answer it. `ev.source` is
+    // set by the browser and cannot be forged by the sender, so pinning it
+    // rejects a SMIRK_RESPONSE injected by any OTHER frame on this page (an ad
+    // frame, an embedded widget) that guessed the channel and a live request
+    // id and would otherwise resolve a pending call with attacker data.
+    // The wallet answers with `iframe.contentWindow.postMessage(...)`, i.e.
+    // from our parent frame, so this is exactly the legitimate path; in
+    // 'force' mode window.parent === window and the check degrades to
+    // same-window, which is same-origin by construction.
+    if (ev.source !== window.parent) return;
+    // The wallet shell is the embedder and therefore a DIFFERENT origin from
+    // this page, so `window.location.origin` is not the value to compare
+    // against: we can only check the origin when the dapp pinned it.
+    if (walletOrigin !== undefined && ev.origin !== walletOrigin) return;
     const data = ev.data as
       | { channel?: unknown; payload?: WireResponse }
       | null

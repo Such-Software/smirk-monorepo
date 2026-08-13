@@ -128,15 +128,26 @@ export function isForeignVaultBackup(mnemonic: string, text: string): boolean {
 
 /**
  * Resolve the ACTIVE identity for signing/posting/delivery. Falls back to the
- * account-0 derived identity if the vault is unreadable or its active secret is
- * missing: the wallet must always have a usable identity.
+ * account-0 derived identity ONLY when account-0 is what is active (no vault
+ * yet, or the default is selected): the wallet must always have a usable default
+ * identity. For any OTHER active identity an unresolvable secret THROWS, because
+ * silently answering with account-0 would post/DM as the user's MAIN identity
+ * while they believe they are on a burner. {@link getActiveNostrIdentityFromWallet}
+ * turns that into its documented `identity: null, needsUnlock: true`.
  */
 export async function getActiveNostrIdentity(mnemonic: string): Promise<NostrIdentity> {
+  // A vault we cannot even READ says nothing about which identity is active, so
+  // it cannot be shown to be account-0 either: let that propagate too.
+  const vault = await loadVault(mnemonic);
+  const active = activeStored(vault);
+  // Same rule the wrapper below applies: no entry for the active pointer, or an
+  // entry that IS derived account 0.
+  const activeIsAccount0 =
+    !active || (active.source === 'derived' && (active.account ?? 0) === 0);
   try {
-    const vault = await loadVault(mnemonic);
     return resolveActiveIdentity(vault, mnemonic, vaultCrypto(mnemonic).decrypt);
-  } catch {
-    const { deriveNostrIdentity } = await import('@smirk/core');
+  } catch (err) {
+    if (!activeIsAccount0) throw err;
     return deriveNostrIdentity(mnemonic, 0);
   }
 }

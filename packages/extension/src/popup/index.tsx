@@ -1652,12 +1652,28 @@ function App() {
     );
   }
 
+  /**
+   * Stop the background DM poller.
+   *
+   * The watcher re-arms its own alarm across service-worker restarts, so without
+   * an explicit clear it keeps announcing the user's npub to the relay every few
+   * minutes after lock, after a backend switch, and after "Forget this wallet".
+   * The watcher also checks its own preconditions before each poll, so this is
+   * belt-and-braces: it stops the beacon at the moment of the user's action
+   * rather than at the next tick. Best-effort by design, a missing background
+   * page must never block locking.
+   */
+  const stopDmWatch = async () => {
+    await chrome.runtime.sendMessage({ type: 'DM_WATCH_CLEAR' }).catch(() => {});
+  };
+
   // walletState.kind === 'unlocked'
   const lockHandler = async () => {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     await clearCachedActiveNostrKey();
     await clearBootstrapCache();
     await clearDappPublicCache();
+    await stopDmWatch();
     await walletKeystore.lock();
     await refresh();
   };
@@ -1843,6 +1859,7 @@ function App() {
                 await clearCachedActiveNostrKey();
                 await clearBootstrapCache();
                 await clearDappPublicCache();
+                await stopDmWatch();
                 await walletKeystore.destroy();
                 await refresh();
               }}
@@ -1855,6 +1872,10 @@ function App() {
                 invalidateCapabilities();
                 await clearBootstrapCache();
                 await clearDappPublicCache();
+                // The watcher is pinned to the OLD instance's relay, so leaving it
+                // running would keep beaconing this npub to a relay the user just
+                // navigated away from. Messages re-arms it against the new one.
+                await stopDmWatch();
                 // Drop the balance snapshot too: it's keyed by the OLD backend, so
                 // the re-bootstrap against the new instance must not paint stale
                 // cross-backend numbers on first open.
@@ -2198,12 +2219,17 @@ function HomeRouter({
               else if (owner.data.user_id) recipientUserId = owner.data.user_id;
             }
           }
-          // Build both transports under the ACTIVE identity (from the vault), so a
-          // send from a burner/imported identity is gift-wrapped by IT, not always
-          // account 0. selectSendChannel inside startGrinSend picks Nostr vs backend.
-          const identity = await getActiveNostrIdentity(wallet.mnemonic);
-          const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
           try {
+            // Build both transports under the ACTIVE identity (from the vault), so a
+            // send from a burner/imported identity is gift-wrapped by IT, not always
+            // account 0. selectSendChannel inside startGrinSend picks Nostr vs backend.
+            //
+            // Inside the try on purpose: resolving a non-default active identity now
+            // THROWS when its secret will not decrypt, rather than silently falling
+            // back to account 0. That has to surface as {ok:false} like any other
+            // send failure instead of rejecting this handler's promise.
+            const identity = await getActiveNostrIdentity(wallet.mnemonic);
+            const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
             const result = await startGrinSend({
               mnemonic: wallet.mnemonic,
               senderSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
@@ -2243,9 +2269,11 @@ function HomeRouter({
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
-          const identity = await getActiveNostrIdentity(wallet.mnemonic);
-          const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
           try {
+            // Inside the try: see the note on onGrinSend. A non-default active
+            // identity whose secret will not decrypt now throws here.
+            const identity = await getActiveNostrIdentity(wallet.mnemonic);
+            const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
             const result = await processGrinS2({
               mnemonic: wallet.mnemonic,
               s2,
@@ -2273,7 +2301,15 @@ function HomeRouter({
             return;
           }
           await ensureWasmInit();
-          const identity = await getActiveNostrIdentity(wallet.mnemonic);
+          const identity = await getActiveNostrIdentity(wallet.mnemonic).catch(() => null);
+          if (!identity) {
+            // The active identity's secret will not decrypt, so we cannot build a
+            // channel to tell the counterparty. Free the reserved inputs locally
+            // anyway, exactly as the locked-wallet branch above does: leaving them
+            // reserved would strand that balance with nothing to release it.
+            await grinOverlay.remove(slateId).catch(() => undefined);
+            return;
+          }
           const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
           await cancelGrinSend({
             slate_id: slateId,

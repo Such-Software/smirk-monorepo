@@ -24,6 +24,7 @@ import { api, CORE_PACKAGE_VERSION } from '@smirk/core';
 
 import { bootBackendSelection } from '../backend-boot';
 import { installDappBridge } from './dapp/dispatch';
+import { clearDappPublicCache } from './dapp/provider';
 import { installDmWatcher } from './dm-watch';
 import { installJobsCoordinator } from './jobs/coordinator';
 
@@ -40,6 +41,19 @@ console.debug('[smirk] background worker starting', {
 
 chrome.runtime.onInstalled.addListener(() => {
   console.debug('[smirk] installed; api base:', (api as unknown as { baseUrl: string }).baseUrl);
+});
+
+// A browser restart means there is no unlocked popup session, by definition:
+// the keys live in `chrome.storage.session`, which the browser drops on exit.
+// The dapp public cache lives in `chrome.storage.local` and therefore does
+// survive, so clear it here. Without this, an entry written under the default
+// auto-lock of 0 (which carries no `sessionExpiresAtMs`, see provider.ts) would
+// outlive the restart and report `isUnlocked: true` to a previously-connected
+// origin, handing it the user's addresses and npub before any unlock.
+chrome.runtime.onStartup.addListener(() => {
+  void clearDappPublicCache().catch((e: unknown) => {
+    console.debug('[smirk] startup cache clear failed:', e);
+  });
 });
 
 // PING listener: registered FIRST so the dapp bridge's

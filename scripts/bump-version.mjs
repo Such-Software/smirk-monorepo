@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
  * bump-version.mjs: set every shipped artifact's version to a single
- * semver. Lockstep across the workspace: root + every `packages/*` +
- * the extension's `manifest.json` (the file Chrome/Firefox actually
- * read, which `npm version` ignores).
+ * semver. Lockstep across the workspace: root + the `packages/*` that
+ * ship (the private tooling packages and the independently versioned
+ * `@such-software/smirk-dapp-api` are deliberately out) + BOTH
+ * extension manifests, `manifest.json` (Chrome) and
+ * `manifest.firefox.json` (AMO), which are the files the stores
+ * actually read and which `npm version` ignores.
  *
  * Usage:
  *   node scripts/bump-version.mjs 0.3.0          # write
@@ -24,8 +27,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 // Targets carry the file path + the JSON path to the version string.
-// Keep the manifest target last: it's the file Chrome reads, and we
-// want it confirmed-written after every npm package has been touched.
+// Keep the manifest targets last: they're the files the stores read, and
+// we want them confirmed-written after every npm package has been
+// touched. BOTH manifests ship, so both must move together: a Firefox
+// package whose manifest version disagrees with the Chrome one and with
+// the git tag is a rejected AMO upload at best, and an untraceable
+// artifact at worst.
 const NPM_TARGETS = [
   'package.json',
   'packages/assets/package.json',
@@ -35,7 +42,10 @@ const NPM_TARGETS = [
   'packages/ui/package.json',
   'packages/wasm/package.json',
 ];
-const MANIFEST_TARGETS = ['packages/extension/manifest.json'];
+const MANIFEST_TARGETS = [
+  'packages/extension/manifest.json',
+  'packages/extension/manifest.firefox.json',
+];
 
 // Rust crates intentionally skipped: they're never published. If
 // a future release needs Cargo in lockstep, add their Cargo.toml here
@@ -44,9 +54,33 @@ const CARGO_TARGETS = [];
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
+function fail(msg) {
+  console.error(`error: ${msg}`);
+  process.exit(2);
+}
+
+// Every target is a file we KNOW ships. A missing file, unparseable JSON,
+// or a missing/garbage `version` means the release is about to go out with
+// something at the wrong version, so stop the release rather than skip the
+// file: a silent skip is exactly how the Firefox manifest drifted.
 function readJson(rel) {
   const p = resolve(ROOT, rel);
-  return { path: p, json: JSON.parse(readFileSync(p, 'utf8')) };
+  let raw;
+  try {
+    raw = readFileSync(p, 'utf8');
+  } catch (err) {
+    fail(`${rel}: cannot read (${err.code ?? err.message})`);
+  }
+  let json;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    fail(`${rel}: not valid JSON (${err.message})`);
+  }
+  if (typeof json.version !== 'string' || !SEMVER_RE.test(json.version)) {
+    fail(`${rel}: missing or malformed "version" (found ${JSON.stringify(json.version)})`);
+  }
+  return { path: p, json };
 }
 
 function writeJson(path, json) {
@@ -105,7 +139,7 @@ function main() {
   ];
 
   if (changes.length === 0) {
-    console.log(`all targets already at ${version} — nothing to do`);
+    console.log(`all targets already at ${version}: nothing to do`);
     return;
   }
 

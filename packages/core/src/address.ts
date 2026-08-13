@@ -1,7 +1,9 @@
 /**
  * Address derivation and validation for all supported chains.
  *
- * - **BTC/LTC**: P2WPKH (bech32, `bc1q…` / `ltc1q…`).
+ * - **BTC/LTC**: P2WPKH (bech32, `bc1q…` / `ltc1q…`). We only derive
+ *   P2WPKH, but a recipient may also be P2TR (bech32m, `bc1p…`), which
+ *   the validators accept because the Rust builder can pay it.
  * - **XMR/WOW**: Cryptonote standard address (prefix + spend + view +
  *   4-byte Keccak checksum, encoded with Monero base58).
  * - **Grin**: slatepack address (ed25519 pubkey, bech32-encoded with
@@ -14,7 +16,7 @@
  * surface so `@smirk/core` is import-time WASM-free.
  */
 
-import { bech32 } from '@scure/base';
+import { bech32, bech32m } from '@scure/base';
 import { sha256 } from '@noble/hashes/sha256';
 import { ripemd160 } from '@noble/hashes/ripemd160';
 import { keccak_256 } from '@noble/hashes/sha3';
@@ -311,26 +313,83 @@ export function grinSlatpackAddress(publicKey: Uint8Array): string {
 // Validation
 // ============================================================================
 
-/** True iff `address` parses as a `bc1…` bech32 address. */
-export function isValidBtcAddress(address: string): boolean {
-  try {
-    if (!address.includes('1')) return false;
-    const decoded = bech32.decode(address as `${string}1${string}`);
-    return decoded.prefix === 'bc' && decoded.words.length > 0;
-  } catch {
-    return false;
-  }
+/**
+ * Witness (version, program-length) pairs a recipient address may carry.
+ *
+ * This is exactly the set `decode_recipient_script`
+ * (`crates/btc-ext/src/address.rs`) can turn into a script_pubkey: P2WPKH
+ * (v0, 20 bytes) and P2TR (v1, 32 bytes). Anything else (P2WSH, future
+ * witness versions) is refused there, so we refuse it here too: green-lighting
+ * an address in the send wizard that the signer will reject strands the user
+ * at the last step of the flow.
+ */
+function isSupportedWitnessProgram(version: number, programLength: number): boolean {
+  return (version === 0 && programLength === 20) || (version === 1 && programLength === 32);
 }
 
-/** True iff `address` parses as a `ltc1…` bech32 address. */
-export function isValidLtcAddress(address: string): boolean {
+/**
+ * True iff `address` is a segwit address under `hrp` that the signer can pay.
+ *
+ * Witness v0 is checksummed with bech32 and v1+ with bech32m (BIP350); the two
+ * checksum constants are deliberately incompatible. We decode with bech32
+ * first, fall back to bech32m, and then require the announced witness version
+ * to match whichever codec accepted the string. That pairing is what rejects a
+ * taproot address carrying a v0 checksum (and a v0 address carrying a bech32m
+ * one): both decode cleanly under the wrong codec, and only the version check
+ * catches them.
+ */
+function isValidSegwitAddress(address: string, hrp: string): boolean {
+  if (!address.includes('1')) return false;
+  const encoded = address as `${string}1${string}`;
+
+  let words: number[];
+  let isBech32m: boolean;
   try {
-    if (!address.includes('1')) return false;
-    const decoded = bech32.decode(address as `${string}1${string}`);
-    return decoded.prefix === 'ltc' && decoded.words.length > 0;
+    const decoded = bech32.decode(encoded);
+    if (decoded.prefix !== hrp) return false;
+    words = decoded.words;
+    isBech32m = false;
+  } catch {
+    try {
+      const decoded = bech32m.decode(encoded);
+      if (decoded.prefix !== hrp) return false;
+      words = decoded.words;
+      isBech32m = true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (words.length === 0) return false;
+  const version = words[0]!;
+  if (isBech32m ? version === 0 : version !== 0) return false;
+
+  let program: Uint8Array;
+  try {
+    // 5-bit words back to bytes; throws on bad padding, which is itself a
+    // reason to reject the address.
+    program = (isBech32m ? bech32m : bech32).fromWords(words.slice(1));
   } catch {
     return false;
   }
+
+  return isSupportedWitnessProgram(version, program.length);
+}
+
+/**
+ * True iff `address` is a `bc1…` segwit address the signer can pay:
+ * P2WPKH (`bc1q…`) or P2TR (`bc1p…`).
+ */
+export function isValidBtcAddress(address: string): boolean {
+  return isValidSegwitAddress(address, 'bc');
+}
+
+/**
+ * True iff `address` is a `ltc1…` segwit address the signer can pay:
+ * P2WPKH (`ltc1q…`) or P2TR (`ltc1p…`).
+ */
+export function isValidLtcAddress(address: string): boolean {
+  return isValidSegwitAddress(address, 'ltc');
 }
 
 /**

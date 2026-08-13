@@ -16,6 +16,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { bech32, bech32m } from '@scure/base';
 
 import {
   isValidBtcAddress,
@@ -204,4 +205,93 @@ test('subaddress derivation is deterministic', () => {
 test('subaddress (0,0) throws — it is the primary address, not a subaddress', () => {
   assert.throws(() => xmrSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 0));
   assert.throws(() => wowSubaddress(REF_SPEND_PUB, REF_VIEW_PRIV, 0, 0));
+});
+
+// ============================================================================
+// BTC / LTC segwit recipients
+// ============================================================================
+//
+// The validators must accept exactly the (witness version, program length)
+// pairs `decode_recipient_script` (crates/btc-ext/src/address.rs) can pay:
+// (0, 20) P2WPKH and (1, 32) P2TR. Vectors below are the BIP84 / BIP86
+// reference addresses (same ones the Rust unit tests assert on) plus BIP173's
+// P2WSH example; the malformed ones are synthesized here so the checksum and
+// length failure modes are exercised without hand-typed strings.
+
+// BIP84 m/84'/0'/0'/0/0 for the "abandon … about" mnemonic: v0, 20 bytes.
+const BTC_P2WPKH = 'bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu';
+// BIP173 example: v0, 32 bytes (P2WSH).
+const BTC_P2WSH =
+  'bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3';
+// BIP86 m/86'/0'/0'/0/0 for the same mnemonic: v1, 32 bytes (taproot).
+const BTC_P2TR =
+  'bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr';
+
+/** Witness program bytes of a bech32m (v1+) address. */
+function witnessProgram(address: string): Uint8Array {
+  return bech32m.fromWords(bech32m.decode(address as `${string}1${string}`).words.slice(1));
+}
+
+test('isValidBtcAddress: accepts v0 P2WPKH (bech32)', () => {
+  assert.equal(isValidBtcAddress(BTC_P2WPKH), true);
+});
+
+test('isValidBtcAddress: accepts v1 P2TR (bech32m)', () => {
+  assert.equal(isValidBtcAddress(BTC_P2TR), true);
+});
+
+test('isValidLtcAddress: accepts ltc1q P2WPKH and ltc1p P2TR', () => {
+  const p2wpkhProgram = bech32.fromWords(
+    bech32.decode(BTC_P2WPKH as `${string}1${string}`).words.slice(1),
+  );
+  const ltcP2wpkh = bech32.encode('ltc', [0, ...bech32.toWords(p2wpkhProgram)]);
+  const ltcP2tr = bech32m.encode('ltc', [1, ...bech32m.toWords(witnessProgram(BTC_P2TR))]);
+  assert.equal(isValidLtcAddress(ltcP2wpkh), true, ltcP2wpkh);
+  assert.equal(isValidLtcAddress(ltcP2tr), true, ltcP2tr);
+});
+
+test('isValidBtcAddress: rejects v0 P2WSH — the builder cannot pay it', () => {
+  // (0, 32) is a well-formed bech32 address, but `decode_recipient_script`
+  // only builds P2WPKH and P2TR outputs. Accepting it here would green-light
+  // a send the signer refuses.
+  assert.equal(isValidBtcAddress(BTC_P2WSH), false);
+});
+
+test('isValidBtcAddress / isValidLtcAddress: reject the other chain\'s HRP', () => {
+  const ltcP2tr = bech32m.encode('ltc', [1, ...bech32m.toWords(witnessProgram(BTC_P2TR))]);
+  assert.equal(isValidBtcAddress(ltcP2tr), false);
+  assert.equal(isValidLtcAddress(BTC_P2TR), false);
+  assert.equal(isValidLtcAddress(BTC_P2WPKH), false);
+});
+
+test('isValidBtcAddress: rejects a v1 address with a bech32 (v0) checksum', () => {
+  // BIP350: v0 is bech32, v1+ is bech32m. Re-encoding the taproot payload
+  // with the v0 checksum yields a string that decodes cleanly as bech32 but
+  // is NOT a valid taproot address, and the network would not pay it.
+  const taprootWords = bech32m.decode(BTC_P2TR as `${string}1${string}`).words;
+  const wrongChecksum = bech32.encode('bc', taprootWords);
+  assert.notEqual(wrongChecksum, BTC_P2TR);
+  assert.equal(isValidBtcAddress(wrongChecksum), false);
+});
+
+test('isValidBtcAddress: rejects a v0 address with a bech32m checksum', () => {
+  const p2wpkhWords = bech32.decode(BTC_P2WPKH as `${string}1${string}`).words;
+  const wrongChecksum = bech32m.encode('bc', p2wpkhWords);
+  assert.notEqual(wrongChecksum, BTC_P2WPKH);
+  assert.equal(isValidBtcAddress(wrongChecksum), false);
+});
+
+test('isValidBtcAddress: rejects unsupported program lengths', () => {
+  // v0 with a 21-byte program, and v1 with a 20-byte program: both are
+  // syntactically fine bech32/bech32m, neither is a script the builder emits.
+  const v0BadLength = bech32.encode('bc', [0, ...bech32.toWords(new Uint8Array(21))]);
+  const v1BadLength = bech32m.encode('bc', [1, ...bech32m.toWords(new Uint8Array(20))]);
+  assert.equal(isValidBtcAddress(v0BadLength), false);
+  assert.equal(isValidBtcAddress(v1BadLength), false);
+});
+
+test('isValidBtcAddress: rejects an empty / version-only / non-bech32 string', () => {
+  assert.equal(isValidBtcAddress(''), false);
+  assert.equal(isValidBtcAddress('bc1'), false);
+  assert.equal(isValidBtcAddress('not-an-address'), false);
 });

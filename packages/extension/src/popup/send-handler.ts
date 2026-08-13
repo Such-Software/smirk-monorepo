@@ -85,6 +85,15 @@ function parseWasmResult<T>(json: string): T {
 }
 
 /**
+ * Largest atomic amount the CryptoNote wire format can carry (u64 max).
+ *
+ * The bound that matters is the protocol's, not JavaScript's: atomic amounts
+ * travel as BigInt here and as decimal strings across the wasm boundary, so
+ * values above 2^53 are exact the whole way.
+ */
+const MAX_U64_ATOMIC = 2n ** 64n - 1n;
+
+/**
  * P2WPKH transaction-size estimator (BIP-141 vsize).
  *
  * Each input: 41 bytes of base data (outpoint + sequence + empty
@@ -667,8 +676,16 @@ async function sendXmrWow(
     effectiveAmount = selectedTotal - feeAtomic;
   } else {
     const target = amountAtomic;
-    if (target > BigInt(Number.MAX_SAFE_INTEGER)) {
-      return { ok: false, error: 'Amount exceeds JS-safe-integer range' };
+    // Selection, fee math and the destination amount are BigInt end-to-end and
+    // the amount reaches the signer as a decimal string (`de_u64_flex`), so the
+    // only real bound is the protocol's u64. The old 2^53 cap was left over from
+    // the JS-number era and rejected legitimate sends: at WOW's 11 decimals it
+    // capped a single send at ~90k WOW, an ordinary holding for that chain.
+    if (target <= 0n) {
+      return { ok: false, error: 'Amount must be greater than zero' };
+    }
+    if (target > MAX_U64_ATOMIC) {
+      return { ok: false, error: 'Amount exceeds the maximum u64 atomic value' };
     }
     const acc: typeof sortedOutputs = [];
     let accTotal = 0n;
