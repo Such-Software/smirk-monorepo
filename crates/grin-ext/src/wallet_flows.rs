@@ -682,8 +682,8 @@ pub struct SignInvoiceOutput {
 ///
 /// 1. Validate slate state is `Invoice1`.
 /// 2. Derive each input's blinding factor; verify on-chain commitment.
-/// 3. If `inputs_total > amount + fee`, derive change blind + Pedersen
-///    + bulletproof. (Note: fee is dictated by the receiver in the
+/// 3. If `inputs_total > amount + fee`, derive change blind + Pedersen +
+///    bulletproof. (Note: fee is dictated by the receiver in the
 ///    invoice; sender either accepts or rejects.)
 /// 4. Compute `sender_blind_excess = change_blind − Σ input_blinds −
 ///    kernel_offset`. (Or `−Σ inputs − offset` with no change.)
@@ -898,10 +898,10 @@ pub fn finalize_invoice(
 ///   - ext_key: v3 (modern), legacy v1/v2 (if `legacy_ext_key.is_some()`)
 ///   - switch: Regular (HF2 default), None (raw BIP32 child)
 ///   - depth: 4 (walk all path elements, our internal convention),
-///            3 (walk first 3 elements: grin-wallet's `ExtKeychainPath`
-///               default for standard outputs; the 4th u32 is just
-///               serialization padding). Only enabled when path[3] == 0;
-///               otherwise depth-3 would silently drop a meaningful step.
+///     3 (walk first 3 elements: grin-wallet's `ExtKeychainPath`
+///     default for standard outputs; the 4th u32 is just serialization
+///     padding). Only enabled when path[3] == 0; otherwise depth-3
+///     would silently drop a meaningful step.
 ///
 /// Without the depth-3 candidates, outputs created by external
 /// grin-wallet / Grim (which always serialize the default account at

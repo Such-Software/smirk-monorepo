@@ -371,7 +371,7 @@ pub fn sweep_grin_voucher(
 
     let tx_bytes = serialize_voucher_tx(
         &params.kernel_offset,
-        &[voucher_input.clone()],
+        std::slice::from_ref(&voucher_input),
         &outputs,
         &kernel_features.to_v2_bytes()?,
         &kernel_excess,

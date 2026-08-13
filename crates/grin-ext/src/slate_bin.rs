@@ -47,9 +47,6 @@ impl W {
     fn u16(&mut self, v: u16) {
         self.buf.extend_from_slice(&v.to_be_bytes());
     }
-    fn u32(&mut self, v: u32) {
-        self.buf.extend_from_slice(&v.to_be_bytes());
-    }
     fn u64(&mut self, v: u64) {
         self.buf.extend_from_slice(&v.to_be_bytes());
     }
@@ -71,12 +68,16 @@ impl<'a> R<'a> {
         Self { data, pos: 0 }
     }
     fn ensure(&self, n: usize) -> Result<(), String> {
-        if self.pos + n > self.data.len() {
+        // Compare against the bytes that remain instead of `self.pos + n`:
+        // `n` can be a counterparty-chosen length (see read_coms), and the
+        // sum would overflow before the comparison could reject it. `pos`
+        // never exceeds `len` because it only advances past a successful
+        // ensure, so the subtraction cannot underflow.
+        let remaining = self.data.len().saturating_sub(self.pos);
+        if n > remaining {
             Err(format!(
                 "slate bin: unexpected EOF at pos {} (need {} more, have {})",
-                self.pos,
-                n,
-                self.data.len() - self.pos
+                self.pos, n, remaining
             ))
         } else {
             Ok(())
@@ -203,8 +204,15 @@ fn read_opt_fields(r: &mut R) -> Result<(u8, u64, u64, u8, u64), String> {
     Ok((num_parts, amt, fee, feat, ttl))
 }
 
-fn write_sigs(w: &mut W, sigs: &[ParticipantDataV4]) {
-    w.u8(sigs.len() as u8);
+fn write_sigs(w: &mut W, sigs: &[ParticipantDataV4]) -> Result<(), String> {
+    // The V4 wire format has exactly one byte for this count, so a longer
+    // list is unencodable. Refusing beats truncating: a wrapped count would
+    // still be a well-formed slate, just one describing a different
+    // transaction than the one we hold.
+    let count = u8::try_from(sigs.len()).map_err(|_| {
+        format!("slate bin: {} participants exceeds the u8 count field", sigs.len())
+    })?;
+    w.u8(count);
     for s in sigs {
         if s.part.is_some() {
             w.u8(1);
@@ -219,6 +227,7 @@ fn write_sigs(w: &mut W, sigs: &[ParticipantDataV4]) {
             w.bytes(p);
         }
     }
+    Ok(())
 }
 
 fn read_sigs(r: &mut R) -> Result<Vec<ParticipantDataV4>, String> {
@@ -238,8 +247,13 @@ fn read_sigs(r: &mut R) -> Result<Vec<ParticipantDataV4>, String> {
     Ok(out)
 }
 
-fn write_coms(w: &mut W, coms: &[CommitsV4]) {
-    w.u16(coms.len() as u16);
+fn write_coms(w: &mut W, coms: &[CommitsV4]) -> Result<(), String> {
+    // Same reasoning as write_sigs: this count is 16 bits wide on the wire,
+    // so an over-long list must be rejected rather than silently wrapped.
+    let count = u16::try_from(coms.len()).map_err(|_| {
+        format!("slate bin: {} commitments exceeds the u16 count field", coms.len())
+    })?;
+    w.u16(count);
     for o in coms {
         if o.p.is_some() {
             w.u8(1); // output (with proof)
@@ -256,6 +270,7 @@ fn write_coms(w: &mut W, coms: &[CommitsV4]) {
             w.bytes(p);
         }
     }
+    Ok(())
 }
 
 fn read_coms(r: &mut R) -> Result<Vec<CommitsV4>, String> {
@@ -266,7 +281,15 @@ fn read_coms(r: &mut R) -> Result<Vec<CommitsV4>, String> {
         let f = r.u8()?;
         let c: [u8; 33] = r.fixed()?;
         let p = if is_output == 1 {
-            let plen = r.u64()? as usize;
+            // This length is whatever the transaction counterparty put in
+            // their slatepack. On wasm32 `as usize` would truncate it to 32
+            // bits, so a crafted 2^32 + k would shrink to k, sail through
+            // the reader's bounds check, and silently desynchronise the
+            // parse of every commitment that follows.
+            let plen_wire = r.u64()?;
+            let plen = usize::try_from(plen_wire).map_err(|_| {
+                format!("slate bin: rangeproof length {plen_wire} does not fit in usize")
+            })?;
             Some(r.bytes(plen)?.to_vec())
         } else {
             None
@@ -298,7 +321,11 @@ fn read_proof(r: &mut R) -> Result<PaymentInfoV4, String> {
     Ok(PaymentInfoV4 { saddr, raddr, rsig })
 }
 
-fn write_opt_structs(w: &mut W, coms: &Option<Vec<CommitsV4>>, proof: &Option<PaymentInfoV4>) {
+fn write_opt_structs(
+    w: &mut W,
+    coms: &Option<Vec<CommitsV4>>,
+    proof: &Option<PaymentInfoV4>,
+) -> Result<(), String> {
     let mut status: u8 = 0;
     if coms.is_some() {
         status |= 0x01;
@@ -308,11 +335,12 @@ fn write_opt_structs(w: &mut W, coms: &Option<Vec<CommitsV4>>, proof: &Option<Pa
     }
     w.u8(status);
     if let Some(c) = coms {
-        write_coms(w, c);
+        write_coms(w, c)?;
     }
     if let Some(p) = proof {
         write_proof(w, p);
     }
+    Ok(())
 }
 
 fn read_opt_structs(r: &mut R) -> Result<(Option<Vec<CommitsV4>>, Option<PaymentInfoV4>), String> {
@@ -344,8 +372,8 @@ pub fn serialize_slate_v4_bin(slate: &SlateV4) -> Result<Vec<u8>, String> {
     w.u8(state_byte(slate.sta));
     w.bytes(&slate.off);
     write_opt_fields(&mut w, slate);
-    write_sigs(&mut w, &slate.sigs);
-    write_opt_structs(&mut w, &slate.coms, &slate.proof);
+    write_sigs(&mut w, &slate.sigs)?;
+    write_opt_structs(&mut w, &slate.coms, &slate.proof)?;
     // For HeightLocked (feat=2) or NRD (feat=3), append the
     // lock_hgt / relative_height u64 (both stored in feat_args.lock_hgt).
     if slate.feat == 2 || slate.feat == 3 {
@@ -421,6 +449,51 @@ mod tests {
         let bin = serialize_slate_v4_bin(&slate).unwrap();
         let back = deserialize_slate_v4_bin(&bin).unwrap();
         assert_eq!(slate, back);
+    }
+
+    /// The 16 bytes standing in for a rangeproof body in the tests below.
+    const PROOF_BODY: [u8; 16] = [0xBB; 16];
+
+    /// Hand-build a `coms` section holding one output whose rangeproof body
+    /// is [`PROOF_BODY`] but whose length prefix is `plen`. Only the prefix
+    /// differs between the honest and the hostile case below.
+    fn coms_bytes(plen: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u16.to_be_bytes()); // one entry
+        bytes.push(1); // is_output = 1, so a rangeproof follows
+        bytes.push(0); // OutputFeatures::Plain
+        bytes.extend_from_slice(&[0xAA; 33]); // Pedersen commitment
+        bytes.extend_from_slice(&plen.to_be_bytes());
+        bytes.extend_from_slice(&PROOF_BODY);
+        bytes
+    }
+
+    #[test]
+    fn rangeproof_length_that_overflows_32_bits_is_rejected() {
+        // Control: with an honest prefix these exact bytes parse cleanly.
+        let coms = read_coms(&mut R::new(&coms_bytes(16))).unwrap();
+        assert_eq!(coms.len(), 1);
+        assert_eq!(coms[0].p.as_deref(), Some(&PROOF_BODY[..]));
+
+        // Hostile: 2^32 + 16 truncates to 16 when cast to a 32-bit usize,
+        // i.e. to the control case above. Under the old `as usize` the
+        // wallet would have accepted this on wasm32: the bounds check would
+        // pass, 16 bytes would be consumed, and everything after this
+        // commitment would be parsed from the wrong offset, so the wallet
+        // could act on a slate its counterparty never sent.
+        let hostile = (1u64 << 32) + 16;
+        let err = read_coms(&mut R::new(&coms_bytes(hostile))).unwrap_err();
+
+        // On a 32-bit target the length conversion is what rejects it; on a
+        // 64-bit host the length converts fine and the bounds check rejects
+        // it instead. Both are refusals, which is the invariant that
+        // matters, but only the first proves nothing was truncated.
+        if usize::BITS < 64 {
+            assert!(
+                err.contains("does not fit in usize"),
+                "expected a length-conversion refusal, got: {err}"
+            );
+        }
     }
 
     #[test]

@@ -151,6 +151,11 @@ fn keyed_blake2b_256(key: &[u8], data: &[u8]) -> Result<[u8; 32], String> {
     Ok(res)
 }
 
+/// What a successful bulletproof rewind yields: the committed value, the
+/// rewind-derived blinding factor, the embedded proof message, and the
+/// message length the underlying library reports.
+pub type RewoundProof = (u64, [u8; 32], Vec<u8>, usize);
+
 /// Rewind a bulletproof, returning the recovered value, the rewind-derived
 /// blinding factor, and the embedded 20-byte proof message (+ its length).
 ///
@@ -163,7 +168,7 @@ pub fn bullet_proof_rewind_with_message(
     commitment: &[u8; COMMITMENT_LEN],
     rewind_nonce: &[u8; 32],
     proof_bytes: &[u8],
-) -> Result<Option<(u64, [u8; 32], Vec<u8>, usize)>, String> {
+) -> Result<Option<RewoundProof>, String> {
     use secp256k1zkp::pedersen::{Commitment, RangeProof};
     use secp256k1zkp::{ContextFlag, Secp256k1, SecretKey};
 
@@ -233,6 +238,10 @@ pub fn build_v3_proof_message(
     msg
 }
 
+/// What minting an output yields: its Pedersen commitment, its rangeproof
+/// bytes, and the rewind nonce the proof was built with.
+pub type MintedOutput = ([u8; COMMITMENT_LEN], Vec<u8>, [u8; 32]);
+
 /// Mint a fully **seed-recoverable** Grin output in one place: deterministic
 /// view-key rewind nonce + embedded v3 identifier message. EVERY Grin output
 /// Smirk creates routes through this, so every new output can be rediscovered
@@ -255,7 +264,7 @@ pub fn create_recoverable_output(
     path: &[u32; 4],
     switch: SwitchCommitmentType,
     private_nonce: &[u8; 32],
-) -> Result<([u8; COMMITMENT_LEN], Vec<u8>, [u8; 32]), String> {
+) -> Result<MintedOutput, String> {
     let commitment = pedersen_commit(amount, blinding_factor)?;
     let rh = rewind_hash(extended_private_key)?;
     let rewind_nonce = output_rewind_nonce(&rh, &commitment)?;
