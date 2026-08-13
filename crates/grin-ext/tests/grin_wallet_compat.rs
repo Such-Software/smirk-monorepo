@@ -432,8 +432,9 @@ fn full_send_round_trip_validates_against_grin_wallet() {
     eprintln!("[final tx] kernel.excess_sig RAW bytes match our final_signature? {matches}");
     // Try the reverse-bytes hypothesis: each 32-byte half reversed.
     let mut reversed = [0u8; 64];
-    for i in 0..32 { reversed[i] = finalize_out.final_signature[31 - i]; }
-    for i in 0..32 { reversed[32 + i] = finalize_out.final_signature[63 - i]; }
+    reversed.copy_from_slice(&finalize_out.final_signature);
+    reversed[..32].reverse();
+    reversed[32..].reverse();
     eprintln!("[final tx] reverse(final_signature halves)  = {:02x?}", &reversed[..]);
     eprintln!("[final tx] kernel.excess_sig RAW bytes == reversed-halves? {}",
         kernel_sig_raw == reversed);
