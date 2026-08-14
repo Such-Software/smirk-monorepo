@@ -77,8 +77,12 @@ if [ -d "$BUNDLE_DIR" ]; then
   # Tauri lays bundles out per packager. Signing the installers users actually
   # download, plus the updater tarball, and deliberately NOT the `.sig` files
   # Tauri's own updater emits: those are updater signatures, a separate scheme.
+  # `! -name ._*` drops AppleDouble sidecars: a macOS bundle tarred on a Mac and
+  # untarred elsewhere leaves a `._Foo.dmg` next to `Foo.dmg`, and it matches the
+  # same glob. Signing one would publish a signature for a metadata stub that no
+  # user ever downloads.
   while IFS= read -r -d '' f; do artifacts+=("$f"); done < <(
-    find "$BUNDLE_DIR" -type f \
+    find "$BUNDLE_DIR" -type f ! -name '._*' \
       \( -name '*.dmg' -o -name '*.app.tar.gz' \
       -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
       -o -name '*.msi' -o -name '*.exe' \) -print0 2>/dev/null | sort -z
