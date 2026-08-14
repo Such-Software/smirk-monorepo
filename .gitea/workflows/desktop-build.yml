@@ -155,6 +155,35 @@ jobs:
         with:
           node-version: '20'
 
+      # The Windows runner ALREADY has a rustup home (C:\Users\ssh\.rustup) but
+      # rustup is not on the PATH this job sees. dtolnay/rust-toolchain probes with
+      # `command -v rustup`, decides it is absent, runs rustup-init, and that aborts:
+      #   could not create home directory: 'C:\Users\ssh\.rustup':
+      #   Cannot create a file when that file already exists. (os error 183)
+      # macOS and Linux pass the identical step because rustup is on their PATH.
+      # Putting the existing cargo bin on PATH makes the probe succeed, so the
+      # action configures the toolchain instead of trying to reinstall it.
+      - name: Put existing rustup on PATH (Windows)
+        if: matrix.os_label == 'windows'
+        shell: bash
+        run: |
+          found=""
+          for d in "$USERPROFILE/.cargo/bin" "$HOME/.cargo/bin"; do
+            if [ -x "$d/rustup.exe" ] || [ -x "$d/rustup" ]; then found="$d"; break; fi
+          done
+          if [ -n "$found" ]; then
+            echo "$found" >> "$GITHUB_PATH"
+            echo "added $found to PATH; the toolchain action will reuse it"
+          else
+            # A .rustup directory with no rustup binary is a half-installed state,
+            # and it is exactly what makes rustup-init abort. Clear it so the
+            # action's own install can succeed rather than failing the same way.
+            for h in "$USERPROFILE/.rustup" "$HOME/.rustup"; do
+              if [ -d "$h" ]; then rm -rf "$h" && echo "removed stale rustup home $h"; fi
+            done
+            echo "no usable rustup found; the toolchain action will install one"
+          fi
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
