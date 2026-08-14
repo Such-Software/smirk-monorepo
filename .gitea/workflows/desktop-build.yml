@@ -30,7 +30,8 @@ name: Desktop build (Gitea)
 # NOTE: the Tauri auto-UPDATER is intentionally OFF for v0.3.0 (tauri.conf.json
 #   plugins.updater.active=false, no update server yet), so no TAURI_SIGNING_*
 #   key is needed. Artifact authenticity is provided by a detached PGP signature
-#   applied to the collected bundles out-of-band (jwinterm@wownero.org key).
+#   applied to the collected bundles out-of-band, with the Smirk Releases key
+#   <jw@such.software> (signing subkey 96F6836D5110C2CB). See KEYS.asc.
 # ──────────────────────────────────────────────────────────────────────────────
 
 on:

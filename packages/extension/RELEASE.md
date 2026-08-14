@@ -121,6 +121,35 @@ git push origin main "v$VERSION"
 > `v0.3.0` tag was placed, so the tag ended up well behind the artifacts
 > that actually shipped. Treat that as the anti-pattern.
 
+## Signatures
+
+Every shipped artifact carries a detached OpenPGP signature, and so does
+`SHA256SUMS-v<version>.txt`. The signed checksum file is the one that matters for
+anyone who installed from a store or a mirror: they have no `.asc` beside the
+file, but they can still check the download against a list you signed.
+
+Signing key, also committed as `KEYS.asc` at the repo root:
+
+```
+Smirk Releases <jw@such.software>
+primary  5C5C255C 6B1BF28C 7C55C186 3401D818 39135A6F   ed25519, expires 2028-08-13
+signing  79153CE3 AA4D0361 0F0EE105 96F6836D 5110C2CB   ed25519, expires 2028-08-13
+```
+
+Sign with the SUBKEY. The trailing `!` pins gpg to it, so the primary never has
+to leave the machine that holds it:
+
+```sh
+SMIRK_SIGNING_KEY=96F6836D5110C2CB! scripts/sign-release.sh "$VERSION" \
+  --bundle-dir ~/smirk-desktop-v$VERSION
+```
+
+Verify without signing: `scripts/sign-release.sh "$VERSION" --verify`.
+
+A verifier should fetch `KEYS.asc` from somewhere OTHER than the host serving the
+download. If the key and the artifact come from the same place, an attacker who
+controls that place serves a matching pair and the signature proves nothing.
+
 ## Verify reproducibility
 
 Before upload, confirm a clean rebuild produces the same bytes:
