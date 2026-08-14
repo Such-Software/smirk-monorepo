@@ -163,25 +163,32 @@ jobs:
       # macOS and Linux pass the identical step because rustup is on their PATH.
       # Putting the existing cargo bin on PATH makes the probe succeed, so the
       # action configures the toolchain instead of trying to reinstall it.
-      - name: Put existing rustup on PATH (Windows)
+      - name: Point rustup somewhere usable (Windows)
         if: matrix.os_label == 'windows'
         shell: bash
         run: |
-          found=""
-          for d in "$USERPROFILE/.cargo/bin" "$HOME/.cargo/bin"; do
-            if [ -x "$d/rustup.exe" ] || [ -x "$d/rustup" ]; then found="$d"; break; fi
-          done
-          if [ -n "$found" ]; then
-            echo "$found" >> "$GITHUB_PATH"
-            echo "added $found to PATH; the toolchain action will reuse it"
+          # $USERPROFILE is a WINDOWS path (C:\Users\ssh) and bash cannot test it
+          # directly, so translate it first. Without this the existing install is
+          # invisible and the probe below reports "not found" while rustup-init
+          # still trips over the very directory we failed to see.
+          up="$(cygpath -u "$USERPROFILE" 2>/dev/null || printf '%s' "$USERPROFILE" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\L\1|')"
+          echo "userprofile (unix form): $up"
+
+          if [ -x "$up/.cargo/bin/rustup.exe" ]; then
+            # Reuse the toolchain already on the box: the action's own
+            # `command -v rustup` probe then succeeds and it skips installing.
+            echo "$(cygpath -w "$up/.cargo/bin" 2>/dev/null || echo "$up/.cargo/bin")" >> "$GITHUB_PATH"
+            echo "reusing existing rustup at $up/.cargo/bin"
           else
-            # A .rustup directory with no rustup binary is a half-installed state,
-            # and it is exactly what makes rustup-init abort. Clear it so the
-            # action's own install can succeed rather than failing the same way.
-            for h in "$USERPROFILE/.rustup" "$HOME/.rustup"; do
-              if [ -d "$h" ]; then rm -rf "$h" && echo "removed stale rustup home $h"; fi
-            done
-            echo "no usable rustup found; the toolchain action will install one"
+            # There is a rustup home but no usable binary. Rather than delete a
+            # directory that other jobs on this shared runner may rely on, give
+            # rustup a job-scoped home: rustup-init aborts only because its target
+            # already exists, and a fresh path sidesteps that entirely.
+            tmp="${RUNNER_TEMP:-$up/AppData/Local/Temp}"
+            wtmp="$(cygpath -w "$tmp" 2>/dev/null || echo "$tmp")"
+            printf 'RUSTUP_HOME=%s\\rustup\n' "$wtmp" >> "$GITHUB_ENV"
+            printf 'CARGO_HOME=%s\\cargo\n'  "$wtmp" >> "$GITHUB_ENV"
+            echo "no usable rustup; using a job-scoped RUSTUP_HOME/CARGO_HOME under $wtmp"
           fi
 
       - name: Install Rust toolchain
