@@ -1,3 +1,3 @@
-f29671adeaa8ba0e72045883754ce76fd221fbec8c0bcd87efe57ee658ab1d47  smirk-wallet-chrome-v0.3.0.zip
-f9ea32983286b4fe177b518ba9687d085566875f2fa6c509ad5b8c2175c07322  smirk-wallet-firefox-v0.3.0.zip
-f4ea5be4e671d7f964c0a703e31aef61d3c7809db541fc61633f1091e61c6d59  smirk-wallet-source-v0.3.0.zip
+cfb302d1d74b44d19063860e9ea8defbced2e26742458c8d8b3d4034f803eea5  smirk-wallet-chrome-v0.3.0.zip
+1459e7b20eb1df0ce66a2ae4e50d0423d666a4a4174e5eb2c8d5a88c2fd64b19  smirk-wallet-firefox-v0.3.0.zip
+d11c37b3fb459d5997d0f1699d9c14be77e1a1cf88d1854ef0f1a5251835bfff  smirk-wallet-source-v0.3.0.zip
