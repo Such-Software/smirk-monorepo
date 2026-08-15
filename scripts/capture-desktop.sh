@@ -98,7 +98,12 @@ UI_SETTLE=1.5         # after a keystroke that changes screen
 STABLE_INTERVAL=1.5   # poll gap for wait_stable
 WAIT_APP=90           # window to appear after launch
 BOOT_SETTLE=8         # window mapped -> wallet UI painted (wasm init, popup module)
-WAIT_ONBOARD=300      # password submit -> setup step (register + PoW + bootstrap)
+# password submit -> setup step (register + PoW + bootstrap). Generous because
+# registration can include an altcha proof-of-work solve, and this runs under
+# software-rendered WebKit on a virtual display, where that JS is far slower
+# than on a real GPU-backed browser. Override with WAIT_ONBOARD if a backend's
+# PoW difficulty makes even this too tight.
+WAIT_ONBOARD="${WAIT_ONBOARD:-900}"
 WAIT_STABLE=45        # per surface, waiting for the frame to stop moving
 
 # --- frame checks ---
@@ -359,6 +364,16 @@ cleanup() {
     mkdir -p "$OUT_DIR" 2>/dev/null || true
     if cp "$LOG" "$OUT_DIR/capture-app.log" 2>/dev/null; then
       echo "app log kept at $OUT_DIR/capture-app.log"
+    fi
+  fi
+  # A GUI app that fails a navigation step usually logs nothing at all, so the
+  # log rescue above comes back empty and the operator is left guessing at which
+  # screen it actually stopped on. Photograph the display before tearing it
+  # down: for a screenshot tool, the screen IS the diagnostic.
+  if [ "$rc" -ne 0 ] && [ -n "$DISPLAY_NUM" ]; then
+    mkdir -p "$OUT_DIR" 2>/dev/null || true
+    if DISPLAY=":$DISPLAY_NUM" import -window root "$OUT_DIR/FAILED-screen.png" 2>/dev/null; then
+      echo "screen at failure kept at $OUT_DIR/FAILED-screen.png"
     fi
   fi
   # The app first: WebKitGTK forks a web process and a network process, and

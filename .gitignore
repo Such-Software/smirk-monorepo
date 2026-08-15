@@ -81,6 +81,9 @@ builds/
 
 # Build artifacts: store/release zips are generated (make ext-*, git archive), never committed.
 packages/extension/releases/*.zip
+# Detached signatures are build output too: they belong with the bytes they
+# sign, on the release, not in source.
+packages/extension/releases/*.asc
 
 # e2e demo-video captures (CAPTURE_VIDEO=1) — regenerable, feed the such-graphics pipeline.
 packages/e2e/videos/
