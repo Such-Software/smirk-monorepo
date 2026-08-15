@@ -201,7 +201,20 @@ fi
 # process table. Without that flag the whole seed would be an argv on a box where
 # anyone can run ps.
 if command -v xdotool >/dev/null 2>&1; then
-  if ! xdotool type --help 2>&1 | grep -q -- '--file'; then
+  # `xdotool type --help` needs an X display before it will print anything: with
+  # no DISPLAY it dies with "Can't open display" and the grep below sees an empty
+  # string, which reads as "--file is missing" when the flag is actually there.
+  # Ask under a throwaway display so the answer is about xdotool rather than
+  # about the environment this check happens to run in.
+  xdotool_help=""
+  if [ -n "${DISPLAY:-}" ]; then
+    xdotool_help="$(xdotool type --help 2>&1 || true)"
+  elif command -v xvfb-run >/dev/null 2>&1; then
+    xdotool_help="$(xvfb-run -a xdotool type --help 2>&1 || true)"
+  fi
+  if [ -z "$xdotool_help" ]; then
+    problems+=("could not ask xdotool whether 'type --file' exists (no display and no xvfb-run)")
+  elif ! printf '%s' "$xdotool_help" | grep -q -- '--file'; then
     problems+=("this xdotool's 'type' has no --file: it would put the seed phrase in argv")
   fi
 fi
