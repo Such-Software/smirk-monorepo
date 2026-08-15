@@ -92,6 +92,16 @@ const CAPTIONS = {
     sub: 'Point the wallet at your own server and send us nothing at all.',
   },
   '08-settings': { head: 'Yours to configure', sub: 'Auto-lock, address privacy, chains, backend.' },
+  // The frame shows the panel in its EMPTY state, because the capture wallet has
+  // never connected to a site. So the caption describes the control rather than
+  // a list of sites: everything it claims is written in the panel's own copy on
+  // screen ("it shows up here, and you can take its access back at any time").
+  // This is the frame that answers the <all_urls> question a store reviewer
+  // actually asks, so it must not overreach.
+  '09-connected-sites': {
+    head: 'Revoke any site, any time',
+    sub: 'Sites reach nothing without your approval, and you can withdraw it.',
+  },
 };
 
 /**
