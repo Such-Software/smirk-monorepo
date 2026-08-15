@@ -371,9 +371,27 @@ fn apply_rect<R: Runtime>(
     // upstream-tracked race threshold.
     let size = LogicalSize::new(rect.width.max(MIN_SIZE), rect.height.max(MIN_SIZE));
     let pos = LogicalPosition::new(target_x, target_y);
-    let _ = embedded.hide();
+
+    // The hide/show sandwich above is a WebKitGTK workaround, and Linux never
+    // reaches this code: main.ts routes Linux to the iframe controller and only
+    // macOS and Windows use these native tab windows. So the sandwich has only
+    // ever run where it is not needed, and it is not free there. On macOS it is
+    // orderOut:/orderFront: plus a WKWebView re-composite, applied once per
+    // `Moved` event at drag rate, which is exactly the reported stutter and the
+    // stale trailing frames: the overlay is always one event behind the parent.
+    //
+    // Do it only where it helps. Elsewhere just move the window, and show it
+    // when it is not already visible, which covers both a tab's first placement
+    // and a return from `hide_frame` (leaving and re-entering the Browse tab).
+    let needs_remap = cfg!(target_os = "linux") || !embedded.is_visible().unwrap_or(false);
+
+    if needs_remap {
+        let _ = embedded.hide();
+    }
     embedded.set_size(size).map_err(|e| e.to_string())?;
-    let _ = embedded.show();
+    if needs_remap {
+        let _ = embedded.show();
+    }
     embedded
         .set_position(pos)
         .map_err(|e| e.to_string())?;

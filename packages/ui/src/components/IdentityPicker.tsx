@@ -6,6 +6,12 @@
  * managed) and COOL (a deterministic blockies-style avatar so every identity has a
  * recognizable face). Presentational only: the consumer supplies the identity list +
  * the current selection + an onSelect; resolving keys stays in the wallet.
+ *
+ * An identity is named by what the user recognizes: their private label, else the
+ * public handle they claimed (`name@domain`), else the npub. A wallet whose only
+ * identity is the seed default has neither a label nor anything else on screen, so
+ * before handles reached here it announced the user as `npub1abcd…wxyz`: a name they
+ * cannot read, share, or check against the one they just reserved.
  */
 import { useEffect, useRef, useState } from 'preact/hooks';
 
@@ -19,6 +25,19 @@ export interface PickerIdentity {
   /** Private local label (never published). */
   label?: string;
   source?: IdentitySource;
+  /**
+   * Public Smirk handle (`name@domain`) THIS identity owns, when it owns one.
+   * Set it ONLY on the identity the handle actually resolves to. Lending the main
+   * identity's handle to a burner row would both tie the two together on screen and
+   * name the burner something that no payment to it would ever reach.
+   */
+  handle?: string;
+  /**
+   * True while this identity's handle is still being read back. Set it on the
+   * identity that could own one, so the control holds a neutral placeholder instead
+   * of an npub it would swap out a frame later.
+   */
+  handleLoading?: boolean;
 }
 
 const SOURCE_META: Record<IdentitySource, { text: string; hue: number }> = {
@@ -110,8 +129,50 @@ function SourceBadge({ source }: { source?: IdentitySource }) {
   );
 }
 
-function labelFor(id: PickerIdentity): string {
-  return id.label || shortNpubDisplay(id.npub);
+/**
+ * `name@domain` → `@name`, for the trigger pill only. The pill is ~135px of text,
+ * so a full handle is cut mid-name by the ellipsis; the domain is the part that can
+ * be dropped. The full form stays in the list below and in the accessible name.
+ */
+function shortHandleDisplay(handle: string): string {
+  const at = handle.lastIndexOf('@');
+  return `@${at > 0 ? handle.slice(0, at) : handle}`;
+}
+
+/**
+ * What to CALL this identity, most-recognizable first: the private label the user
+ * chose, else the handle they claimed, else the npub. `null` means "not known yet"
+ * (the handle is still resolving), which the caller renders as a placeholder.
+ */
+function displayName(id: PickerIdentity, short = false): string | null {
+  if (id.label) return id.label;
+  if (id.handle) return short ? shortHandleDisplay(id.handle) : id.handle;
+  if (id.handleLoading) return null;
+  return shortNpubDisplay(id.npub);
+}
+
+/** Spoken stand-in while the handle read is in flight (the pill shows a bar). */
+const NAME_LOADING = 'loading your handle';
+
+/**
+ * Placeholder for a name we do not have yet. Deliberately not the npub: showing the
+ * npub here would be replaced by the handle a moment later, and a name that changes
+ * under the user is exactly what makes it untrustworthy.
+ */
+function NamePlaceholder({ width = 64 }: { width?: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width,
+        height: 8,
+        borderRadius: 4,
+        background: 'currentColor',
+        opacity: 0.25,
+        flex: '0 0 auto',
+      }}
+    />
+  );
 }
 
 /**
@@ -231,6 +292,12 @@ export function IdentityPicker({
 
   if (!selected) return null;
 
+  // Two forms of the same name: the pill shows `@name` (it has ~135px), while the
+  // accessible name keeps `name@domain`, because the domain is what makes a handle
+  // verifiable and a screen-reader user has no list row to fall back on.
+  const selectedName = displayName(selected, true);
+  const spokenName = displayName(selected) ?? NAME_LOADING;
+
   return (
     <div ref={rootRef} class={className} style={{ position: 'relative', display: 'inline-block' }}>
       <button
@@ -239,7 +306,8 @@ export function IdentityPicker({
         {...(testid ? { 'data-testid': testid } : {})}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`${label} ${labelFor(selected)}${interactive ? '. Activate to change or manage identities.' : ''}`}
+        aria-label={`${label} ${spokenName}${interactive ? '. Activate to change or manage identities.' : ''}`}
+        aria-busy={selectedName === null}
         disabled={!interactive}
         onClick={() => interactive && setOpen((o) => !o)}
         onKeyDown={(e) => {
@@ -264,9 +332,13 @@ export function IdentityPicker({
         }}
       >
         <IdentityAvatar pubkeyHex={selected.pubkeyHex} size={compact ? 18 : 20} />
-        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {labelFor(selected)}
-        </span>
+        {selectedName === null ? (
+          <NamePlaceholder />
+        ) : (
+          <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {selectedName}
+          </span>
+        )}
         {interactive && (
           <span aria-hidden="true" style={{ opacity: 0.6, fontSize: 10 }}>
             ▾
@@ -303,6 +375,7 @@ export function IdentityPicker({
           {identities.map((id, idx) => {
             const active = idx === activeIdx;
             const isSel = id.pubkeyHex === selectedPubkey;
+            const name = displayName(id);
             return (
               <li
                 key={id.pubkeyHex}
@@ -324,11 +397,23 @@ export function IdentityPicker({
                 <IdentityAvatar pubkeyHex={id.pubkeyHex} size={26} />
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {labelFor(id)}
-                    </span>
+                    {name === null ? (
+                      <NamePlaceholder width={96} />
+                    ) : (
+                      <span style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {name}
+                      </span>
+                    )}
                     {id.source ? <SourceBadge source={id.source} /> : null}
                   </span>
+                  {/* A private label outranks the handle on the name line, so show
+                      the handle here instead of dropping it: it is the address other
+                      people pay, and only the full `name@domain` is worth sharing. */}
+                  {id.handle && id.handle !== name ? (
+                    <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {id.handle}
+                    </span>
+                  ) : null}
                   <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', fontFamily: 'var(--smirk-font-family-mono, monospace)' }}>
                     {shortNpubDisplay(id.npub)}
                   </span>

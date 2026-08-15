@@ -23,7 +23,8 @@
         "transparent": false,
         "decorations": true,
         "focus": true,
-        "center": true
+        "center": true,
+        "acceptFirstMouse": true
       }
     ],
     "withGlobalTauri": true,

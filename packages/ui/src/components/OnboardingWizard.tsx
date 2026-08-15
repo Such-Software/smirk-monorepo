@@ -3,7 +3,8 @@
  *
  * Steps:
  *   0. Welcome:    Create new | Import existing
- *   1a (create).   Show generated mnemonic: user writes it down
+ *   1a (create).   Show generated mnemonic: user writes it down, or copies
+ *                  the words-only phrase (see formatMnemonicForClipboard)
  *   1b (import).   Warning screen: Smirk only restores Smirk-created seeds
  *   1b'.           12 numbered word boxes: paste-fills all at once
  *   2 (create).    Verify by re-entering N random words
@@ -573,6 +574,22 @@ function Welcome({
   );
 }
 
+/**
+ * Reduce a mnemonic to exactly what belongs on a clipboard: the words,
+ * single-spaced, nothing else.
+ *
+ * The seed screen renders every word beside its position number, so a
+ * hand-dragged selection yields "01 abandon 02 ability …". That pastes into a
+ * recovery field as a phrase that does not restore, and the user finds out
+ * when they need it most. Every path that copies the phrase goes through here.
+ */
+export function formatMnemonicForClipboard(mnemonic: string): string {
+  return mnemonic.trim().split(/\s+/).filter(Boolean).join(' ');
+}
+
+/** How long the copy confirmation stays up before reverting to the caveat. */
+const COPY_FEEDBACK_MS = 2500;
+
 function ShowMnemonic({
   mnemonic,
   onContinue,
@@ -582,8 +599,57 @@ function ShowMnemonic({
   onContinue: () => void;
   onBack: () => void;
 }) {
-  const words = mnemonic.trim().split(/\s+/);
+  // One source of truth for what is shown and what gets copied: the grid can
+  // never drift from the phrase the clipboard receives.
+  const phrase = formatMnemonicForClipboard(mnemonic);
+  const words = phrase.split(' ');
   const [acknowledged, setAcknowledged] = useState(false);
+  const [copyState, setCopyState] = useState<
+    { kind: 'idle' } | { kind: 'copied' } | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The user can leave this screen (Back, or Continue) while the reset is
+  // pending; stop it landing on an unmounted component.
+  useEffect(
+    () => () => {
+      if (copyResetRef.current !== null) clearTimeout(copyResetRef.current);
+    },
+    [],
+  );
+
+  const copyPhrase = async () => {
+    if (copyResetRef.current !== null) clearTimeout(copyResetRef.current);
+    try {
+      // `navigator.clipboard` is the one API available in all three hosts: the
+      // popup (manifest has clipboardWrite) and the Tauri webview. A chrome.*
+      // call would break desktop. It can also be undefined outright in an
+      // insecure context, which throws in here and lands in the catch.
+      await navigator.clipboard.writeText(phrase);
+      setCopyState({ kind: 'copied' });
+      // Confirmation is transient: a permanent "Copied" would read as a promise
+      // that the phrase is still sitting on the clipboard, which we can't make.
+      copyResetRef.current = setTimeout(
+        () => setCopyState({ kind: 'idle' }),
+        COPY_FEEDBACK_MS,
+      );
+    } catch {
+      // Never fail silently on a seed screen: tell the user the phrase did NOT
+      // reach the clipboard, and point at the manual route that still works.
+      setCopyState({
+        kind: 'error',
+        message:
+          "Couldn't reach the clipboard. Select the words above and copy them by hand; the position numbers won't come with them.",
+      });
+    }
+  };
+
+  const copyStatus =
+    copyState.kind === 'copied'
+      ? `Copied all ${words.length} words. Paste them somewhere safe, then clear your clipboard.`
+      : copyState.kind === 'error'
+        ? copyState.message
+        : 'Copies the words only, no numbers. Any app can read your clipboard, so writing it down is still safer.';
 
   return (
     <div>
@@ -629,6 +695,10 @@ function ShowMnemonic({
                 fontSize: 11,
                 width: 22,
                 textAlign: 'right',
+                // Keep the position numbers out of a hand-dragged selection, so
+                // manually copying the grid still yields words only. Matches the
+                // import grid, which has always done this.
+                userSelect: 'none',
               }}
             >
               {(i + 1).toString().padStart(2, '0')}
@@ -637,6 +707,39 @@ function ShowMnemonic({
           </li>
         ))}
       </ol>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          margin: '0 0 4px',
+        }}
+      >
+        <Button
+          variant="secondary"
+          fullWidth={false}
+          onClick={() => void copyPhrase()}
+          testid="onboarding-create-copy-seed"
+        >
+          {copyState.kind === 'copied' ? 'Copied' : 'Copy phrase'}
+        </Button>
+        <span
+          role="status"
+          aria-live="polite"
+          data-testid="onboarding-create-copy-seed-status"
+          style={{
+            flex: 1,
+            minWidth: 160,
+            fontSize: 12,
+            lineHeight: 1.4,
+            color: copyState.kind === 'error' ? '#ff6b6b' : 'inherit',
+            opacity: copyState.kind === 'error' ? 1 : 0.6,
+          }}
+        >
+          {copyStatus}
+        </span>
+      </div>
       <label
         style={{
           display: 'flex',

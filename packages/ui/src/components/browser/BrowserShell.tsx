@@ -27,8 +27,9 @@
  *  - Routing nav actions through controller methods.
  *  - Measuring the frame slot and calling `setFrameRect` whenever it
  *    changes (resize, tab strip collapse, etc.).
- *  - Hiding the webview when the controller's snapshot reports no
- *    tabs (e.g. between `close()` and `open()`).
+ *  - Releasing the webview on unmount (zero rect + `hideFrame`) so a
+ *    native overlay is never left painted over the rest of the
+ *    wallet once the browser surface is gone.
  *
  * The shell does NOT take care of:
  *  - Persisting bookmarks / history (consumer wires those into the
@@ -280,4 +281,38 @@ function useFrameRect(
     // changes our `y` offset; ResizeObserver fires for size changes
     // but not necessarily position-only changes, so be explicit.
   }, [frameRef, controller, tabCount]);
+
+  // Release the frame when the shell goes away. Deliberately its own
+  // effect: the measuring effect above re-runs on every `tabCount`
+  // change, and hiding there would blink the webview out for one
+  // debounce tick every time a tab opens or closes. This cleanup runs
+  // only on a real unmount (the wallet routed away from Browse) or a
+  // controller swap, which is exactly when the region we measured
+  // stops existing.
+  //
+  // Why it matters: with a native-overlay controller the active tab
+  // is a separate borderless OS window composited over the frame
+  // slot. Nothing at the OS level ties its visibility to our DOM, so
+  // without this it stays on screen over whatever the wallet shows
+  // next, swallowing clicks in that area, and the desktop shell
+  // re-raises it on every window-focus event, so it returns even if
+  // the user does manage to switch tabs.
+  useEffect(() => {
+    return () => {
+      // Zero rect first, then hide. Native controllers debounce
+      // `setFrameRect`, so a rect measured moments ago can still be
+      // queued; overwriting the queued value with zeroes means its
+      // trailing-edge flush cannot re-show the webview we just hid.
+      // `hideFrame` then takes effect immediately instead of one
+      // debounce later. Rejections are swallowed because tearing
+      // down after the controller was closed is legitimate (a closed
+      // controller rejects `hideFrame`), and there is no UI left to
+      // report the failure to. Both calls are no-ops for inline
+      // (iframe) controllers.
+      void controller
+        .setFrameRect({ x: 0, y: 0, width: 0, height: 0 })
+        .catch(() => undefined);
+      void controller.hideFrame().catch(() => undefined);
+    };
+  }, [controller]);
 }
