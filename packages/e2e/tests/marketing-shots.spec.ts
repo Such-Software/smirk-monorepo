@@ -180,4 +180,20 @@ test('capture the wallet surfaces used in store listings', async ({
   await page.getByTestId('nav-tab-settings').click();
   await settle(page);
   await shot(page, '08-settings');
+
+  // CONNECTED SITES: the answer to the question that gets wallet extensions
+  // rejected, which is why `<all_urls>` is justified. The store listing argues
+  // that a site reaches nothing without an explicit grant and that a user can
+  // withdraw one; this is the screen that shows it, so it needs its own frame.
+  // It sits below the fold on the Settings screen, so 08 does not include it.
+  const connected = page.getByTestId('settings-connected-sites');
+  if (await connected.isVisible({ timeout: 10_000 }).catch(() => false)) {
+    await connected.scrollIntoViewIfNeeded();
+    await settle(page);
+    await shot(page, '09-connected-sites');
+  } else {
+    // Loud rather than silent: a missing frame here weakens the permission
+    // argument, and an empty-state panel is still worth showing.
+    console.log('[shot] SKIPPED 09-connected-sites: panel not found on Settings');
+  }
 });
