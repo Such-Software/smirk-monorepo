@@ -41,7 +41,7 @@ function sourceFiles(root: string): string[] {
 }
 
 /**
- * Collect `chrome.a.b` where it is *called* -- `chrome.runtime.sendMessage(`
+ * Collect `chrome.a.b` where it is *called*: `chrome.runtime.sendMessage(`
  * or `chrome.runtime\n  .sendMessage(`. Bare property reads (`chrome.runtime.id`)
  * and mentions inside comments are handled by the caller filter below.
  */
@@ -72,7 +72,7 @@ test('the desktop shim answers every chrome.* member the shared UI calls', () =>
   assert.ok(shim, 'shim did not install');
 
   const used = calledChromeMembers([...sourceFiles(popupRoot), ...sourceFiles(uiRoot)]);
-  assert.ok(used.size > 0, 'regex found no chrome.* calls at all -- it has rotted');
+  assert.ok(used.size > 0, 'regex found no chrome.* calls at all; it has rotted');
 
   const missing: string[] = [];
   for (const [member, files] of used) {
@@ -85,7 +85,7 @@ test('the desktop shim answers every chrome.* member the shared UI calls', () =>
       const first = files[0] ?? '<unknown>';
       missing.push(
         `chrome.${member} is called in ${files.length} file(s), e.g. ` +
-          `${first.slice(first.indexOf('packages/'))} -- but the shim does not provide it`,
+          `${first.slice(first.indexOf('packages/'))}, but the shim does not provide it`,
       );
     }
   }
@@ -106,7 +106,7 @@ test('runtime.sendMessage is a function that resolves rather than throwing', asy
 
   // The regression this guards: `.catch()` must be reachable. If sendMessage
   // is undefined the call throws *before* the catch attaches, and the caller
-  // -- lockHandler, onForgetComplete, onBackendSwitched -- dies with it.
+  // (lockHandler, onForgetComplete, onBackendSwitched) dies with it.
   assert.equal(typeof runtime.sendMessage, 'function');
   await assert.doesNotReject(async () => {
     await runtime.sendMessage({ type: 'DM_WATCH_CLEAR' }).catch(() => undefined);

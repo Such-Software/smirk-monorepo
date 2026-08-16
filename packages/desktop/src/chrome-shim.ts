@@ -27,7 +27,7 @@
  *    the hint degrades rather than breaks. It MUST exist as a
  *    function: `chrome.runtime` is defined here, so an unshimmed
  *    `.sendMessage(...)` is a synchronous TypeError that aborts the
- *    caller *before* any `.catch()` can attach -- which is how Lock
+ *    caller *before* any `.catch()` can attach, which is how Lock
  *    and Forget-wallet silently died on desktop.
  *  - `chrome.runtime.connect` throws. The jobs coordinator lives in
  *    the background worker, so no port can be honoured; a stub port

@@ -10,7 +10,7 @@
  *
  * So: try the modern API, then fall back to the `execCommand('copy')` route,
  * which works from a plain document in every host we ship. Only if both fail
- * do we throw -- callers surface that to the user rather than claiming a copy
+ * do we throw; callers surface that to the user rather than claiming a copy
  * that never happened.
  */
 export async function copyText(text: string): Promise<void> {
@@ -25,7 +25,7 @@ export async function copyText(text: string): Promise<void> {
     }
   } catch {
     // Permission denied, or a host that defines the API but refuses it.
-    // Fall through -- execCommand is a genuinely different path and may work.
+    // Fall through: execCommand is a genuinely different path and may work.
   }
 
   if (typeof document === 'undefined') {
@@ -54,7 +54,7 @@ export async function copyText(text: string): Promise<void> {
   try {
     scratch.select();
     scratch.setSelectionRange(0, text.length);
-    // eslint-disable-next-line deprecation/deprecation -- the modern API is
+    // eslint-disable-next-line deprecation/deprecation: the modern API is
     // tried first; this is the fallback that keeps Linux working.
     const ok = document.execCommand('copy');
     if (!ok) throw new Error('clipboard unavailable: copy command rejected');
