@@ -18,10 +18,11 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { installChromeShim } from '../chrome-shim';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const popupRoot = join(here, '../../extension/src/popup');
-const uiRoot = join(here, '../../ui/src');
+const popupRoot = join(here, '../../../extension/src/popup');
+const uiRoot = join(here, '../../../ui/src');
 
 function sourceFiles(root: string): string[] {
   const out: string[] = [];
@@ -65,10 +66,7 @@ function calledChromeMembers(files: string[]): Map<string, string[]> {
   return found;
 }
 
-test('the desktop shim answers every chrome.* member the shared UI calls', async () => {
-  // Import for side effects only after we know what to look for; installing
-  // mutates globalThis.
-  const { installChromeShim } = await import('./chrome-shim.ts');
+test('the desktop shim answers every chrome.* member the shared UI calls', () => {
   installChromeShim();
   const shim = (globalThis as { chrome?: Record<string, unknown> }).chrome;
   assert.ok(shim, 'shim did not install');
@@ -78,15 +76,16 @@ test('the desktop shim answers every chrome.* member the shared UI calls', async
 
   const missing: string[] = [];
   for (const [member, files] of used) {
-    const [ns, fn] = member.split('.');
+    const [ns = '', fn = ''] = member.split('.');
     const nsObj = shim[ns] as Record<string, unknown> | undefined;
     const target = nsObj?.[fn];
     // `storage.onChanged` is an object with addListener, not a function.
     const answered = typeof target === 'function' || typeof target === 'object';
     if (!answered) {
+      const first = files[0] ?? '<unknown>';
       missing.push(
         `chrome.${member} is called in ${files.length} file(s), e.g. ` +
-          `${files[0].slice(files[0].indexOf('packages/'))} -- but the shim does not provide it`,
+          `${first.slice(first.indexOf('packages/'))} -- but the shim does not provide it`,
       );
     }
   }
@@ -101,7 +100,6 @@ test('the desktop shim answers every chrome.* member the shared UI calls', async
 });
 
 test('runtime.sendMessage is a function that resolves rather than throwing', async () => {
-  const { installChromeShim } = await import('./chrome-shim.ts');
   installChromeShim();
   const chromeGlobal = (globalThis as { chrome?: Record<string, unknown> }).chrome!;
   const runtime = chromeGlobal['runtime'] as { sendMessage: (m: unknown) => Promise<unknown> };
@@ -115,8 +113,7 @@ test('runtime.sendMessage is a function that resolves rather than throwing', asy
   });
 });
 
-test('runtime.connect throws loudly instead of returning a port that never answers', async () => {
-  const { installChromeShim } = await import('./chrome-shim.ts');
+test('runtime.connect throws loudly instead of returning a port that never answers', () => {
   installChromeShim();
   const chromeGlobal = (globalThis as { chrome?: Record<string, unknown> }).chrome!;
   const runtime = chromeGlobal['runtime'] as { connect: (i: unknown) => unknown };
@@ -125,14 +122,13 @@ test('runtime.connect throws loudly instead of returning a port that never answe
   assert.throws(() => runtime.connect({ name: 'jobs' }), /unavailable on desktop/);
 });
 
-test('installing over a host-provided chrome global keeps the host keys', async () => {
+test('installing over a host-provided chrome global keeps the host keys', () => {
   // WebView2 (Windows) defines `chrome.webview` for its own IPC. Clobbering it
   // takes Tauri's channel with it; merging is what keeps Windows booting.
   delete (globalThis as { chrome?: unknown }).chrome;
   const hostBridge = { postMessage() {} };
   (globalThis as { chrome?: unknown }).chrome = { webview: hostBridge };
 
-  const { installChromeShim } = await import('./chrome-shim.ts');
   installChromeShim();
 
   const chromeGlobal = (globalThis as { chrome?: Record<string, unknown> }).chrome!;

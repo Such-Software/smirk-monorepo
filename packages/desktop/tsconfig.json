@@ -4,11 +4,28 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "noEmit": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client", "chrome"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "vite/client",
+      "chrome"
+    ],
     "paths": {
-      "@smirk/extension/popup": ["../extension/src/popup/index.tsx"]
+      "@smirk/extension/popup": [
+        "../extension/src/popup/index.tsx"
+      ]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "src/**/__tests__/**"
+  ]
 }
