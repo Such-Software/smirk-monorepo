@@ -14,7 +14,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "clean": "rm -rf dist src-tauri/target"
+    "clean": "rm -rf dist src-tauri/target",
+    "test": "node --test --import tsx 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@smirk/assets": "*",
