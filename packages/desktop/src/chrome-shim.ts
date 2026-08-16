@@ -20,11 +20,20 @@
  * `main.ts` for the hand-off.
  *
  * Limitations (v0.3.0):
- *  - `chrome.runtime.sendMessage` (the extension's background-SW
- *    bridge) is not polyfilled. The embedded browser handles dapp
- *    integration on desktop via its own Tauri-side bridge (see
- *    `browser_plugin.rs::attach_per_webview_rpc`), so the SW
- *    surface isn't needed.
+ *  - `chrome.runtime.sendMessage` resolves `undefined` instead of
+ *    reaching a background worker, because desktop has none. Every
+ *    current caller is a background *hint* (DM_WATCH_SET/CLEAR,
+ *    DM_WRAPS_GET) whose foreground path still works, so dropping
+ *    the hint degrades rather than breaks. It MUST exist as a
+ *    function: `chrome.runtime` is defined here, so an unshimmed
+ *    `.sendMessage(...)` is a synchronous TypeError that aborts the
+ *    caller *before* any `.catch()` can attach -- which is how Lock
+ *    and Forget-wallet silently died on desktop.
+ *  - `chrome.runtime.connect` throws. The jobs coordinator lives in
+ *    the background worker, so no port can be honoured; a stub port
+ *    would hang every request forever instead. Throwing surfaces a
+ *    real error to the bootstrap caller. Only reachable when the
+ *    backend does not advertise `nostr_native_auth`.
  *  - `chrome.alarms` is NOT polyfilled. Auto-lock currently works
  *    only while the wallet window stays open (the popup-level timer
  *    fires); background auto-lock does not exist on desktop. Mobile
@@ -58,6 +67,9 @@ async function getStore(): Promise<Store> {
 // ============================================================================
 
 const sessionMap = new Map<string, unknown>();
+
+// One debug line per dropped message type, not per call.
+const warnedSendMessage = new Set<string>();
 
 // ============================================================================
 // Cross-backend change-event bus. Mirrors chrome.storage.onChanged.
@@ -232,6 +244,38 @@ export function installChromeShim(): void {
         return `/${clean}`;
       },
       id: 'smirk-desktop',
+
+      // Desktop has no background service worker. Callers use this to
+      // hand the background a hint (start/stop DM polling, fetch wraps
+      // it collected while away); there is nothing to hand it, so we
+      // resolve `undefined` and let the foreground path carry the
+      // feature. See the header note: the critical property is that
+      // this is a *function*, so `chrome.runtime.sendMessage(...)`
+      // returns a thenable rather than throwing synchronously.
+      async sendMessage(message?: unknown): Promise<undefined> {
+        const type =
+          typeof message === 'object' && message !== null && 'type' in message
+            ? String((message as { type: unknown }).type)
+            : 'unknown';
+        if (!warnedSendMessage.has(type)) {
+          warnedSendMessage.add(type);
+          console.debug(
+            `[chrome-shim] chrome.runtime.sendMessage(${type}) dropped: desktop has no background worker`,
+          );
+        }
+        return undefined;
+      },
+
+      // Deliberately throws rather than returning a dead port: the jobs
+      // client resolves requests from port replies, so a stub port that
+      // never answers would hang the caller forever. Fail loudly.
+      connect(_info?: unknown): never {
+        throw new Error(
+          '[chrome-shim] chrome.runtime.connect is unavailable on desktop: ' +
+            'the jobs coordinator runs in the extension background worker. ' +
+            'Use a backend that advertises nostr_native_auth.',
+        );
+      },
     },
     storage: {
       local: localApi,

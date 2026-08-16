@@ -6,7 +6,7 @@ import {
   withAssetVisibility,
   type UnlockedWallet,
 } from '@smirk/core';
-import { useRoute, useSessionState, listThemes } from '@smirk/ui';
+import { useRoute, useSessionState, listThemes, copyText } from '@smirk/ui';
 import { getAsset, listAssets } from '@smirk/assets';
 import type { OriginPermission } from '@such-software/smirk-dapp-api';
 import { store, sessionStorage, walletKeystore } from '../singletons';
@@ -549,7 +549,13 @@ function SecurityRow({
 function FingerprintPanel({ fingerprint }: { fingerprint: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(fingerprint);
+    // Only claim "Copied" if it actually landed; copyText throws when
+    // neither the async API nor the execCommand fallback is available.
+    try {
+      await copyText(fingerprint);
+    } catch {
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -941,7 +947,13 @@ function KeyRow({
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(value);
+    // Only claim "Copied" if it actually landed; copyText throws when
+    // neither the async API nor the execCommand fallback is available.
+    try {
+      await copyText(value);
+    } catch {
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

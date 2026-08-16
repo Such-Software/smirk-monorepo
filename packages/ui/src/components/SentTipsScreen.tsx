@@ -20,6 +20,7 @@ import { mustGetAsset } from '@smirk/assets';
 import { formatAmount } from '../format';
 import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
+import { copyText } from '../clipboard';
 
 export interface SentTipRow {
   id: string;
@@ -377,10 +378,10 @@ function TipCard({
 function ShareUrlPanel({ shareUrl }: { shareUrl: string }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    void navigator.clipboard.writeText(shareUrl).then(() => {
+    void copyText(shareUrl).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    });
+    }).catch(() => undefined);
   };
   return (
     <div

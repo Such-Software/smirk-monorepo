@@ -31,6 +31,7 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import type { ComponentChildren, JSX } from 'preact';
+import { copyText } from '../clipboard';
 
 /**
  * Minimal shape this panel needs from the unlocked wallet. Subset of
@@ -94,7 +95,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
       aria-label={`Copy ${label}`}
       onClick={async () => {
         try {
-          await navigator.clipboard.writeText(value);
+          await copyText(value);
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         } catch {

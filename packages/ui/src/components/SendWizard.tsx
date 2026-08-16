@@ -34,6 +34,7 @@ import { useWizard } from '../state/hooks';
 import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
 import { formatAmount, formatAmountWithAsset } from '../format';
+import { copyText } from '../clipboard';
 
 export type FeeTier = 'fast' | 'normal' | 'slow' | 'custom';
 
@@ -1643,10 +1644,10 @@ function GrinExchange(props: GrinExchangeProps) {
   }, [props.armoredOutgoing]);
 
   const copy = (text: string) => {
-    void navigator.clipboard.writeText(text).then(() => {
+    void copyText(text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
-    });
+    }).catch(() => undefined);
   };
 
   const handleFinalize = async () => {
@@ -1937,10 +1938,10 @@ function DoneStep({
   const [copied, setCopied] = useState(false);
   const copyTxid = () => {
     if (!txid) return;
-    void navigator.clipboard.writeText(txid).then(() => {
+    void copyText(txid).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
-    });
+    }).catch(() => undefined);
   };
   // Diagnostic: if we render the Done step without a txid, log so
   // the next time this bug shows up we can read the cause from the

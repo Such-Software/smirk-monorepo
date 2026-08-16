@@ -25,6 +25,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { mustGetAsset, listAssets } from '@smirk/assets';
 import { AssetIcon } from './AssetIcon';
 import { formatAmountWithTicker } from '../format';
+import { copyText } from '../clipboard';
 
 /** Platforms users can address. "smirk" means the recipient is a known
  *  Smirk user looked up by their Smirk username. */
@@ -571,10 +572,10 @@ function TipSuccess({
 }) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
-    void navigator.clipboard.writeText(text).then(() => {
+    void copyText(text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    });
+    }).catch(() => undefined);
   };
 
   return (

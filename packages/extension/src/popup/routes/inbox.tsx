@@ -5,7 +5,8 @@ import {
   useRoute,
   formatAmountWithTicker,
   type InboxItem,
-  type InboxTipItem,
+  type InboxTipItem,,
+  copyText,
 } from '@smirk/ui';
 import { store } from '../singletons';
 import { cancelInboxItem } from '../inbox-actions';
@@ -440,7 +441,7 @@ export function InboxRouter({
       }
     });
     // Clipboard fallback for the "wizard slot mismatch" case.
-    void navigator.clipboard.writeText(slatepack).catch(() => undefined);
+    void copyText(slatepack).catch(() => undefined);
     void navigate('home/send');
   };
   // Drop a row from the relay. Backend marks the entry cancelled; our 30s poll

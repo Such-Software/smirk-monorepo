@@ -19,7 +19,7 @@
  *   assetIds={['btc', 'ltc', 'xmr', 'wow', 'grin']}
  *   resolveAddress={async (id) => walletGetReceiveAddress(id)}
  *   renderQr={(data) => <QRCode value={data} />}
- *   onCopy={(text) => navigator.clipboard.writeText(text)}
+ *   onCopy={(text) => void copyText(text).catch(() => undefined)}
  *   onExit={() => router.back()}
  * />
  * ```

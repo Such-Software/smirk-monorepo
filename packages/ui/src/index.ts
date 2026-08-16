@@ -34,6 +34,8 @@
  */
 
 // ----- Components -----
+export { copyText } from './clipboard';
+
 export { ActionButton, ActionRow } from './components/ActionButton';
 export type { ActionButtonProps, ActionRowProps } from './components/ActionButton';
 

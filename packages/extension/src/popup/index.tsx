@@ -137,7 +137,8 @@ import {
   type InboxItem,
   type InboxTipItem,
   type OnboardingRegistration,
-  type RecentRecipient,
+  type RecentRecipient,,
+  copyText,
 } from '@smirk/ui';
 import { listAssets } from '@smirk/assets';
 import { send } from './send-handler';
@@ -528,6 +529,14 @@ const verifyKeyImage = async ({
 
 
 function openPopOut() {
+  // Desktop already IS the popped-out window. The chrome-shim stubs
+  // `windows.create` to a no-op there, so running the rest of this would
+  // close the only window the user has and take the wallet with it. The
+  // control is normally hidden by the >=481px media query in styles.css,
+  // but the Tauri window can be dragged down to its 380px minWidth, which
+  // brings it back on screen.
+  if (chrome.runtime.id === 'smirk-desktop') return;
+
   const popoutUrl = chrome.runtime.getURL('popup.html');
   void chrome.windows.create({
     url: popoutUrl,
@@ -2384,7 +2393,7 @@ function HomeRouter({
             ? primaryAddressForAsset(wallet, assetId)
             : null
         }
-        onCopy={(text) => void navigator.clipboard.writeText(text)}
+        onCopy={(text) => void copyText(text).catch(() => undefined)}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}
         {...(smirkHandle ? { handle: smirkHandle } : {})}
@@ -2500,7 +2509,7 @@ function HomeRouter({
       <GrinPasteIncomingWizard
         assetId="grin"
         onReadClipboard={async () => navigator.clipboard.readText()}
-        onCopy={(text) => void navigator.clipboard.writeText(text)}
+        onCopy={(text) => void copyText(text).catch(() => undefined)}
         onSign={async ({ s1Armored, relayId }) => {
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };
@@ -2651,7 +2660,7 @@ function HomeRouter({
                 const w = s.wizards.send;
                 if (w) w.fields.grinPastedS2 = armored;
               });
-              void navigator.clipboard.writeText(armored).catch(() => undefined);
+              void copyText(armored).catch(() => undefined);
               void navigate('home/send');
               return { ok: true };
             }
@@ -2660,7 +2669,7 @@ function HomeRouter({
                 const w = s.wizards['grin-request'];
                 if (w) w.fields.pastedI2 = armored;
               });
-              void navigator.clipboard.writeText(armored).catch(() => undefined);
+              void copyText(armored).catch(() => undefined);
               void navigate('home/receive/grin-request');
               return { ok: true };
             }
@@ -2746,7 +2755,7 @@ function HomeRouter({
       <GrinPayInvoiceWizard
         assetId="grin"
         onReadClipboard={async () => navigator.clipboard.readText()}
-        onCopy={(text) => void navigator.clipboard.writeText(text)}
+        onCopy={(text) => void copyText(text).catch(() => undefined)}
         onInspect={(i1Armored) => {
           if (!wallet.mnemonic) {
             return { ok: false, error: 'Wallet not unlocked' };

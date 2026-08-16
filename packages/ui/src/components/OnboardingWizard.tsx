@@ -28,6 +28,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Button } from './Button';
 import { BackendPicker, type BackendProbeInfo } from './BackendPicker';
+import { copyText } from '../clipboard';
 
 /**
  * One linked third-party social (Telegram, Discord, Matrix, …).
@@ -625,7 +626,7 @@ function ShowMnemonic({
       // popup (manifest has clipboardWrite) and the Tauri webview. A chrome.*
       // call would break desktop. It can also be undefined outright in an
       // insecure context, which throws in here and lands in the catch.
-      await navigator.clipboard.writeText(phrase);
+      await copyText(phrase);
       setCopyState({ kind: 'copied' });
       // Confirmation is transient: a permanent "Copied" would read as a promise
       // that the phrase is still sitting on the clipboard, which we can't make.
@@ -1662,7 +1663,7 @@ function PaymentStep({
   const copy = async () => {
     if (!invoice) return;
     try {
-      await navigator.clipboard.writeText(invoice.payTo);
+      await copyText(invoice.payTo);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {

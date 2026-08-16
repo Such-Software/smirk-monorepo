@@ -15,7 +15,7 @@ import {
   type StoredIdentity,
   type UnlockedWallet,
 } from '@smirk/core';
-import { IdentityAvatar } from '@smirk/ui';
+import { IdentityAvatar, copyText } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
 import {
   loadVault,
@@ -614,7 +614,7 @@ export function NostrIdentityRoute({
               cursor: 'pointer',
             }}
             title="Click to copy"
-            onClick={() => void navigator.clipboard.writeText(activeIdentity.npub).catch(() => {})}
+            onClick={() => void copyText(activeIdentity.npub).catch(() => {})}
           >
             {activeIdentity.npub}
           </div>
@@ -697,7 +697,7 @@ export function NostrIdentityRoute({
                   </span>
                   <div
                     data-testid={`nostr-nsec-${id.pubkeyHex}`}
-                    onClick={() => void navigator.clipboard.writeText(revealedNsec.nsec).catch(() => {})}
+                    onClick={() => void copyText(revealedNsec.nsec).catch(() => {})}
                     title="Click to copy"
                     style={{ fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all', cursor: 'pointer' }}
                   >

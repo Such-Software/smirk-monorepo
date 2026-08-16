@@ -18,6 +18,7 @@ import { mustGetAsset } from '@smirk/assets';
 
 import { useWizard } from '../state/hooks';
 import { Button } from './Button';
+import { copyText } from '../clipboard';
 
 const WIZARD_ID = 'grin-request';
 const TOTAL_STEPS = 2;
@@ -325,10 +326,10 @@ function Exchange({
   }, [armoredOutgoing]);
 
   const copy = (text: string) => {
-    void navigator.clipboard.writeText(text).then(() => {
+    void copyText(text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
-    });
+    }).catch(() => undefined);
   };
 
   const submit = async () => {
@@ -434,10 +435,10 @@ function Done({
           <button
             data-no-uppercase
             onClick={() => {
-              void navigator.clipboard.writeText(kernelExcess).then(() => {
+              void copyText(kernelExcess).then(() => {
                 setCopied(true);
                 window.setTimeout(() => setCopied(false), 1400);
-              });
+              }).catch(() => undefined);
             }}
             style={slatepackBox}
           >
@@ -454,10 +455,10 @@ function Done({
           >
             <button
               onClick={() => {
-                void navigator.clipboard.writeText(kernelExcess).then(() => {
+                void copyText(kernelExcess).then(() => {
                   setCopied(true);
                   window.setTimeout(() => setCopied(false), 1400);
-                });
+                }).catch(() => undefined);
               }}
               style={copyBtn}
             >
