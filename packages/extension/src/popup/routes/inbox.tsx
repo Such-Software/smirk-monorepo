@@ -5,7 +5,7 @@ import {
   useRoute,
   formatAmountWithTicker,
   type InboxItem,
-  type InboxTipItem,,
+  type InboxTipItem,
   copyText,
 } from '@smirk/ui';
 import { store } from '../singletons';

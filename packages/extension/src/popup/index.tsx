@@ -137,7 +137,7 @@ import {
   type InboxItem,
   type InboxTipItem,
   type OnboardingRegistration,
-  type RecentRecipient,,
+  type RecentRecipient,
   copyText,
 } from '@smirk/ui';
 import { listAssets } from '@smirk/assets';
