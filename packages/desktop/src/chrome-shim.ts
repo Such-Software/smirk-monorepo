@@ -203,8 +203,22 @@ const sessionApi = {
 // ============================================================================
 
 export function installChromeShim(): void {
-  if ((globalThis as { chrome?: unknown }).chrome !== undefined) {
-    // Already installed (HMR re-run or test environment). Leave it.
+  // Do NOT bail merely because a `chrome` global exists. Windows runs on
+  // WebView2, which is Chromium-based and already defines `window.chrome` for
+  // its own host bridge (`chrome.webview`). A presence check therefore sees
+  // WebView2's object, concludes the shim is installed, installs nothing, and
+  // the popup dies at import time with "chrome.storage.local is unavailable".
+  // macOS (WKWebView) and Linux (WebKitGTK) define no `chrome`, which is why
+  // this only ever broke Windows.
+  //
+  // Test for OUR surface instead, and merge rather than replace: clobbering
+  // `chrome.webview` would take Tauri's IPC channel with it.
+  const existing = (globalThis as { chrome?: Record<string, unknown> }).chrome;
+  const alreadyOurs =
+    typeof existing?.['storage'] === 'object' &&
+    (existing['storage'] as { local?: unknown } | undefined)?.local !== undefined;
+  if (alreadyOurs) {
+    // Genuine re-run (HMR, or a test that installed us once already).
     return;
   }
 
@@ -241,5 +255,8 @@ export function installChromeShim(): void {
     },
   };
 
-  (globalThis as { chrome?: unknown }).chrome = chromeShim;
+  // Merge onto whatever the host already put there (WebView2's `chrome.webview`)
+  // instead of assigning over it. Our keys win for the surface we implement; any
+  // host-provided key we do not touch survives.
+  (globalThis as { chrome?: unknown }).chrome = Object.assign(existing ?? {}, chromeShim);
 }
