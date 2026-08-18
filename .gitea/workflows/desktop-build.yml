@@ -1,4 +1,4 @@
-name: Desktop build (Gitea)
+name: Release build (Gitea)
 
 # Builds + signs the Tauri desktop app on the Builds Gitea runners and uploads
 # the bundles as workflow artifacts. This is the Gitea counterpart to
@@ -342,3 +342,86 @@ jobs:
           name: smirk-desktop-${{ matrix.os_label }}-v0.3.0
           if-no-files-found: warn
           path: artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz
+
+  # ── Extension artifacts ──────────────────────────────────────────────────────
+  # Added 2026-08-18. Before this, the three extension zips were built by hand on
+  # a workstation into a gitignored directory while the desktop bundles came from
+  # CI, so the ten release artifacts shipped with two different provenance
+  # stories. The weaker half is the one that goes to the Chrome Web Store and
+  # AMO. Worse, it had already bitten us: when the working checkout disappeared
+  # from jw-laptop the zips existed nowhere and the checksums recorded at the tag
+  # described files that could not be regenerated.
+  #
+  # Runs in this workflow rather than ci.yml on purpose: artifacts must descend
+  # from the tagged commit, and ci.yml runs on every push.
+  extension:
+    name: extension build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang (wasm C target)
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Pinned to whatever the lockfile resolves, matching ci.yml. A hardcoded
+      # version silently mismatches and the wasm gets built by whichever
+      # wasm-bindgen already sits on the runner.
+      - name: Install wasm-bindgen-cli
+        run: |
+          WB_VERSION=$(cargo pkgid wasm-bindgen | sed 's/.*@//')
+          cargo install -f wasm-bindgen-cli --version "${WB_VERSION}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install TS deps
+        run: npm install
+
+      # Version comes from the manifest, which is the source of truth. The
+      # desktop legs above still hardcode v0.3.0 in their artifact names; migrate
+      # them the same way before cutting v0.4.0 or they will ship mislabelled.
+      - name: Resolve version
+        id: ver
+        run: |
+          V=$(node -p "require('./packages/extension/manifest.json').version")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "building extension artifacts for v$V"
+
+      # pack-release.sh drives `make ext-chrome` / `make ext-firefox`, which
+      # depend on the wasm target, so no separate wasm step is needed here.
+      - name: Pack extension archives
+        run: scripts/pack-release.sh "${{ steps.ver.outputs.version }}"
+
+      # The whole point of pack-release.sh is that the archives are a function of
+      # the commit rather than of the clock. Prove it on every release build
+      # instead of trusting it: --verify rebuilds and checks against the sums
+      # just recorded. Cheap here, since the macOS leg is the wall-clock pole.
+      - name: Verify archives are reproducible
+        run: scripts/pack-release.sh "${{ steps.ver.outputs.version }}" --verify
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p artifacts-out
+          cp -v packages/extension/releases/* artifacts-out/
+          ls -la artifacts-out
+
+      - name: Upload extension archives
+        uses: actions/upload-artifact@v3
+        continue-on-error: true
+        env:
+          # Same self-signed cert as the desktop upload above.
+          NODE_TLS_REJECT_UNAUTHORIZED: '0'
+        with:
+          name: smirk-extension-v${{ steps.ver.outputs.version }}
+          if-no-files-found: error
+          path: artifacts-out/
