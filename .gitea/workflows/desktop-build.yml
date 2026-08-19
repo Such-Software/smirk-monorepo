@@ -42,6 +42,15 @@ on:
 
 jobs:
   build:
+    # Isolated toolchain homes, one per job. These runners execute several jobs
+    # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
+    # job's toolchain install rewrites binaries another job is mid-way through
+    # using: cargo check and cargo test would pass, then the very next step died
+    # with "cargo: command not found". rust-toolchain.toml made that window much
+    # wider, because every cargo call in the checkout now consults rustup.
+    env:
+      RUSTUP_HOME: ${{ runner.temp }}/rustup
+      CARGO_HOME: ${{ runner.temp }}/cargo
     strategy:
       fail-fast: false
       matrix:
@@ -362,6 +371,15 @@ jobs:
   # Runs in this workflow rather than ci.yml on purpose: artifacts must descend
   # from the tagged commit, and ci.yml runs on every push.
   extension:
+    # Isolated toolchain homes, one per job. These runners execute several jobs
+    # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
+    # job's toolchain install rewrites binaries another job is mid-way through
+    # using: cargo check and cargo test would pass, then the very next step died
+    # with "cargo: command not found". rust-toolchain.toml made that window much
+    # wider, because every cargo call in the checkout now consults rustup.
+    env:
+      RUSTUP_HOME: ${{ runner.temp }}/rustup
+      CARGO_HOME: ${{ runner.temp }}/cargo
     name: extension build
     runs-on: ubuntu-latest
     steps:
