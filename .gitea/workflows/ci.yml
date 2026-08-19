@@ -34,23 +34,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Single source of truth for the compiler version is rust-toolchain.toml.
-      # `@stable` was a moving target, which broke wasm byte-reproducibility both
-      # across machines and across time; see that file's header.
-      # sed rather than `grep -oP`: BSD grep on the macOS runner has no -P.
-      - name: Read pinned Rust toolchain
-        id: rust_pin
-        shell: bash
-        run: |
-          V=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-          [ -n "$V" ] || { echo "no channel in rust-toolchain.toml" >&2; exit 1; }
-          echo "channel=$V" >> "$GITHUB_OUTPUT"
-          echo "pinned rust toolchain: $V"
-
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        # @stable here installs a working rustup/cargo on the runner; it does NOT
+        # decide which compiler builds our code. rust-toolchain.toml pins that, and
+        # rustup honours it for every cargo call inside the checkout, installing the
+        # pinned toolchain with its components and targets on first use. Do not pin a
+        # version on this action: three jobs share one ~/.rustup on this runner, and
+        # having them each install a specific toolchain concurrently raced badly
+        # (clippy step hit "cargo: command not found" mid-job).
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ steps.rust_pin.outputs.channel }}
           components: clippy
 
       - name: Cache Cargo
@@ -112,23 +105,16 @@ jobs:
       - name: Install clang (wasm C target)
         run: sudo apt-get update && sudo apt-get install -y clang
 
-      # Single source of truth for the compiler version is rust-toolchain.toml.
-      # `@stable` was a moving target, which broke wasm byte-reproducibility both
-      # across machines and across time; see that file's header.
-      # sed rather than `grep -oP`: BSD grep on the macOS runner has no -P.
-      - name: Read pinned Rust toolchain
-        id: rust_pin
-        shell: bash
-        run: |
-          V=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-          [ -n "$V" ] || { echo "no channel in rust-toolchain.toml" >&2; exit 1; }
-          echo "channel=$V" >> "$GITHUB_OUTPUT"
-          echo "pinned rust toolchain: $V"
-
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        # @stable here installs a working rustup/cargo on the runner; it does NOT
+        # decide which compiler builds our code. rust-toolchain.toml pins that, and
+        # rustup honours it for every cargo call inside the checkout, installing the
+        # pinned toolchain with its components and targets on first use. Do not pin a
+        # version on this action: three jobs share one ~/.rustup on this runner, and
+        # having them each install a specific toolchain concurrently raced badly
+        # (clippy step hit "cargo: command not found" mid-job).
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ steps.rust_pin.outputs.channel }}
           targets: wasm32-unknown-unknown
 
       - name: Cache Cargo
@@ -236,21 +222,14 @@ jobs:
       # INFORMATIONAL: dev tooling + moderate advisories, non-blocking.
       - name: npm audit (full, advisory)
         run: npm audit || true
-      # Single source of truth for the compiler version is rust-toolchain.toml.
-      # `@stable` was a moving target, which broke wasm byte-reproducibility both
-      # across machines and across time; see that file's header.
-      # sed rather than `grep -oP`: BSD grep on the macOS runner has no -P.
-      - name: Read pinned Rust toolchain
-        id: rust_pin
-        shell: bash
-        run: |
-          V=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-          [ -n "$V" ] || { echo "no channel in rust-toolchain.toml" >&2; exit 1; }
-          echo "channel=$V" >> "$GITHUB_OUTPUT"
-          echo "pinned rust toolchain: $V"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust_pin.outputs.channel }}
+      # @stable here installs a working rustup/cargo on the runner; it does NOT
+      # decide which compiler builds our code. rust-toolchain.toml pins that, and
+      # rustup honours it for every cargo call inside the checkout, installing the
+      # pinned toolchain with its components and targets on first use. Do not pin a
+      # version on this action: three jobs share one ~/.rustup on this runner, and
+      # having them each install a specific toolchain concurrently raced badly
+      # (clippy step hit "cargo: command not found" mid-job).
+      - uses: dtolnay/rust-toolchain@stable
       # INFORMATIONAL: the vendored monero-oxide / secp256k1zkp subtrees pin older
       # deps, so this is advisory until a tuned deny.toml lands.
       - name: cargo audit (advisory)
