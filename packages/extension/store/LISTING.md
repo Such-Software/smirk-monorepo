@@ -264,6 +264,10 @@ the root of the source archive:
         its own. Do not pass +stable or set a rustup default: a different rustc
         produces functionally-equivalent but not byte-identical wasm.
       wasm-bindgen CLI 0.2.121, which MUST match the version in Cargo.lock
+      clang, whose version also affects the wasm: secp256k1zkp compiles C into
+        it. The exact compiler used for this release is recorded in
+        TOOLCHAIN-v0.3.0.txt alongside SHA256SUMS. Everything else in the
+        package reproduces without matching it.
 
     Toolchain setup
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

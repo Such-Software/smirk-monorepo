@@ -60,6 +60,14 @@ identify the exact uploaded artifacts. Inputs:
   from inside that directory.)
 - **OS:** Linux x86_64 (the original build matrix). macOS arm64
   reproduces today; Windows hasn't been re-checked since v0.2.x
+- **C compiler:** the wasm is not a pure-Rust artifact.
+  `crates/secp256k1zkp/build.rs` compiles C through cc-rs, so the clang version
+  feeds `smirk_wasm_bg.wasm` alongside rustc. Measured 2026-08-19: with rustc
+  and wasm-bindgen matched, CI on clang 19 and a workstation on clang 21.1.8
+  produced byte-identical JS, HTML, CSS and glue, and differed in the wasm
+  alone. A repo file cannot pin clang the way `rust-toolchain.toml` pins rustc,
+  so each release records what it used in `TOOLCHAIN-v<version>.txt` next to
+  `SHA256SUMS`. Match that to match the wasm.
 - **Lockfile:** the committed `package-lock.json` is the only source
   of dep versions; never run `npm update` mid-release
 - **WASM bundle:** must be rebuilt before the extension. From the

@@ -79,6 +79,37 @@ git archive --format=zip --output="$OUT/smirk-wallet-source-v$VERSION.zip" HEAD
     "smirk-wallet-source-v$VERSION.zip" > "SHA256SUMS-v$VERSION.txt" \
   && cat "SHA256SUMS-v$VERSION.txt" )
 
+# Record the toolchain that produced these bytes.
+#
+# rustc is pinned by rust-toolchain.toml, and with it every file in the archives
+# reproduces across machines EXCEPT the wasm: crates/secp256k1zkp/build.rs
+# compiles C through cc-rs, so the C compiler version feeds the binary too.
+# Measured 2026-08-19 at commit 02ea0ea: CI on clang 19 and a workstation on
+# clang 21.1.8 produced identical JS, HTML, CSS and glue, and differed in
+# smirk_wasm_bg.wasm alone.
+#
+# A repo file cannot pin clang the way it pins rustc, so record what was used
+# instead of implying a guarantee we do not have. A reviewer who cannot match
+# the wasm can at least see why, and match it deliberately if they choose.
+{
+  echo "# Toolchain that produced SHA256SUMS-v$VERSION.txt"
+  echo "# commit: $(git rev-parse HEAD)"
+  echo "rustc:         $(rustc --version 2>/dev/null || echo unknown)"
+  echo "cargo:         $(cargo --version 2>/dev/null || echo unknown)"
+  # The CLI is often only in ~/.cargo/bin, which a non-login shell misses.
+  # Record the lockfile requirement too: that is the version that must match.
+  echo "wasm-bindgen:  $(wasm-bindgen --version 2>/dev/null \
+                        || "$HOME/.cargo/bin/wasm-bindgen" --version 2>/dev/null \
+                        || echo "cli not on PATH")"
+  echo "wasm-bindgen (Cargo.lock): $(cargo pkgid wasm-bindgen 2>/dev/null | sed 's/.*@//' || echo unknown)"
+  echo "cc (C -> wasm): $(${CC:-clang} --version 2>/dev/null | head -1 || echo unknown)"
+  echo "node:          $(node --version 2>/dev/null || echo unknown)"
+  echo "npm:           $(npm --version 2>/dev/null || echo unknown)"
+  echo "host:          $(uname -sm)"
+} > "$OUT/TOOLCHAIN-v$VERSION.txt"
+echo
+cat "$OUT/TOOLCHAIN-v$VERSION.txt"
+
 echo
 echo "note: the firefox build runs last and leaves dist/ holding the FIREFOX"
 echo "manifest. Anything reading dist/ after this sees Firefox, not Chrome."
