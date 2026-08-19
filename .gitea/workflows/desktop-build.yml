@@ -209,9 +209,12 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust_pin.outputs.channel }}
+          # Only the per-platform targets here: wasm32 comes from
+          # rust-toolchain.toml, and naming it in both places makes rustup
+          # install the same component twice and abort on a file conflict.
           # rust_targets holds REAL rustup targets (both mac arches for the
           # universal build); matrix.target is just the bundle output dir.
-          targets: wasm32-unknown-unknown,${{ matrix.rust_targets }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -394,7 +397,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust_pin.outputs.channel }}
-          targets: wasm32-unknown-unknown
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
