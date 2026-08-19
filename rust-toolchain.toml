@@ -1,0 +1,30 @@
+# Pins the Rust toolchain for every crate in this workspace.
+#
+# Why this file exists: `make wasm` passes --remap-path-prefix so the build
+# directory and cargo home stop leaking into the binary, which makes the wasm
+# byte-identical across checkouts GIVEN THE SAME rustc. That conditional was
+# load-bearing and unmet. Nothing pinned rustc, and every workflow used
+# `dtolnay/rust-toolchain@stable`, so the compiler was a moving target: the same
+# tag built on two machines produced different wasm (verified 2026-08-18, CI on
+# 1.97.1 against a workstation on 1.95.0), and two CI runs months apart would
+# have diverged on their own without a line of code changing.
+#
+# That matters most for AMO. The source zip exists so a reviewer can rebuild and
+# content-match the extension, and a reviewer cannot guess our compiler. This
+# file is the answer to "which rustc", for them and for us.
+#
+# Bumping it is a release decision, not a chore: it changes the bytes of every
+# shipped artifact. Rebuild and re-record SHA256SUMS when it moves.
+#
+# Note: crates/monero-oxide carries its own rust-toolchain.toml from the
+# upstream fork. Its crates are members of THIS workspace, so builds driven from
+# the repo root use the pin here; that nested file only applies to someone
+# running cargo from inside that directory.
+[toolchain]
+channel = "1.97.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+# Needed by every extension build (`make wasm`). Per-platform desktop targets
+# stay in the desktop-build matrix, since installing all of them everywhere
+# would be waste.
+targets = ["wasm32-unknown-unknown"]

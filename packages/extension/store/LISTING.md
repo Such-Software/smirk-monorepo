@@ -258,14 +258,15 @@ the root of the source archive:
       Node 22.x (the workspace `engines` field requires >=20), npm as shipped
         with that Node release
       GNU make
-      Rust 1.95.0 via rustup, with the wasm32-unknown-unknown target
+      Rust via rustup. The exact version and the wasm32-unknown-unknown
+        target are pinned in rust-toolchain.toml at the root of this archive;
+        rustup reads that file and selects and installs the right toolchain on
+        its own. Do not pass +stable or set a rustup default: a different rustc
+        produces functionally-equivalent but not byte-identical wasm.
       wasm-bindgen CLI 0.2.121, which MUST match the version in Cargo.lock
 
     Toolchain setup
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-      rustup toolchain install 1.95.0
-      rustup default 1.95.0
-      rustup target add wasm32-unknown-unknown
       cargo install wasm-bindgen-cli --version 0.2.121
 
     Build

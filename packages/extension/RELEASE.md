@@ -28,11 +28,16 @@ Reproducibility on this extension is strong, with one honest edge. Verified
 for v0.3.0 with a from-scratch build of the source zip in a different
 directory: the shared JS libraries, HTML, CSS, the compiled `wasm`, and the
 background/content/inject bundles are all byte-identical. The `wasm` is
-byte-identical given the same rustc (v0.3.0 shipped rustc 1.95.0) because
-`make wasm` passes `--remap-path-prefix`, so the build directory and cargo
-home no longer leak into the binary (that leakage previously made the wasm
-differ per build location); a different rustc yields functionally-equivalent
-but not byte-identical wasm. The one exception is `popup.js`, the largest
+byte-identical given the same rustc because `make wasm` passes
+`--remap-path-prefix`, so the build directory and cargo home no longer leak
+into the binary (that leakage previously made the wasm differ per build
+location); a different rustc yields functionally-equivalent but not
+byte-identical wasm. **The rustc version is pinned in `rust-toolchain.toml` at
+the repo root, and rustup honours it automatically**, so a reviewer who builds
+from a clean checkout gets the right compiler without being told a version
+number. Before that file existed the guarantee was unusable: nothing pinned
+rustc and CI tracked `stable`, so the same commit built on two machines
+produced different wasm. The one exception is `popup.js`, the largest
 entry bundle: Rollup names and orders its modules by absolute path, so a
 build at a different directory produces a functionally-identical but not
 byte-identical `popup.js` (deterministic for a given path). The zip
@@ -43,9 +48,16 @@ identify the exact uploaded artifacts. Inputs:
 
 - **Node:** `>=20.0.0` (matches the workspace `engines` field)
 - **npm:** ships with the matched Node release
-- **Rust:** rustc 1.95.0 for v0.3.0. `make wasm` remaps build paths so a
-  clean checkout on the same rustc reproduces the wasm byte-for-byte no
-  matter where it is built
+- **Rust:** pinned by `rust-toolchain.toml` at the repo root; rustup installs
+  and selects it on its own, so do not override it with `+stable` or a
+  `rustup default`. `make wasm` remaps build paths, so a clean checkout on the
+  pinned rustc reproduces the wasm byte-for-byte wherever it is built. Bumping
+  the pin changes the bytes of every shipped artifact and is a release
+  decision: rebuild and re-record `SHA256SUMS` when it moves. (Note:
+  `crates/monero-oxide` carries its own `rust-toolchain.toml` from the upstream
+  fork. Its crates are members of this workspace, so builds driven from the
+  repo root use the root pin; the nested file only binds someone running cargo
+  from inside that directory.)
 - **OS:** Linux x86_64 (the original build matrix). macOS arm64
   reproduces today; Windows hasn't been re-checked since v0.2.x
 - **Lockfile:** the committed `package-lock.json` is the only source
@@ -212,17 +224,16 @@ mandatory.
    these steps; if one changes, change both.
 
    ```
-   Reproducible build instructions (Linux/macOS, Node 22.x, GNU make,
-   rustc 1.95.0):
+   Reproducible build instructions (Linux/macOS, Node 22.x, GNU make):
 
    # Prerequisites. The extension embeds a WebAssembly bundle compiled from the
-   # Rust sources in crates/, so the build needs a Rust toolchain. v0.3.0 was
-   # built with rustc 1.95.0; another rustc yields functionally-equivalent but
-   # not byte-identical wasm.
+   # Rust sources in crates/, so the build needs a Rust toolchain. The exact
+   # rustc is pinned in rust-toolchain.toml at the root of the source archive,
+   # and rustup reads that file automatically: run cargo from the archive root
+   # and the right compiler is selected and installed for you. Do NOT pass
+   # +stable or set a rustup default, which is how you end up with
+   # functionally-equivalent but not byte-identical wasm.
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   rustup toolchain install 1.95.0
-   rustup default 1.95.0
-   rustup target add wasm32-unknown-unknown
    # The wasm-bindgen CLI must match the version in Cargo.lock (0.2.121 for
    # v0.3.0); a version mismatch fails the build.
    cargo install wasm-bindgen-cli --version 0.2.121
