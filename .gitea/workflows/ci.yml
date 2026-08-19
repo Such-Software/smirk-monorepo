@@ -47,23 +47,39 @@ jobs:
           echo "channel=$V" >> "$GITHUB_OUTPUT"
           echo "pinned rust toolchain: $V"
 
-          # These runners keep ~/.rustup between jobs, and one of them holds a
-          # wasm32 std that rustup's own manifest does not list. Installing the
-          # target then aborts with "detected conflict:
-          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib", which
-          # fails the job before a single crate compiles. Clear the orphan so
-          # rustup can lay the component down cleanly; it is regenerable.
+          # These runners keep ~/.rustup between jobs, and one holds toolchain
+          # files that rustup's own manifest does not account for. Installing
+          # then aborts with "detected conflict:
+          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib" before a
+          # single crate compiles.
+          #
+          # Gate on the DIRECTORY, not on `rustup toolchain list`: the broken
+          # state is precisely one where the files exist while rustup does not
+          # list the toolchain, so listing it first skipped the repair.
           #
           # Run from $HOME, not the checkout: any rustc/cargo call inside the
-          # repo triggers the rust-toolchain.toml auto-install we are trying to
-          # get ahead of.
+          # repo triggers the rust-toolchain.toml auto-install we are getting
+          # ahead of.
           ( cd "$HOME" || exit 0
-            rustup toolchain list 2>/dev/null | grep -q "^${V}-" || exit 0
-            rustup target list --toolchain "$V" --installed 2>/dev/null \
-              | grep -qx wasm32-unknown-unknown && exit 0
-            for t in "$HOME"/.rustup/toolchains/"$V"-*/lib/rustlib/wasm32-unknown-unknown; do
-              [ -d "$t" ] || continue
-              rm -rf "$t" && echo "cleared orphaned wasm32 std: $t"
+            listed=$(rustup toolchain list 2>/dev/null | grep -c "^${V}-" || true)
+            echo "rustup lists toolchain ${V}: ${listed}"
+            for d in "$HOME"/.rustup/toolchains/"$V"-*; do
+              [ -d "$d" ] || continue
+              if [ "$listed" = "0" ]; then
+                # Files without a manifest entry: rustup cannot reconcile this,
+                # and every install attempt will conflict. Drop it wholesale and
+                # let rustup lay down a clean copy.
+                rm -rf "$d" && echo "removed untracked toolchain dir: $d"
+                continue
+              fi
+              w="$d/lib/rustlib/wasm32-unknown-unknown"
+              [ -d "$w" ] || continue
+              if rustup target list --toolchain "$V" --installed 2>/dev/null \
+                   | grep -qx wasm32-unknown-unknown; then
+                echo "wasm32 std is tracked; leaving $w"
+              else
+                rm -rf "$w" && echo "cleared orphaned wasm32 std: $w"
+              fi
             done
           ) || true
 
@@ -144,23 +160,39 @@ jobs:
           echo "channel=$V" >> "$GITHUB_OUTPUT"
           echo "pinned rust toolchain: $V"
 
-          # These runners keep ~/.rustup between jobs, and one of them holds a
-          # wasm32 std that rustup's own manifest does not list. Installing the
-          # target then aborts with "detected conflict:
-          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib", which
-          # fails the job before a single crate compiles. Clear the orphan so
-          # rustup can lay the component down cleanly; it is regenerable.
+          # These runners keep ~/.rustup between jobs, and one holds toolchain
+          # files that rustup's own manifest does not account for. Installing
+          # then aborts with "detected conflict:
+          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib" before a
+          # single crate compiles.
+          #
+          # Gate on the DIRECTORY, not on `rustup toolchain list`: the broken
+          # state is precisely one where the files exist while rustup does not
+          # list the toolchain, so listing it first skipped the repair.
           #
           # Run from $HOME, not the checkout: any rustc/cargo call inside the
-          # repo triggers the rust-toolchain.toml auto-install we are trying to
-          # get ahead of.
+          # repo triggers the rust-toolchain.toml auto-install we are getting
+          # ahead of.
           ( cd "$HOME" || exit 0
-            rustup toolchain list 2>/dev/null | grep -q "^${V}-" || exit 0
-            rustup target list --toolchain "$V" --installed 2>/dev/null \
-              | grep -qx wasm32-unknown-unknown && exit 0
-            for t in "$HOME"/.rustup/toolchains/"$V"-*/lib/rustlib/wasm32-unknown-unknown; do
-              [ -d "$t" ] || continue
-              rm -rf "$t" && echo "cleared orphaned wasm32 std: $t"
+            listed=$(rustup toolchain list 2>/dev/null | grep -c "^${V}-" || true)
+            echo "rustup lists toolchain ${V}: ${listed}"
+            for d in "$HOME"/.rustup/toolchains/"$V"-*; do
+              [ -d "$d" ] || continue
+              if [ "$listed" = "0" ]; then
+                # Files without a manifest entry: rustup cannot reconcile this,
+                # and every install attempt will conflict. Drop it wholesale and
+                # let rustup lay down a clean copy.
+                rm -rf "$d" && echo "removed untracked toolchain dir: $d"
+                continue
+              fi
+              w="$d/lib/rustlib/wasm32-unknown-unknown"
+              [ -d "$w" ] || continue
+              if rustup target list --toolchain "$V" --installed 2>/dev/null \
+                   | grep -qx wasm32-unknown-unknown; then
+                echo "wasm32 std is tracked; leaving $w"
+              else
+                rm -rf "$w" && echo "cleared orphaned wasm32 std: $w"
+              fi
             done
           ) || true
 
@@ -287,23 +319,39 @@ jobs:
           echo "channel=$V" >> "$GITHUB_OUTPUT"
           echo "pinned rust toolchain: $V"
 
-          # These runners keep ~/.rustup between jobs, and one of them holds a
-          # wasm32 std that rustup's own manifest does not list. Installing the
-          # target then aborts with "detected conflict:
-          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib", which
-          # fails the job before a single crate compiles. Clear the orphan so
-          # rustup can lay the component down cleanly; it is regenerable.
+          # These runners keep ~/.rustup between jobs, and one holds toolchain
+          # files that rustup's own manifest does not account for. Installing
+          # then aborts with "detected conflict:
+          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib" before a
+          # single crate compiles.
+          #
+          # Gate on the DIRECTORY, not on `rustup toolchain list`: the broken
+          # state is precisely one where the files exist while rustup does not
+          # list the toolchain, so listing it first skipped the repair.
           #
           # Run from $HOME, not the checkout: any rustc/cargo call inside the
-          # repo triggers the rust-toolchain.toml auto-install we are trying to
-          # get ahead of.
+          # repo triggers the rust-toolchain.toml auto-install we are getting
+          # ahead of.
           ( cd "$HOME" || exit 0
-            rustup toolchain list 2>/dev/null | grep -q "^${V}-" || exit 0
-            rustup target list --toolchain "$V" --installed 2>/dev/null \
-              | grep -qx wasm32-unknown-unknown && exit 0
-            for t in "$HOME"/.rustup/toolchains/"$V"-*/lib/rustlib/wasm32-unknown-unknown; do
-              [ -d "$t" ] || continue
-              rm -rf "$t" && echo "cleared orphaned wasm32 std: $t"
+            listed=$(rustup toolchain list 2>/dev/null | grep -c "^${V}-" || true)
+            echo "rustup lists toolchain ${V}: ${listed}"
+            for d in "$HOME"/.rustup/toolchains/"$V"-*; do
+              [ -d "$d" ] || continue
+              if [ "$listed" = "0" ]; then
+                # Files without a manifest entry: rustup cannot reconcile this,
+                # and every install attempt will conflict. Drop it wholesale and
+                # let rustup lay down a clean copy.
+                rm -rf "$d" && echo "removed untracked toolchain dir: $d"
+                continue
+              fi
+              w="$d/lib/rustlib/wasm32-unknown-unknown"
+              [ -d "$w" ] || continue
+              if rustup target list --toolchain "$V" --installed 2>/dev/null \
+                   | grep -qx wasm32-unknown-unknown; then
+                echo "wasm32 std is tracked; leaving $w"
+              else
+                rm -rf "$w" && echo "cleared orphaned wasm32 std: $w"
+              fi
             done
           ) || true
       - uses: dtolnay/rust-toolchain@master
