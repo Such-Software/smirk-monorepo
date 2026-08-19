@@ -38,7 +38,7 @@ jobs:
       # `@stable` was a moving target, which broke wasm byte-reproducibility both
       # across machines and across time; see that file's header.
       # sed rather than `grep -oP`: BSD grep on the macOS runner has no -P.
-      - name: Read pinned Rust toolchain
+      - name: Read pinned Rust toolchain, clearing a stale wasm32 std
         id: rust_pin
         shell: bash
         run: |
@@ -46,6 +46,26 @@ jobs:
           [ -n "$V" ] || { echo "no channel in rust-toolchain.toml" >&2; exit 1; }
           echo "channel=$V" >> "$GITHUB_OUTPUT"
           echo "pinned rust toolchain: $V"
+
+          # These runners keep ~/.rustup between jobs, and one of them holds a
+          # wasm32 std that rustup's own manifest does not list. Installing the
+          # target then aborts with "detected conflict:
+          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib", which
+          # fails the job before a single crate compiles. Clear the orphan so
+          # rustup can lay the component down cleanly; it is regenerable.
+          #
+          # Run from $HOME, not the checkout: any rustc/cargo call inside the
+          # repo triggers the rust-toolchain.toml auto-install we are trying to
+          # get ahead of.
+          ( cd "$HOME" || exit 0
+            rustup toolchain list 2>/dev/null | grep -q "^${V}-" || exit 0
+            rustup target list --toolchain "$V" --installed 2>/dev/null \
+              | grep -qx wasm32-unknown-unknown && exit 0
+            for t in "$HOME"/.rustup/toolchains/"$V"-*/lib/rustlib/wasm32-unknown-unknown; do
+              [ -d "$t" ] || continue
+              rm -rf "$t" && echo "cleared orphaned wasm32 std: $t"
+            done
+          ) || true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -115,7 +135,7 @@ jobs:
       # `@stable` was a moving target, which broke wasm byte-reproducibility both
       # across machines and across time; see that file's header.
       # sed rather than `grep -oP`: BSD grep on the macOS runner has no -P.
-      - name: Read pinned Rust toolchain
+      - name: Read pinned Rust toolchain, clearing a stale wasm32 std
         id: rust_pin
         shell: bash
         run: |
@@ -123,6 +143,26 @@ jobs:
           [ -n "$V" ] || { echo "no channel in rust-toolchain.toml" >&2; exit 1; }
           echo "channel=$V" >> "$GITHUB_OUTPUT"
           echo "pinned rust toolchain: $V"
+
+          # These runners keep ~/.rustup between jobs, and one of them holds a
+          # wasm32 std that rustup's own manifest does not list. Installing the
+          # target then aborts with "detected conflict:
+          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib", which
+          # fails the job before a single crate compiles. Clear the orphan so
+          # rustup can lay the component down cleanly; it is regenerable.
+          #
+          # Run from $HOME, not the checkout: any rustc/cargo call inside the
+          # repo triggers the rust-toolchain.toml auto-install we are trying to
+          # get ahead of.
+          ( cd "$HOME" || exit 0
+            rustup toolchain list 2>/dev/null | grep -q "^${V}-" || exit 0
+            rustup target list --toolchain "$V" --installed 2>/dev/null \
+              | grep -qx wasm32-unknown-unknown && exit 0
+            for t in "$HOME"/.rustup/toolchains/"$V"-*/lib/rustlib/wasm32-unknown-unknown; do
+              [ -d "$t" ] || continue
+              rm -rf "$t" && echo "cleared orphaned wasm32 std: $t"
+            done
+          ) || true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -238,7 +278,7 @@ jobs:
       # `@stable` was a moving target, which broke wasm byte-reproducibility both
       # across machines and across time; see that file's header.
       # sed rather than `grep -oP`: BSD grep on the macOS runner has no -P.
-      - name: Read pinned Rust toolchain
+      - name: Read pinned Rust toolchain, clearing a stale wasm32 std
         id: rust_pin
         shell: bash
         run: |
@@ -246,6 +286,26 @@ jobs:
           [ -n "$V" ] || { echo "no channel in rust-toolchain.toml" >&2; exit 1; }
           echo "channel=$V" >> "$GITHUB_OUTPUT"
           echo "pinned rust toolchain: $V"
+
+          # These runners keep ~/.rustup between jobs, and one of them holds a
+          # wasm32 std that rustup's own manifest does not list. Installing the
+          # target then aborts with "detected conflict:
+          # lib/rustlib/wasm32-unknown-unknown/.../libaddr2line-*.rlib", which
+          # fails the job before a single crate compiles. Clear the orphan so
+          # rustup can lay the component down cleanly; it is regenerable.
+          #
+          # Run from $HOME, not the checkout: any rustc/cargo call inside the
+          # repo triggers the rust-toolchain.toml auto-install we are trying to
+          # get ahead of.
+          ( cd "$HOME" || exit 0
+            rustup toolchain list 2>/dev/null | grep -q "^${V}-" || exit 0
+            rustup target list --toolchain "$V" --installed 2>/dev/null \
+              | grep -qx wasm32-unknown-unknown && exit 0
+            for t in "$HOME"/.rustup/toolchains/"$V"-*/lib/rustlib/wasm32-unknown-unknown; do
+              [ -d "$t" ] || continue
+              rm -rf "$t" && echo "cleared orphaned wasm32 std: $t"
+            done
+          ) || true
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust_pin.outputs.channel }}
