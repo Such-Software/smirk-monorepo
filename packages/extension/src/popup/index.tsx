@@ -1827,10 +1827,27 @@ function App() {
     // A failed bootstrap must surface its error + a retry, NOT sit forever on the
     // "Setting up wallet…" placeholder (which reads as an infinite hang).
     if (session?.error) {
+      // A missing mnemonic is not transient and retrying cannot fix it: the
+      // warm-restore session cache drops the mnemonic by design, and
+      // npub-native sign-in needs it to sign the NIP-98 register event. Only a
+      // real unlock puts it back. Without that button this screen is a dead
+      // end, because it replaces the whole UI and nothing on it reaches the
+      // unlock prompt.
+      const needsMnemonic = /unlocked mnemonic/i.test(session.error);
       return (
         <BootstrapErrorScreen
           message={session.error}
           onRetry={() => setSession(null)}
+          onUnlock={
+            needsMnemonic
+              ? () => {
+                  // Lock first, then drop the failed session: locking alone
+                  // leaves the error on screen, clearing alone re-runs the same
+                  // failing bootstrap.
+                  void lockHandler().then(() => setSession(null));
+                }
+              : undefined
+          }
         />
       );
     }
