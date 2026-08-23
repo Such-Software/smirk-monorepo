@@ -39,8 +39,21 @@ console.debug('[smirk] background worker starting', {
   core: CORE_PACKAGE_VERSION,
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   console.debug('[smirk] installed; api base:', (api as unknown as { baseUrl: string }).baseUrl);
+
+  // Open setup in a tab on a fresh install, never on update or on a browser
+  // profile sync. Onboarding cannot run in the action popup: the browser
+  // destroys it on blur, and the recovery phrase is held in memory only, so a
+  // user who steps away to write the phrase down comes back to a rebuilt popup
+  // and a second, different seed. See popup/onboarding-surface.ts.
+  if (details.reason !== 'install') return;
+  void chrome.tabs
+    ?.create({ url: `${chrome.runtime.getURL('popup.html')}?ctx=tab`, active: true })
+    .catch((e: unknown) => {
+      // Not fatal: the popup shows a hand-off card that opens the same tab.
+      console.debug('[smirk] could not open the setup tab:', e);
+    });
 });
 
 // A browser restart means there is no unlocked popup session, by definition:

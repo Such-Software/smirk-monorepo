@@ -139,10 +139,12 @@ import {
   type OnboardingRegistration,
   type RecentRecipient,
   copyText,
+  Button,
 } from '@smirk/ui';
 import { listAssets } from '@smirk/assets';
 import { send } from './send-handler';
 import { bootstrapAuthInExtension } from './jobs/bootstrap-in-extension';
+import { canHostOnboarding, openOnboardingTab } from './onboarding-surface';
 import {
   startGrinSend,
   processGrinS2,
@@ -527,6 +529,45 @@ const verifyKeyImage = async ({
 
 
 
+
+/**
+ * Shown instead of onboarding when the wallet is empty and this document is the
+ * action popup. Setting up a wallet means reading a recovery phrase off the
+ * screen and putting it somewhere safe, which almost always means leaving this
+ * window; the popup does not survive that, and the phrase cannot be recovered
+ * afterwards. So we do not start the flow here at all.
+ */
+function OnboardingHandoff({ onContinue }: { onContinue: () => void }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+        padding: '28px 22px',
+        textAlign: 'center',
+        alignItems: 'center',
+      }}
+    >
+      <img
+        src={chrome.runtime.getURL('icons/icon-128.png')}
+        alt=""
+        width={64}
+        height={64}
+        style={{ borderRadius: 12 }}
+      />
+      <h1 style={{ fontSize: 18, margin: 0 }}>Set up your Smirk wallet</h1>
+      <p style={{ fontSize: 13, lineHeight: 1.5, opacity: 0.8, margin: 0 }}>
+        Setup opens in its own tab. You will be shown a recovery phrase, and
+        writing it down usually means switching windows: this small popup closes
+        the moment it loses focus, and the phrase would be lost with it.
+      </p>
+      <Button onClick={onContinue} testid="onboarding-handoff-continue">
+        Continue in a tab
+      </Button>
+    </div>
+  );
+}
 
 function openPopOut() {
   // Desktop already IS the popped-out window. The chrome-shim stubs
@@ -1490,6 +1531,20 @@ function App() {
   }
 
   if (walletState.kind === 'empty') {
+    // Onboarding must not run in the action popup: the browser destroys it on
+    // blur, and the mnemonic is deliberately held in memory only, so stepping
+    // away to paste the phrase loses it. Pressing create again then mints a
+    // DIFFERENT seed, with nothing on screen saying the first one is dead.
+    // Hand off to a tab, which survives focus changes.
+    if (!canHostOnboarding()) {
+      return (
+        <OnboardingHandoff
+          onContinue={() => {
+            void openOnboardingTab().then(() => window.close());
+          }}
+        />
+      );
+    }
     return (
       <OnboardingWizard
         onBegin={() => setOnboardingBegun(true)}
