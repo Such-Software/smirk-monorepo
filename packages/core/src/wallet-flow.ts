@@ -612,6 +612,7 @@ export async function fetchAllBalances(
             bootstrap.xmrStartHeight,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
+            options.restorePolicy,
           )
         : Promise.resolve(zero),
     ),
@@ -629,6 +630,7 @@ export async function fetchAllBalances(
             bootstrap.wowStartHeight,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
+            options.restorePolicy,
           )
         : Promise.resolve(zero),
     ),
@@ -739,6 +741,7 @@ async function fetchLwsBalance(
   startHeight: number | undefined,
   verifyKeyImage: KeyImageVerifier | undefined,
   strictSpentIndex: boolean,
+  restorePolicy?: RestorePowPolicy | undefined,
 ): Promise<AssetBalance> {
   // Best-effort registration, at most ONCE per account per session (see
   // `registeredLwsAccounts` for why repeating it corrupts the balance).
@@ -750,9 +753,30 @@ async function fetchLwsBalance(
   const acctKey = `${backendUrl}|${userId}|${asset}:${address}`;
   if (!registeredLwsAccounts.has(acctKey)) {
     registeredLwsAccounts.add(acctKey);
+
+    // Registering with a start height IS declaring a restore depth, and an
+    // operator prices that depth exactly as it prices a grin rescan: past
+    // `pow_free_days` a hashcash nonce is required, bound to
+    // `(asset, address, start_height)`. Solve it before registering.
+    //
+    // xmr/wow have escaped this so far only because they usually register
+    // inside the free window. Import a seed older than that and registration is
+    // refused; because it is best-effort and the rejection is swallowed just
+    // below, the symptom is a balance that reads zero forever with no error at
+    // all, which is worse than the loud failure grin gave.
+    let restorePowNonce: number | undefined;
+    if (startHeight !== undefined && restorePolicy?.pow_days_per_bit) {
+      const tipRes = await providers.lws(asset).getHeight();
+      const tip = tipRes.data?.height ?? 0;
+      if (tip > 0) {
+        const bits = requiredRestorePowBits(asset, startHeight, tip, restorePolicy);
+        restorePowNonce = await solveRestorePow(asset, address, startHeight, bits);
+      }
+    }
+
     await providers
       .lws(asset)
-      .registerAccount(userId, address, viewKeyHex, startHeight)
+      .registerAccount(userId, address, viewKeyHex, startHeight, undefined, restorePowNonce)
       .catch(() => undefined);
   }
 

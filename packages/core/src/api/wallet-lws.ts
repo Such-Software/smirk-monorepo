@@ -143,6 +143,17 @@ export interface WalletLwsMethods {
      * FEATURE_XMR_SUBADDR_PROVISIONING policy and the field is not even sent.
      */
     subaddrCount?: number,
+    /**
+     * Restore proof-of-work nonce. Required when the operator prices the
+     * requested depth (`/capabilities` -> `restore.pow_*`), ignored otherwise.
+     * Bound to `(asset, address, start_height)`.
+     *
+     * Without it a deep import is refused, and because registration here is
+     * best-effort and the rejection is swallowed, the symptom is a balance that
+     * reads zero forever with no error. Same gate that made every GRIN balance
+     * unreadable on a priced backend.
+     */
+    restorePowNonce?: number,
   ): Promise<
     ApiResponse<{ success: boolean; message: string; start_height?: number }>
   >;
@@ -336,7 +347,7 @@ export function createWalletLwsMethods(client: ApiClient): WalletLwsMethods {
       };
     },
 
-    async registerLws(userId, asset, address, viewKey, startHeight, subaddrCount) {
+    async registerLws(userId, asset, address, viewKey, startHeight, subaddrCount, restorePowNonce) {
       return client.request('/wallet/lws/register', {
         method: 'POST',
         body: JSON.stringify({
@@ -345,6 +356,9 @@ export function createWalletLwsMethods(client: ApiClient): WalletLwsMethods {
           address,
           view_key: viewKey,
           start_height: startHeight,
+          // Omitted unless solved, so an unpriced backend receives exactly the
+          // body it received before and the field is absent rather than null.
+          ...(restorePowNonce !== undefined ? { restore_pow_nonce: restorePowNonce } : {}),
           // Only present when the caller asked for a batch. Omitted otherwise,
           // so the request body is byte-identical to before and the backend
           // applies its own FEATURE_XMR_SUBADDR_PROVISIONING default.

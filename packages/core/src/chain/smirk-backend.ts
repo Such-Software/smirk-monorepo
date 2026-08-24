@@ -186,11 +186,24 @@ export class SmirkLwsProvider implements LwsChainProvider {
     viewKey: string,
     startHeight?: number,
     subaddrCount?: number,
+    restorePowNonce?: number,
   ) {
     // Call ARITY is preserved when no batch was asked for: this file's contract
     // is that a provider call and the old direct `api` call are identical, and
     // an extra trailing `undefined` is an observable difference to anything
-    // inspecting arguments.
+    // inspecting arguments. A solved restore nonce is likewise appended only
+    // when one exists, so an unpriced backend sees the request it saw before.
+    if (restorePowNonce !== undefined) {
+      return this.api.registerLws(
+        userId,
+        this.asset,
+        address,
+        viewKey,
+        startHeight,
+        subaddrCount,
+        restorePowNonce,
+      );
+    }
     return subaddrCount === undefined
       ? this.api.registerLws(userId, this.asset, address, viewKey, startHeight)
       : this.api.registerLws(userId, this.asset, address, viewKey, startHeight, subaddrCount);

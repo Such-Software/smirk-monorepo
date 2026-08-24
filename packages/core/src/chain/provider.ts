@@ -120,6 +120,17 @@ export interface LwsChainProvider extends BaseChainProvider {
      * is on, so registration is unchanged by default.
      */
     subaddrCount?: number,
+    /**
+     * Restore proof-of-work nonce. Required when the operator prices the
+     * requested depth (`/capabilities` -> `restore.pow_*`), ignored otherwise.
+     * Bound to `(asset, address, start_height)`.
+     *
+     * Without it a deep import is refused, and because registration here is
+     * best-effort and the rejection is swallowed, the symptom is a balance that
+     * reads zero forever with no error. Same gate that made every GRIN balance
+     * unreadable on a priced backend.
+     */
+    restorePowNonce?: number,
   ): Promise<ApiResponse<LwsRegisterResult>>;
   deactivateAccount(address: string): Promise<ApiResponse<LwsDeactivateResult>>;
 
