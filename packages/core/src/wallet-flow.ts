@@ -407,6 +407,20 @@ export interface FetchBalancesOptions {
   restorePolicy?: RestorePowPolicy | undefined;
 
   /**
+   * The API handle, used to resolve the restore policy when `restorePolicy` was
+   * not supplied.
+   *
+   * A caller holding capabilities in component state cannot be relied on to
+   * have them yet: the extension popup loads `/capabilities` asynchronously and
+   * fetches balances on the same tick, so the first fetch saw `null` and
+   * silently skipped the restore proof-of-work. That put GRIN straight back to
+   * "this restore depth requires a 9-bit proof-of-work nonce" in the shipped
+   * wallet while the fix tested green everywhere else. `loadCapabilities` is
+   * cached, so resolving it here costs nothing after the first call.
+   */
+  api?: SmirkApi | undefined;
+
+  /**
    * When provided, filter LWS-reported `spent_outputs` by recomputing
    * their key images locally with the wallet's spend key; only the
    * matches are subtracted from `total_received`. Without this the
@@ -531,6 +545,14 @@ export async function fetchAllBalances(
   bootstrap: BootstrapAuthResult,
   options: FetchBalancesOptions = {},
 ): Promise<Balances> {
+  // Resolve the restore policy ONCE, preferring what the caller passed but
+  // falling back to the cached capabilities. Callers that hold caps in
+  // component state race their own first balance fetch; see `api` on
+  // FetchBalancesOptions.
+  const restorePolicy: RestorePowPolicy | undefined =
+    options.restorePolicy ??
+    (options.api ? ((await loadCapabilities(options.api))?.restore ?? undefined) : undefined);
+
   const xmrViewKeyHex = bytesToHex(wallet.keys.xmr.privateViewKey);
   const wowViewKeyHex = bytesToHex(wallet.keys.wow.privateViewKey);
   const xmrSpendKeyHex = bytesToHex(wallet.keys.xmr.privateSpendKey);
@@ -612,7 +634,7 @@ export async function fetchAllBalances(
             bootstrap.xmrStartHeight,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
-            options.restorePolicy,
+            restorePolicy,
           )
         : Promise.resolve(zero),
     ),
@@ -630,7 +652,7 @@ export async function fetchAllBalances(
             bootstrap.wowStartHeight,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
-            options.restorePolicy,
+            restorePolicy,
           )
         : Promise.resolve(zero),
     ),
@@ -641,7 +663,7 @@ export async function fetchAllBalances(
             providers,
             options.grinRewindHash,
             options.grinPending,
-            options.restorePolicy,
+            restorePolicy,
           )
         : Promise.resolve(zero),
     ),
