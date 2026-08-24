@@ -885,6 +885,9 @@ function App() {
       const utxoScan = await buildUtxoScanContext(wallet);
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
+        // Prices the grin rescan. Without it a priced operator rejects the
+        // scan outright and the grin balance never renders.
+        restorePolicy: caps?.restore,
         // Only meaningful once the wallet can hold subaddress outputs. With the
         // flag off this is false and the spent-output filter is unchanged.
         strictSpentSubaddrIndex: subaddressReceiveEnabled(),
@@ -989,6 +992,9 @@ function App() {
       const utxoScan = await buildUtxoScanContext(wallet);
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
+        // Prices the grin rescan. Without it a priced operator rejects the
+        // scan outright and the grin balance never renders.
+        restorePolicy: caps?.restore,
         // Only meaningful once the wallet can hold subaddress outputs. With the
         // flag off this is false and the spent-output filter is unchanged.
         strictSpentSubaddrIndex: subaddressReceiveEnabled(),
