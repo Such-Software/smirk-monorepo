@@ -1,6 +1,7 @@
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
+import { isLocalPublishRelay, publishRelaySkipReason } from '../fixtures/relay-guard.js';
 
 /**
  * Feed tab. The operator-curated Nostr feed, which is capability-gated: the tab
@@ -18,7 +19,19 @@ test('Feed tab is present + renders iff the backend advertises a feed', async ({
   context,
   extensionId,
 }) => {
-  const caps = (await getCapabilities()) as unknown as { features?: { feed?: boolean } };
+  const caps = (await getCapabilities()) as unknown as {
+    features?: { feed?: boolean };
+    messaging?: { relay_url?: string };
+  };
+  // This spec publishes a public kind-1, so it must never run against a real
+  // relay. Verified on prod 2026-08-24: the relay refuses it outright under
+  // `premium-post` ("premium membership required to post general Nostr
+  // events"), so pointing the suite at production produced a failure that
+  // looked like a broken feed and was in fact correct policy enforcement.
+  test.skip(
+    !isLocalPublishRelay(caps.messaging?.relay_url),
+    publishRelaySkipReason(caps.messaging?.relay_url),
+  );
   const feedAdvertised = !!caps.features?.feed;
 
   const page = await context.newPage();

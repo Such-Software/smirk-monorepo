@@ -37,14 +37,35 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  *   set -a && . <monorepo>/packages/smoke-tests/secrets/smoke-mnemonics.env && set +a
  */
 
+interface Capabilities {
+  restore?: { policy?: string; max_depth_days?: number | null };
+}
+
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
 const BACKEND = process.env.BACKEND_URL ?? 'http://127.0.0.1:8080/api/v1';
 
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
 
-interface Capabilities {
-  restore?: { policy?: string; max_depth_days?: number | null };
-}
+/**
+ * This spec asserts the CLIENT expression of a `create-only` operator policy,
+ * so it is only meaningful against a create-only backend. Run it against a
+ * `bounded` instance (api.smirk.cash advertises bounded with a 365 day window)
+ * and it fails on the policy assertion while proving nothing: the wallet is
+ * behaving correctly for the policy it was actually handed.
+ *
+ * Skip instead, the way every other backend-shaped spec here does with
+ * `/capabilities`. A failure should mean the wallet disagrees with its backend,
+ * not that the backend is configured differently from the author's laptop.
+ */
+const capsPolicy = await fetch(`${BACKEND}/capabilities`)
+  .then((r) => (r.ok ? (r.json() as Promise<Capabilities>) : null))
+  .then((c) => c?.restore?.policy ?? null)
+  .catch(() => null);
+test.skip(
+  capsPolicy !== 'create-only',
+  `backend restore.policy is ${capsPolicy ?? 'unreadable'}, not create-only; ` +
+    'this spec asserts create-only client behaviour',
+);
 
 test('create-only backend: /capabilities reports create-only and onboarding offers no restore-height picker', async ({
   context,

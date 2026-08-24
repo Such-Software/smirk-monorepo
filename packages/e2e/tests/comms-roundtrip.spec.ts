@@ -46,6 +46,7 @@ import type { Page } from '@playwright/test';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { deriveNostrIdentity } from '@smirk/core';
 import { getCapabilities } from '../fixtures/capabilities.js';
+import { isLocalPublishRelay, publishRelaySkipReason } from '../fixtures/relay-guard.js';
 
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
@@ -82,6 +83,13 @@ test('an encrypted DM survives a round trip through the relay', async ({
   test.skip(
     !caps.features?.nostr_relay || !caps.messaging?.relay_url,
     'backend advertises no relay, so there is nowhere to deliver a DM (see the header of this spec)',
+  );
+
+  // And it must be a LOCAL relay: these tests publish real events, and the spec
+  // header forbids production. Enforced rather than merely documented.
+  test.skip(
+    !isLocalPublishRelay(caps.messaging?.relay_url),
+    publishRelaySkipReason(caps.messaging?.relay_url),
   );
 
   const page = await context.newPage();
@@ -146,6 +154,13 @@ test('the feed composer agrees with the server about posting rights', async ({
   test.skip(
     !caps.features?.feed || !caps.messaging?.relay_url,
     'backend advertises no feed/relay, so there is nothing to post to (see the header of this spec)',
+  );
+
+  // And it must be a LOCAL relay: these tests publish real events, and the spec
+  // header forbids production. Enforced rather than merely documented.
+  test.skip(
+    !isLocalPublishRelay(caps.messaging?.relay_url),
+    publishRelaySkipReason(caps.messaging?.relay_url),
   );
 
   const page = await context.newPage();
