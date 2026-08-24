@@ -213,7 +213,29 @@ jobs:
         with:
           # rust_targets holds REAL rustup targets (both mac arches for the
           # universal build); matrix.target is just the bundle output dir.
+          #
+          # These land on the toolchain THIS ACTION installs. rust-toolchain.toml
+          # then makes cargo use the pinned toolchain instead, which does not
+          # have them, so the next step adds them where the build will look.
           targets: wasm32-unknown-unknown,${{ matrix.rust_targets }}
+
+      - name: Add the per-platform targets to the PINNED toolchain
+        shell: bash
+        run: |
+          # Run inside the checkout on purpose: rustup resolves the toolchain
+          # from rust-toolchain.toml here, so the targets are added to the one
+          # cargo will actually build with.
+          #
+          # Without this the macOS universal build fails with "Target
+          # x86_64-apple-darwin is not installed (installed targets:
+          # aarch64-apple-darwin, wasm32-unknown-unknown)". Linux and Windows
+          # hid it, because their target is their host and is present already.
+          for t in $(printf '%s' "${{ matrix.rust_targets }}" | tr ',' ' '); do
+            [ -n "$t" ] || continue
+            echo "adding $t to $(rustc -vV | sed -n 's/^release: //p')"
+            rustup target add "$t"
+          done
+          rustup target list --installed
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
