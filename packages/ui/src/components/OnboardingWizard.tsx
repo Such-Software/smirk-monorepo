@@ -60,6 +60,17 @@ export interface ExistingIdentity {
 export interface OnboardingWizardProps {
   /** Generate a fresh BIP39 mnemonic. Caller wires `generateMnemonicPhrase` from `@smirk/core`. */
   generateMnemonic: () => string;
+  /**
+   * When set, "create" hands off here instead of generating a phrase inline.
+   *
+   * Creating shows a phrase the user must copy somewhere safe, which usually
+   * means leaving this window. A surface the browser destroys on blur (the
+   * MV3 action popup) loses the phrase, and pressing create again mints a
+   * DIFFERENT one, so a user can end up holding the recovery phrase for a
+   * wallet that is not theirs. Import has no such hazard: the phrase already
+   * exists and losing the screen costs only retyping, so import stays inline.
+   */
+  onRequestDurableSurface?: (() => void) | undefined;
   /** Validate a user-supplied mnemonic. Caller wires `isValidMnemonic` from `@smirk/core`. */
   isValidMnemonic: (mnemonic: string) => boolean;
   /**
@@ -243,6 +254,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // /capabilities read. Opening the popup is not consent, so nothing that
   // touches the network may run before this.
   const startCreate = () => {
+    // Divert before generating: a phrase that is never minted here cannot be
+    // lost here. See `onRequestDurableSurface`.
+    if (props.onRequestDurableSurface) {
+      props.onRequestDurableSurface();
+      return;
+    }
     props.onBegin?.();
     setStep({ kind: 'show', mnemonic: props.generateMnemonic() });
   };

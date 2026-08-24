@@ -65,7 +65,11 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   const PASSWORD = 'e2e-test-password-123';
 
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  // `?ctx=tab` is how a real user reaches creation now: the action popup diverts
+  // create to a tab, because the browser destroys the popup on blur and the
+  // phrase would go with it. See onboarding-surface.ts and the
+  // popup-diverts-create spec, which covers the diversion itself.
+  await page.goto(`chrome-extension://${extensionId}/popup.html?ctx=tab`);
 
   // welcome → create
   await page.getByTestId('onboarding-create-btn').click();
