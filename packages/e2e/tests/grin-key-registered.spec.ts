@@ -36,6 +36,9 @@ test('an onboarded wallet has its GRIN key registered with the backend', async (
   extensionId,
 }) => {
   test.skip(!MNEMONIC, 'no smoke mnemonic set — source secrets/smoke-mnemonics.env');
+  // Registration mines on a pow_required backend, so allow more than the
+  // default per-test timeout, though not much: the work itself is quick.
+  test.setTimeout(4 * 60_000);
   const caps = await getCapabilities();
   test.skip(!caps.chains.grin?.enabled, 'grin disabled on this backend (/capabilities chains.grin)');
 
@@ -46,16 +49,20 @@ test('an onboarded wallet has its GRIN key registered with the backend', async (
   // The canonical-GRIN registration is deferred behind unlock + wasm, so poll
   // rather than sampling once: a bare assertion here would be racing the very
   // effect under test and would flake in both directions.
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 90_000;
   let userId: string | null = null;
   let grinKey: unknown = null;
 
   while (Date.now() < deadline) {
+    // `smirk_bootstrap_cache_v1`, NOT the unlocked-session cache: the latter is
+    // SessionCachePayload (fingerprint, keys, addresses, expiry) and carries no
+    // userId at all, so reading it there returns undefined no matter how
+    // healthy the backend is. See popup/bootstrap-cache.ts.
     userId = await page.evaluate(async (key) => {
       const s = await chrome.storage.session.get(key);
-      const cache = s[key] as { bootstrap?: { userId?: string } } | undefined;
-      return cache?.bootstrap?.userId ?? null;
-    }, 'smirk_unlocked_session_cache');
+      const entry = s[key] as { bootstrap?: { userId?: string } } | undefined;
+      return entry?.bootstrap?.userId ?? null;
+    }, 'smirk_bootstrap_cache_v1');
 
     if (userId) {
       const res = await fetch(`${BACKEND_URL}/users/${userId}/keys/grin`);
@@ -75,12 +82,10 @@ test('an onboarded wallet has its GRIN key registered with the backend', async (
     const bootstrapFailed = (await errScreen.count()) > 0;
     const detail = bootstrapFailed
       ? `bootstrap failed on screen with: ${await errScreen.innerText()}`
-      : 'bootstrap produced no userId and showed no error: is this wallet ' +
-        'registered on the backend under test? SMOKE_BACKEND_URL in ' +
-        'smoke-tests/secrets points at the legacy v2 host, which this suite ' +
-        'cannot use; the specs need a v3 smirk-backend-core where the smoke ' +
-        'wallets exist.';
-    throw new Error(`no userId after 60s. ${detail}`);
+      : 'bootstrap produced no userId and showed no error. On a backend with ' +
+        'registration.pow_required, an unknown wallet must mine before it can ' +
+        'register, so this can simply mean the work did not finish in time.';
+    throw new Error(`no userId after 90s. ${detail}`);
   }
   expect(
     grinKey,
