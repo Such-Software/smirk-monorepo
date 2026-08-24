@@ -25,13 +25,17 @@ import { BACKEND_URL } from '../fixtures/extension.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
-const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
+// Carol is the grin-carrying smoke wallet; fall back to alice, which the other
+// grin specs use, so this still runs wherever only alice is provisioned.
+const MNEMONIC = (
+  process.env.SMOKE_CAROL_MNEMONIC ?? process.env.SMOKE_ALICE_MNEMONIC
+)?.trim();
 
 test('an onboarded wallet has its GRIN key registered with the backend', async ({
   context,
   extensionId,
 }) => {
-  test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set');
+  test.skip(!MNEMONIC, 'no smoke mnemonic set — source secrets/smoke-mnemonics.env');
   const caps = await getCapabilities();
   test.skip(!caps.chains.grin?.enabled, 'grin disabled on this backend (/capabilities chains.grin)');
 
@@ -63,7 +67,21 @@ test('an onboarded wallet has its GRIN key registered with the backend', async (
     await page.waitForTimeout(2_000);
   }
 
-  expect(userId, 'bootstrap never produced a userId; sign-in cannot work at all').toBeTruthy();
+  // A null userId means bootstrap never completed, which is a different failure
+  // from "registered but missing its grin key". Say which, or the next person
+  // debugging this learns only that a variable was null.
+  if (!userId) {
+    const errScreen = page.getByTestId('bootstrap-error');
+    const bootstrapFailed = (await errScreen.count()) > 0;
+    const detail = bootstrapFailed
+      ? `bootstrap failed on screen with: ${await errScreen.innerText()}`
+      : 'bootstrap produced no userId and showed no error: is this wallet ' +
+        'registered on the backend under test? SMOKE_BACKEND_URL in ' +
+        'smoke-tests/secrets points at the legacy v2 host, which this suite ' +
+        'cannot use; the specs need a v3 smirk-backend-core where the smoke ' +
+        'wallets exist.';
+    throw new Error(`no userId after 60s. ${detail}`);
+  }
   expect(
     grinKey,
     'no GRIN key registered for this user: smirk.cash GRIN sign-in would answer ' +

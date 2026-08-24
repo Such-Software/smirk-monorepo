@@ -30,18 +30,33 @@ test('the action popup diverts create instead of generating a phrase', async ({
 
   const createBtn = page.getByTestId('onboarding-create-btn');
   await expect(createBtn).toBeVisible({ timeout: 30_000 });
-  await createBtn.click();
 
-  // The reveal screen must NOT appear here. Its first word is the tell: if that
-  // renders in the popup, a phrase has been minted on a surface that dies on
-  // blur, which is exactly the reported bug.
-  await expect(page.getByTestId('onboarding-create-seed-word-0')).toHaveCount(0, {
-    timeout: 10_000,
-  });
-  await expect(page.getByTestId('onboarding-create-copy-seed')).toHaveCount(0);
-
-  // Import is untouched: it must still be reachable from the same screen.
+  // Import must stay reachable from this same screen: only create is diverted,
+  // because only create mints a phrase that can be silently replaced.
   await expect(page.getByTestId('onboarding-import-btn')).toBeVisible();
+
+  // Clicking create must open the durable surface and close this one. Waiting on
+  // the new page is the only reliable assertion here: the popup closes itself,
+  // so querying it afterwards races the teardown and reports `undefined` rather
+  // than a count.
+  const [tab] = await Promise.all([
+    context.waitForEvent('page'),
+    createBtn.click(),
+  ]);
+  await tab.waitForLoadState('domcontentloaded');
+
+  expect(tab.url(), 'create must hand off to the tab-hosted surface').toContain('ctx=tab');
+
+  expect(page.isClosed(), 'the popup should close once it has handed off').toBe(true);
+
+  // The tab lands on the welcome screen rather than auto-starting create. That
+  // is deliberate: generating on load would mint a fresh phrase on every reload,
+  // which is the same silent-replacement hazard in a different costume. So the
+  // user asks again, here, where the answer can survive.
+  await tab.getByTestId('onboarding-create-btn').click();
+  await expect(tab.getByTestId('onboarding-create-seed-word-0')).toBeVisible({
+    timeout: 30_000,
+  });
 });
 
 test('the tab surface does generate a phrase', async ({ context, extensionId }) => {
