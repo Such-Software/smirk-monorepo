@@ -27,9 +27,11 @@ name: Release build (Gitea)
 #      APPLE_API_ISSUER             issuer UUID
 #      APPLE_API_KEY                key id (e.g. CHK6B69G58)
 #      APPLE_API_KEY_P8_BASE64      base64 of AuthKey_<id>.p8 (decoded to a file below)
-# NOTE: the Tauri auto-UPDATER is intentionally OFF for v0.3.0 (tauri.conf.json
-#   plugins.updater.active=false, no update server yet), so no TAURI_SIGNING_*
-#   key is needed. Artifact authenticity is provided by a detached PGP signature
+# NOTE: the Tauri auto-updater is ON. tauri.conf.json holds the minisign PUBLIC
+#   key and points at the `latest.json` published as a GitHub Release asset, so
+#   there is no separate update host to run (releases.smirk.cash was never stood
+#   up). The build needs TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) as repository
+#   secrets to emit the .sig files that manifest refers to. Artifact authenticity is provided by a detached PGP signature
 #   applied to the collected bundles out-of-band, with the Smirk Releases key
 #   <jw@such.software> (signing subkey 96F6836D5110C2CB). See KEYS.asc.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -306,6 +308,14 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          # Updater signing. tauri.conf.json carries the PUBLIC half and sets
+          # updater.active = true, so every shipped build checks for updates.
+          # Without these the bundler emits no .sig, and an update the app finds
+          # can never be verified, stranding users on the version they installed.
+          # minisign, from `tauri signer generate`. NOT the PGP release key: that
+          # signs artifacts for humans, this signs update payloads for the app.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: packages/desktop
           args: ${{ matrix.args }}
