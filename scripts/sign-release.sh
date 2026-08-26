@@ -48,6 +48,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXT_DIR="$ROOT/packages/extension/releases"
 BUNDLE_DIR="${BUNDLE_DIR:-$ROOT/packages/desktop/src-tauri/target/release/bundle}"
 SUMS="$EXT_DIR/SHA256SUMS-v$VERSION.txt"
+# The toolchain record is signed alongside the sums, so the release directory
+# verifies on its own. It states which rustc, wasm-bindgen and C compiler
+# produced these bytes, which is exactly what a reviewer needs when the wasm
+# does not reproduce: the C compiler feeds it via cc-rs and cannot be pinned by
+# rust-toolchain.toml. An unsigned provenance record is a provenance record
+# anyone can rewrite.
+TOOLCHAIN="$EXT_DIR/TOOLCHAIN-v$VERSION.txt"
 
 command -v gpg >/dev/null 2>&1 || { echo "gpg not found on this machine" >&2; exit 1; }
 
@@ -91,6 +98,7 @@ fi
 desktop_count=$(( ${#artifacts[@]} - ext_count ))
 
 [ -f "$SUMS" ] && artifacts+=("$SUMS")
+[ -f "$TOOLCHAIN" ] && artifacts+=("$TOOLCHAIN")
 
 if [ ${#artifacts[@]} -eq 0 ]; then
   echo "nothing to sign: no v$VERSION artifacts under" >&2
@@ -99,7 +107,7 @@ if [ ${#artifacts[@]} -eq 0 ]; then
   exit 1
 fi
 
-echo "v$VERSION: $ext_count extension, $desktop_count desktop, $([ -f "$SUMS" ] && echo 1 || echo 0) checksum file"
+echo "v$VERSION: $ext_count extension, $desktop_count desktop, $([ -f "$SUMS" ] && echo 1 || echo 0) checksum file, $([ -f "$TOOLCHAIN" ] && echo 1 || echo 0) toolchain record"
 [ "$ext_count" -lt 3 ] && echo "  WARNING: expected 3 extension artifacts, found $ext_count"
 [ "$desktop_count" -eq 0 ] && echo "  note: no desktop bundles present (CI builds those on a tag)"
 

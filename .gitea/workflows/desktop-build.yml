@@ -369,8 +369,11 @@ jobs:
             && echo "archived $(ls -la artifacts-out/*.tar.gz)" || echo "nothing to archive"
 
       - name: Upload bundle archive
+        # NOT continue-on-error: this is the release path, and a swallowed upload
+        # failure leaves a green job with no artifact to sign, which is
+        # indistinguishable from success until someone goes looking for the
+        # bundle. Fail loudly instead.
         uses: actions/upload-artifact@v3
-        continue-on-error: true
         env:
           # The runner uploads artifacts to https://git.such.software, which serves
           # a self-signed cert, and upload-artifact's Node rejects it
@@ -470,8 +473,9 @@ jobs:
           ls -la artifacts-out
 
       - name: Upload extension archives
+        # See the note on the desktop upload: a release upload must not fail
+        # quietly.
         uses: actions/upload-artifact@v3
-        continue-on-error: true
         env:
           # Same self-signed cert as the desktop upload above.
           NODE_TLS_REJECT_UNAUTHORIZED: '0'
