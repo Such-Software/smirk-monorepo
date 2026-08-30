@@ -350,8 +350,13 @@ jobs:
           base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
           find "$base" -type f \( \
             -name '*.dmg' -o -name '*.app.tar.gz*' -o -name '*.AppImage*' \
-            -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi*' -o -name '*-setup.exe' \
+            -o -name '*.deb*' -o -name '*.rpm*' -o -name '*.msi*' -o -name '*-setup.exe*' \
           \) -exec cp -v {} "$dest/" \; 2>/dev/null || true
+          # The trailing wildcards are load-bearing: they pull each bundle's
+          # `.sig` across. Windows was the one pattern without one, so the NSIS
+          # updater signature was produced and then left behind, making Windows
+          # the single platform missing from latest.json. A platform absent from
+          # the manifest does not error, it just never updates.
           # macOS: the notarized + stapled .app is a DIRECTORY, not a file.
           find "$base" -maxdepth 3 -type d -name '*.app' -exec cp -R {} "$dest/" \; 2>/dev/null || true
           # macOS: build the .dmg from the notarized .app with hdiutil (pure CLI,
