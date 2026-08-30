@@ -73,7 +73,7 @@
   "plugins": {
     "updater": {
       "active": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY2NEQ4MUZDOTZDNEZDNTgKUldSWS9NU1cvSUZOOXNkNnJ5VEQzL09kaUlTS01FWXg1aFBiS3VQUEtYaFhwUFgrUnRRUDVVMW0K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCQjYzNEY2QUEyOUVDQQpSV1RLbnFKcVQyTzdDaUREY3VldHRwSjJmMExpSWlxdXFnZlhPajNIWmFzaHRCVkZsUjQ4ZTRndQo=",
       "endpoints": [
         "https://github.com/Such-Software/smirk-monorepo/releases/latest/download/latest.json"
       ]
