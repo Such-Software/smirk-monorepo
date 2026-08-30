@@ -106,11 +106,26 @@ and set `bundle.windows.certificateThumbprint` in `tauri.conf.json`.
    - Windows: the NSIS `-setup.exe`. `bundle.targets` is
      `["appimage", "app", "nsis"]`, so no `.msi` is produced.
    - Linux: the `.AppImage`
-   - A `latest.json` file (the updater manifest, signed)
-7. **Smoke-test** each platform's binary by installing on a clean
+   - A `latest.json` file (the updater manifest)
+7. **Generate the updater manifest.** Nothing in the build produces it;
+   the bundler only emits each platform's artifact and its `.sig`.
+   ```
+   scripts/make-updater-manifest.sh 0.3.1 --bundle-dir ~/smirk-desktop-v0.3.1
+   ```
+   Run this after every platform's artifacts are staged and before
+   signing, so `latest.json` is covered by the signed `SHA256SUMS`. The
+   script refuses to write a manifest with a platform missing: an absent
+   platform key does not error at runtime, it just never updates, and
+   nothing reports it.
+
+   The `.sig` files it reads come from `bundle.createUpdaterArtifacts`
+   in `tauri.conf.json` plus `TAURI_SIGNING_PRIVATE_KEY` in CI. If both
+   are not set the bundler emits no signatures at all, and this step is
+   where you find out.
+8. **Smoke-test** each platform's binary by installing on a clean
    VM. Lock + unlock the wallet, send a tiny transaction, claim a
    tip. Cross-check against the CHANGELOG.
-8. **Announce** via the website + Telegram channel + relevant
+9. **Announce** via the website + Telegram channel + relevant
    social channels.
 
 ## Test build (no publish)
