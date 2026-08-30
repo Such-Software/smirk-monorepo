@@ -61,6 +61,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import urllib.parse
 
 version = os.environ["VERSION"]
 bundle = pathlib.Path(os.environ["BUNDLE_DIR"])
@@ -81,6 +82,26 @@ MATCHERS = [
     ("linux-x86_64",   lambda n: n.endswith(".AppImage")),
     ("windows-x86_64", lambda n: n.endswith("-setup.exe")),
 ]
+
+# Tauri names every bundle after the product, so each one carries a space:
+# "Smirk Wallet_0.3.0_amd64.AppImage". GitHub rewrites spaces to periods when it
+# stores a release asset, so a URL built from the local filename points at a name
+# that does not exist there, and the updater 404s on a manifest that otherwise
+# looks correct.
+#
+# Rename on disk rather than only fixing the URL, so the staged file, the
+# SHA256SUMS sign-release.sh produces, the uploaded asset and this manifest all
+# agree on one name. Done as its own pass before matching, because macOS is
+# matched twice (both arch keys point at the same universal bundle) and a rename
+# inside the match loop invalidates the second lookup.
+for path in sorted(p for p in bundle.rglob("*") if p.is_file()):
+    if " " in path.name:
+        target = path.with_name(path.name.replace(" ", "."))
+        if target.exists():
+            print(f"error: {target.name} already exists; refusing to clobber", file=sys.stderr)
+            sys.exit(1)
+        path.rename(target)
+        print(f"  renamed {path.name!r} -> {target.name!r} (GitHub asset naming)")
 
 files = sorted(p for p in bundle.rglob("*") if p.is_file())
 
@@ -107,7 +128,12 @@ for key, match in MATCHERS:
     if not signature:
         missing.append(f"{key}: {sig.name} is empty")
         continue
-    platforms[key] = {"signature": signature, "url": f"{BASE}/{art.name}"}
+    # Percent-encode anything left that is not URL-safe. After the rename above
+    # there should be nothing, but a manifest is not the place to find out.
+    platforms[key] = {
+        "signature": signature,
+        "url": f"{BASE}/{urllib.parse.quote(art.name)}",
+    }
 
 if missing:
     print("Updater manifest is incomplete:", file=sys.stderr)
