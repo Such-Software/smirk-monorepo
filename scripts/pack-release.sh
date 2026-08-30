@@ -73,11 +73,29 @@ build_variant firefox
 # Deterministic already: git archive derives mtimes from the commit.
 git archive --format=zip --output="$OUT/smirk-wallet-source-v$VERSION.zip" HEAD
 
+# The source archive is deliberately NOT in the committed sums file.
+#
+# git archive stamps every entry's mtime from the commit, so the archive's hash
+# is a function of the commit. Recording that hash in a tracked file changes the
+# commit, which changes the archive, which invalidates the hash just recorded.
+# There is no fixed point: the value committed can never be the value a verifier
+# computes at the tag. We shipped exactly that contradiction in v0.3.0, where the
+# recorded source hash could not be reproduced from the tag it was recorded for.
+#
+# The extension zips have no such problem: they are built from source and do not
+# contain this file, so their hashes are stable across the recording commit.
+#
+# The source archive's hash is still published, by sign-release.sh, into the
+# SHA256SUMS that ships with the release and carries a PGP signature. That is the
+# file a verifier should use anyway, since it is the signed one.
 ( cd "$OUT" && sha256sum \
     "smirk-wallet-chrome-v$VERSION.zip" \
-    "smirk-wallet-firefox-v$VERSION.zip" \
-    "smirk-wallet-source-v$VERSION.zip" > "SHA256SUMS-v$VERSION.txt" \
+    "smirk-wallet-firefox-v$VERSION.zip" > "SHA256SUMS-v$VERSION.txt" \
   && cat "SHA256SUMS-v$VERSION.txt" )
+
+echo
+echo "source archive (hash recorded at release time, not committed; see above):"
+( cd "$OUT" && sha256sum "smirk-wallet-source-v$VERSION.zip" )
 
 # Record the toolchain that produced these bytes.
 #
