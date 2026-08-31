@@ -105,6 +105,14 @@ for path in sorted(p for p in bundle.rglob("*") if p.is_file()):
 
 files = sorted(p for p in bundle.rglob("*") if p.is_file())
 
+# Never let an unsigned artifact into the manifest. Windows ships both a signed
+# installer and an unsigned one, the latter so the build stays independently
+# reproducible. They differ only by suffix today, so the selectors below happen
+# not to collide, but "happens not to" is not a property worth relying on: a
+# manifest pointing at the unsigned installer would hand every existing user an
+# unsigned binary on update and re-raise the SmartScreen warning each time.
+files = [p for p in files if "unsigned" not in p.name.lower()]
+
 platforms = {}
 missing = []
 for key, match in MATCHERS:

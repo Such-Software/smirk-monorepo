@@ -291,6 +291,35 @@ jobs:
       # keychain, signs with hardened runtime, and notarizes via the API key when
       # the APPLE_* secrets are present. No tagName is set, so it does NOT create a
       # release: it just produces the signed + notarized bundles.
+      # Windows is built twice, on purpose.
+      #
+      # The signed installer is what users should run: an unknown-publisher
+      # SmartScreen warning on a crypto wallet installer is the worst possible
+      # place to spend a user's doubt. But a signed binary cannot be reproduced
+      # by anyone outside this building, because the signature comes from a key
+      # on a hardware token. Publishing the unsigned artifact alongside it is
+      # what keeps the build independently verifiable.
+      #
+      # This pass runs first and with --no-sign, so it never touches the shared
+      # signing queue. The signed pass follows and reuses the compiled objects,
+      # so the second build is mostly re-bundling.
+      - name: Build unsigned Windows artifacts
+        if: matrix.os_label == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run tauri build -- --target ${{ matrix.target }} --no-sign
+          dest="$HOME/smirk-unsigned-v0.3.0"
+          rm -rf "$dest"; mkdir -p "$dest"
+          base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          # Renamed here rather than at publish time: two installers with the same
+          # name in one directory is how the wrong one gets uploaded.
+          for f in "$base"/nsis/*-setup.exe; do
+            [ -e "$f" ] || continue
+            cp -v "$f" "$dest/$(basename "${f%-setup.exe}")-setup-unsigned.exe"
+          done
+          ls -la "$dest"
+
       - name: Build + sign Tauri bundles
         uses: tauri-apps/tauri-action@v0
         id: tauri
@@ -381,6 +410,16 @@ jobs:
             [ -f "$exe" ] && cp -v "$exe" "$dest/SmirkWallet-0.3.0-portable.exe" || echo "no portable exe at $exe"
           fi
           echo "staged installers to: $dest"; ls -la "$dest" || true
+          # Carry the unsigned installer across too. It is published beside the signed
+          # one so the build stays independently reproducible; the signature comes
+          # from a hardware token, so nobody outside can reproduce the signed bytes.
+          #
+          # It deliberately gets NO updater signature. latest.json must point at the
+          # signed installer, or the updater would hand every existing user an
+          # unsigned binary and re-raise the SmartScreen warning on each update.
+          if [ -d "$HOME/smirk-unsigned-v0.3.0" ]; then
+            cp -v "$HOME/smirk-unsigned-v0.3.0"/*.exe "$dest/" 2>/dev/null || true
+          fi
           mkdir -p artifacts-out
           tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz" -C "$dest" . \
             && echo "archived $(ls -la artifacts-out/*.tar.gz)" || echo "nothing to archive"

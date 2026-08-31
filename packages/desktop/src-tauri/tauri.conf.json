@@ -57,7 +57,23 @@
       "entitlements": null
     },
     "windows": {
+      "//": "Signing goes through the hardware-token broker, not a thumbprint.",
+      "//2": "The EV key is non-exportable and lives on a SafeNet eToken, so there",
+      "//3": "is no importable identity for signtool to look up. certificateThumbprint",
+      "//4": "stays null deliberately; signCommand hands each PE to the broker, which",
+      "//5": "signs as the operator whose session has the token logged in.",
+      "//6": "Tauri invokes this for the app exe before packaging AND the installer",
+      "//7": "after, which is what the two-signature rule requires.",
       "certificateThumbprint": null,
+      "signCommand": {
+        "cmd": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy", "Bypass",
+          "-File", "scripts/sign-windows.ps1",
+          "-Path", "%1"
+        ]
+      },
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "webviewInstallMode": {
