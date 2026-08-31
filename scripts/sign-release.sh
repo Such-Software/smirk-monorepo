@@ -82,6 +82,12 @@ ext_count=${#artifacts[@]}
 
 if [ -d "$BUNDLE_DIR" ]; then
   # Tauri lays bundles out per packager. Signing the installers users actually
+  # `latest.json` is signed too. It is not a binary, but it is the file that
+  # tells every installed client which binary to fetch, so it is worth as
+  # much to an attacker as any bundle here. The minisign signatures inside
+  # it stop a tampered manifest from installing anything, because the client
+  # verifies the download against the key baked into the app; the detached
+  # PGP signature is what lets a person verify the manifest itself.
   # download, plus the updater tarball, and deliberately NOT the `.sig` files
   # Tauri's own updater emits: those are updater signatures, a separate scheme.
   # `! -name ._*` drops AppleDouble sidecars: a macOS bundle tarred on a Mac and
@@ -92,7 +98,7 @@ if [ -d "$BUNDLE_DIR" ]; then
     find "$BUNDLE_DIR" -type f ! -name '._*' \
       \( -name '*.dmg' -o -name '*.app.tar.gz' \
       -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
-      -o -name '*.msi' -o -name '*.exe' \) -print0 2>/dev/null | sort -z
+      -o -name '*.msi' -o -name '*.exe' -o -name 'latest.json' \) -print0 2>/dev/null | sort -z
   )
 fi
 desktop_count=$(( ${#artifacts[@]} - ext_count ))

@@ -113,10 +113,12 @@ and set `bundle.windows.certificateThumbprint` in `tauri.conf.json`.
    scripts/make-updater-manifest.sh 0.3.1 --bundle-dir ~/smirk-desktop-v0.3.1
    ```
    Run this after every platform's artifacts are staged and before
-   signing, so `latest.json` is covered by the signed `SHA256SUMS`. The
-   script refuses to write a manifest with a platform missing: an absent
-   platform key does not error at runtime, it just never updates, and
-   nothing reports it.
+   signing, so `sign-release.sh` picks the manifest up and gives it its
+   own `latest.json.asc`. (The committed `SHA256SUMS` covers only the
+   extension zips; desktop artifacts and the manifest are each signed
+   individually.) The script refuses to write a manifest with a platform
+   missing: an absent platform key does not error at runtime, it just
+   never updates, and nothing reports it.
 
    The `.sig` files it reads come from `bundle.createUpdaterArtifacts`
    in `tauri.conf.json` plus `TAURI_SIGNING_PRIVATE_KEY` in CI. If both
