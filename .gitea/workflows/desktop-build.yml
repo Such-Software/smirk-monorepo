@@ -308,7 +308,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run tauri build -- --target ${{ matrix.target }} --no-sign
+          # -w: the tauri script lives in the @smirk/desktop workspace, not the
+          # root package. The signed pass goes through tauri-action, which resolves
+          # that itself, which is why only this hand-written pass needed telling.
+          npm run tauri -w @smirk/desktop -- build --target ${{ matrix.target }} --no-sign
           dest="$HOME/smirk-unsigned-v0.3.0"
           rm -rf "$dest"; mkdir -p "$dest"
           base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
