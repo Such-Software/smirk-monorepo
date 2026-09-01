@@ -427,6 +427,29 @@ jobs:
           tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz" -C "$dest" . \
             && echo "archived $(ls -la artifacts-out/*.tar.gz)" || echo "nothing to archive"
 
+      # A green Windows job must not be able to ship an unsigned installer.
+      #
+      # The bundling step carries continue-on-error because NSIS is flaky on this
+      # runner, and that flag once turned a failed signing pass into a passing job:
+      # the build errored with "failed to run powershell", the staging step copied
+      # the unsigned installer left by the --no-sign pass, and the artifact shipped
+      # labelled as signed. Nothing reported it. Only opening the file did.
+      #
+      # So assert the property directly on the artifact that ships, rather than
+      # trusting the exit status of the step that was meant to produce it.
+      - name: Verify the Windows installer is actually signed
+        if: matrix.os_label == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # bash + powershell.exe rather than `shell: pwsh`: bash is the shell every
+          # other step on this runner already uses, and pwsh is not known to be
+          # installed. The .exe suffix matters too, since that spawn is exactly
+          # what failed for the bundler.
+          powershell.exe -NoProfile -ExecutionPolicy Bypass \
+            -File packages/desktop/src-tauri/scripts/verify-windows-signature.ps1 \
+            -Dest "$HOME/smirk-desktop-v0.3.0/windows"
+
       - name: Upload bundle archive
         # NOT continue-on-error: this is the release path, and a swallowed upload
         # failure leaves a green job with no artifact to sign, which is
