@@ -113,6 +113,45 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
 }
 
 /**
+ * Hand the unlocked session to a window this popup is about to spawn.
+ *
+ * Popping out is `windows.create` followed by `window.close()`: the new window
+ * boots a fresh popup that reads the session cache like any cold start. With
+ * auto-lock set to 0 the cache is deliberately never written, so the wallet the
+ * user unlocked a millisecond ago asks for the password again, and again on
+ * every subsequent pop-out. "Lock immediately" should mean locking when you
+ * close the wallet, not when you open a second view of it.
+ *
+ * So this writes the same payload as `writeSessionCache`, with a deliberately
+ * tiny lifetime, for the spawning window to consume. It is NOT a way around the
+ * user's setting: the entry survives {@link HANDOFF_TTL_MS} and no longer, it
+ * carries no mnemonic exactly as the normal cache does not, and once the new
+ * window unlocks from it the usual `writeSessionCache` runs with the real
+ * setting, which at 0 removes it again.
+ *
+ * The exposure this adds over an unlocked popup is a few seconds of derived
+ * keys in `chrome.storage.session`, which is memory-backed and dies with the
+ * browser. That is the narrowest channel available: MV3 can kill the service
+ * worker at any moment, so passing it through the background is less reliable,
+ * and desktop has no background worker at all.
+ */
+export const HANDOFF_TTL_MS = 30_000;
+
+export async function writeSessionHandoff(wallet: UnlockedWallet): Promise<void> {
+  const expiresAtMs = Date.now() + HANDOFF_TTL_MS;
+  const entry: SessionCachePayload = {
+    version: 2,
+    _noMnemonic: true,
+    fingerprint: wallet.fingerprint,
+    keys: wallet.keys,
+    addresses: wallet.addresses,
+    expiresAtMs,
+  };
+  await sessionStorage.set(SESSION_CACHE_KEY, serializeForSessionCache(entry));
+  await cacheActiveNostrKeyForSession(wallet, expiresAtMs);
+}
+
+/**
  * Convergent post-unlock sweep of legacy `m/44'` BTC/LTC funds to the v0.3
  * `m/84'` receive address. v0.2 used `m/44'`, so a migrated wallet's old coins
  * sit at an address it no longer watches; this moves them over.

@@ -180,7 +180,12 @@ import type { WalletSession } from './types';
 import { resolveIcon } from './icons';
 import { isTipStale } from './tip-inbox';
 import { dappPublicCacheFor } from './dapp-public-cache';
-import { tryRestoreSessionCache, writeSessionCache, convergeLegacySweep } from './session-cache';
+import {
+  tryRestoreSessionCache,
+  writeSessionCache,
+  writeSessionHandoff,
+  convergeLegacySweep,
+} from './session-cache';
 import { readBootstrapCache, writeBootstrapCache, clearBootstrapCache } from './bootstrap-cache';
 import { browserController } from './browser-controller';
 import { probeBackend } from './routes/backend';
@@ -529,7 +534,7 @@ const verifyKeyImage = async ({
 
 
 
-function openPopOut() {
+function openPopOut(unlocked?: UnlockedWallet) {
   // Desktop already IS the popped-out window. The chrome-shim stubs
   // `windows.create` to a no-op there, so running the rest of this would
   // close the only window the user has and take the wallet with it. The
@@ -539,13 +544,26 @@ function openPopOut() {
   if (chrome.runtime.id === 'smirk-desktop') return;
 
   const popoutUrl = chrome.runtime.getURL('popup.html');
-  void chrome.windows.create({
-    url: popoutUrl,
-    type: 'popup',
-    width: 480,
-    height: 720,
-  });
-  window.close();
+  // Hand the session to the window we are about to open, THEN open it.
+  //
+  // The new window is a fresh popup that reads the session cache like any
+  // cold start, and with auto-lock at 0 that cache is deliberately never
+  // written, so popping out demanded the password again every single time
+  // for a wallet that was unlocked a millisecond earlier. Locking
+  // immediately should mean locking when the wallet is closed, not when a
+  // second view of it is opened.
+  //
+  // Order matters: creating the window first races its read of the cache.
+  void (async () => {
+    if (unlocked) await writeSessionHandoff(unlocked);
+    await chrome.windows.create({
+      url: popoutUrl,
+      type: 'popup',
+      width: 480,
+      height: 720,
+    });
+    window.close();
+  })();
 }
 
 
@@ -1833,7 +1851,7 @@ function App() {
   return (
     <StateProvider store={store} router={router}>
       <AppShell
-        onPopOut={openPopOut}
+        onPopOut={() => openPopOut(walletState?.kind === 'unlocked' ? walletState.wallet : undefined)}
         brand={{
           label: 'Smirk Wallet',
           iconUrl: chrome.runtime.getURL('icons/favicon-16.png'),
