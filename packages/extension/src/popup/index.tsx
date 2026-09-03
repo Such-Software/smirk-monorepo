@@ -1853,6 +1853,7 @@ function App() {
         routes={{
           home: (
             <HomeRouter
+              onLock={lockHandler}
               wallet={walletState.wallet}
               session={session}
               caps={caps}
@@ -1973,6 +1974,7 @@ function HomeRouter({
   caps,
   tips,
   onRefresh,
+  onLock,
   onTipClaim,
   nostrLinkPrompt,
   confirmNostrLink,
@@ -1994,6 +1996,8 @@ function HomeRouter({
   /** Refresh balances + prices. Used by the header refresh button, after a send
    *  and after a tip claim, and threaded into the asset-detail screen. */
   onRefresh: () => Promise<void>;
+  /** Locks the wallet, the only route back to the unlock prompt. */
+  onLock: () => Promise<void>;
   /** Claim a tip from an asset-detail row. Threaded through to
    *  `AssetDetailRoute` so the per-row Claim button fires the same
    *  sweep logic as the InboxTab "Claim" affordance. */
@@ -3258,6 +3262,33 @@ function HomeRouter({
             }}
           >
             {session.error}
+            {/* Several sign-in failures are fixed only by re-entering the
+                passphrase, and the message says exactly that. With no control
+                here there is nothing to press: the unlock prompt is reachable
+                only by locking, and the sole Lock button sits at the bottom of
+                Settings. Reading it on the home screen and having to hunt, or
+                shorten the auto-lock timeout to force a lock, is how someone
+                concludes the wallet is stuck. */}
+            {/re-unlock the wallet/i.test(session.error) ? (
+              <div style={{ marginTop: 6 }}>
+                <button
+                  onClick={() => void onLock()}
+                  data-testid="home-error-relock-btn"
+                  style={{
+                    padding: '4px 10px',
+                    background: 'rgba(255,255,255,0.06)',
+                    border: '1px solid rgba(255,107,107,0.5)',
+                    borderRadius: 6,
+                    color: 'inherit',
+                    fontFamily: 'inherit',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Lock and re-unlock
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null
       }
