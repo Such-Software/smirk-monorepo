@@ -97,8 +97,12 @@ jobs:
       - name: Install Linux dependencies
         if: matrix.os_label == 'linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          # Two jobs from this workflow can land on the same runner at once and
+          # both install packages. Without a lock timeout the loser dies with
+          # "Could not get lock /var/lib/apt/lists/lock" and exit 100, which
+          # reads as a broken build rather than two jobs sharing a host.
+          sudo apt-get -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y \
             libwebkit2gtk-4.1-dev \
             libjavascriptcoregtk-4.1-dev \
             libsoup-3.0-dev \
@@ -493,7 +497,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install clang (wasm C target)
-        run: sudo apt-get update && sudo apt-get install -y clang
+        run: |
+          # Same lock contention as the desktop job: these can run together.
+          sudo apt-get -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y clang
 
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
