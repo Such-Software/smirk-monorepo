@@ -156,6 +156,11 @@ export interface FeeTiers {
 }
 
 export interface SendWizardProps {
+  /**
+   * Coin to start on, when Send was reached from that coin's detail screen.
+   * Ignored if a draft is already in progress, so resuming never retargets.
+   */
+  initialAssetId?: string;
   assetIds: string[];
 
   /**
@@ -318,7 +323,19 @@ export function SendWizard(props: SendWizardProps) {
 
   // Start the wizard once on mount. eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!wizard.active) void wizard.start();
+    void (async () => {
+      if (!wizard.active) await wizard.start();
+      // Preselect the coin when we arrived from its detail screen. Tapping a
+      // coin and then Send used to drop you on the asset chooser, asking which
+      // coin you meant when you had just told it.
+      //
+      // `fields` here is the mount-time snapshot, which is exactly the right
+      // thing to test: a draft already in progress has fromAssetId set, and
+      // must not be silently retargeted at whatever screen you came from.
+      if (props.initialAssetId && !fields.fromAssetId) {
+        await wizard.setField('fromAssetId', props.initialAssetId);
+      }
+    })();
   }, []);
 
   if (!wizard.active) {

@@ -2027,9 +2027,16 @@ function HomeRouter({
   const grinUserId = session?.bootstrap?.userId ?? '';
 
   // route.current is e.g. "home", "home/send", "home/receive", "home/asset/btc"
-  if (route.current === 'home/send') {
+  if (route.current === 'home/send' || route.current.startsWith('home/send/asset/')) {
+    // Same as Receive: arriving from a coin's detail screen preselects that
+    // coin. Without it, tapping a coin and then Send drops you on the asset
+    // chooser, asking which coin you meant when you just told it.
+    const sendPreselectedAssetId = route.current.startsWith('home/send/asset/')
+      ? route.current.substring('home/send/asset/'.length)
+      : undefined;
     return (
       <SendWizard
+        {...(sendPreselectedAssetId ? { initialAssetId: sendPreselectedAssetId } : {})}
         // Filter to assets that are both (a) sendable per registry AND
         // (b) not hidden by the user. The chooser should never list
         // anything the user explicitly hid or the registry never
@@ -2479,7 +2486,7 @@ function HomeRouter({
         session={session}
         onRefresh={onRefresh}
         onBack={() => void navigate('home')}
-        onSend={() => void navigate('home/send')}
+        onSend={() => void navigate(`home/send/asset/${drilldownAssetId}`)}
         onReceive={() => void navigate(`home/receive/asset/${drilldownAssetId}`)}
         // Carry the asset id forward as a route segment so the Tip
         // composer pre-selects this coin instead of defaulting to
