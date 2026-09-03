@@ -2377,9 +2377,18 @@ function HomeRouter({
     );
   }
 
-  if (route.current === 'home/receive') {
+  if (route.current === 'home/receive' || route.current.startsWith('home/receive/asset/')) {
+    // Arriving from a coin's detail screen carries that coin forward, the way
+    // `home/tip/<asset>` already does. Without it Receive always opened the
+    // asset picker, so tapping a coin and then Receive showed a list of coins
+    // again. That reads as being bounced to the home screen, and you have to
+    // pick the coin you were already looking at.
+    const preselectedAssetId = route.current.startsWith('home/receive/asset/')
+      ? route.current.substring('home/receive/asset/'.length)
+      : undefined;
     return (
       <ReceiveScreen
+        {...(preselectedAssetId ? { initialAssetId: preselectedAssetId } : {})}
         // Receivable assets only, minus any the user hid. See
         // SendWizard for the rationale on capability + visibility
         // double-gating.
@@ -2467,7 +2476,7 @@ function HomeRouter({
         onRefresh={onRefresh}
         onBack={() => void navigate('home')}
         onSend={() => void navigate('home/send')}
-        onReceive={() => void navigate('home/receive')}
+        onReceive={() => void navigate(`home/receive/asset/${drilldownAssetId}`)}
         // Carry the asset id forward as a route segment so the Tip
         // composer pre-selects this coin instead of defaulting to
         // whatever has the largest balance.
