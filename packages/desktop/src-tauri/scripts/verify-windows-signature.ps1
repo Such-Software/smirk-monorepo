@@ -13,10 +13,25 @@ param([Parameter(Mandatory = $true)][string]$Dest)
 
 $ErrorActionPreference = 'Stop'
 
-$signed = @(Get-ChildItem (Join-Path $Dest '*-setup.exe') -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notlike '*unsigned*' })
+# Everything a user can double-click, not just the installer. The portable exe
+# was NotSigned for a whole release cycle because this check only looked at
+# *-setup.exe and the job went green: Tauri signs a copy it bundles and leaves
+# target/release untouched, so the raw binary staged as the portable never
+# carried a signature.
+$signed = @(
+    Get-ChildItem (Join-Path $Dest '*.exe') -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '*unsigned*' }
+)
 if ($signed.Count -eq 0) {
-    throw "verify: no signed installer staged in $Dest"
+    throw "verify: no signed executable staged in $Dest"
+}
+# Both shipping executables must be present. A missing one is not an absence,
+# it is a publish that quietly drops a download people are given a link to.
+foreach ($required in @('*-setup.exe', '*-portable.exe')) {
+    $hit = @($signed | Where-Object { $_.Name -like $required })
+    if ($hit.Count -eq 0) {
+        throw "verify: nothing matching $required was staged in $Dest"
+    }
 }
 
 foreach ($f in $signed) {
@@ -35,7 +50,7 @@ foreach ($f in $signed) {
 
 # The unsigned copy must stay unsigned. If both are signed they are the same
 # artifact under two names, and the reproducibility claim we publish is false.
-foreach ($f in @(Get-ChildItem (Join-Path $Dest '*-setup-unsigned.exe') -ErrorAction SilentlyContinue)) {
+foreach ($f in @(Get-ChildItem (Join-Path $Dest '*unsigned*.exe') -ErrorAction SilentlyContinue)) {
     $sig = Get-AuthenticodeSignature -LiteralPath $f.FullName
     Write-Host "verify: $($f.Name) -> $($sig.Status) (expected NotSigned)"
     if ($sig.Status -eq 'Valid') {

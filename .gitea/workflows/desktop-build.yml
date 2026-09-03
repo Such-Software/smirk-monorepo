@@ -414,7 +414,23 @@ jobs:
           # shippable artifact exists even when NSIS bundling fails on this runner.
           if [ "${{ matrix.os_label }}" = "windows" ]; then
             exe="packages/desktop/src-tauri/target/${{ matrix.target }}/release/smirk-desktop.exe"
-            [ -f "$exe" ] && cp -v "$exe" "$dest/SmirkWallet-0.3.0-portable.exe" || echo "no portable exe at $exe"
+            if [ -f "$exe" ]; then
+              # Two portables, matching the installer pair. Tauri signs a copy it
+              # bundles and leaves target/release untouched, so the raw exe here is
+              # unsigned even though the bundler reported signing smirk-desktop.exe.
+              # Verified by size: the staged file was byte-for-byte the length of the
+              # unsigned build, and a signed PE is larger.
+              cp -v "$exe" "$dest/SmirkWallet-0.3.0-portable-unsigned.exe"
+              cp -v "$exe" "$dest/SmirkWallet-0.3.0-portable.exe"
+              # Sign the shipping one through the same broker the bundler uses. A user
+              # who runs the portable build gets the same publisher as one who runs the
+              # installer; without this they get an unknown-publisher warning instead.
+              powershell.exe -NoProfile -ExecutionPolicy Bypass \
+                -File packages/desktop/src-tauri/scripts/sign-windows.ps1 \
+                -Path "$dest/SmirkWallet-0.3.0-portable.exe"
+            else
+              echo "no portable exe at $exe"
+            fi
           fi
           echo "staged installers to: $dest"; ls -la "$dest" || true
           # Carry the unsigned installer across too. It is published beside the signed
