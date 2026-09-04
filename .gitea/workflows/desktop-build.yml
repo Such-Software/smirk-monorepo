@@ -98,10 +98,21 @@ jobs:
         if: matrix.os_label == 'linux'
         run: |
           # Two jobs from this workflow can land on the same runner at once and
-          # both install packages. Without a lock timeout the loser dies with
-          # "Could not get lock /var/lib/apt/lists/lock" and exit 100, which
-          # reads as a broken build rather than two jobs sharing a host.
-          sudo apt-get -o DPkg::Lock::Timeout=600 update
+          # both install packages; the loser dies with "Could not get lock" and
+          # exit 100, which reads as a broken build rather than a shared host.
+          #
+          # DPkg::Lock::Timeout governs the dpkg frontend lock, NOT
+          # /var/lib/apt/lists/lock which `apt-get update` contends on. The loser
+          # of a two-job race died instantly even with the timeout set.
+          apt_retry() {
+            for attempt in $(seq 1 30); do
+              if sudo apt-get -o DPkg::Lock::Timeout=60 "$@"; then return 0; fi
+              echo "apt busy (attempt $attempt), another job holds the lock; retrying"
+              sleep 10
+            done
+            echo 'apt still locked after 5 minutes'; return 1
+          }
+          apt_retry update
           sudo apt-get -o DPkg::Lock::Timeout=600 install -y \
             libwebkit2gtk-4.1-dev \
             libjavascriptcoregtk-4.1-dev \
@@ -514,9 +525,20 @@ jobs:
 
       - name: Install clang (wasm C target)
         run: |
-          # Same lock contention as the desktop job: these can run together.
-          sudo apt-get -o DPkg::Lock::Timeout=600 update
-          sudo apt-get -o DPkg::Lock::Timeout=600 install -y clang
+          # DPkg::Lock::Timeout governs the dpkg frontend lock, NOT
+          # /var/lib/apt/lists/lock which `apt-get update` contends on. Two jobs
+          # from this workflow can share a runner, and the loser died instantly
+          # with "Could not get lock" even with the timeout set. Retry instead.
+          apt_retry() {
+            for attempt in $(seq 1 30); do
+              if sudo apt-get -o DPkg::Lock::Timeout=60 "$@"; then return 0; fi
+              echo "apt busy (attempt $attempt), another job holds the lock; retrying"
+              sleep 10
+            done
+            echo 'apt still locked after 5 minutes'; return 1
+          }
+          apt_retry update
+          apt_retry install -y clang
 
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
