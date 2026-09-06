@@ -27,6 +27,26 @@ import { cacheActiveNostrKeyForSession, clearCachedActiveNostrKey } from './nost
  * normally-unlocked.
  */
 export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
+  // Never downgrade a wallet that is already unlocked in memory.
+  //
+  // The cached payload is mnemonic-less by design, and this function writes
+  // whatever it restores into `walletKeystore.cached`. The unlock path calls
+  // `writeSessionCache` and then `refresh`, and `refresh` calls this first, so
+  // with auto-lock above zero the sequence was: unlock produces a wallet WITH
+  // the mnemonic, the cache is written without it, and this immediately
+  // replaced the good wallet with the stripped one. npub sign-in then failed
+  // with "needs the unlocked mnemonic" on a password unlock that had just
+  // succeeded, and unlocking again repeated it.
+  //
+  // It only bit users who had set a timeout: at zero, `writeSessionCache`
+  // deletes the entry instead of writing one, so there was nothing here to
+  // clobber with, and "lock immediately" looked like a fix for an unrelated
+  // problem.
+  const live = await walletKeystore.getState();
+  if (live.kind === 'unlocked' && live.wallet.mnemonic) {
+    return live.wallet;
+  }
+
   const stored = await sessionStorage.get(SESSION_CACHE_KEY);
   if (!stored) return null;
   // Revive `{__u8:hex}` (and recover a legacy numeric-object form) back to real
