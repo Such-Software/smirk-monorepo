@@ -8,8 +8,10 @@ import {
   statSync,
   existsSync,
   createReadStream,
+  readFileSync,
 } from 'fs';
 import { extname } from 'path';
+import { execSync } from 'child_process';
 
 /**
  * Recursively copy a directory.
@@ -208,7 +210,37 @@ function copyAssetsForDesktop() {
   };
 }
 
+
+/**
+ * Stamp the build with the commit it came from. Same rationale as the
+ * extension's copy: `package.json` version changes on release, not per build,
+ * so a three-week-old desktop binary and a fresh one both said 0.3.0 and the
+ * stale one was twice diagnosed as a code bug. Falls back to `unknown` rather
+ * than failing a build from a tarball with no git directory.
+ */
+function buildStamp(): { commit: string; date: string; version: string } {
+  let commit = 'unknown';
+  try {
+    commit = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    const dirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
+    if (dirty) commit += '-dirty';
+  } catch {
+    // no git available; `unknown` is the honest answer
+  }
+  const version = JSON.parse(
+    readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+  ).version as string;
+  return { commit, date: new Date().toISOString().slice(0, 10), version };
+}
+
+const stamp = buildStamp();
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(stamp.version),
+    __BUILD_COMMIT__: JSON.stringify(stamp.commit),
+    __BUILD_DATE__: JSON.stringify(stamp.date),
+  },
   // Tauri runs the dev server on its own port; vite needs to be told
   // which one. 1420 is Tauri's default.
   clearScreen: false,

@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
-import { copyFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'fs';
+import { copyFileSync, mkdirSync, readdirSync, statSync, existsSync, readFileSync } from 'fs';
 import { buildSync } from 'esbuild';
+import { execSync } from 'child_process';
 
 /**
  * Recursively copy a directory.
@@ -129,7 +130,44 @@ function copyMonorepoAssets() {
   };
 }
 
+
+/**
+ * Stamp the build with the commit it came from.
+ *
+ * `package.json` version alone cannot answer "is this the build I just
+ * installed": it changes on release, not on every build, so three weeks of
+ * binaries all called themselves 0.3.0 and a stale one was twice mistaken for
+ * a code bug. The commit changes whenever the bytes do.
+ *
+ * Falls back to `unknown` rather than failing the build. A tarball with no git
+ * directory is a legitimate way to build this, and a missing stamp must never
+ * be the reason a release cannot be produced.
+ */
+function buildStamp(): { commit: string; date: string; version: string } {
+  let commit = 'unknown';
+  try {
+    commit = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    const dirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
+    // A dirty tree is a different artefact from the commit it claims. Say so,
+    // because "it reproduces at that sha" is exactly what a reader will assume.
+    if (dirty) commit += '-dirty';
+  } catch {
+    // no git available; `unknown` is the honest answer
+  }
+  const version = JSON.parse(
+    readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+  ).version as string;
+  return { commit, date: new Date().toISOString().slice(0, 10), version };
+}
+
+const stamp = buildStamp();
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(stamp.version),
+    __BUILD_COMMIT__: JSON.stringify(stamp.commit),
+    __BUILD_DATE__: JSON.stringify(stamp.date),
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

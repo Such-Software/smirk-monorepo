@@ -10,6 +10,7 @@ import { useRoute, useSessionState, listThemes, copyText } from '@smirk/ui';
 import { getAsset, listAssets } from '@smirk/assets';
 import type { OriginPermission } from '@such-software/smirk-dapp-api';
 import { store, sessionStorage, walletKeystore } from '../singletons';
+import { APP_VERSION, buildIdentity } from '../build-info';
 import { bytesToHex, feedTimeAgo } from '../format';
 import { settingsInputStyle } from '../ui-shared';
 import { writeSessionCache } from '../session-cache';
@@ -1359,6 +1360,25 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
       >
         Lock wallet now
       </button>
+
+      {/* Which build is this. The version alone cannot answer it: it changes
+          on release, not per build, so three weeks of binaries all reported
+          0.3.0 and a stale one was twice diagnosed as a code defect. The
+          commit is the only identifier that changes when the bytes do, and a
+          bug report is worth far more with it than without. Selectable, so it
+          can be copied into a report rather than transcribed from a photo. */}
+      <p
+        data-testid="settings-build-identity"
+        style={{
+          marginTop: 18,
+          fontSize: 11,
+          opacity: 0.45,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          userSelect: 'text',
+        }}
+      >
+        {buildIdentity(APP_VERSION)}
+      </p>
 
       <section style={{ marginTop: 28, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <h3 style={{ fontSize: 13, fontWeight: 600, margin: '0 0 6px', opacity: 0.85 }}>
