@@ -1263,6 +1263,14 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           rationale + the polling cost savings. */}
       <AssetsVisibilityPanel sessionState={sessionState} />
 
+      {/* Extension only. The toggle controls whether window.smirk is injected
+          into web pages, which is a content-script concern; the desktop app
+          has no content scripts and never injects anything. Rendered there it
+          persisted as checked and changed nothing, so it told a privacy-minded
+          user they had disabled an exposure that never existed. A control that
+          reports a protection it does not provide is worse than its absence.
+          Same gating the auto-lock callout above already uses. */}
+      {browserController && (
       <section style={{ marginTop: 20 }}>
         <label
           style={{
@@ -1300,6 +1308,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
           Takes effect on next page load for each tab.
         </p>
       </section>
+      )}
 
       {/* Connected sites: the off-switch for every standing dapp grant.
           Sits next to the injection toggle because both answer the same

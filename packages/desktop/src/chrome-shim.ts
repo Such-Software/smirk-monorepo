@@ -56,7 +56,17 @@ async function getStore(): Promise<Store> {
     // `defaults: {}` satisfies the plugin's StoreOptions; we use the
     // empty object because every key the wallet writes is shaped by
     // the popup, not pre-seeded.
-    storeLoadPromise = load(STORE_FILENAME, { autoSave: true, defaults: {} });
+    // A rejection must not be cached. Memoizing the promise means one
+    // transient failure (a locked file, a half-written store during an
+    // unclean shutdown) becomes permanent for the life of the process: every
+    // later call re-awaits the same rejection, so a wallet that could recover
+    // by retrying instead stays broken until the user quits the app.
+    storeLoadPromise = load(STORE_FILENAME, { autoSave: true, defaults: {} }).catch(
+      (e: unknown) => {
+        storeLoadPromise = null;
+        throw e;
+      },
+    );
   }
   return storeLoadPromise;
 }
@@ -141,6 +151,13 @@ const localApi = {
       await store.set(k, v);
       changes[k] = { oldValue: oldValue ?? undefined, newValue: v };
     }
+    // Flush before resolving. `autoSave` writes on its own schedule, so without
+    // this the promise resolves while the bytes are still in memory and a quit,
+    // crash, or OS kill in that window loses them. Callers here are storing
+    // keystores and wallet state and reasonably assume an awaited write is a
+    // write; chrome.storage.local behaves that way, and the whole point of this
+    // shim is that the popup cannot tell the difference.
+    await store.save();
     emitChange('local', changes);
   },
 
@@ -153,6 +170,10 @@ const localApi = {
       await store.delete(k);
       changes[k] = { oldValue: oldValue ?? undefined };
     }
+    // Same reason as `set`: a delete that has not reached disk is not a delete,
+    // and "Forget this wallet" resolving before the keystore is actually gone
+    // is the worst possible version of that.
+    await store.save();
     emitChange('local', changes);
   },
 };
