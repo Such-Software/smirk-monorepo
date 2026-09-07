@@ -145,8 +145,20 @@ export function HeaderIdentitySwitcher({ wallet }: { wallet: UnlockedWallet }) {
 
   const onSelect = (pubkey: string) => {
     const mnemonic = wallet.mnemonic;
-    setActivePubkey(pubkey); // optimistic
-    if (!mnemonic) return; // can't persist a switch without the seed
+    // Don't claim a switch that cannot be committed. On a warm resume there is
+    // no seed, so the vault write below is skipped and nothing ever reverts the
+    // optimistic update: the chip showed the newly-picked identity while every
+    // signing path kept using the old one, and the mismatch survived until the
+    // popup was reopened. Showing the truth and asking for an unlock is better
+    // than showing a switch that did not happen.
+    if (!mnemonic) {
+      // The identity hub owns the inline re-unlock; this chip has no prompt of
+      // its own, so send the user to the one place that can actually complete
+      // the switch rather than pretending it happened here.
+      void navigate('settings/nostr');
+      return;
+    }
+    setActivePubkey(pubkey); // optimistic; the vault write below commits it
     void (async () => {
       const vault = await loadVault(mnemonic);
       await saveVault(mnemonic, setActiveIdentity(vault, pubkey));

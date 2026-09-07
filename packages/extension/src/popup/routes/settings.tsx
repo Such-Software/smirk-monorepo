@@ -390,6 +390,7 @@ export function SettingsRouter({
   session,
   onRefresh,
   onLock,
+  onUnlocked,
   onForgetComplete,
   onBackendSwitched,
 }: {
@@ -399,6 +400,8 @@ export function SettingsRouter({
    *  can show the recovered funds immediately. */
   onRefresh: () => Promise<void>;
   onLock: () => Promise<void>;
+  /** Adopt a wallet re-unlocked inline in the identity hub. */
+  onUnlocked?: (w: UnlockedWallet) => void;
   onForgetComplete: () => Promise<void>;
   /** Drop the per-backend session + caches so the shell re-bootstraps auth
    *  against the newly-selected backend. */
@@ -416,7 +419,7 @@ export function SettingsRouter({
     );
   }
   if (route.current === 'settings/nostr') {
-    return <NostrIdentityRoute wallet={wallet} onBack={() => void navigate('settings')} />;
+    return <NostrIdentityRoute wallet={wallet} {...(onUnlocked ? { onUnlocked } : {})} onBack={() => void navigate('settings')} />;
   }
   if (route.current === 'settings/backend') {
     return (

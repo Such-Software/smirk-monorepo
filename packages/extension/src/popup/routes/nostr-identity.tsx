@@ -45,9 +45,12 @@ import { writeSessionCache } from '../session-cache';
 export function NostrIdentityRoute({
   wallet,
   onBack,
+  onUnlocked,
 }: {
   wallet: UnlockedWallet;
   onBack: () => void;
+  /** Called after a successful inline unlock so the app can adopt the full wallet. */
+  onUnlocked?: (w: UnlockedWallet) => void;
 }) {
   // On a warm resume the seed isn't in memory (wallet.mnemonic is undefined). We
   // keep the hub VIEWABLE read-only and let the user re-enter their password
@@ -118,6 +121,12 @@ export function NostrIdentityRoute({
       const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
       await writeSessionCache(w, minutes);
       setReunlocked(w);
+      // Tell the app, not just this component. `reunlocked` is local state, so
+      // without this the rest of the popup kept the stripped wallet: Send still
+      // reported "Wallet not unlocked (no mnemonic available)", Grin flows still
+      // refused, and the header chip still would not persist a switch. The user
+      // typed their password and the wallet appeared to get worse.
+      onUnlocked?.(w);
       setUnlockPw('');
       setShowUnlock(false);
       setUnlockPrompt(null);

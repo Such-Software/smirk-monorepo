@@ -1979,6 +1979,11 @@ function App() {
               session={session}
               onRefresh={handleRefresh}
               onLock={lockHandler}
+              // Adopt a wallet re-unlocked inside the identity hub. refresh()
+              // is safe here: tryRestoreSessionCache now returns the live
+              // wallet when it already holds a mnemonic, rather than reading
+              // the stripped cache back over it.
+              onUnlocked={() => void refresh()}
               onForgetComplete={async () => {
                 await sessionStorage.remove(SESSION_CACHE_KEY);
                 await clearCachedActiveNostrKey();
