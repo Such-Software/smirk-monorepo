@@ -21,8 +21,25 @@ import { fileURLToPath } from 'node:url';
 import { installChromeShim } from '../chrome-shim';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Every directory the desktop bundle actually reaches, not just the two most
+// obvious ones. The popup imports the dapp-popup signers, the dapp approval
+// background code and core, and those were unscanned: an unshimmed chrome.*
+// call in any of them is a runtime TypeError that only fires when a user opens
+// the screen that uses it, which is the failure this tripwire exists to catch.
 const popupRoot = join(here, '../../../extension/src/popup');
 const uiRoot = join(here, '../../../ui/src');
+const dappPopupRoot = join(here, '../../../extension/src/dapp-popup');
+// Only the two background/dapp modules the popup actually imports. approval.ts
+// and dispatch.ts are service-worker entry points: the desktop bundle never
+// loads them, and their chrome.windows.remove / onRemoved / runtime.onMessage
+// calls are unreachable here. Scanning the whole directory reports those as
+// gaps, and a tripwire that fires on code the product cannot run teaches people
+// to ignore it, which costs more than the check is worth.
+const dappBgFiles = [
+  join(here, '../../../extension/src/background/dapp/provider.ts'),
+  join(here, '../../../extension/src/background/dapp/inject-policy.ts'),
+];
+const coreRoot = join(here, '../../../core/src');
 
 function sourceFiles(root: string): string[] {
   const out: string[] = [];
@@ -71,7 +88,12 @@ test('the desktop shim answers every chrome.* member the shared UI calls', () =>
   const shim = (globalThis as { chrome?: Record<string, unknown> }).chrome;
   assert.ok(shim, 'shim did not install');
 
-  const used = calledChromeMembers([...sourceFiles(popupRoot), ...sourceFiles(uiRoot)]);
+  const used = calledChromeMembers([...sourceFiles(popupRoot),
+    ...sourceFiles(uiRoot),
+    ...sourceFiles(dappPopupRoot),
+    ...dappBgFiles,
+    ...sourceFiles(coreRoot),
+  ]);
   assert.ok(used.size > 0, 'regex found no chrome.* calls at all; it has rotted');
 
   const missing: string[] = [];
