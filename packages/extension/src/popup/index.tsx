@@ -803,7 +803,18 @@ function App() {
   // transition (create / unlock / lock / destroy) so the gate re-renders.
   // Also opportunistically restores a non-expired session cache.
   const refresh = async () => {
-    await tryRestoreSessionCache();
+    const restored = await tryRestoreSessionCache();
+    // Reapply the user's real auto-lock to whatever we restored.
+    //
+    // A pop-out handoff carries a deliberately short expiry and is consumed on
+    // read, so without this the new window would hold a session with no stored
+    // lifetime at all. Re-stamping puts the configured policy back: at 0 that
+    // correctly writes nothing, so "lock immediately" still means the session
+    // does not outlive the window.
+    if (restored) {
+      const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
+      await writeSessionCache(restored, minutes);
+    }
     const ks = await walletKeystore.getState();
     setWalletState(ks);
     // Legacy-wallet detection only matters while there's no v0.3 keystore.

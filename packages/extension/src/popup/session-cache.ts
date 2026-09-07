@@ -47,6 +47,31 @@ export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
     return live.wallet;
   }
 
+  // A handoff from a window that is popping out. Consumed once and deleted: it
+  // is a transfer between two windows of one session, not a stored session, and
+  // leaving it behind would let a stale 30-second entry unlock a later window.
+  //
+  // Read BEFORE the real cache so a pop-out under auto-lock 0 works at all: at
+  // 0 there is no real cache by design, and the handoff is the only thing
+  // carrying the session across.
+  const handoff = await sessionStorage.get(SESSION_HANDOFF_KEY);
+  if (handoff) {
+    await sessionStorage.remove(SESSION_HANDOFF_KEY);
+    const revived = parseSessionCache(reviveForSessionCache(handoff));
+    if (revived && Date.now() < revived.expiresAtMs && derivedKeysUsable(revived.keys)) {
+      const ks = await walletKeystore.getState();
+      if (ks.kind !== 'empty' && ks.keystore.fingerprint === revived.fingerprint) {
+        const wallet = restoreUnlockedFromCache({
+          keys: revived.keys,
+          addresses: revived.addresses,
+          fingerprint: revived.fingerprint,
+        });
+        (walletKeystore as unknown as { cached: UnlockedWallet }).cached = wallet;
+        return wallet;
+      }
+    }
+  }
+
   const stored = await sessionStorage.get(SESSION_CACHE_KEY);
   if (!stored) return null;
   // Revive `{__u8:hex}` (and recover a legacy numeric-object form) back to real
@@ -157,6 +182,19 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
  */
 export const HANDOFF_TTL_MS = 30_000;
 
+/**
+ * The handoff lives under its OWN key.
+ *
+ * It used to reuse SESSION_CACHE_KEY, which quietly rewrote the user's real
+ * session with a 30-second expiry: nothing re-stamps the cache on a handoff
+ * restore (that path exists precisely to skip the unlock screen, and unlock is
+ * where writeSessionCache is called), so an auto-lock of 4 hours silently
+ * became 30 seconds for the rest of the browser session. The next toolbar click
+ * or dapp approval asked for the password again, which is the complaint popping
+ * out was supposed to fix, moved one step downstream.
+ */
+const SESSION_HANDOFF_KEY = 'smirk.session.handoff.v1';
+
 export async function writeSessionHandoff(wallet: UnlockedWallet): Promise<void> {
   const expiresAtMs = Date.now() + HANDOFF_TTL_MS;
   const entry: SessionCachePayload = {
@@ -167,8 +205,18 @@ export async function writeSessionHandoff(wallet: UnlockedWallet): Promise<void>
     addresses: wallet.addresses,
     expiresAtMs,
   };
-  await sessionStorage.set(SESSION_CACHE_KEY, serializeForSessionCache(entry));
-  await cacheActiveNostrKeyForSession(wallet, expiresAtMs);
+  await sessionStorage.set(SESSION_HANDOFF_KEY, serializeForSessionCache(entry));
+  // Deliberately does NOT touch the active-identity key cache.
+  //
+  // Passing this 30-second expiry to cacheActiveNostrKeyForSession put a
+  // selected burner on the handoff clock, so it expired half a minute after the
+  // window opened and Messages and Feed asked to re-unlock an identity chosen
+  // while fully unlocked. Worse, when the spawning window was itself warm that
+  // function takes its `!wallet.mnemonic` branch and DELETES the key outright,
+  // breaking the new window from its first paint.
+  //
+  // Whatever the real writeSessionCache stored is still valid and still has the
+  // right lifetime. A handoff is a transfer, not a re-issue.
 }
 
 /**
