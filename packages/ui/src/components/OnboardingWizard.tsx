@@ -179,6 +179,17 @@ export interface OnboardingWizardProps {
    */
   registrationResolved?: boolean;
   /**
+   * Ask the host to re-run the capabilities read that sets
+   * `registrationResolved`.
+   *
+   * Without it the fail-closed branch below is a dead end: it tells the user to
+   * check their connection and try again, but pressing the button again only
+   * re-reads the same unresolved prop. The host's read is an effect keyed on
+   * onboarding state, none of which changes here, so nothing ever retries and
+   * the wallet cannot be created until the popup is reopened.
+   */
+  onRetryRegistration?: () => void;
+  /**
    * Pay-to-register callbacks, required only when `registration` can reach the
    * payment method. `begin` creates the wallet (once) + mints an invoice bound to
    * its BTC key and returns the pay-to target; `poll` makes one register attempt
@@ -332,6 +343,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       setError(
         "Couldn't reach the backend to check its sign-up requirements. Check your connection and try again.",
       );
+      // Actually retry it. The message is only honest if pressing the button
+      // re-runs the read; the host re-resolves and the next press proceeds.
+      props.onRetryRegistration?.();
       return;
     }
     const kind = props.registration?.kind ?? 'free';
@@ -1633,6 +1647,8 @@ function PaymentStep({
   );
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Non-fatal: the watch is still running. Distinct from `err`, which ends it.
+  const [pollWarning, setPollWarning] = useState<string | null>(null);
   const started = useRef(false);
 
   useEffect(() => {
@@ -1654,8 +1670,37 @@ function PaymentStep({
         setInvoice(inv);
         setStatus('waiting');
         let attempt = 0;
+        // Once the pay-to target is on screen the user may already have sent
+        // funds, so this loop must not stop for anything short of settlement.
+        // It used to share one try/catch with `begin`, which meant a single
+        // rejected poll (a dropped connection, a backend restart, a wallet
+        // waking from sleep) ended the watch for good: `started` blocks a
+        // remount from restarting it, so the money arrived and nothing was
+        // listening. Transient failures are the expected case over a wait
+        // measured in minutes, not the exceptional one.
+        let consecutiveFailures = 0;
         while (!cancelled) {
-          const r = await poll(attempt++);
+          let r: 'pending' | 'done';
+          try {
+            r = await poll(attempt++);
+            consecutiveFailures = 0;
+            setPollWarning(null);
+          } catch {
+            if (cancelled) return;
+            consecutiveFailures++;
+            // Say so after a couple of misses rather than the first, which is
+            // usually a blip that resolves before the user could read the note.
+            if (consecutiveFailures >= 2) {
+              setPollWarning(
+                "Having trouble reaching the backend. Still watching for your payment; you don't need to send it again.",
+              );
+            }
+            // Back off to 30s so a long outage is not hammered, then keep going.
+            await new Promise((res) =>
+              setTimeout(res, Math.min(6000 * consecutiveFailures, 30_000)),
+            );
+            continue;
+          }
           if (cancelled) return;
           if (r === 'done') {
             setStatus('settled');
@@ -1665,6 +1710,8 @@ function PaymentStep({
           await new Promise((res) => setTimeout(res, 6000));
         }
       } catch (e) {
+        // Reachable only for a `begin` failure: no invoice was ever shown, so
+        // there is no payment in flight and stopping is the honest outcome.
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : 'Payment failed. Please try again.');
         setStatus('error');
@@ -1760,6 +1807,14 @@ function PaymentStep({
           style={{ fontSize: 13, opacity: 0.75, marginTop: 14 }}
         >
           Waiting for payment to confirm… you can keep this open.
+        </p>
+      )}
+      {status === 'waiting' && pollWarning && (
+        <p
+          data-testid="onboarding-payment-warning"
+          style={{ fontSize: 12, opacity: 0.7, marginTop: 6, lineHeight: 1.45 }}
+        >
+          {pollWarning}
         </p>
       )}
       {status === 'settled' && (

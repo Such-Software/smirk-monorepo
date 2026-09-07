@@ -188,7 +188,7 @@ import {
 } from './session-cache';
 import { readBootstrapCache, writeBootstrapCache, clearBootstrapCache } from './bootstrap-cache';
 import { browserController } from './browser-controller';
-import { probeBackend } from './routes/backend';
+import { probeBackend, BackendRoute } from './routes/backend';
 import { FeedRoute } from './routes/feed';
 import { SettingsRouter } from './routes/settings';
 import { ensureWasmInit } from './wasm-init';
@@ -666,6 +666,11 @@ function App() {
   const paymentInvoiceDetailsRef = useRef<
     { payTo: string; amount: string; currency: string } | null
   >(null);
+  // Bumped by the wizard's retry. The capabilities effect below keys on it, so a
+  // user who hit a transient failure can actually re-resolve the gate; without
+  // it the effect's deps never change during onboarding and "try again" is a
+  // button that does nothing.
+  const [capsRetryNonce, setCapsRetryNonce] = useState(0);
   // Fetch the active backend's registration policy while onboarding, so the
   // wizard can route the gate (invite / payment / choose). Absent => `free`.
   useEffect(() => {
@@ -715,7 +720,7 @@ function App() {
     return () => {
       stale = true;
     };
-  }, [walletState?.kind, needsMigration, onboardingBegun]);
+  }, [walletState?.kind, needsMigration, onboardingBegun, capsRetryNonce]);
 
   // Shared post-register onboarding wiring: warm the bootstrap cache and surface
   // any identity this wallet already owns. Used by both the free/invite
@@ -769,6 +774,11 @@ function App() {
     tips: InboxTipItem[];
     error: string | null;
   }>({ tips: [], error: null });
+
+  // Escape hatch out of the bootstrap error screen, into the backend picker.
+  // That screen replaces the whole UI, so when a bootstrap fails against an
+  // unreachable backend there is no route to the setting that caused it.
+  const [bootstrapBackendEscape, setBootstrapBackendEscape] = useState(false);
 
   // This backend's capabilities (memoized in core). Drives all opt-in gating:
   // fiat/tips/grin/feed surfaces hide, and their calls stop firing, when the
@@ -1587,6 +1597,7 @@ function App() {
         }}
         {...(regPlan ? { registration: regPlan } : {})}
         registrationResolved={regResolved}
+        onRetryRegistration={() => setCapsRetryNonce((n) => n + 1)}
         payment={{
           // Create the wallet (once) + mint an invoice bound to its BTC key.
           // The SAME wallet + invoice are read back by `poll`.
@@ -1784,6 +1795,50 @@ function App() {
     await walletKeystore.lock();
     await refresh();
   };
+  // Enforce the auto-lock setting while the window stays open.
+  //
+  // Auto-lock was implemented purely as a session-cache TTL, which is only
+  // consulted when a popup starts. That is sufficient in the extension, where
+  // clicking away closes the popup, and simply false on desktop: the window
+  // lives for days, nothing re-reads the TTL, and a wallet set to "10 minutes"
+  // stays unlocked indefinitely while the Settings screen says otherwise. An
+  // idle timer makes the label true on both surfaces.
+  //
+  // `0` ("Immediately") is deliberately excluded: it means "do not outlive the
+  // window", not "lock while I am using it". The window-close path already
+  // covers it, and a zero-length idle timer would lock mid-keystroke.
+  useEffect(() => {
+    if (walletState.kind !== 'unlocked') return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    const arm = (minutes: number) => {
+      clear();
+      if (cancelled || minutes <= 0) return;
+      timer = setTimeout(() => void lockHandler(), minutes * 60_000);
+    };
+    const activity = () => {
+      // Re-read each time: the user can change the setting mid-session, and a
+      // stale closure would keep enforcing the old value until a relock.
+      void store.load().then((st) => {
+        if (cancelled) return;
+        arm(st.ui.autoLockMinutes ?? 0);
+      });
+    };
+    const events = ['mousedown', 'keydown', 'pointerdown', 'wheel', 'focus'];
+    for (const e of events) window.addEventListener(e, activity, { passive: true });
+    activity();
+    return () => {
+      cancelled = true;
+      clear();
+      for (const e of events) window.removeEventListener(e, activity);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletState.kind]);
+
   const handleRefresh = () =>
     // `session` is briefly an empty `{}` cast between the bootstrap kick-off
     // and the bootstrapAuth resolution (see `startSession`), so a truthiness
@@ -1870,6 +1925,20 @@ function App() {
     // A failed bootstrap must surface its error + a retry, NOT sit forever on the
     // "Setting up wallet…" placeholder (which reads as an infinite hang).
     if (session?.error) {
+      // Backend picker, reached from the error screen. Switching clears the
+      // failed session so bootstrap re-runs against the new backend; Back
+      // returns to the error rather than a blank tab.
+      if (bootstrapBackendEscape) {
+        return (
+          <BackendRoute
+            onSwitched={async () => {
+              setBootstrapBackendEscape(false);
+              setSession(null);
+            }}
+            onBack={() => setBootstrapBackendEscape(false)}
+          />
+        );
+      }
       // A missing mnemonic is not transient and retrying cannot fix it: the
       // warm-restore session cache drops the mnemonic by design, and
       // npub-native sign-in needs it to sign the NIP-98 register event. Only a
@@ -1881,6 +1950,7 @@ function App() {
         <BootstrapErrorScreen
           message={session.error}
           onRetry={() => setSession(null)}
+          onSwitchBackend={() => setBootstrapBackendEscape(true)}
           onUnlock={
             needsMnemonic
               ? () => {

@@ -79,12 +79,21 @@ export function BootstrapErrorScreen({
   message,
   onRetry,
   onUnlock,
+  onSwitchBackend,
 }: {
   message: string;
   onRetry: () => void;
   /** Present only when the failure is a missing mnemonic, which retrying cannot
    *  fix and an unlock can. */
   onUnlock?: (() => void) | undefined;
+  /** Reaches the backend picker from here.
+   *
+   *  This screen replaces the whole UI, tabs included, so a user pointed at a
+   *  self-hosted backend that is down cannot reach Settings to point somewhere
+   *  else. Retry re-runs the same failing request forever and unlock does not
+   *  apply, which leaves reinstalling the wallet as the only exit: the one
+   *  action that risks the seed. */
+  onSwitchBackend?: (() => void) | undefined;
 }) {
   return (
     <div
@@ -142,6 +151,25 @@ export function BootstrapErrorScreen({
         >
           Try again
         </button>
+        {onSwitchBackend && (
+          <button
+            type="button"
+            data-testid="bootstrap-error-backend"
+            onClick={onSwitchBackend}
+            style={{
+              padding: '8px 18px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.2)',
+              background: 'rgba(255,255,255,0.08)',
+              color: 'inherit',
+            }}
+          >
+            Backend settings
+          </button>
+        )}
       </div>
     </div>
   );
