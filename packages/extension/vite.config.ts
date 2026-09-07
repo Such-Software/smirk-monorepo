@@ -145,9 +145,25 @@ function copyMonorepoAssets() {
  */
 function buildStamp(): { commit: string; date: string; version: string } {
   let commit = 'unknown';
+  let date = 'unknown';
   try {
     commit = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
-    const dirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim();
+    // The commit is the clock, exactly as scripts/pack-release.sh already says.
+    // A wall-clock date makes every build of the same source a different
+    // artifact: pack-release.sh builds once, records the hashes, then rebuilds
+    // to verify, and those runs straddling UTC midnight would embed different
+    // dates and fail a checksum that is supposed to prove the source.
+    date = execSync('git log -1 --format=%cd --date=format:%Y-%m-%d', {
+      encoding: 'utf8',
+    }).trim();
+    // Scoped to build inputs. pack-release.sh writes SHA256SUMS and TOOLCHAIN
+    // into packages/extension/releases DURING the release, so an unscoped probe
+    // sees the release's own output and stamps the verify rebuild '-dirty',
+    // changing bytes that were just checksummed.
+    const dirty = execSync(
+      "git status --porcelain -- ':!packages/extension/releases'",
+      { encoding: 'utf8' },
+    ).trim();
     // A dirty tree is a different artefact from the commit it claims. Say so,
     // because "it reproduces at that sha" is exactly what a reader will assume.
     if (dirty) commit += '-dirty';
@@ -157,7 +173,20 @@ function buildStamp(): { commit: string; date: string; version: string } {
   const version = JSON.parse(
     readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
   ).version as string;
-  return { commit, date: new Date().toISOString().slice(0, 10), version };
+  // Fail the build rather than ship an unidentifiable one. A silent
+  // degradation to "unknown" reproduces the exact problem this stamp exists to
+  // prevent: a binary that cannot say which build it is. `unknown` is the right
+  // answer when there is genuinely no git (a tarball build), so only an empty
+  // or malformed value is treated as a fault.
+  if (!commit || !date || !version) {
+    throw new Error(
+      `[buildStamp] refusing to build without an identity: commit=${commit} ` +
+        `date=${date} version=${version}. The stamp is what makes a bug report ` +
+        'answerable; a build that cannot name itself is the failure mode this ' +
+        'guards against.',
+    );
+  }
+  return { commit, date, version };
 }
 
 const stamp = buildStamp();
