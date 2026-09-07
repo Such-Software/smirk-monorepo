@@ -1479,6 +1479,18 @@ function App() {
           await writeSessionCache(wallet, minutes);
           // Bootstrap auth; the backend re-points the existing user by
           // seed_fingerprint (derivation rotation), preserving the @handle.
+          // Everything from here is post-commit. migrateLegacyWallet has already
+          // resealed the seed into the v0.3 keystore, which core/src/migration.ts
+          // documents as the crash-safe commit point. What follows is network:
+          // bootstrap does PoW and registers, popup-resident, on whatever
+          // connection the user has.
+          //
+          // Letting those throw surfaced 'Upgrade failed. Try again.' over a
+          // migration that had SUCCEEDED, and retrying could not help: the
+          // legacy blob is gone from the wizard's point of view and the keystore
+          // already exists, so the user was told to redo something already done,
+          // on the one screen standing between them and their money.
+          try {
           const bootstrap = await bootstrapAuthInExtension(api, wallet);
           const token = api.getAccessToken();
           if (token) {
@@ -1527,6 +1539,12 @@ function App() {
             return `Your old BTC/LTC funds were already moved across.${cohortNote}`;
           }
           return `No old BTC/LTC funds needed moving.${cohortNote}`;
+          } catch (e) {
+            // Degrade, do not fail. The upgrade is durable; sign-in is not, and
+            // the unlocked shell re-runs bootstrap on its own.
+            console.warn('[migration] post-upgrade sign-in failed; will retry', e);
+            return 'Wallet upgraded. We could not sign you in just yet, so some balances may be missing until the next try.';
+          }
         }}
         onDone={refresh}
       />
@@ -1660,7 +1678,21 @@ function App() {
           }
         }}
         onComplete={async (mnemonic, password, gate) => {
-          const wallet = await walletKeystore.createWallet({ mnemonic, password });
+          // Resume rather than recreate. createWallet is a DURABLE write, and
+          // everything after it is network: bootstrap does PoW and registers over
+          // whatever connection the user has. When that failed, the wizard showed
+          // its error and the retry ran this line again against a keystore that
+          // now existed, so the user was stuck one step from a wallet that had in
+          // fact been created, with their phrase already written down.
+          //
+          // Unlocking an existing keystore with the same password is the same
+          // wallet: the seed is sealed under it. A different password, or a
+          // different seed, cannot unlock it and still fails loudly.
+          const existing = await walletKeystore.getState();
+          const wallet =
+            existing.kind === 'empty'
+              ? await walletKeystore.createWallet({ mnemonic, password })
+              : await walletKeystore.unlock(password);
           // Respect the user's stored auto-lock preference. For a brand-new
           // wallet this is normally `0` (immediate), so no session cache.
           const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
@@ -1944,6 +1976,18 @@ function App() {
                 await clearDappPublicCache();
                 await stopDmWatch();
                 await walletKeystore.destroy();
+                // Drop the v0.2 blob too, or a migrated user is trapped forever.
+                //
+                // Migration deliberately KEEPS the legacy state (see
+                // core/src/migration.ts, "never delete it in the same step") so
+                // a half-finished upgrade can be retried. But destroy() only
+                // removes the v0.3 keystore, so detectLegacyWallet still finds
+                // the blob, the app decides a v0.2 wallet needs upgrading, and
+                // the MigrationWizard reappears asking for the password of a
+                // wallet the user just deliberately forgot. There is no way
+                // past that screen: it is the whole UI, and the wallet it wants
+                // no longer exists. Forgetting has to mean forgetting both.
+                await storage.remove(LEGACY_WALLET_KEY);
                 await refresh();
               }}
               onBackendSwitched={async () => {
