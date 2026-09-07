@@ -184,7 +184,20 @@ export async function cacheActiveNostrKeyForSession(
   wallet: UnlockedWallet,
   expiresAtMs: number,
 ): Promise<void> {
-  if (!wallet.mnemonic || expiresAtMs <= Date.now()) {
+  // A caller with no mnemonic cannot resolve the active identity, so it has
+  // nothing to say about the cached key and must not be able to destroy it.
+  //
+  // Clearing here meant any warm-session caller wiped a burner the user had
+  // selected while fully unlocked: changing the auto-lock duration in Settings
+  // did it, and so did popping out from an already-warm window. The user then
+  // saw "Re-unlock the wallet to message as this identity" for an identity
+  // they had just chosen, with no indication that a settings change had done
+  // it. Absence of the seed is absence of information, not an instruction.
+  if (!wallet.mnemonic) return;
+
+  // An expiry in the past IS an instruction: the caller knows the session is
+  // over and the key should not outlive it.
+  if (expiresAtMs <= Date.now()) {
     await clearCachedActiveNostrKey();
     return;
   }

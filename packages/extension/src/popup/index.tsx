@@ -1591,9 +1591,19 @@ function App() {
           // Create the wallet (once) + mint an invoice bound to its BTC key.
           // The SAME wallet + invoice are read back by `poll`.
           begin: async (mnemonic, password) => {
+            // Reuse only if it is the SAME seed. The ref survives a PaymentStep
+            // remount, which is what it is for, but it also survived the user
+            // going back and generating or importing a different phrase. Reusing
+            // on mere presence then sealed the keystore under the FIRST seed
+            // while the wizard had just shown them a second one, so the phrase
+            // they wrote down would not open the wallet they were paying to
+            // create, and they would not find out until they needed it.
+            const wantedFingerprint = computeSeedFingerprint(mnemonic);
+            const cached = paymentWalletRef.current;
             const wallet =
-              paymentWalletRef.current ??
-              (await walletKeystore.createWallet({ mnemonic, password }));
+              cached && cached.fingerprint === wantedFingerprint
+                ? cached
+                : await walletKeystore.createWallet({ mnemonic, password });
             paymentWalletRef.current = wallet;
             const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
             await writeSessionCache(wallet, minutes);

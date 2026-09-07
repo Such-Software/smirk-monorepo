@@ -243,8 +243,12 @@ function buildStamp(): { commit: string; date: string; version: string } {
   } catch {
     // no git available; `unknown` is the honest answer
   }
+  // tauri.conf.json, not package.json. That is the version Tauri stamps into
+  // the bundle and the one the updater compares against, so reading the npm
+  // manifest would let the number on screen drift from the number that decides
+  // whether an update applies. They agree today; nothing keeps them agreeing.
   const version = JSON.parse(
-    readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+    readFileSync(new URL('./src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
   ).version as string;
   // Fail the build rather than ship an unidentifiable one. A silent
   // degradation to "unknown" reproduces the exact problem this stamp exists to
