@@ -1620,6 +1620,59 @@ function InviteStep({
   );
 }
 
+/**
+ * Watch a minted invoice until the backend reads it as settled.
+ *
+ * Extracted from `PaymentStep` so the retry policy is testable without a DOM:
+ * the behaviour that matters here is what happens on a FAILED poll, and that
+ * was previously unreachable from a test.
+ *
+ * Once the pay-to target is on screen the user may already have sent funds, so
+ * this must not stop for anything short of settlement. It formerly shared one
+ * try/catch with the mint step, so a single rejected poll ended the watch for
+ * good while the component's `started` ref blocked any restart: money arrived
+ * and nothing was listening. Over a wait measured in minutes a dropped
+ * connection is the expected case, not the exceptional one.
+ */
+export async function watchForSettlement(opts: {
+  poll: (attempt: number) => Promise<'pending' | 'done'>;
+  onWarning: (message: string | null) => void;
+  sleep: (ms: number) => Promise<void>;
+  cancelled: () => boolean;
+}): Promise<'done' | 'cancelled'> {
+  const { poll, onWarning, sleep, cancelled } = opts;
+  let attempt = 0;
+  let consecutiveFailures = 0;
+  while (!cancelled()) {
+    let r: 'pending' | 'done';
+    try {
+      r = await poll(attempt++);
+      consecutiveFailures = 0;
+      onWarning(null);
+    } catch {
+      if (cancelled()) return 'cancelled';
+      consecutiveFailures++;
+      // Say so after a couple of misses rather than the first, which is usually
+      // a blip that resolves before the user could finish reading the note.
+      if (consecutiveFailures >= 2) {
+        onWarning(
+          "Having trouble reaching the backend. Still watching for your payment; you don't need to send it again.",
+        );
+      }
+      // Back off to 30s so a long outage is not hammered, then keep going.
+      await sleep(Math.min(POLL_INTERVAL_MS * consecutiveFailures, 30_000));
+      continue;
+    }
+    if (cancelled()) return 'cancelled';
+    if (r === 'done') return 'done';
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return 'cancelled';
+}
+
+/** Gap between settlement checks while the backend is answering normally. */
+const POLL_INTERVAL_MS = 6000;
+
 /** Pay-to-register: mint an invoice, show the pay-to target, and poll until the
  *  backend reads it as settled (each poll is a fresh register attempt). */
 function PaymentStep({
@@ -1669,46 +1722,16 @@ function PaymentStep({
         }
         setInvoice(inv);
         setStatus('waiting');
-        let attempt = 0;
-        // Once the pay-to target is on screen the user may already have sent
-        // funds, so this loop must not stop for anything short of settlement.
-        // It used to share one try/catch with `begin`, which meant a single
-        // rejected poll (a dropped connection, a backend restart, a wallet
-        // waking from sleep) ended the watch for good: `started` blocks a
-        // remount from restarting it, so the money arrived and nothing was
-        // listening. Transient failures are the expected case over a wait
-        // measured in minutes, not the exceptional one.
-        let consecutiveFailures = 0;
-        while (!cancelled) {
-          let r: 'pending' | 'done';
-          try {
-            r = await poll(attempt++);
-            consecutiveFailures = 0;
-            setPollWarning(null);
-          } catch {
-            if (cancelled) return;
-            consecutiveFailures++;
-            // Say so after a couple of misses rather than the first, which is
-            // usually a blip that resolves before the user could read the note.
-            if (consecutiveFailures >= 2) {
-              setPollWarning(
-                "Having trouble reaching the backend. Still watching for your payment; you don't need to send it again.",
-              );
-            }
-            // Back off to 30s so a long outage is not hammered, then keep going.
-            await new Promise((res) =>
-              setTimeout(res, Math.min(6000 * consecutiveFailures, 30_000)),
-            );
-            continue;
-          }
-          if (cancelled) return;
-          if (r === 'done') {
-            setStatus('settled');
-            onDone();
-            return;
-          }
-          await new Promise((res) => setTimeout(res, 6000));
-        }
+        const outcome = await watchForSettlement({
+          poll,
+          onWarning: setPollWarning,
+          sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
+          cancelled: () => cancelled,
+        });
+        if (outcome === 'cancelled') return;
+        setStatus('settled');
+        onDone();
+        return;
       } catch (e) {
         // Reachable only for a `begin` failure: no invoice was ever shown, so
         // there is no payment in flight and stopping is the honest outcome.
