@@ -11,7 +11,7 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
-## [0.3.0] - 2026-08-13
+## [0.3.0] - 2026-09-08
 
 The stable v0.3.0 release. It carries the v0.3.0-rc1 feature drop plus a round of
 cross-chain compatibility, balance and send reliability, real-money validation, the
