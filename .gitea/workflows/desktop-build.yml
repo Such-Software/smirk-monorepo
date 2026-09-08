@@ -94,6 +94,72 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Version comes from the manifest, never a literal. Every path and artifact
+      # name below used to hardcode 0.3.0, so the first build of 0.3.1 would have
+      # staged its bundles into a v0.3.0 directory and uploaded them under a
+      # v0.3.0 name: the same class of defect as a binary that cannot say which
+      # build it is, and just as quiet.
+      - name: Resolve version
+        id: ver
+        run: |
+          V=$(node -p "require('./packages/extension/manifest.json').version")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "building desktop artifacts for v$V"
+
+      # Cheap guard, and it belongs here rather than next to the signing step.
+      # A dead signing token is invisible until the bundler calls the broker, which
+      # on this runner is roughly 25 minutes of Rust and NSIS work later. That is
+      # exactly what happened on 2026-09-07: a full compile spent to discover a
+      # token that was present but not logged in.
+      #
+      # Two distinct faults, reported separately because they need different
+      # people to fix them:
+      #   - a tripped breaker needs an operator to clear a latch
+      #   - a live breaker with a logged-out token needs someone at the console
+      #
+      # This never supplies a password, so it cannot consume one of the token's
+      # three attempts. A logged-out token makes signtool sit on a prompt nobody
+      # answers, so the timeout IS the signal.
+      - name: Preflight the Windows signing token
+        if: matrix.os_label == 'windows'
+        shell: powershell
+        run: |
+          if (Test-Path 'C:\signing\SIGNING_LOCKED') {
+              Write-Host '--- breaker contents ---'
+              Get-Content 'C:\signing\SIGNING_LOCKED'
+              throw 'preflight: the signing broker''s circuit breaker is tripped. An operator must clear it before this build is worth running.'
+          }
+          if (-not (Test-Path 'C:\signing\in')) {
+              throw 'preflight: C:\signing\in is missing, so the broker is not serving this host.'
+          }
+          Write-Host 'preflight: breaker clear and broker queue present.'
+
+          # A clear breaker only proves nobody has failed YET. The token can still
+          # be logged out, and that is invisible until something actually asks it
+          # to sign. So ask it now, with a throwaway PE, using the very script the
+          # bundler will use later: same queue, same wait, same verification.
+          # Roughly 45 seconds to learn what otherwise costs a full compile.
+          $probe = Join-Path $env:RUNNER_TEMP 'smirk-token-probe.exe'
+          Copy-Item -LiteralPath 'C:\Windows\System32\where.exe' -Destination $probe -Force
+          try {
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File packages/desktop/src-tauri/scripts/sign-windows.ps1 -Path $probe
+              if ($LASTEXITCODE -ne 0) { throw "probe exited $LASTEXITCODE" }
+              Write-Host 'preflight: the token is logged in and signing.'
+          } catch {
+              Write-Host 'preflight: the signing token cannot sign right now, so this build stopped'
+              Write-Host 'before spending ~25 minutes to reach the same conclusion.'
+              Write-Host "Underlying error: $_"
+              Write-Host 'Most likely the token is present but NOT logged in. SafeNet holds the login'
+              Write-Host 'per session, so a reboot drops it, and changing any SafeNet client setting'
+              Write-Host 'restarts the client and drops it too. Log the token in on the console'
+              Write-Host 'session, confirm with a manual signtool run, then clear'
+              Write-Host 'C:\signing\SIGNING_LOCKED if this probe tripped it.'
+              Write-Host 'No password attempt was consumed: this never supplies one.'
+              throw 'preflight: signing token unavailable; see the guidance above.'
+          } finally {
+              Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Install Linux dependencies
         if: matrix.os_label == 'linux'
         run: |
@@ -327,7 +393,7 @@ jobs:
           # root package. The signed pass goes through tauri-action, which resolves
           # that itself, which is why only this hand-written pass needed telling.
           npm run tauri -w @smirk/desktop -- build --target ${{ matrix.target }} --no-sign
-          dest="$HOME/smirk-unsigned-v0.3.0"
+          dest="$HOME/smirk-unsigned-v${{ steps.ver.outputs.version }}"
           rm -rf "$dest"; mkdir -p "$dest"
           base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
           # Renamed here rather than at publish time: two installers with the same
@@ -392,7 +458,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          dest="$HOME/smirk-desktop-v0.3.0/${{ matrix.os_label }}"
+          dest="$HOME/smirk-desktop-v${{ steps.ver.outputs.version }}/${{ matrix.os_label }}"
           rm -rf "$dest"; mkdir -p "$dest"
           base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
           find "$base" -type f \( \
@@ -417,7 +483,7 @@ jobs:
               cp -R "$app" "$dmgsrc/"
               ln -s /Applications "$dmgsrc/Applications"
               hdiutil create -volname "Smirk Wallet" -srcfolder "$dmgsrc" -ov -format UDZO \
-                "$dest/Smirk-Wallet-0.3.0.dmg" && rm -rf "$app" || echo "hdiutil dmg failed; keeping .app"
+                "$dest/Smirk-Wallet-${{ steps.ver.outputs.version }}.dmg" && rm -rf "$app" || echo "hdiutil dmg failed; keeping .app"
               rm -rf "$dmgsrc"
             fi
           fi
@@ -431,14 +497,14 @@ jobs:
               # unsigned even though the bundler reported signing smirk-desktop.exe.
               # Verified by size: the staged file was byte-for-byte the length of the
               # unsigned build, and a signed PE is larger.
-              cp -v "$exe" "$dest/SmirkWallet-0.3.0-portable-unsigned.exe"
-              cp -v "$exe" "$dest/SmirkWallet-0.3.0-portable.exe"
+              cp -v "$exe" "$dest/SmirkWallet-${{ steps.ver.outputs.version }}-portable-unsigned.exe"
+              cp -v "$exe" "$dest/SmirkWallet-${{ steps.ver.outputs.version }}-portable.exe"
               # Sign the shipping one through the same broker the bundler uses. A user
               # who runs the portable build gets the same publisher as one who runs the
               # installer; without this they get an unknown-publisher warning instead.
               powershell.exe -NoProfile -ExecutionPolicy Bypass \
                 -File packages/desktop/src-tauri/scripts/sign-windows.ps1 \
-                -Path "$dest/SmirkWallet-0.3.0-portable.exe"
+                -Path "$dest/SmirkWallet-${{ steps.ver.outputs.version }}-portable.exe"
             else
               echo "no portable exe at $exe"
             fi
@@ -451,11 +517,11 @@ jobs:
           # It deliberately gets NO updater signature. latest.json must point at the
           # signed installer, or the updater would hand every existing user an
           # unsigned binary and re-raise the SmartScreen warning on each update.
-          if [ -d "$HOME/smirk-unsigned-v0.3.0" ]; then
-            cp -v "$HOME/smirk-unsigned-v0.3.0"/*.exe "$dest/" 2>/dev/null || true
+          if [ -d "$HOME/smirk-unsigned-v${{ steps.ver.outputs.version }}" ]; then
+            cp -v "$HOME/smirk-unsigned-v${{ steps.ver.outputs.version }}"/*.exe "$dest/" 2>/dev/null || true
           fi
           mkdir -p artifacts-out
-          tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz" -C "$dest" . \
+          tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz" -C "$dest" . \
             && echo "archived $(ls -la artifacts-out/*.tar.gz)" || echo "nothing to archive"
 
       # A green Windows job must not be able to ship an unsigned installer.
@@ -479,7 +545,7 @@ jobs:
           # what failed for the bundler.
           powershell.exe -NoProfile -ExecutionPolicy Bypass \
             -File packages/desktop/src-tauri/scripts/verify-windows-signature.ps1 \
-            -Dest "$HOME/smirk-desktop-v0.3.0/windows"
+            -Dest "$HOME/smirk-desktop-v${{ steps.ver.outputs.version }}/windows"
 
       - name: Upload bundle archive
         # NOT continue-on-error: this is the release path, and a swallowed upload
@@ -493,9 +559,9 @@ jobs:
           # (DEPTH_ZERO_SELF_SIGNED_CERT). Trust it for this internal-only upload.
           NODE_TLS_REJECT_UNAUTHORIZED: '0'
         with:
-          name: smirk-desktop-${{ matrix.os_label }}-v0.3.0
+          name: smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}
           if-no-files-found: warn
-          path: artifacts-out/smirk-desktop-${{ matrix.os_label }}-v0.3.0.tar.gz
+          path: artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz
 
   # ── Extension artifacts ──────────────────────────────────────────────────────
   # Added 2026-08-18. Before this, the three extension zips were built by hand on
@@ -571,9 +637,9 @@ jobs:
       - name: Install TS deps
         run: npm install
 
-      # Version comes from the manifest, which is the source of truth. The
-      # desktop legs above still hardcode v0.3.0 in their artifact names; migrate
-      # them the same way before cutting v0.4.0 or they will ship mislabelled.
+      # Version comes from the manifest, which is the source of truth. The desktop
+      # legs above now resolve it the same way, so every leg of a release names
+      # itself from one place.
       - name: Resolve version
         id: ver
         run: |
