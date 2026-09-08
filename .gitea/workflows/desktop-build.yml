@@ -578,6 +578,11 @@ jobs:
           GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # rel.json is workspace-relative on purpose. git-bash translates an
+          # absolute /tmp path to its own root, while node is a native Windows
+          # binary and reads the same string as C:\tmp, so the two disagree about
+          # which file they are using and the Windows leg died on ENOENT after a
+          # fully signed build. A relative path resolves identically for both.
           TAG="${GITHUB_REF#refs/tags/}"
           API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
           AUTH="Authorization: token $GITEA_TOKEN"
@@ -589,7 +594,7 @@ jobs:
           fi
           # Reuse a release a sibling leg already created: four legs share one tag,
           # so each creating its own would race.
-          code=$(curl -sk -o /tmp/rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
+          code=$(curl -sk -o rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
           if [ "$code" != "200" ]; then
             # Draft, so a half-populated release is never mistaken for a shipped one
             # while other legs are still building.
@@ -600,17 +605,17 @@ jobs:
             BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":true}"
             curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
             # A concurrent leg may have won the create, so re-read rather than fail.
-            curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
+            curl -sk -o rel.json -H "$AUTH" "$API/releases/tags/$TAG"
           fi
           # node, not python3: the Windows runner's git-bash has no python3, and
           # this step died with exit 127 after a full signed build had succeeded.
           # node is guaranteed here because the build just used it.
-          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8")).id)')
+          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel.json","utf8")).id)')
           for FILE in "${FILES[@]}"; do
             NAME="$(basename "$FILE")"
             # Drop a same-named asset from an earlier attempt, so a re-run does not
             # leave two assets differing only by which build produced them.
-            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
+            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
             for oid in $OLD; do
               curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
             done
@@ -763,6 +768,11 @@ jobs:
           GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # rel.json is workspace-relative on purpose. git-bash translates an
+          # absolute /tmp path to its own root, while node is a native Windows
+          # binary and reads the same string as C:\tmp, so the two disagree about
+          # which file they are using and the Windows leg died on ENOENT after a
+          # fully signed build. A relative path resolves identically for both.
           TAG="${GITHUB_REF#refs/tags/}"
           API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
           AUTH="Authorization: token $GITEA_TOKEN"
@@ -774,7 +784,7 @@ jobs:
           fi
           # Reuse a release a sibling leg already created: four legs share one tag,
           # so each creating its own would race.
-          code=$(curl -sk -o /tmp/rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
+          code=$(curl -sk -o rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
           if [ "$code" != "200" ]; then
             # Draft, so a half-populated release is never mistaken for a shipped one
             # while other legs are still building.
@@ -785,17 +795,17 @@ jobs:
             BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":true}"
             curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
             # A concurrent leg may have won the create, so re-read rather than fail.
-            curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
+            curl -sk -o rel.json -H "$AUTH" "$API/releases/tags/$TAG"
           fi
           # node, not python3: the Windows runner's git-bash has no python3, and
           # this step died with exit 127 after a full signed build had succeeded.
           # node is guaranteed here because the build just used it.
-          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8")).id)')
+          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel.json","utf8")).id)')
           for FILE in "${FILES[@]}"; do
             NAME="$(basename "$FILE")"
             # Drop a same-named asset from an earlier attempt, so a re-run does not
             # leave two assets differing only by which build produced them.
-            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
+            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
             for oid in $OLD; do
               curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
             done
