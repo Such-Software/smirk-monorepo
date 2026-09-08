@@ -19,7 +19,7 @@ import {
   type InboxTipItem,
   type SparklinePoint,
 } from '@smirk/ui';
-import { rowTimestamp, explorerUrlForRow, explorerUrlForPendingOutgoing } from '../explorer';
+import { rowTimestamp, isPendingRow, explorerUrlForRow, explorerUrlForPendingOutgoing } from '../explorer';
 import { clawbackSocialTip } from '../tip-claim-handler';
 import { listTipKeyBackups, removeTipKeyBackup } from '../tip-key-backup';
 import { isTipStale } from '../tip-inbox';
@@ -147,6 +147,12 @@ export function AssetDetailRoute({
       // tip-{sent,received}). Rows without a timestamp (UTXO with
       // height-only) sort last.
       const merged = [...chainRows, ...tipRows].sort((a, b) => {
+        // Unconfirmed first. They are the newest thing that exists, and they
+        // carry no timestamp, so ordering by the timestamp rule alone put them
+        // last, beneath transactions from days earlier.
+        const pa = isPendingRow(a);
+        const pb = isPendingRow(b);
+        if (pa !== pb) return pa ? -1 : 1;
         const ta = rowTimestamp(a);
         const tb = rowTimestamp(b);
         if (ta === null && tb === null) return 0;
