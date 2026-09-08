@@ -599,7 +599,7 @@ function Welcome({
             textDecoration: 'underline',
           }}
         >
-          Running your own backend? Use it →
+          Connect to a custom backend →
         </button>
       )}
     </div>

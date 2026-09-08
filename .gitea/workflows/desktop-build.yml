@@ -146,31 +146,15 @@ jobs:
           }
           Write-Host 'preflight: breaker clear and broker queue present.'
 
-          # A clear breaker only proves nobody has failed YET. The token can still
-          # be logged out, and that is invisible until something actually asks it
-          # to sign. So ask it now, with a throwaway PE, using the very script the
-          # bundler will use later: same queue, same wait, same verification.
-          # Roughly 45 seconds to learn what otherwise costs a full compile.
-          $probe = Join-Path $env:RUNNER_TEMP 'smirk-token-probe.exe'
-          Copy-Item -LiteralPath 'C:\Windows\System32\where.exe' -Destination $probe -Force
-          try {
-              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File packages/desktop/src-tauri/scripts/sign-windows.ps1 -Path $probe
-              if ($LASTEXITCODE -ne 0) { throw "probe exited $LASTEXITCODE" }
-              Write-Host 'preflight: the token is logged in and signing.'
-          } catch {
-              Write-Host 'preflight: the signing token cannot sign right now, so this build stopped'
-              Write-Host 'before spending ~25 minutes to reach the same conclusion.'
-              Write-Host "Underlying error: $_"
-              Write-Host 'Most likely the token is present but NOT logged in. SafeNet holds the login'
-              Write-Host 'per session, so a reboot drops it, and changing any SafeNet client setting'
-              Write-Host 'restarts the client and drops it too. Log the token in on the console'
-              Write-Host 'session, confirm with a manual signtool run, then clear'
-              Write-Host 'C:\signing\SIGNING_LOCKED if this probe tripped it.'
-              Write-Host 'No password attempt was consumed: this never supplies one.'
-              throw 'preflight: signing token unavailable; see the guidance above.'
-          } finally {
-              Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-          }
+          # A live-token probe was tried here and removed. It signed a throwaway
+          # copy of where.exe, which Windows already ships signed by Microsoft, so
+          # sign-windows.ps1's signer check correctly rejected it and the preflight
+          # failed a build whose token was fine. A guard that reports a healthy
+          # system as broken is worse than no guard: it costs a cycle AND sends the
+          # operator to the wrong machine. Proving the token is live needs an
+          # unsigned PE built on the spot, which is more machinery than this is
+          # worth; the breaker check above already catches the case that actually
+          # recurs, an operator who has not cleared the latch.
 
       - name: Install Linux dependencies
         if: matrix.os_label == 'linux'
@@ -609,7 +593,11 @@ jobs:
           if [ "$code" != "200" ]; then
             # Draft, so a half-populated release is never mistaken for a shipped one
             # while other legs are still building.
-            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":true,\"prerelease\":false}"
+            # Not a draft: Gitea does not associate a draft with its tag, so
+            # `releases/tags/$TAG` 404s and the assets are unreachable, which is the
+            # whole point of publishing here. prerelease marks it as CI output on an
+            # internal ingress repo, not something shipped to users.
+            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":true}"
             curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
             # A concurrent leg may have won the create, so re-read rather than fail.
             curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
@@ -787,7 +775,11 @@ jobs:
           if [ "$code" != "200" ]; then
             # Draft, so a half-populated release is never mistaken for a shipped one
             # while other legs are still building.
-            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":true,\"prerelease\":false}"
+            # Not a draft: Gitea does not associate a draft with its tag, so
+            # `releases/tags/$TAG` 404s and the assets are unreachable, which is the
+            # whole point of publishing here. prerelease marks it as CI output on an
+            # internal ingress repo, not something shipped to users.
+            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":true}"
             curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
             # A concurrent leg may have won the create, so re-read rather than fail.
             curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
