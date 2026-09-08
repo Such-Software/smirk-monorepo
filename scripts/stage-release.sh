@@ -40,6 +40,13 @@ zips=("$SRC"/smirk-desktop-*-v"$VERSION"*.zip "$SRC"/smirk-extension-v"$VERSION"
 [ ${#zips[@]} -gt 0 ] || fail "no smirk artifact zips for v$VERSION found in $SRC"
 
 echo "staging ${#zips[@]} artifact zip(s) into $DEST"
+echo
+echo "CHECK THESE DATES. A previous release's download sitting in the same folder"
+echo "is indistinguishable by name, and staging it ships the pre-fix build:"
+for z in "${zips[@]}"; do
+  printf '  %-46s %s\n' "$(basename "$z")" "$(date -r "$z" '+%Y-%m-%d %H:%M')"
+done
+echo
 
 for z in "${zips[@]}"; do
   name="$(basename "$z")"
