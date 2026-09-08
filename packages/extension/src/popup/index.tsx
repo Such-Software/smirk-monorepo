@@ -1820,20 +1820,35 @@ function App() {
       if (cancelled || minutes <= 0) return;
       timer = setTimeout(() => void lockHandler(), minutes * 60_000);
     };
-    const activity = () => {
-      // Re-read each time: the user can change the setting mid-session, and a
-      // stale closure would keep enforcing the old value until a relock.
-      void store.load().then((st) => {
-        if (cancelled) return;
-        arm(st.ui.autoLockMinutes ?? 0);
-      });
-    };
+    // Hold the setting in a local and refresh it when it actually changes.
+    //
+    // The first cut re-read storage inside the event handler, so there was an
+    // async read per keystroke, per wheel tick, per pointer-down. Typing an
+    // amount fired dozens of them, each resolving out of order against a timer
+    // they were all re-arming. Re-arming has to be synchronous and cheap, or the
+    // thing meant to lock the wallet becomes the thing making it stutter.
+    let minutes = 0;
+    const activity = () => arm(minutes);
     const events = ['mousedown', 'keydown', 'pointerdown', 'wheel', 'focus'];
     for (const e of events) window.addEventListener(e, activity, { passive: true });
-    activity();
+    void store.load().then((st) => {
+      if (cancelled) return;
+      minutes = st.ui.autoLockMinutes ?? 0;
+      arm(minutes);
+    });
+    // Track later edits so changing the setting in Settings applies now, rather
+    // than at the next relock.
+    const unsubscribe = store.subscribe((st) => {
+      if (cancelled) return;
+      const next = st.ui.autoLockMinutes ?? 0;
+      if (next === minutes) return;
+      minutes = next;
+      arm(minutes);
+    });
     return () => {
       cancelled = true;
       clear();
+      unsubscribe();
       for (const e of events) window.removeEventListener(e, activity);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

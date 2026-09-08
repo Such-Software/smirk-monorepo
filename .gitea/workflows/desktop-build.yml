@@ -602,12 +602,15 @@ jobs:
             # A concurrent leg may have won the create, so re-read rather than fail.
             curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
           fi
-          ID=$(python3 -c 'import json,sys; print(json.load(open("/tmp/rel.json"))["id"])')
+          # node, not python3: the Windows runner's git-bash has no python3, and
+          # this step died with exit 127 after a full signed build had succeeded.
+          # node is guaranteed here because the build just used it.
+          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8")).id)')
           for FILE in "${FILES[@]}"; do
             NAME="$(basename "$FILE")"
             # Drop a same-named asset from an earlier attempt, so a re-run does not
             # leave two assets differing only by which build produced them.
-            OLD=$(python3 -c 'import json,sys; d=json.load(open("/tmp/rel.json")); print(" ".join(str(a["id"]) for a in (d.get("assets") or []) if a.get("name")==sys.argv[1]))' "$NAME")
+            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
             for oid in $OLD; do
               curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
             done
@@ -784,12 +787,15 @@ jobs:
             # A concurrent leg may have won the create, so re-read rather than fail.
             curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
           fi
-          ID=$(python3 -c 'import json,sys; print(json.load(open("/tmp/rel.json"))["id"])')
+          # node, not python3: the Windows runner's git-bash has no python3, and
+          # this step died with exit 127 after a full signed build had succeeded.
+          # node is guaranteed here because the build just used it.
+          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8")).id)')
           for FILE in "${FILES[@]}"; do
             NAME="$(basename "$FILE")"
             # Drop a same-named asset from an earlier attempt, so a re-run does not
             # leave two assets differing only by which build produced them.
-            OLD=$(python3 -c 'import json,sys; d=json.load(open("/tmp/rel.json")); print(" ".join(str(a["id"]) for a in (d.get("assets") or []) if a.get("name")==sys.argv[1]))' "$NAME")
+            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("/tmp/rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
             for oid in $OLD; do
               curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
             done
