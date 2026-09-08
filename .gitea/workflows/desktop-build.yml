@@ -56,6 +56,18 @@ jobs:
     env:
       RUSTUP_HOME: ${{ runner.temp }}/rustup
       CARGO_HOME: ${{ runner.temp }}/cargo
+      # Swap is gated on this at BUILD time. Unset, the Swap tab renders a
+      # "disabled in this build" notice, which is what every build shipped until
+      # now, because nothing ever injected it.
+      #
+      # Vite substitutes VITE_* statically, so this value is readable in the
+      # shipped bundle by anyone who unpacks it. It is a client-side identifier
+      # for a service the wallet calls directly, not a bearer credential for our
+      # backend. Consequence worth knowing: an outside party rebuilding from the
+      # published source zip without this key gets different bytes.
+      # pack-release.sh's reproducibility check still passes, because it builds
+      # twice inside this same environment.
+      VITE_TROCADOR_API_KEY: ${{ secrets.TROCADOR_API_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -563,6 +575,58 @@ jobs:
           if-no-files-found: warn
           path: artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz
 
+      # Attach the archive to a Gitea release, so collection never depends on the
+      # artifacts API.
+      #
+      # That API reports total_count 0 on this instance even for runs that plainly
+      # uploaded (confirmed on completed runs 6394 and 6086). The only routes left
+      # were a browser download or a shell on the Gitea box, and the second means
+      # handing out an interactive account to work around a bug. The releases API
+      # on the same host, with the same token, works, so every leg publishes to
+      # one place a script can fetch.
+      #
+      # Tag builds only: a release keyed on a branch is meaningless, and this must
+      # never invent one for an ordinary push.
+      - name: Publish archive to the Builds release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          AUTH="Authorization: token $GITEA_TOKEN"
+          shopt -s nullglob
+          FILES=(artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "no archives to publish; the upload step above should have caught this"
+            exit 1
+          fi
+          # Reuse a release a sibling leg already created: four legs share one tag,
+          # so each creating its own would race.
+          code=$(curl -sk -o /tmp/rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
+          if [ "$code" != "200" ]; then
+            # Draft, so a half-populated release is never mistaken for a shipped one
+            # while other legs are still building.
+            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":true,\"prerelease\":false}"
+            curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
+            # A concurrent leg may have won the create, so re-read rather than fail.
+            curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
+          fi
+          ID=$(python3 -c 'import json,sys; print(json.load(open("/tmp/rel.json"))["id"])')
+          for FILE in "${FILES[@]}"; do
+            NAME="$(basename "$FILE")"
+            # Drop a same-named asset from an earlier attempt, so a re-run does not
+            # leave two assets differing only by which build produced them.
+            OLD=$(python3 -c 'import json,sys; d=json.load(open("/tmp/rel.json")); print(" ".join(str(a["id"]) for a in (d.get("assets") or []) if a.get("name")==sys.argv[1]))' "$NAME")
+            for oid in $OLD; do
+              curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
+            done
+            curl -sk --fail-with-body -o /dev/null -X POST -H "$AUTH" -F "attachment=@$FILE" "$API/releases/$ID/assets?name=$NAME"
+            echo "published $NAME to release $TAG"
+          done
+
   # ── Extension artifacts ──────────────────────────────────────────────────────
   # Added 2026-08-18. Before this, the three extension zips were built by hand on
   # a workstation into a gitignored directory while the desktop bundles came from
@@ -584,6 +648,18 @@ jobs:
     env:
       RUSTUP_HOME: ${{ runner.temp }}/rustup
       CARGO_HOME: ${{ runner.temp }}/cargo
+      # Swap is gated on this at BUILD time. Unset, the Swap tab renders a
+      # "disabled in this build" notice, which is what every build shipped until
+      # now, because nothing ever injected it.
+      #
+      # Vite substitutes VITE_* statically, so this value is readable in the
+      # shipped bundle by anyone who unpacks it. It is a client-side identifier
+      # for a service the wallet calls directly, not a bearer credential for our
+      # backend. Consequence worth knowing: an outside party rebuilding from the
+      # published source zip without this key gets different bytes.
+      # pack-release.sh's reproducibility check still passes, because it builds
+      # twice inside this same environment.
+      VITE_TROCADOR_API_KEY: ${{ secrets.TROCADOR_API_KEY }}
     name: extension build
     runs-on: ubuntu-latest
     steps:
@@ -676,3 +752,55 @@ jobs:
           name: smirk-extension-v${{ steps.ver.outputs.version }}
           if-no-files-found: error
           path: artifacts-out/
+
+      # Attach the archive to a Gitea release, so collection never depends on the
+      # artifacts API.
+      #
+      # That API reports total_count 0 on this instance even for runs that plainly
+      # uploaded (confirmed on completed runs 6394 and 6086). The only routes left
+      # were a browser download or a shell on the Gitea box, and the second means
+      # handing out an interactive account to work around a bug. The releases API
+      # on the same host, with the same token, works, so every leg publishes to
+      # one place a script can fetch.
+      #
+      # Tag builds only: a release keyed on a branch is meaningless, and this must
+      # never invent one for an ordinary push.
+      - name: Publish archive to the Builds release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
+          AUTH="Authorization: token $GITEA_TOKEN"
+          shopt -s nullglob
+          FILES=(artifacts-out/*)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "no archives to publish; the upload step above should have caught this"
+            exit 1
+          fi
+          # Reuse a release a sibling leg already created: four legs share one tag,
+          # so each creating its own would race.
+          code=$(curl -sk -o /tmp/rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
+          if [ "$code" != "200" ]; then
+            # Draft, so a half-populated release is never mistaken for a shipped one
+            # while other legs are still building.
+            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":true,\"prerelease\":false}"
+            curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
+            # A concurrent leg may have won the create, so re-read rather than fail.
+            curl -sk -o /tmp/rel.json -H "$AUTH" "$API/releases/tags/$TAG"
+          fi
+          ID=$(python3 -c 'import json,sys; print(json.load(open("/tmp/rel.json"))["id"])')
+          for FILE in "${FILES[@]}"; do
+            NAME="$(basename "$FILE")"
+            # Drop a same-named asset from an earlier attempt, so a re-run does not
+            # leave two assets differing only by which build produced them.
+            OLD=$(python3 -c 'import json,sys; d=json.load(open("/tmp/rel.json")); print(" ".join(str(a["id"]) for a in (d.get("assets") or []) if a.get("name")==sys.argv[1]))' "$NAME")
+            for oid in $OLD; do
+              curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
+            done
+            curl -sk --fail-with-body -o /dev/null -X POST -H "$AUTH" -F "attachment=@$FILE" "$API/releases/$ID/assets?name=$NAME"
+            echo "published $NAME to release $TAG"
+          done
