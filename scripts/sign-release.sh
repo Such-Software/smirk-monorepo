@@ -45,8 +45,21 @@ while [ $# -gt 0 ]; do
 done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXT_DIR="$ROOT/packages/extension/releases"
 BUNDLE_DIR="${BUNDLE_DIR:-$ROOT/packages/desktop/src-tauri/target/release/bundle}"
+# `--bundle-dir` covers the extension archives too when they are staged there.
+#
+# It used to apply only to the desktop bundles, so a run against a freshly
+# downloaded CI directory signed those bundles but reached into the working
+# tree for the extension zips. On 2026-09-08 that meant signing four-day-old
+# archives alongside a current desktop build, in one release, with no
+# indication in the signing output. Only the checksum step caught it, and only
+# because the stale zips happened to disagree with a newer sums file; had both
+# been stale together it would have verified clean and shipped.
+if [ -n "${BUNDLE_DIR:-}" ] && ls "$BUNDLE_DIR"/smirk-wallet-*-v"$VERSION".zip >/dev/null 2>&1; then
+  EXT_DIR="$BUNDLE_DIR"
+else
+  EXT_DIR="$ROOT/packages/extension/releases"
+fi
 SUMS="$EXT_DIR/SHA256SUMS-v$VERSION.txt"
 # The toolchain record is signed alongside the sums, so the release directory
 # verifies on its own. It states which rustc, wasm-bindgen and C compiler
