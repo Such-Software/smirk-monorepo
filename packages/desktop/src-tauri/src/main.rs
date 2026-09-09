@@ -37,6 +37,12 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
+        // Native HTTP. The swap provider (api.trocador.app) sends no CORS header
+        // for a tauri:// origin, so a webview fetch is refused outright and the
+        // user sees "Load failed" on Get quote. The extension never hit this: it
+        // holds <all_urls> host permissions and bypasses CORS entirely. Requests
+        // routed through this plugin leave the webview and are not subject to it.
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::default().build())
         // Embedded-browser plugin state. Commands registered in the
         // invoke_handler below. See browser_plugin.rs file header for

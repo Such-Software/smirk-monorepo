@@ -27,7 +27,8 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-store": "^2",
     "@tauri-apps/plugin-shell": "^2",
-    "preact": "^10.19.0"
+    "preact": "^10.19.0",
+    "@tauri-apps/plugin-http": "^2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

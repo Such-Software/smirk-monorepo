@@ -32,6 +32,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-store = "2"
 tauri-plugin-shell = "2"
+# Native HTTP, so Trocador calls bypass the webview's CORS. See main.rs.
+tauri-plugin-http = "2"
 tauri-plugin-updater = "2"
 
 serde = { version = "1", features = ["derive"] }

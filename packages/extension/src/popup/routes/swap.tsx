@@ -1,4 +1,5 @@
-import { useMemo } from 'preact/hooks';
+import { nativeFetch } from '../native-fetch';
+import { useMemo, useState, useEffect } from 'preact/hooks';
 import { TrocadorSwap } from '@smirk/swap';
 import { api, type UnlockedWallet } from '@smirk/core';
 import {
@@ -53,12 +54,32 @@ export function SwapRouter({
   // Instantiate TrocadorSwap once per mount: build-time API key plus the
   // webhook pointed at whichever backend this wallet is configured for.
   // passthrough is set on a per-trade basis (random token), not here.
+  // Desktop needs a fetch that leaves the webview: Trocador sends no CORS header
+  // for a tauri:// origin, so quotes failed with "Load failed" there while the
+  // extension worked. Resolved async, so the client is rebuilt once it arrives.
+  const [nativeFetchImpl, setNativeFetchImpl] = useState<typeof fetch | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    let alive = true;
+    void nativeFetch().then((f) => {
+      if (alive && f) setNativeFetchImpl(() => f);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const trocador = useMemo(
     () =>
       apiKey
-        ? new TrocadorSwap({ apiKey, webhookUrl })
+        ? new TrocadorSwap({
+            apiKey,
+            webhookUrl,
+            ...(nativeFetchImpl ? { fetch: nativeFetchImpl } : {}),
+          })
         : null,
-    [apiKey, webhookUrl],
+    [apiKey, webhookUrl, nativeFetchImpl],
   );
 
   if (!trocador) {
