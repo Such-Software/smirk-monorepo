@@ -571,6 +571,61 @@ jobs:
       #
       # Tag builds only: a release keyed on a branch is meaningless, and this must
       # never invent one for an ordinary push.
+      # Also push straight to the GitHub release, which is where these artifacts
+      # are actually consumed.
+      #
+      # The Gitea hop has failed twice: its Actions artifacts API reports
+      # total_count 0 for runs that plainly uploaded, and release attachments 404
+      # through every API auth form even though the metadata reports a correct
+      # size. Only a browser session can retrieve them, so every release needed a
+      # human with a browser in the middle of an otherwise automated pipeline.
+      #
+      # Uploading here removes that middleman rather than working around it. The
+      # Gitea release upload above stays as the local copy.
+      #
+      # Skipped quietly when the token is absent, so a fork or a local runner does
+      # not fail a build over a credential it was never given.
+      - name: Publish archive to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "GITHUB_RELEASE_TOKEN not set; skipping the GitHub upload"
+            exit 0
+          fi
+          TAG="${GITHUB_REF#refs/tags/}"
+          REPO="Such-Software/smirk-monorepo"
+          API="https://api.github.com/repos/$REPO"
+          AUTH="Authorization: Bearer $GH_TOKEN"
+          shopt -s nullglob
+          FILES=(artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz)
+          [ ${#FILES[@]} -gt 0 ] || { echo "nothing to upload"; exit 1; }
+          # Resolve the release id. The release must already exist: creating one
+          # here could publish a half-populated release while other legs build.
+          code=$(curl -sS -o rel-gh.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
+          if [ "$code" != "200" ]; then
+            echo "no GitHub release for $TAG (HTTP $code); skipping"
+            exit 0
+          fi
+          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel-gh.json","utf8")).id)')
+          for FILE in "${FILES[@]}"; do
+            NAME="$(basename "$FILE")"
+            # Replace a same-named asset from an earlier attempt, so a re-run does
+            # not leave two that differ only by which build produced them.
+            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel-gh.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
+            for oid in $OLD; do
+              curl -sS -o /dev/null -X DELETE -H "$AUTH" "$API/releases/assets/$oid" || true
+            done
+            curl -sS --fail-with-body -o /dev/null -X POST -H "$AUTH" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$FILE" \
+              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$NAME"
+            echo "uploaded $NAME to the GitHub release $TAG"
+          done
+
       - name: Publish archive to the Builds release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -761,6 +816,61 @@ jobs:
       #
       # Tag builds only: a release keyed on a branch is meaningless, and this must
       # never invent one for an ordinary push.
+      # Also push straight to the GitHub release, which is where these artifacts
+      # are actually consumed.
+      #
+      # The Gitea hop has failed twice: its Actions artifacts API reports
+      # total_count 0 for runs that plainly uploaded, and release attachments 404
+      # through every API auth form even though the metadata reports a correct
+      # size. Only a browser session can retrieve them, so every release needed a
+      # human with a browser in the middle of an otherwise automated pipeline.
+      #
+      # Uploading here removes that middleman rather than working around it. The
+      # Gitea release upload above stays as the local copy.
+      #
+      # Skipped quietly when the token is absent, so a fork or a local runner does
+      # not fail a build over a credential it was never given.
+      - name: Publish archive to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "GITHUB_RELEASE_TOKEN not set; skipping the GitHub upload"
+            exit 0
+          fi
+          TAG="${GITHUB_REF#refs/tags/}"
+          REPO="Such-Software/smirk-monorepo"
+          API="https://api.github.com/repos/$REPO"
+          AUTH="Authorization: Bearer $GH_TOKEN"
+          shopt -s nullglob
+          FILES=(artifacts-out/*)
+          [ ${#FILES[@]} -gt 0 ] || { echo "nothing to upload"; exit 1; }
+          # Resolve the release id. The release must already exist: creating one
+          # here could publish a half-populated release while other legs build.
+          code=$(curl -sS -o rel-gh.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
+          if [ "$code" != "200" ]; then
+            echo "no GitHub release for $TAG (HTTP $code); skipping"
+            exit 0
+          fi
+          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel-gh.json","utf8")).id)')
+          for FILE in "${FILES[@]}"; do
+            NAME="$(basename "$FILE")"
+            # Replace a same-named asset from an earlier attempt, so a re-run does
+            # not leave two that differ only by which build produced them.
+            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel-gh.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
+            for oid in $OLD; do
+              curl -sS -o /dev/null -X DELETE -H "$AUTH" "$API/releases/assets/$oid" || true
+            done
+            curl -sS --fail-with-body -o /dev/null -X POST -H "$AUTH" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$FILE" \
+              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$NAME"
+            echo "uploaded $NAME to the GitHub release $TAG"
+          done
+
       - name: Publish archive to the Builds release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
