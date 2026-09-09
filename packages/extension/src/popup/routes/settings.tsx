@@ -1061,6 +1061,13 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
   const { navigate } = useRoute();
   const sessionState = useSessionState();
   const autoLockMinutes = sessionState.ui.autoLockMinutes ?? 0;
+
+  // Recovery-phrase reveal. Kept in component state only: the phrase is never
+  // written to storage, and clearing these unmounts it from memory.
+  const [revealPassword, setRevealPassword] = useState('');
+  const [revealedPhrase, setRevealedPhrase] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
+  const [revealBusy, setRevealBusy] = useState(false);
   const themeId = sessionState.ui.theme ?? 'default';
   const [forgetOpen, setForgetOpen] = useState(false);
   // window.smirk injection toggle: closes the short-term ask in
@@ -1185,9 +1192,138 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
             away from the device.
           </p>
         )}
-      </section>
+        </section>
 
-      {browserController && (
+        {/* Reveal the recovery phrase.
+          *
+          * The wallet never re-showed the phrase after onboarding, so a user who
+          * did not write it down had no way to get it back. On 2026-09-07 that
+          * turned a deleted unpacked extension into a lost wallet, recovered only
+          * by carving deleted LevelDB pages off the disk. Every other wallet
+          * offers this behind a password, and the keystore already returns the
+          * mnemonic from unlock: only the surface was missing.
+          *
+          * Gated on the password rather than the unlocked session, because the
+          * session cache deliberately holds no mnemonic. Held in component state
+          * and never written anywhere. */}
+        <section style={{ marginTop: 24 }}>
+          <label style={{ display: 'block', fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
+            Recovery phrase
+          </label>
+          {revealedPhrase ? (
+            <div>
+              <p
+                data-testid="settings-revealed-phrase"
+                style={{
+                  fontSize: 13,
+                  lineHeight: 1.7,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  background: 'rgba(255,255,255,0.05)',
+                  wordSpacing: 4,
+                }}
+              >
+                {revealedPhrase}
+              </p>
+              <p style={{ fontSize: 11, opacity: 0.6, margin: '6px 0 0', lineHeight: 1.4 }}>
+                Write these words on paper and keep them somewhere safe. Anyone
+                who has them controls this wallet.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setRevealedPhrase(null);
+                  setRevealPassword('');
+                }}
+                style={{
+                  marginTop: 8,
+                  padding: '8px 14px',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  borderRadius: 6,
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: 'inherit',
+                }}
+              >
+                Hide
+              </button>
+            </div>
+          ) : (
+            <div>
+              <p style={{ fontSize: 11, opacity: 0.6, margin: '0 0 8px', lineHeight: 1.4 }}>
+                Shows the 12 words that restore this wallet. Make sure nobody can
+                see your screen.
+              </p>
+              <input
+                type="password"
+                data-testid="settings-reveal-password"
+                value={revealPassword}
+                placeholder="Password"
+                onInput={(e) => setRevealPassword((e.target as HTMLInputElement).value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  background: 'rgba(255,255,255,0.04)',
+                  color: 'inherit',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: 6,
+                  fontFamily: 'inherit',
+                  fontSize: 13,
+                }}
+              />
+              {revealError && (
+                <p style={{ fontSize: 12, color: '#ff8a8a', margin: '6px 0 0' }}>
+                  {revealError}
+                </p>
+              )}
+              <button
+                type="button"
+                data-testid="settings-reveal-btn"
+                disabled={!revealPassword || revealBusy}
+                onClick={() => {
+                  setRevealError(null);
+                  setRevealBusy(true);
+                  void (async () => {
+                    try {
+                      const w = await walletKeystore.unlock(revealPassword);
+                      if (!w.mnemonic) {
+                        // Defensive: a warm-restored wallet carries no mnemonic.
+                        // Say what is true rather than showing an empty box.
+                        setRevealError(
+                          'Could not read the phrase from this session. Lock the wallet and unlock it again.',
+                        );
+                        return;
+                      }
+                      setRevealedPhrase(w.mnemonic);
+                    } catch {
+                      setRevealError('That password did not match.');
+                    } finally {
+                      setRevealBusy(false);
+                    }
+                  })();
+                }}
+                style={{
+                  marginTop: 8,
+                  padding: '8px 14px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: revealPassword && !revealBusy ? 'pointer' : 'default',
+                  opacity: revealPassword && !revealBusy ? 1 : 0.5,
+                  borderRadius: 6,
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: 'inherit',
+                }}
+              >
+                {revealBusy ? 'Checking…' : 'Reveal recovery phrase'}
+              </button>
+            </div>
+          )}
+        </section>
+
+        {browserController && (
         // Desktop-only: surface the v0.3.0 known limitations a user
         // would otherwise blame on a bug. Notifications are silent
         // because chrome.notifications isn't polyfilled. Tracked
