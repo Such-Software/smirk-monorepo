@@ -72,18 +72,36 @@ export async function solvePowChallenge(
     signal?: AbortSignal;
   } = {},
 ): Promise<AltchaPayload | null> {
-  let challenge: Challenge;
-  try {
-    const fetched = await api.powChallenge();
-    if (fetched.error || !fetched.data) {
-      console.warn('[pow] challenge fetch failed:', fetched.error);
-      return null;
+  // Retry the challenge fetch before giving up.
+  //
+  // Returning null here means "register without a solution", which is only
+  // survivable while the backend runs POW_REQUIRED=false. Production runs it
+  // TRUE, so on a gated backend a single transient fetch failure is not a soft
+  // degradation at all: the register call is then rejected outright, and the
+  // rejection reads "Please upgrade to a newer Smirk client", which sends the
+  // user to fix a version that was never the problem. Reported 2026-09-08 on a
+  // first launch of the current release, where pressing Try again succeeded.
+  //
+  // Three quick attempts; the challenge is cheap and the whole point is to
+  // outlast a blip, not to wait out an outage.
+  let challenge: Challenge | null = null;
+  for (let attempt = 0; attempt < 3 && challenge === null; attempt++) {
+    if (options.signal?.aborted) return null;
+    if (attempt > 0) {
+      await new Promise((res) => setTimeout(res, 400 * attempt));
     }
-    challenge = fetched.data as Challenge;
-  } catch (e) {
-    console.warn('[pow] challenge fetch threw:', e);
-    return null;
+    try {
+      const fetched = await api.powChallenge();
+      if (fetched.error || !fetched.data) {
+        console.warn('[pow] challenge fetch failed:', fetched.error);
+        continue;
+      }
+      challenge = fetched.data as Challenge;
+    } catch (e) {
+      console.warn('[pow] challenge fetch threw:', e);
+    }
   }
+  if (challenge === null) return null;
 
   // Watchdog: hard timeout in case the browser environment is broken
   // (e.g. WebKitGTK quirk or worker spawn refused on a hardened
