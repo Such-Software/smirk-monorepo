@@ -144,6 +144,7 @@ import { listAssets } from '@smirk/assets';
 import { send } from './send-handler';
 import { bootstrapAuthInExtension } from './jobs/bootstrap-in-extension';
 import { canHostOnboarding, openOnboardingTab } from './onboarding-surface';
+import { openOrCreateOnboardingWallet } from './onboarding-keystore';
 import {
   startGrinSend,
   processGrinS2,
@@ -660,6 +661,9 @@ function App() {
   // `payment.begin` and the invoice minted for it, read back by `payment.poll`.
   const paymentWalletRef = useRef<UnlockedWallet | null>(null);
   const paymentInvoiceRef = useRef<string | null>(null);
+  // The password the cached payment wallet was sealed with. Without it a
+  // retry at a different password reused a wallet the keystore no longer matched.
+  const paymentPasswordRef = useRef<string | null>(null);
   // The minted invoice's display details, cached so a PaymentStep REMOUNT (back
   // then forward) reuses the same invoice instead of minting a second one and
   // stranding the first: a double-charge risk.
@@ -1609,12 +1613,27 @@ function App() {
             // while the wizard had just shown them a second one, so the phrase
             // they wrote down would not open the wallet they were paying to
             // create, and they would not find out until they needed it.
+            // Reusable only when the SEED matches AND the password has not changed.
+            // Matching on the fingerprint alone let a user who went Back and retyped
+            // a different password finish onboarding with the keystore still sealed
+            // under the first one: the same permanent "invalid password" this
+            // release exists to fix, in the one path where the user has already
+            // paid. Anything not provably identical goes through the helper, which
+            // is the single place that reconciles a password against an existing seal.
             const wantedFingerprint = computeSeedFingerprint(mnemonic);
             const cached = paymentWalletRef.current;
-            const wallet =
-              cached && cached.fingerprint === wantedFingerprint
-                ? cached
-                : await walletKeystore.createWallet({ mnemonic, password });
+            const reusable =
+              cached &&
+              cached.fingerprint === wantedFingerprint &&
+              paymentPasswordRef.current === password;
+            const wallet = reusable
+              ? cached
+              : await openOrCreateOnboardingWallet(
+                  walletKeystore,
+                  mnemonic,
+                  password,
+                );
+            paymentPasswordRef.current = password;
             paymentWalletRef.current = wallet;
             const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
             await writeSessionCache(wallet, minutes);
@@ -1699,21 +1718,17 @@ function App() {
           }
         }}
         onComplete={async (mnemonic, password, gate) => {
-          // Resume rather than recreate. createWallet is a DURABLE write, and
-          // everything after it is network: bootstrap does PoW and registers over
-          // whatever connection the user has. When that failed, the wizard showed
-          // its error and the retry ran this line again against a keystore that
-          // now existed, so the user was stuck one step from a wallet that had in
-          // fact been created, with their phrase already written down.
-          //
-          // Unlocking an existing keystore with the same password is the same
-          // wallet: the seed is sealed under it. A different password, or a
-          // different seed, cannot unlock it and still fails loudly.
-          const existing = await walletKeystore.getState();
-          const wallet =
-            existing.kind === 'empty'
-              ? await walletKeystore.createWallet({ mnemonic, password })
-              : await walletKeystore.unlock(password);
+          // Resume, re-seal, or refuse: never recreate blindly. createWallet is a
+          // DURABLE write and everything after it is network (PoW, then
+          // register), so a failure there leaves a keystore behind and the retry
+          // arrives here with the user free to have changed their password or
+          // their phrase in between. See `onboarding-keystore.ts` for the three
+          // cases and why a keystore holding a different seed is never touched.
+          const wallet = await openOrCreateOnboardingWallet(
+            walletKeystore,
+            mnemonic,
+            password,
+          );
           // Respect the user's stored auto-lock preference. For a brand-new
           // wallet this is normally `0` (immediate), so no session cache.
           const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
