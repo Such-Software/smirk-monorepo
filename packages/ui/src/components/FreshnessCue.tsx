@@ -100,9 +100,16 @@ export function FreshnessCue({
     Math.max(now, Date.now()),
   );
 
-  if (level === 'fresh') return null;
+  // Fresh keeps the element MOUNTED and merely invisible rather than
+  // returning null. Unmounting removed a line of layout, so every refresh
+  // cycle shoved everything beneath the cue up and then back down: on the
+  // balance screens that is the asset rows and their amounts jumping while
+  // the user is reading them, twice a cycle. Reserving the space costs one
+  // hidden row and nothing moves. visibility rather than opacity, so it
+  // leaves the accessibility tree as well as the view.
+  const hidden = level === 'fresh';
 
-  const style = LEVEL_STYLE[level];
+  const style = hidden ? LEVEL_STYLE.updating : LEVEL_STYLE[level];
   // Announce the escalating states to assistive tech; keep the subtle,
   // every-cycle "updating" dot silent so it doesn't spam a screen reader.
   const isAlarm = level === 'warn' || level === 'error';
@@ -111,8 +118,15 @@ export function FreshnessCue({
       class={className}
       data-testid="balance-freshness-cue"
       data-freshness={level}
-      {...(level === 'error' ? { role: 'alert' } : isAlarm ? { role: 'status' } : {})}
-      aria-live={level === 'error' ? 'assertive' : isAlarm ? 'polite' : 'off'}
+      {...(hidden ? { 'aria-hidden': true } : {})}
+      {...(!hidden && level === 'error'
+        ? { role: 'alert' }
+        : !hidden && isAlarm
+          ? { role: 'status' }
+          : {})}
+      aria-live={
+        hidden ? 'off' : level === 'error' ? 'assertive' : isAlarm ? 'polite' : 'off'
+      }
       title={style.title}
       style={{
         display: 'inline-flex',
@@ -122,6 +136,7 @@ export function FreshnessCue({
         lineHeight: 1.3,
         color: style.color,
         maxWidth: '100%',
+        ...(hidden ? { visibility: 'hidden' as const } : {}),
       }}
     >
       <span
