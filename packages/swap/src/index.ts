@@ -46,3 +46,4 @@ export type {
 
 export { ThorchainSwap, type ThorchainSwapOptions } from './thorchain';
 export { TrocadorSwap, type TrocadorSwapOptions } from './trocador';
+export { AltQuickSwap, type AltQuickSwapOptions } from './altquick';

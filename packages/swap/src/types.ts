@@ -130,7 +130,10 @@ export interface SwapError extends Error {
     | 'insufficient_amount'
     | 'asset_pair_unsupported'
     | 'network_error'
-    | 'not_implemented';
+    | 'not_implemented'
+    /** More than the provider's live book can fill right now. Distinct from
+     *  `insufficient_amount` so the UI can say "try less", not "send more". */
+    | 'amount_above_max';
 }
 
 /**
