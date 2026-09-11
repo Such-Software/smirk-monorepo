@@ -589,11 +589,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "GITHUB_RELEASE_TOKEN not set; skipping the GitHub upload"
+            echo "GH_RELEASE_TOKEN not set; skipping the GitHub upload"
             exit 0
           fi
           TAG="${GITHUB_REF#refs/tags/}"
@@ -834,11 +834,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "GITHUB_RELEASE_TOKEN not set; skipping the GitHub upload"
+            echo "GH_RELEASE_TOKEN not set; skipping the GitHub upload"
             exit 0
           fi
           TAG="${GITHUB_REF#refs/tags/}"
