@@ -146,6 +146,28 @@ jobs:
           }
           Write-Host 'preflight: breaker clear and broker queue present.'
 
+          # The broker must also be RUNNING, not merely configured. It is a
+          # scheduled task with an at-logon trigger, so it dies with its session
+          # and nothing re-launches it: on 2026-09-12 it had been dead long enough
+          # to cost three builds, each discovering it only after a full compile and
+          # then waiting the broker's ten minute timeout per artifact.
+          #
+          # Checked by task state rather than by signing a probe file, because an
+          # earlier probe that signed a throwaway PE reported a healthy token as
+          # broken and failed builds that would have succeeded.
+          $broker = Get-ScheduledTask -TaskName 'SuchSoftwareSigningBroker' -ErrorAction SilentlyContinue
+          if (-not $broker) {
+              throw 'preflight: the SuchSoftwareSigningBroker task is not registered on this runner.'
+          }
+          if ($broker.State -ne 'Running') {
+              Write-Host "preflight: broker task state is $($broker.State), expected Running."
+              Write-Host 'Nothing consumes C:\signing\in while it is stopped, so every signature'
+              Write-Host 'would queue and then time out after ten minutes.'
+              Write-Host 'Start it with: schtasks /run /tn SuchSoftwareSigningBroker'
+              throw 'preflight: the signing broker is not running.'
+          }
+          Write-Host 'preflight: broker task is running.'
+
           # A live-token probe was tried here and removed. It signed a throwaway
           # copy of where.exe, which Windows already ships signed by Microsoft, so
           # sign-windows.ps1's signer check correctly rejected it and the preflight
