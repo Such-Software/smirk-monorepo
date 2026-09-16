@@ -33,8 +33,15 @@ use sha2::{Digest, Sha256};
 //   opt_len    : u32                               (4 bytes; total bytes of optional-field region)
 //   [sender]   : present iff opt_flags bit 0:      (u8 len + len bytes of ASCII bech32)
 //   [unknown]  : remaining (opt_len - sender_size) bytes (forward-compat skip region)
-//   payload_len: u32                               (4 bytes)
+//   payload_len: u64                               (8 bytes; NOT u32, see below)
 //   payload    : raw bytes
+//
+// The width asymmetry is real and deliberate upstream, not a typo to tidy up:
+// grin writes `opt_len` with an explicit `write_u32`, while the payload goes
+// through `Writer::write_bytes`, which prefixes a u64 length. Reading the
+// payload prefix as u32 yields a length of 0 on every real slatepack, because
+// the high half of the u64 is always zero at these sizes. That fails silently:
+// the slate simply disappears and every structural check still passes.
 //
 // We always emit version 1.0. `mode` is 0 for plain slates and 1 for
 // age-encrypted payloads (see `slatepack_encryption`).
@@ -90,7 +97,7 @@ impl SlatepackBin {
 
     /// Serialize to the binary format that goes inside the armor.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(2 + 1 + 2 + 4 + self.payload.len() + 64);
+        let mut out = Vec::with_capacity(2 + 1 + 2 + 4 + 8 + self.payload.len() + 64);
 
         // Version
         out.push(self.version.major);
@@ -124,7 +131,7 @@ impl SlatepackBin {
 
         // payload (length-prefixed)
         #[allow(clippy::cast_possible_truncation)]
-        out.extend_from_slice(&(self.payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(&(self.payload.len() as u64).to_be_bytes());
         out.extend_from_slice(&self.payload);
 
         out
@@ -167,7 +174,7 @@ impl SlatepackBin {
             cursor.skip(opt_len - consumed)?;
         }
 
-        let payload_len = cursor.read_u32_be()? as usize;
+        let payload_len = cursor.read_u64_be()? as usize;
         let payload = cursor.read_bytes(payload_len)?.to_vec();
 
         Ok(Self {
@@ -218,6 +225,13 @@ impl<'a> ByteCursor<'a> {
         buf.copy_from_slice(&self.data[self.pos..self.pos + 4]);
         self.pos += 4;
         Ok(u32::from_be_bytes(buf))
+    }
+    fn read_u64_be(&mut self) -> Result<u64, String> {
+        self.ensure(8)?;
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&self.data[self.pos..self.pos + 8]);
+        self.pos += 8;
+        Ok(u64::from_be_bytes(buf))
     }
     fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], String> {
         self.ensure(n)?;
@@ -514,8 +528,8 @@ mod tests {
             0x01, 0x00, // version 1.0
             99,   // bogus mode
             0x00, 0x00, // opt_flags = 0
-            0x00, 0x00, 0x00, 0x00, // opt_len = 0
-            0x00, 0x00, 0x00, 0x00, // payload_len = 0
+            0x00, 0x00, 0x00, 0x00, // opt_len = 0 (u32)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // payload_len = 0 (u64)
         ];
         let result = SlatepackBin::from_bytes(&bytes);
         assert!(result.is_err());
@@ -530,10 +544,26 @@ mod tests {
         let parsed = SlatepackBin::from_bytes(&bin_bytes).expect("real grin-wallet SlatepackBin parses");
 
         // Sanity: version is 1.0; mode is one of the two valid values.
-        // (Real slatepacks may have empty `payload` when the slate lives
-        // inside the encrypted_meta region in encrypted mode, so we don't
-        // assert non-empty.)
         assert_eq!(parsed.version, SlatepackVersion::V1_0);
+
+        // A PLAIN slatepack carries its slate in `payload`; only encrypted mode
+        // moves it into the encrypted_meta region. Not asserting this is what
+        // let a wrong length width pass for so long: reading the u64 prefix as
+        // u32 yields payload_len = 0, so the slate silently vanished and every
+        // other assertion still held.
+        assert_eq!(parsed.mode, SlatepackMode::Plain);
+        assert!(
+            !parsed.payload.is_empty(),
+            "a plain grin-wallet slatepack must carry its slate in payload"
+        );
+        // The payload must run to the end of the buffer: a too-narrow length
+        // prefix truncates rather than erroring, so "non-empty" alone would not
+        // catch a width that is merely wrong in a different way.
+        assert_eq!(
+            parsed.payload.len(),
+            bin_bytes.len() - (2 + 1 + 2 + 4 + 65 + 8),
+            "payload must consume the rest of the slatepack"
+        );
         assert!(matches!(
             parsed.mode,
             SlatepackMode::Plain | SlatepackMode::Encrypted
