@@ -18,6 +18,7 @@ import {
   postingRequirement,
   resolvePublishRelays,
   feedFilters,
+  operatorFeedFilters,
   feedSourcesFromCapability,
   PROFILE_KIND,
   buildProfileEvent,
@@ -81,6 +82,57 @@ test('feedSourcesFromCapability: show_owner=false drops the owner; malformed npu
   });
   // Owner excluded (show_owner=false), garbage skipped, valid entry kept.
   assert.deepEqual(sources.authors, [listed.pubkeyHex]);
+});
+
+test('feedSourcesFromCapability: show_premium opens the relay-general source', () => {
+  const { sources } = feedSourcesFromCapability({
+    relay_url: RELAY,
+    show_owner: false,
+    show_premium: true,
+    owner_npub: null,
+    allowlist_npubs: [],
+    extra_relays: [],
+  });
+  // An instance with no owner and no allowlist previously produced no sources
+  // at all, so the client never subscribed and the feed rendered empty.
+  assert.equal(sources.includeRelayGeneral, true);
+  assert.deepEqual(sources.authors, []);
+});
+
+test('feedSourcesFromCapability: a backend that omits show_premium stays author-only', () => {
+  const { sources } = feedSourcesFromCapability({
+    relay_url: RELAY,
+    show_owner: false,
+    owner_npub: null,
+    allowlist_npubs: [],
+    extra_relays: [],
+  });
+  assert.notEqual(sources.includeRelayGeneral, true);
+});
+
+test('the author-less general filter never joins the filters that fan out to extra relays', () => {
+  const listed = deriveNostrIdentity(MNEMONIC, 2);
+  const sources = {
+    authors: [listed.pubkeyHex],
+    relays: ['wss://relay.public'],
+    includeRelayGeneral: true,
+  };
+  // Curated filters travel to every relay, so each one must be constrained.
+  for (const f of feedFilters(sources)) {
+    assert.ok(
+      (f.authors && f.authors.length) || f['#t'],
+      'a filter sent to a public relay must be constrained by author or hashtag',
+    );
+  }
+  // The unconstrained one exists, but only in the operator-relay set.
+  const general = operatorFeedFilters(sources);
+  assert.equal(general.length, 1);
+  assert.equal(general[0].authors, undefined);
+});
+
+test('operatorFeedFilters is empty unless the operator opted in', () => {
+  assert.deepEqual(operatorFeedFilters({ authors: [] }), []);
+  assert.deepEqual(operatorFeedFilters({ includeRelayGeneral: false }), []);
 });
 
 test('postingRequirement never hardcodes a paywall — it reads operator policy', () => {

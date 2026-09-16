@@ -43,6 +43,16 @@ export interface FeedSources {
   hashtags?: string[];
   /** Extra relays to pull author/hashtag notes from, beyond the operator relay. */
   relays?: string[];
+  /**
+   * Pull EVERY general note from the operator relay, not just listed authors.
+   *
+   * Set from the operator's `show_premium`. The relay is write-gated, so on a
+   * `premium-post` instance every general note on it is already by a premium
+   * member or an allowlisted operator account: the admission policy is the
+   * filter, and re-deriving one client-side would need a membership list the
+   * client cannot have.
+   */
+  includeRelayGeneral?: boolean;
 }
 
 /** Structural shape of the backend `feed` capability, kept local so this Nostr
@@ -50,6 +60,9 @@ export interface FeedSources {
 export interface FeedCapabilityLike {
   relay_url: string;
   show_owner: boolean;
+  /** Include premium members' posts. Optional so an older backend that never
+   *  sent it keeps its current author-only behaviour instead of opening up. */
+  show_premium?: boolean;
   owner_npub: string | null;
   allowlist_npubs: string[];
   extra_relays: string[];
@@ -77,7 +90,11 @@ export function feedSourcesFromCapability(feed: FeedCapabilityLike): {
   if (feed.show_owner && feed.owner_npub) add(feed.owner_npub);
   for (const n of feed.allowlist_npubs ?? []) add(n);
   return {
-    sources: { authors, relays: feed.extra_relays ?? [] },
+    sources: {
+      authors,
+      relays: feed.extra_relays ?? [],
+      includeRelayGeneral: feed.show_premium === true,
+    },
     relayUrl: feed.relay_url,
   };
 }
@@ -230,6 +247,20 @@ export function feedFilters(sources: FeedSources, limit = 100): NostrFilter[] {
   return filters;
 }
 
+/**
+ * The author-less filter for {@link FeedSources.includeRelayGeneral}: every
+ * general note the OPERATOR relay will serve.
+ *
+ * Deliberately NOT part of {@link feedFilters}. Those filters fan out to
+ * `extra_relays` as well, and an author-less kind-1 subscription against a
+ * public relay is the whole firehose, not a curated feed. The admission policy
+ * of the operator's own relay is what makes this filter safe, so it may only
+ * ever be sent there.
+ */
+export function operatorFeedFilters(sources: FeedSources, limit = 100): NostrFilter[] {
+  return sources.includeRelayGeneral ? [{ kinds: [NOTE_KIND], limit }] : [];
+}
+
 /** The notes/feed API over a shared {@link NostrClient}. */
 export class NostrNotes {
   constructor(private readonly client: NostrClient) {}
@@ -259,12 +290,26 @@ export class NostrNotes {
       publicFallback: sources.relays ?? [],
     });
     if (!relays.length) return [];
-    const filters = feedFilters(sources, opts?.limit);
-    if (!filters.length) return [];
-    const events = await this.client.querySync(relays, filters);
-    return events
+
+    // Two scopes, because they are not safe on the same relay set: curated
+    // author/hashtag filters may go anywhere, while the author-less general
+    // filter is only meaningful (and only bounded) on the operator's own relay.
+    const curated = feedFilters(sources, opts?.limit);
+    const general = operatorRelay ? operatorFeedFilters(sources, opts?.limit) : [];
+    if (!curated.length && !general.length) return [];
+
+    const batches = await Promise.all([
+      curated.length ? this.client.querySync(relays, curated) : Promise.resolve([]),
+      general.length ? this.client.querySync([operatorRelay!], general) : Promise.resolve([]),
+    ]);
+
+    // An author listed AND present on the operator relay arrives twice.
+    const seen = new Set<string>();
+    return batches
+      .flat()
       .map(toDisplayNote)
       .filter((n): n is DisplayNote => n !== null)
+      .filter((n) => !seen.has(n.id) && seen.add(n.id))
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 }
