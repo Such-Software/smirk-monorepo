@@ -162,6 +162,42 @@ pub fn grin_slatepack_decrypt(
     Ok(hex::encode(plaintext))
 }
 
+// ----- generic age (not slatepack-framed) -----
+
+/// Encrypt arbitrary bytes to a raw ed25519 public key, with no slatepack
+/// framing.
+///
+/// Unlike [`grin_slatepack_encrypt`] this adds no slatepack metadata block, so
+/// it suits payloads that are not slates: a targeted tip to a CryptoNote
+/// recipient's encryption subkey, for instance. Named without the `grin_`
+/// prefix because nothing about it is Grin-specific beyond where the code
+/// happens to live.
+///
+/// `recipient_pubkey_hex` must be a STANDARD ed25519 public key. A raw reduced
+/// scalar's public key encrypts fine here and then cannot be decrypted.
+#[wasm_bindgen]
+pub fn smirk_age_seal(payload_hex: &str, recipient_pubkey_hex: &str) -> Result<String, JsValue> {
+    let payload = hex::decode(payload_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid payload_hex: {e}")))?;
+    let mut pk = [0u8; 32];
+    hex::decode_to_slice(recipient_pubkey_hex, &mut pk)
+        .map_err(|e| JsValue::from_str(&format!("invalid recipient_pubkey_hex: {e}")))?;
+    let sealed = grin_ext::age_seal(&payload, &pk).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(sealed))
+}
+
+/// Inverse of [`smirk_age_seal`]. `secret_key_hex` is the 32-byte ed25519 SEED.
+#[wasm_bindgen]
+pub fn smirk_age_open(ciphertext_hex: &str, secret_key_hex: &str) -> Result<String, JsValue> {
+    let ct = hex::decode(ciphertext_hex)
+        .map_err(|e| JsValue::from_str(&format!("invalid ciphertext_hex: {e}")))?;
+    let mut sk = [0u8; 32];
+    hex::decode_to_slice(secret_key_hex, &mut sk)
+        .map_err(|e| JsValue::from_str(&format!("invalid secret_key_hex: {e}")))?;
+    let plain = grin_ext::age_open(&ct, &sk).map_err(|e| JsValue::from_str(&e))?;
+    Ok(hex::encode(plain))
+}
+
 /// One-call helper: encrypt a payload to a recipient, wrap in a
 /// SlatepackBin (mode=1), and ASCII-armor the result.
 ///

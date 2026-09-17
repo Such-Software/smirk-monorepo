@@ -454,6 +454,14 @@ export const grin = {
   slatepackUnpack: (armored: string): string => wasm.grin_slatepack_unpack(armored),
   slatepackEncrypt: (payloadHex: string, recipientPubkeyHex: string): string =>
     wasm.grin_slatepack_encrypt(payloadHex, recipientPubkeyHex),
+  /** age-encrypt arbitrary bytes to a standard ed25519 pubkey, NO slatepack
+   *  framing. For payloads that are not slates (a targeted tip to a CryptoNote
+   *  recipient's encryption subkey). */
+  ageSeal: (payloadHex: string, recipientPubkeyHex: string): string =>
+    wasm.smirk_age_seal(payloadHex, recipientPubkeyHex),
+  /** Inverse of `ageSeal`; `secretKeyHex` is the 32-byte ed25519 SEED. */
+  ageOpen: (ciphertextHex: string, secretKeyHex: string): string =>
+    wasm.smirk_age_open(ciphertextHex, secretKeyHex),
   slatepackDecrypt: (encryptedPayloadHex: string, secretKeyHex: string): string =>
     wasm.grin_slatepack_decrypt(encryptedPayloadHex, secretKeyHex),
   slatepackPackEncrypted: (
