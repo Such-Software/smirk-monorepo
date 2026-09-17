@@ -85,8 +85,8 @@ pub use slatepack::{
     SlatepackVersion,
 };
 pub use slatepack_encryption::{
-    decrypt_with_secret, ed25519_pub_to_age_recipient, ed25519_secret_to_age_identity,
-    encrypt_to_recipient, pack_encrypted, unpack_encrypted,
+    age_open, age_seal, decrypt_with_secret, ed25519_pub_to_age_recipient,
+    ed25519_secret_to_age_identity, encrypt_to_recipient, pack_encrypted, unpack_encrypted,
 };
 pub use payment_proof::{
     payment_proof_message, sign_payment_proof, verify_payment_proof, PROOF_MSG_LEN, PROOF_SIG_LEN,

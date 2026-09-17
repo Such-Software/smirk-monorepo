@@ -78,6 +78,58 @@ pub fn ed25519_secret_to_age_identity(ed25519_secret: &[u8; 32]) -> Result<AgeId
         .map_err(|e| format!("parse age identity: {e}"))
 }
 
+/// Encrypt arbitrary bytes to a raw ed25519 public key, with NO slatepack
+/// framing.
+///
+/// Same `age` construction as [`encrypt_to_recipient`], minus the slatepack
+/// metadata block. That block belongs to Grin's wire format; a payload for a
+/// different chain should not carry six bytes of another protocol's header, and
+/// a reader of those bytes should not have to know Grin exists to strip them.
+///
+/// The public key must be a STANDARD ed25519 key, i.e. formed as
+/// `G * clamp(SHA512(seed))`. A raw reduced scalar's public key (a Monero spend
+/// key, say) will encrypt without complaint here and then fail to decrypt,
+/// because [`age_open`] reconstructs the X25519 secret as `SHA512(seed)[0..32]`
+/// and the two only agree for a standard keypair.
+pub fn age_seal(payload: &[u8], recipient_ed25519_pub: &[u8; 32]) -> Result<Vec<u8>, String> {
+    let recipient_str = ed25519_pub_to_age_recipient(recipient_ed25519_pub)?;
+    let recipient: AgeRecipient = recipient_str
+        .parse()
+        .map_err(|e| format!("parse age recipient: {e}"))?;
+    let encryptor = age::Encryptor::with_recipients(vec![Box::new(recipient)])
+        .ok_or_else(|| "no age recipients".to_string())?;
+
+    let mut out = Vec::new();
+    let mut writer = encryptor
+        .wrap_output(&mut out)
+        .map_err(|e| format!("age wrap_output: {e}"))?;
+    writer
+        .write_all(payload)
+        .map_err(|e| format!("age write: {e}"))?;
+    writer.finish().map_err(|e| format!("age finish: {e}"))?;
+    Ok(out)
+}
+
+/// Inverse of [`age_seal`]. `ed25519_secret` is the 32-byte ed25519 SEED.
+pub fn age_open(ciphertext: &[u8], ed25519_secret: &[u8; 32]) -> Result<Vec<u8>, String> {
+    let identity = ed25519_secret_to_age_identity(ed25519_secret)?;
+    let decryptor =
+        match age::Decryptor::new(ciphertext).map_err(|e| format!("age decryptor: {e}"))? {
+            age::Decryptor::Recipients(d) => d,
+            age::Decryptor::Passphrase(_) => {
+                return Err("age payload is passphrase-encrypted, not recipient-encrypted".into())
+            }
+        };
+    let mut reader = decryptor
+        .decrypt(std::iter::once(&identity as &dyn age::Identity))
+        .map_err(|e| format!("age decrypt: {e}"))?;
+    let mut out = Vec::new();
+    reader
+        .read_to_end(&mut out)
+        .map_err(|e| format!("age read: {e}"))?;
+    Ok(out)
+}
+
 /// Encrypt a payload to a single recipient's slatepack address (the raw
 /// 32-byte ed25519 public key inside the bech32 address).
 ///
@@ -96,10 +148,11 @@ pub fn encrypt_to_recipient(
     to_encrypt.extend_from_slice(&EMPTY_META);
     to_encrypt.extend_from_slice(payload);
 
-    let encryptor = age::Encryptor::with_recipients(vec![
-        Box::new(recipient) as Box<dyn age::Recipient + Send>,
-    ])
-    .ok_or_else(|| "no recipients (impossible: we just constructed one)".to_string())?;
+    let encryptor =
+        age::Encryptor::with_recipients(
+            vec![Box::new(recipient) as Box<dyn age::Recipient + Send>],
+        )
+        .ok_or_else(|| "no recipients (impossible: we just constructed one)".to_string())?;
     let mut encrypted = Vec::new();
     let mut writer = encryptor
         .wrap_output(&mut encrypted)
@@ -122,8 +175,8 @@ pub fn decrypt_with_secret(
 ) -> Result<Vec<u8>, String> {
     let identity = ed25519_secret_to_age_identity(ed25519_secret)?;
 
-    let decryptor = age::Decryptor::new(encrypted_payload)
-        .map_err(|e| format!("age::Decryptor::new: {e}"))?;
+    let decryptor =
+        age::Decryptor::new(encrypted_payload).map_err(|e| format!("age::Decryptor::new: {e}"))?;
     let recipients_decryptor = match decryptor {
         age::Decryptor::Recipients(d) => d,
         age::Decryptor::Passphrase(_) => {
@@ -187,6 +240,62 @@ pub fn unpack_encrypted(bin: &SlatepackBin, ed25519_secret: &[u8; 32]) -> Result
 }
 
 #[cfg(test)]
+mod generic_age_tests {
+    use super::*;
+
+    /// A standard ed25519 keypair, the only kind `age_seal` accepts.
+    fn keypair(seed_byte: u8) -> ([u8; 32], [u8; 32]) {
+        use ed25519_dalek::SigningKey;
+        let seed = [seed_byte; 32];
+        let sk = SigningKey::from_bytes(&seed);
+        (seed, sk.verifying_key().to_bytes())
+    }
+
+    #[test]
+    fn seals_and_opens_an_arbitrary_payload() {
+        let (seed, pubkey) = keypair(7);
+        for len in [0usize, 1, 32, 1024] {
+            let payload = vec![0xABu8; len];
+            let ct = age_seal(&payload, &pubkey).expect("seal");
+            assert_ne!(ct, payload, "ciphertext must not be the plaintext");
+            assert_eq!(age_open(&ct, &seed).expect("open"), payload);
+        }
+    }
+
+    /// The whole reason this exists next to `encrypt_to_recipient`: no six-byte
+    /// slatepack metadata block on a payload that is not a slatepack.
+    #[test]
+    fn carries_no_slatepack_metadata() {
+        let (seed, pubkey) = keypair(9);
+        let payload = b"not a slate".to_vec();
+        let plain = age_open(&age_seal(&payload, &pubkey).unwrap(), &seed).unwrap();
+        assert_eq!(plain, payload);
+
+        // The slatepack variant does prepend it, so the two are distinguishable.
+        let slatepack =
+            decrypt_with_secret(&encrypt_to_recipient(&payload, &pubkey).unwrap(), &seed).unwrap();
+        assert_eq!(slatepack, payload, "slatepack path strips its own metadata");
+    }
+
+    #[test]
+    fn the_wrong_secret_cannot_open_it() {
+        let (_, pubkey) = keypair(1);
+        let (other_seed, _) = keypair(2);
+        let ct = age_seal(b"secret", &pubkey).unwrap();
+        assert!(age_open(&ct, &other_seed).is_err());
+    }
+
+    #[test]
+    fn a_corrupted_ciphertext_is_rejected_not_silently_truncated() {
+        let (seed, pubkey) = keypair(3);
+        let mut ct = age_seal(b"secret payload", &pubkey).unwrap();
+        let last = ct.len() - 1;
+        ct[last] ^= 0xFF;
+        assert!(age_open(&ct, &seed).is_err());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -245,7 +354,8 @@ mod tests {
     fn pack_unpack_round_trip() {
         let (sk, pk) = keypair_from_seed(&[99u8; 32]);
         let payload = b"end-to-end encrypted slatepack payload".to_vec();
-        let sender = Some("grin1senderaddrxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string());
+        let sender =
+            Some("grin1senderaddrxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string());
 
         let bin = pack_encrypted(&payload, sender.clone(), &pk).expect("pack");
         assert_eq!(bin.mode, SlatepackMode::Encrypted);
@@ -261,5 +371,4 @@ mod tests {
         let result = unpack_encrypted(&bin, &[0u8; 32]);
         assert!(result.is_err());
     }
-
 }
