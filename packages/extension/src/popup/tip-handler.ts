@@ -51,6 +51,7 @@ import {
   TIP_ASSET_SUITE,
   TIP_TARGET_KEY_TYPE,
   TipSuite,
+  encodeGrinVoucher,
   sealAge,
   sealSecp256k1,
   tipHeader,
@@ -422,8 +423,8 @@ async function lookupRecipientTipKey(
  * `keyMaterial` is whatever the asset's claim flow needs to decrypt:
  *   - BTC/LTC: 32-byte secp256k1 private key
  *   - XMR/WOW: 32-byte ed25519 spend key (view key re-derived from it)
- *   - Grin: JSON-encoded voucher data (blind + commit + proof + nChild
- *     + amount + features); recipient sweeps the voucher commitment.
+ *   - Grin: a GRINVCH1 voucher (blind + commit + proof + amount);
+ *     recipient sweeps the voucher commitment.
  */
 function encryptTipKey(args: {
   keyMaterial: Uint8Array;
@@ -673,20 +674,11 @@ function scalarToBytes(scalar: bigint): Uint8Array {
 // ============================================================================
 //
 // Sender builds a single-party voucher tx (createGrinVoucher in
-// crates/grin-ext/src/voucher.rs, committed 588ee2c). The voucher
-// output's secret blinding factor + commitment + range proof + n_child
-// + amount + features are JSON-encoded and encrypted to the recipient.
-// Claimer decrypts → sweep_grin_voucher → spends the commitment into
-// their own keychain non-interactively.
-
-interface GrinVoucherEncryptionData {
-  blindingFactor: string;
-  commitment: string;
-  proof: string;
-  nChild: number;
-  amount: number;
-  features: number;
-}
+// crates/grin-ext/src/voucher.rs, committed 588ee2c). The voucher output's
+// secret blinding factor, commitment, range proof and amount are encoded as
+// GRINVCH1 and encrypted to the recipient. Claimer decrypts →
+// sweep_grin_voucher → spends the commitment into their own keychain
+// non-interactively. See `@smirk/core`'s grin-voucher for the format.
 
 async function createGrinTip(
   wallet: UnlockedWallet,
@@ -810,23 +802,21 @@ async function createGrinTip(
     change_bp_private_nonce_hex: wasmGrin.randomSecretNonce(),
   });
 
-  // 6. Encrypt voucher data (JSON) BEFORE broadcast so the encrypted
-  //    payload is durable on the backend before any on-chain action.
-  //    The recipient needs ALL of: blinding_factor, commitment, proof,
-  //    n_child, amount, features. Without this blob the funds are
-  //    unsweepable even by the sender (the blinding factor is the
-  //    "spend key" for a Pedersen commitment).
-  const voucherData: GrinVoucherEncryptionData = {
-    blindingFactor: voucherResult.voucher.blinding_factor_hex,
-    commitment: voucherResult.voucher.commitment_hex,
+  // 6. Encrypt the voucher BEFORE broadcast so the encrypted payload is durable
+  //    on the backend before any on-chain action. Without this blob the funds
+  //    are unsweepable even by the sender: the blinding factor is the spend
+  //    authority for a Pedersen commitment and exists nowhere else.
+  //
+  //    The sender's BIP32 child index used to ride along here. Sweeping never
+  //    read it, and it tells the recipient which output of the sender's wallet
+  //    paid them, so it is gone.
+  const voucherDataBytes = encodeGrinVoucher({
+    commit: voucherResult.voucher.commitment_hex,
     proof: voucherResult.voucher.proof_hex,
-    // path[2] = real BIP32 child; path[3] = padding 0 (see
-    // grin-flows.ts companion comment about the bricking bug).
-    nChild: voucherResult.voucher.path[2],
-    amount: voucherResult.voucher.amount,
     features: 0,
-  };
-  const voucherDataBytes = new TextEncoder().encode(JSON.stringify(voucherData));
+    blind: voucherResult.voucher.blinding_factor_hex,
+    amount: BigInt(voucherResult.voucher.amount),
+  });
   const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
     keyMaterial: voucherDataBytes,
     isPublic: fields.isPublic,

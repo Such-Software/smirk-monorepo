@@ -48,6 +48,8 @@ import {
   chainProviders,
   isTipEnvelope,
   parseTipEnvelope,
+  decodeGrinVoucher,
+  type GrinVoucher,
   openSecp256k1,
   openAge,
   TIP_ASSET_ID,
@@ -347,10 +349,9 @@ function walletSecp256k1Key(asset: ClaimAsset, wallet: UnlockedWallet): Uint8Arr
  * address → wallet), only the destination differs (here = sender,
  * for claim = recipient, but both come from `wallet`).
  *
- * For Grin the local backup contains the full voucher metadata
- * (`commitment + proof + blindingFactor + amount + nChild`); the
- * sweep mints a fresh sender-owned output via the same WASM
- * primitive the recipient uses for a normal claim.
+ * For Grin the local backup contains the full voucher; the sweep
+ * mints a fresh sender-owned output via the same WASM primitive the
+ * recipient uses for a normal claim.
  *
  * Requires the local backup. Tips created on a different device or
  * a wiped install have no local backup → clawback returns an error
@@ -991,28 +992,6 @@ function scalarToBytes(scalar: bigint): Uint8Array {
 // ============================================================================
 
 /**
- * Wire format the sender writes when encrypting a Grin tip; see
- * `tip-handler.ts::GrinVoucherEncryptionData`. Field names MUST
- * match the sender exactly: the JSON is read straight out of the
- * encrypted payload, no normalization. A name mismatch surfaces as
- * "Grin voucher payload is missing required fields" and looks like
- * a corrupted-tip error.
- *
- * `nChild` is the sender's path index for the voucher output and
- * is unused by the receiver (we mint into our OWN next-free child
- * index). Kept in the type for completeness so future code can
- * cross-reference if needed.
- */
-interface GrinVoucherPayload {
-  blindingFactor: string;
-  commitment: string;
-  proof: string;
-  nChild: number;
-  amount: number;
-  features: number;
-}
-
-/**
  * Sweep a Grin voucher into the recipient's own keychain. Unlike
  * BTC/LTC/XMR/WOW, the decrypted payload is NOT a private key:
  * it's a JSON blob describing a voucher output the sender created
@@ -1028,17 +1007,17 @@ async function sweepGrin(
   wallet: UnlockedWallet,
   userId: string,
 ): Promise<ClaimOutcome> {
-  let voucher: GrinVoucherPayload;
+  // GRINVCH1, or the legacy untagged shape for anything still in flight.
+  // decodeGrinVoucher validates every field it returns, so a voucher that gets
+  // past here has spend authority and an exact amount.
+  let voucher: GrinVoucher;
   try {
-    voucher = JSON.parse(new TextDecoder().decode(decryptedJson)) as GrinVoucherPayload;
+    voucher = decodeGrinVoucher(decryptedJson);
   } catch (e) {
     return {
       ok: false,
-      error: `Failed to parse Grin voucher payload: ${e instanceof Error ? e.message : String(e)}`,
+      error: `Failed to read the Grin voucher: ${e instanceof Error ? e.message : String(e)}`,
     };
-  }
-  if (!voucher.commitment || !voucher.blindingFactor || !voucher.amount) {
-    return { ok: false, error: 'Grin voucher payload is missing required fields' };
   }
 
   if (!wallet.mnemonic) {
@@ -1088,19 +1067,28 @@ async function sweepGrin(
   // Mirrors `tip-handler.ts::createGrinTip::calcFee` and
   // `grin-flows.ts::calcGrinFee`.
   const fee = (1 + 21 * 1 + 3 * 1) * 500_000;
-  if (voucher.amount <= fee) {
+  if (voucher.amount <= BigInt(fee)) {
     return {
       ok: false,
-      error: `Voucher amount ${voucher.amount} ≤ fee ${fee} — nothing to sweep`,
+      error: `Voucher amount ${voucher.amount} is not above the ${fee} fee, so there is nothing to sweep`,
+    };
+  }
+  // The wasm boundary still takes amounts as JS numbers. The voucher itself
+  // carries a u64, so refuse rather than hand wasm a rounded value that builds
+  // a commitment which will not balance.
+  if (voucher.amount > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return {
+      ok: false,
+      error: 'This voucher is for more Grin than this version can sweep. Update Smirk and try again.',
     };
   }
 
   const sweepParams: GrinSweepVoucherParams = {
     extended_private_key_hex: extKey.extended_private_key_hex,
-    voucher_commitment_hex: voucher.commitment,
-    voucher_blind_hex: voucher.blindingFactor,
-    voucher_amount: voucher.amount,
-    ...(voucher.features !== undefined ? { voucher_features: voucher.features } : {}),
+    voucher_commitment_hex: voucher.commit,
+    voucher_blind_hex: voucher.blind,
+    voucher_amount: Number(voucher.amount),
+    voucher_features: voucher.features,
     claimer_path: claimerPath,
     fee,
     kernel_offset_hex: wasmGrin.randomSecretNonce(),
