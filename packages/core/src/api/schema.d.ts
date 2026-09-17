@@ -554,8 +554,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Tips CLAIMABLE by the caller. As with `received`, a public-only instance has
-         *     no targeted-claimable inbox, so this is always empty (served 200, not 404).
+         * Tips CLAIMABLE by the caller right now.
+         * @description A strict subset of `received`, filtered by exactly the conditions the claim
+         *     call itself enforces, so the inbox never offers a Claim the backend will then
+         *     refuse.
          */
         get: operations["get_claimable_social_tips"];
         put?: never;
@@ -574,10 +576,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Tips RECEIVED by the caller. Public-only instances have no targeted-recipient
-         *     inbox (public tips are claimed via share URL, never delivered to a user), so
-         *     this is always empty — served (200) rather than 404 so the client's inbox
-         *     poll doesn't error on a targeted-only endpoint this instance doesn't serve.
+         * Tips RECEIVED by the caller, newest first.
+         * @description Public tips never appear here: they are claimed by holding a share URL and
+         *     have no addressee to deliver to. An instance with targeted tips off has
+         *     nothing to list and answers 200 with an empty list, so the client's inbox
+         *     poll does not error on a backend that simply does not offer the feature.
          */
         get: operations["get_received_social_tips"];
         put?: never;
@@ -1703,6 +1706,13 @@ export interface components {
             premium_relay: boolean;
             /** @description Fiat price feed. */
             prices: boolean;
+            /**
+             * @description Tips addressed to a Smirk handle rather than to a share URL. A client
+             *     must not offer the targeted option unless this is true, because the
+             *     create call refuses it and the send would fail after the user picked a
+             *     recipient and an amount.
+             */
+            targeted_tips: boolean;
             /** @description Tipping (parked). */
             tips: boolean;
             /**

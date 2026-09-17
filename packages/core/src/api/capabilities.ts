@@ -118,6 +118,10 @@ export interface BackendCapabilities {
      *  relay). See `feed`. Absent on backends that run no feed. */
     feed?: boolean;
     tips: boolean;
+    /** Tips addressed to a Smirk handle rather than to a share URL. Absent on a
+     *  backend that predates the feature, which is the same as off: that backend
+     *  rejects a targeted create with a 400. */
+    targeted_tips?: boolean;
   };
   restore: RestoreCapability;
   /** Registration gates for a new wallet. Absent on legacy backends ⇒ treat as open. */
@@ -254,6 +258,12 @@ export const capAllowsTips = (c: Caps): boolean => c == null || c.features.tips;
  *  that doesn't run tips (the v3 client only ever talks to caps-advertising
  *  backends, so an unknown/legacy caps reads as "no tips" here). */
 export const capHasTips = (c: Caps): boolean => !!c?.features.tips;
+/** Targeted (addressed-to-a-handle) tips. STRICT, and deliberately so: offering
+ *  the recipient composer against a backend that refuses it walks the user
+ *  through picking a person and an amount only to 400 at submit. Unknown or
+ *  legacy caps read as off, because that is what they are. */
+export const capHasTargetedTips = (c: Caps): boolean =>
+  !!c?.features.tips && !!c.features.targeted_tips;
 /** Grin relay (address registration + slatepack relay). Permissive on unknown. */
 export const capAllowsGrin = (c: Caps): boolean => c == null || c.features.grin_relay;
 /** First-party Nostr relay (DM inbox). STRICT: only when advertised. */

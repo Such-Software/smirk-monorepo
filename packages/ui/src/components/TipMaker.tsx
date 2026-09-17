@@ -110,18 +110,18 @@ export interface TipMakerProps {
   /**
    * Whether this backend can serve TARGETED (@username / platform) tips.
    *
-   * There is currently NO targeted-tips capability on `BackendCapabilities`, and
-   * the shipped backend is PUBLIC-ONLY: it rejects a targeted tip with a 400 at
-   * submit time. So this defaults to `false`, and the composer:
-   *   - opens as a PUBLIC share-URL tip (the out-of-box tip the backend accepts),
-   *     rather than the old default of a targeted @username tip that 400s, and
-   *   - hides the "anyone with the link can claim" toggle, so a user can't flip
-   *     the composer into a targeted tip the backend can't fulfil.
+   * Wire this from the backend's `features.targeted_tips` capability
+   * (`capHasTargetedTips`), never from a constant. An instance that does not
+   * serve targeted tips rejects the create with a 400 at submit time, so with
+   * this false the composer:
+   *   - opens as a PUBLIC share-URL tip, the tip such a backend accepts, and
+   *   - hides the "anyone with the link can claim" toggle, so the composer
+   *     cannot be flipped into a tip the backend will not fulfil.
    *
-   * A future backend that advertises targeted-tip support can pass
-   * `allowTargeted` (wired from that capability) to restore the recipient
-   * composer + public/targeted toggle. Keep this capability-driven: do NOT
-   * hardcode it true, or a public-only instance regresses to the 400 trap.
+   * Defaults to false, which is the correct reading of both an older backend
+   * that does not advertise the capability and one whose operator has left it
+   * off. Hardcoding it true regresses every public-only instance to the 400
+   * trap, with the user having already picked a recipient and an amount.
    */
   allowTargeted?: boolean;
 }
@@ -230,7 +230,7 @@ export function TipMaker(props: TipMakerProps) {
   const [assetId, setAssetId] = useState<string>(defaultAssetId);
   const [amountText, setAmountText] = useState('');
   // Default to a PUBLIC share-URL tip unless this backend can serve targeted
-  // tips (see `allowTargeted`). The shipped backend is public-only, so the
+  // tips (see `allowTargeted`). A public-only backend leaves it off, so the
   // out-of-box tip must be one it accepts: a targeted default would 400 on
   // submit the moment the user filled the composer and pressed Send.
   const [isPublic, setIsPublic] = useState(!props.allowTargeted);

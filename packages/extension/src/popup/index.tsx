@@ -82,6 +82,7 @@ import {
   invalidateCapabilities,
   capAllowsPrices,
   capHasTips,
+  capHasTargetedTips,
   capAllowsGrin,
   capHasFeed,
   type BackendCapabilities,
@@ -3179,6 +3180,11 @@ function HomeRouter({
         assetIds={visibleAssetIds(sessionState, listAssets(), caps)
           .filter((a) => a.socialTipping)
           .map((a) => a.id)}
+        // Strictly capability-driven, never hardcoded: an instance that does not
+        // serve targeted tips refuses the create with a 400, and offering the
+        // recipient composer there walks the user through choosing a person and
+        // an amount before failing at submit.
+        allowTargeted={capHasTargetedTips(caps)}
         {...(tipPrefilledAsset ? { prefilledAssetId: tipPrefilledAsset } : {})}
         // All 5 assets wired: BTC/LTC fresh-keypair, XMR/WOW
         // fresh-primary-keypair + LWS registration, Grin
