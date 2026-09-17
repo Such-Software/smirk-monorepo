@@ -132,12 +132,41 @@ export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
  * "Never" sentinel (negative / MAX_SAFE_INTEGER) was dropped in
  * v0.3.0; a stored legacy value self-heals to the 24h cap on read.
  */
-export async function writeSessionCache(wallet: UnlockedWallet, minutes: number): Promise<void> {
+/**
+ * @returns the session's expiry, or `null` when auto-lock is "lock immediately"
+ * and nothing was cached. Callers pass it to `writeBootstrapCache` so the auth
+ * token expires exactly when the unlocked session does; a token with a shorter
+ * life leaves the wallet unlocked but unable to authenticate, which is the dead
+ * zone described in `bootstrap-cache.ts`.
+ */
+/**
+ * When the current unlocked session expires, or `null` if there is none.
+ *
+ * Exposed so the bootstrap (auth token) cache can expire with the session
+ * rather than on a timer of its own. Reads the raw entry deliberately: it wants
+ * the timestamp, not a revived wallet, and must not disturb the restore path.
+ */
+export async function readSessionExpiry(): Promise<number | null> {
+  try {
+    const raw = await sessionStorage.get(SESSION_CACHE_KEY);
+    if (!raw || typeof raw !== 'object') return null;
+    const expiresAtMs = (raw as { expiresAtMs?: unknown }).expiresAtMs;
+    if (typeof expiresAtMs !== 'number' || Date.now() >= expiresAtMs) return null;
+    return expiresAtMs;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeSessionCache(
+  wallet: UnlockedWallet,
+  minutes: number,
+): Promise<number | null> {
   const clamped = clampAutoLockMinutes(minutes);
   if (clamped === 0) {
     await sessionStorage.remove(SESSION_CACHE_KEY);
     await clearCachedActiveNostrKey();
-    return;
+    return null;
   }
   const expiresAtMs = Date.now() + clamped * 60_000;
   const entry: SessionCachePayload = {
@@ -155,6 +184,7 @@ export async function writeSessionCache(wallet: UnlockedWallet, minutes: number)
   // Also cache a NON-default active Nostr identity's key on the same lifetime so it
   // survives a warm resume (the default account-0 key already rides in wallet.keys).
   await cacheActiveNostrKeyForSession(wallet, expiresAtMs);
+  return expiresAtMs;
 }
 
 /**
