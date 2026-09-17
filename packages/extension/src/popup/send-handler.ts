@@ -27,6 +27,7 @@ import {
   recordUtxoActivity,
   utxoAddressAt,
   type UnlockedWallet,
+  buildDecoyRings,
 } from '@smirk/core';
 import { storage } from './singletons';
 import { mustGetAsset } from '@smirk/assets';
@@ -719,12 +720,20 @@ async function sendXmrWow(
     effectiveAmount = target;
   }
 
-  // 3. Fetch decoys. (ringSize − 1) per input from one batched call, then
-  //    slice into per-input rings.
+  // 3. Fetch decoys. (ringSize - 1) per input from one batched call, then
+  //    assemble one ring per input.
+  //
+  //    One extra input's worth is requested as slack. `random_outs` samples
+  //    independently per draw, so the pool can contain the same global index
+  //    twice or contain the output being spent, and both are unusable: a
+  //    repeated index is a zero delta that CLSAG cannot encode. The slack lets
+  //    buildDecoyRings skip collisions and still fill every ring.
   const ringSize = asset === 'wow' ? 22 : 16;
   const decoysPerInput = ringSize - 1;
   const totalDecoys = decoysPerInput * selected.length;
-  const decoysResp = await chainProviders.lws(asset).getRandomOutputs(totalDecoys);
+  const decoysResp = await chainProviders
+    .lws(asset)
+    .getRandomOutputs(decoysPerInput * (selected.length + 1));
   if (decoysResp.error || !decoysResp.data) {
     return { ok: false, error: decoysResp.error ?? 'Failed to fetch decoys' };
   }
@@ -735,6 +744,15 @@ async function sendXmrWow(
       error: `LWS returned ${decoyPool.length} decoys, expected ${totalDecoys}`,
     };
   }
+  const ringsResult = buildDecoyRings(
+    decoyPool,
+    selected.map((o) => o.global_index),
+    decoysPerInput,
+  );
+  if (!ringsResult.ok) {
+    return { ok: false, error: ringsResult.error };
+  }
+  const rings = ringsResult.rings;
 
   // 4. Build TxParams JSON. Field names are snake_case to match the
   //    Rust serde contract (see crates/smirk-wasm/src/signing.rs::TxParams).
@@ -755,7 +773,7 @@ async function sendXmrWow(
         rct: out.rct,
         ...(sub ? { subaddr_index: { major: sub.major, minor: sub.minor } } : {}),
       },
-      decoys: decoyPool.slice(i * decoysPerInput, (i + 1) * decoysPerInput),
+      decoys: rings[i] ?? [],
     };
   });
   // Decimal string, never `Number()`: a sweep of a large balance exceeds 2^53

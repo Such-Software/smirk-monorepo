@@ -387,9 +387,16 @@ fn build_output_with_decoys(
     // Extract ring points
     let ring: Vec<[Point; 2]> = ring_members.into_iter().map(|(_, pts)| pts).collect();
 
-    // Create Decoys struct
+    // Create Decoys struct.
+    //
+    // The overwhelmingly likely cause of a rejection here is a repeated global
+    // index in the ring: offsets are deltas, and `Decoys::new` requires each one
+    // to strictly increase the running sum, so a duplicate encodes as a zero and
+    // is not representable. The client deduplicates before building the ring
+    // (see `buildDecoyRings`), so reaching this means the pool was too
+    // collision-heavy to fill, which the next sample usually fixes.
     let decoys = Decoys::new(offsets, signer_index as u8, ring)
-        .ok_or("Failed to create Decoys")?;
+        .ok_or("Could not build the ring for this input (the node returned overlapping decoys). Try again in a moment.")?;
 
     // Serialize OutputData + Decoys in the format OutputWithDecoys::read expects
     let mut serialized = Vec::with_capacity(256);

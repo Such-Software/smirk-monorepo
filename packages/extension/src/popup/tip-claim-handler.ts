@@ -48,6 +48,7 @@ import {
   chainProviders,
   isTipEnvelope,
   parseTipEnvelope,
+  buildDecoyRings,
   decodeGrinVoucher,
   type GrinVoucher,
   openSecp256k1,
@@ -862,10 +863,15 @@ async function sweepXmrWow(
   }
   const sweepAmount = total - feeAtomic;
 
-  // Decoy fetch: ring-size − 1 per input. WOW ringSize=22, XMR=16.
+  // Decoy fetch: ring-size minus 1 per input, plus one input's worth of slack.
+  // The pool can contain duplicates or the output being spent, both unusable in
+  // a ring; see buildDecoyRings. Same handling as the send path.
   const ringSize = asset === 'wow' ? 22 : 16;
-  const decoysNeeded = (ringSize - 1) * spendable.length;
-  const decoysResp = await chainProviders.lws(asset).getRandomOutputs(decoysNeeded);
+  const decoysPerInput = ringSize - 1;
+  const decoysNeeded = decoysPerInput * spendable.length;
+  const decoysResp = await chainProviders
+    .lws(asset)
+    .getRandomOutputs(decoysPerInput * (spendable.length + 1));
   if (decoysResp.error || !decoysResp.data) {
     return {
       ok: false,
@@ -879,6 +885,15 @@ async function sweepXmrWow(
       error: `LWS returned ${decoyPool.length} decoys, expected ${decoysNeeded}`,
     };
   }
+  const ringsResult = buildDecoyRings(
+    decoyPool,
+    spendable.map((o) => o.global_index),
+    decoysPerInput,
+  );
+  if (!ringsResult.ok) {
+    return { ok: false, error: ringsResult.error };
+  }
+  const rings = ringsResult.rings;
 
   const inputs = spendable.map((out, i) => ({
     output: {
@@ -890,7 +905,7 @@ async function sweepXmrWow(
       height: out.height,
       rct: out.rct,
     },
-    decoys: decoyPool.slice(i * (ringSize - 1), (i + 1) * (ringSize - 1)),
+    decoys: rings[i] ?? [],
   }));
   // Decimal string, never `Number()`: a tip funded above 2^53 atomic units
   // would be silently rounded by a JS number and the signer would pay the

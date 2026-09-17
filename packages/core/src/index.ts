@@ -57,6 +57,7 @@ export * from './messaging';
 export * from './crypto';
 export * from './tip-envelope';
 export * from './grin-voucher';
+export * from './decoy-ring';
 
 // Address derivation + validation
 export * from './address';
