@@ -6,12 +6,9 @@
  *   1. Call `api.claimSocialTip(tipId)`: backend marks the tip as
  *      'claiming' and returns the sender's `encrypted_key` + the
  *      `tip_address` to sweep.
- *   2. Decrypt `encrypted_key` with the recipient's BTC private key.
- *      Same ECIES scheme `tip-handler.ts` uses to encrypt: BTC
- *      pubkey is the universal encryption target across all five
- *      assets, because every Smirk wallet has one. (The recipient
- *      might not even have a balance for the tip's asset yet; the
- *      sweep CREATES the first receive.)
+ *   2. Decrypt `encrypted_key` with the key that matches the payload's
+ *      suite (see `decryptTargetedPayload`). A versioned envelope names
+ *      its own suite; a pre-envelope payload is BTC-key ECIES.
  *   3. Per-asset sweep into the recipient's own wallet address:
  *        BTC/LTC:  raw-key P2WPKH sweep via @scure/btc-signer
  *        XMR/WOW:  RingCT sweep via WASM, using tip's view+spend
@@ -22,10 +19,16 @@
  *      'claiming' to 'claimed'. Best-effort: if it fails the funds
  *      are already swept; user just sees the tip stuck in 'claiming'.
  *
- * **Why decryption always uses BTC.** See encryption side in
- * `tip-handler.ts`. Important corollary: a recipient who has never
- * derived their BTC address still has a BTC key in their HD wallet,
- * so claims of any asset work as long as the wallet is unlocked.
+ * **Which key decrypts.** Tips used to be encrypted to the recipient's BTC
+ * pubkey whatever the asset, on the reasoning that every Smirk wallet has one.
+ * Every wallet does, but that put a Grin-only recipient's tip behind a
+ * secp256k1 key from a chain they may never use. Each asset now seals to a key
+ * of its own, so claiming dispatches on the suite byte the sender wrote.
+ *
+ * Pre-envelope tips keep working untouched, and telling them apart needs no
+ * migration or flag: a legacy payload opens with a compressed secp256k1 point,
+ * so its first byte is 0x02 or 0x03, and the envelope version is 0x01. That
+ * collision-avoidance is why envelope versions 0x02 and 0x03 can never be used.
  */
 
 import { secp256k1 } from '@noble/curves/secp256k1';
@@ -40,8 +43,16 @@ import {
   decryptPublicTipPayload,
   decodeUrlFragmentKey,
   bytesToHex,
+  hexToBytes,
   randomBytes,
   chainProviders,
+  isTipEnvelope,
+  parseTipEnvelope,
+  openSecp256k1,
+  openAge,
+  TIP_ASSET_ID,
+  TIP_ASSET_SUITE,
+  TipSuite,
   type UnlockedWallet,
 } from '@smirk/core';
 import {
@@ -55,6 +66,7 @@ import {
   resolveGrinSpendable,
 } from './grin-flows';
 import { decryptTipKeyBackup, getTipKeyBackup } from './tip-key-backup';
+import { wasmAgeSealer } from './tip-age-sealer';
 import { nip05HomeDomain } from './nip05';
 
 /**
@@ -126,19 +138,11 @@ export async function claimSocialTip(
     return { ok: false, error: 'Tip has no on-chain address' };
   }
 
-  // Step 2: decrypt the sender's encrypted payload.
-  // Wire format: ephemeralPubkey (33-byte compressed secp256k1, 66
-  // hex chars) || ciphertext. Mirrors the sender-side packing in
-  // tip-handler.ts::encryptTipKey.
-  const ephemeralPubkeyHex = encrypted_key.slice(0, 66);
-  const ciphertextHex = encrypted_key.slice(66);
+  // Step 2: decrypt the sender's encrypted payload with whichever key its
+  // suite calls for.
   let decrypted: Uint8Array;
   try {
-    decrypted = decryptTipPayload(
-      ciphertextHex,
-      ephemeralPubkeyHex,
-      wallet.keys.btc.privateKey,
-    );
+    decrypted = decryptTargetedPayload(encrypted_key, asset, wallet);
   } catch (e) {
     return {
       ok: false,
@@ -226,6 +230,103 @@ async function confirmSweepWithRetry(
     `[tip-claim] confirmTipSweep exhausted retries for tip ${tipId} sweep ${sweepTxid}: ${lastErr}. Funds are on-chain; backend mark is stale.`,
   );
   return null;
+}
+
+/**
+ * Open a TARGETED tip payload, dispatching on the suite the sender used.
+ *
+ * Two formats coexist and always will, because migrating them is neither
+ * possible (the sender is gone) nor necessary. The discriminator costs one
+ * byte and no state: an envelope starts with version `0x01`; a pre-envelope
+ * payload starts with a compressed secp256k1 ephemeral point, whose leading
+ * byte is `0x02` or `0x03` by definition of the encoding.
+ *
+ * Throws with a claim-facing message rather than returning a result, because
+ * the caller already wraps this in the try/catch that surfaces it.
+ */
+function decryptTargetedPayload(
+  encryptedKeyHex: string,
+  asset: ClaimAsset,
+  wallet: UnlockedWallet,
+): Uint8Array {
+  const payload = hexToBytes(encryptedKeyHex);
+
+  if (!isTipEnvelope(payload)) {
+    // Pre-envelope: ephemeralPubkey (33-byte compressed secp256k1, 66 hex
+    // chars) || ciphertext, always sealed to the recipient's BTC key whatever
+    // the asset. Left exactly as it was; anything still in flight must claim.
+    return decryptTipPayload(
+      encryptedKeyHex.slice(66),
+      encryptedKeyHex.slice(0, 66),
+      wallet.keys.btc.privateKey,
+    );
+  }
+
+  const envelope = parseTipEnvelope(payload);
+
+  // The header is authenticated, so a mismatch would fail at decrypt anyway.
+  // Checking first turns "authentication failed" into something a person can
+  // act on, and catches a backend that handed us the wrong tip's ciphertext.
+  if (envelope.asset !== TIP_ASSET_ID[asset]) {
+    throw new Error(
+      `This payload is not a ${asset.toUpperCase()} tip (it is sealed for a different asset).`,
+    );
+  }
+  if (envelope.suite !== TIP_ASSET_SUITE[asset]) {
+    throw new Error(
+      `This ${asset.toUpperCase()} tip uses encryption suite ${envelope.suite}, which this wallet does not expect. Update Smirk and try again.`,
+    );
+  }
+
+  switch (envelope.suite) {
+    case TipSuite.Secp256k1Ecies:
+      // BTC and LTC each seal to their own key now, so LTC is no longer
+      // claimed with the Bitcoin key it never had a reason to borrow.
+      return openSecp256k1(envelope, walletSecp256k1Key(asset, wallet));
+
+    case TipSuite.AgeEd25519: {
+      // The dedicated encryption subkey, NOT the spend key. Derived at unlock
+      // and carried in the session cache, so a warm resume claims fine.
+      const enc = asset === 'xmr' || asset === 'wow' ? wallet.keys.enc?.[asset] : undefined;
+      if (!enc) {
+        throw new Error(
+          'This wallet has no encryption key for that asset yet. Lock and unlock Smirk once, then claim again.',
+        );
+      }
+      return openAge(envelope, enc.seed, wasmAgeSealer);
+    }
+
+    case TipSuite.AgeSlatepack: {
+      // Sealed to the grin1 address, so only the seed behind that address
+      // opens it. A session-cache restore drops the mnemonic by design.
+      if (!wallet.mnemonic) {
+        throw new Error(
+          'Claiming a Grin tip needs the unlocked wallet. Unlock Smirk and try again.',
+        );
+      }
+      const secretHex = wasmGrin.slatepackAddressSecret(wallet.mnemonic, 0);
+      return openAge(envelope, hexToBytes(secretHex), wasmAgeSealer);
+    }
+
+    default:
+      throw new Error(
+        `Unknown tip encryption suite ${envelope.suite}. Update Smirk to claim this tip.`,
+      );
+  }
+}
+
+/** The secp256k1 private key for an asset whose tip suite is ECIES. */
+function walletSecp256k1Key(asset: ClaimAsset, wallet: UnlockedWallet): Uint8Array {
+  switch (asset) {
+    case 'btc':
+      return wallet.keys.btc.privateKey;
+    case 'ltc':
+      return wallet.keys.ltc.privateKey;
+    default:
+      // Unreachable: the suite check above already established this asset maps
+      // to the ECIES suite, and only BTC and LTC do.
+      throw new Error(`${asset.toUpperCase()} has no secp256k1 claim key`);
+  }
 }
 
 /**

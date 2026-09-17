@@ -285,6 +285,27 @@ mod generic_age_tests {
         assert!(age_open(&ct, &other_seed).is_err());
     }
 
+    /// The Grin tip suite seals to the pubkey decoded from a `grin1…` address
+    /// and opens with the seed derived from the mnemonic. Those come from two
+    /// different functions in another module, and nothing else asserts they are
+    /// the same keypair; if they ever diverge, every Grin tip becomes
+    /// unclaimable with no error until decrypt time.
+    #[test]
+    fn a_slatepack_address_opens_what_was_sealed_to_it() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon about";
+        for index in [0u32, 1, 7] {
+            let addr = crate::slatepack_address(mnemonic, index, crate::Network::Mainnet)
+                .expect("address");
+            let (pubkey, _) = crate::slatepack_address_to_pubkey(&addr).expect("decode");
+            let seed = crate::slatepack_address_ed25519_secret(mnemonic, index).expect("secret");
+
+            let payload = b"voucher body".to_vec();
+            let opened = age_open(&age_seal(&payload, &pubkey).expect("seal"), &seed).expect("open");
+            assert_eq!(opened, payload, "address index {index} does not open its own seal");
+        }
+    }
+
     #[test]
     fn a_corrupted_ciphertext_is_rejected_not_silently_truncated() {
         let (seed, pubkey) = keypair(3);

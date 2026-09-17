@@ -114,3 +114,44 @@ test('parseTipEnvelope refuses anything that is not an envelope', () => {
   assert.throws(() => parseTipEnvelope(new Uint8Array([0x02, 1, 2, 3])));
   assert.throws(() => parseTipEnvelope(new Uint8Array([0x01])));
 });
+
+test('a suite and the key type it is claimed with never disagree', () => {
+  // The sender picks a key by TIP_TARGET_KEY_TYPE and writes a suite byte from
+  // TIP_ASSET_SUITE. The claimer reads the suite byte and picks a key from it.
+  // If those two maps ever drift apart, the sender seals to one key and the
+  // claimer reaches for another, and the tip is unclaimable with no error until
+  // decrypt time. The backend's key_type_for_tip mirrors this same pairing.
+  const keyTypeForSuite = new Map<number, string>([
+    [TipSuite.Secp256k1Ecies, 'primary'],
+    [TipSuite.AgeEd25519, 'enc'],
+    [TipSuite.AgeSlatepack, 'slatepack'],
+  ]);
+  for (const asset of Object.keys(TIP_ASSET_SUITE) as Array<keyof typeof TIP_ASSET_SUITE>) {
+    const suite = TIP_ASSET_SUITE[asset];
+    assert.equal(
+      TIP_TARGET_KEY_TYPE[asset],
+      keyTypeForSuite.get(suite),
+      `${asset} seals under suite ${suite} but is claimed with the ${TIP_TARGET_KEY_TYPE[asset]} key`,
+    );
+  }
+  // Every suite in the table is one some asset actually uses, so a suite the
+  // claimer dispatches on is never one no sender can produce.
+  for (const suite of keyTypeForSuite.keys()) {
+    assert.ok(
+      Object.values(TIP_ASSET_SUITE).includes(suite as never),
+      `suite ${suite} is dispatched on but no asset emits it`,
+    );
+  }
+});
+
+test('the header names the asset it was sealed for', () => {
+  // The claim side refuses an envelope whose asset byte is not the tip's asset,
+  // so that byte has to be distinct per asset or the check is vacuous.
+  const ids = Object.values(TIP_ASSET_ID);
+  assert.equal(new Set(ids).size, ids.length, 'two assets share a TIP_ASSET_ID');
+  for (const asset of Object.keys(TIP_ASSET_ID) as Array<keyof typeof TIP_ASSET_ID>) {
+    const header = tipHeader(asset);
+    assert.equal(header[0], TIP_ENVELOPE_VERSION);
+    assert.equal(header[2], TIP_ASSET_ID[asset]);
+  }
+});

@@ -54,13 +54,13 @@ import {
   sealAge,
   sealSecp256k1,
   tipHeader,
-  type AgeSealer,
   type AssetType,
 } from '@smirk/core';
 import { send } from './send-handler';
 import { resolveGrinSpendable } from './grin-flows';
 import { recordGrinTx } from './grin-tx-journal';
 import { storeTipKeyBackup } from './tip-key-backup';
+import { wasmAgeSealer } from './tip-age-sealer';
 
 /**
  * Retry `api.attachSocialTipFunding` with exponential backoff.
@@ -469,17 +469,6 @@ function encryptTipKey(args: {
     urlFragmentEncoded: undefined,
   };
 }
-
-/**
- * The wasm-backed `age` operations the envelope's age suites need. Kept here
- * rather than in `@smirk/core` so the core stays free of a wasm-init
- * dependency; callers have already run `ensureWasmInit()` by this point.
- */
-const wasmAgeSealer: AgeSealer = {
-  seal: (payload, recipientPub) =>
-    hexToBytes(wasmGrin.ageSeal(bytesToHex(payload), bytesToHex(recipientPub))),
-  open: (body, seed) => hexToBytes(wasmGrin.ageOpen(bytesToHex(body), bytesToHex(seed))),
-};
 
 // ============================================================================
 // XMR / WOW
