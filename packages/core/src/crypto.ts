@@ -86,6 +86,47 @@ export function decrypt(encryptedData: Uint8Array, key: Uint8Array): Uint8Array 
   return cipher.decrypt(ciphertext);
 }
 
+/**
+ * As {@link encrypt}, but binding `aad` into the authentication tag.
+ *
+ * Deliberately a SEPARATE function rather than an optional argument on
+ * {@link encrypt}: that pair is what the public-link tip path and
+ * `tip-key-backup` (a fund-recovery mechanism) already produce and consume
+ * byte-for-byte, and a default-empty AAD parameter is one careless caller away
+ * from changing what those write.
+ *
+ * The AAD is not stored. A reader reconstructs it from the envelope header it
+ * already parsed, so a tampered header fails the tag instead of silently
+ * selecting a different suite.
+ */
+export function encryptWithAad(
+  data: Uint8Array,
+  key: Uint8Array,
+  aad: Uint8Array,
+): Uint8Array {
+  const nonce = randomBytes(24);
+  const cipher = xchacha20poly1305(key, nonce, aad);
+  const ciphertext = cipher.encrypt(data);
+
+  const result = new Uint8Array(nonce.length + ciphertext.length);
+  result.set(nonce, 0);
+  result.set(ciphertext, nonce.length);
+  return result;
+}
+
+/** Inverse of {@link encryptWithAad}. Throws if `aad` does not match. */
+export function decryptWithAad(
+  encryptedData: Uint8Array,
+  key: Uint8Array,
+  aad: Uint8Array,
+): Uint8Array {
+  const nonce = encryptedData.slice(0, 24);
+  const ciphertext = encryptedData.slice(24);
+
+  const cipher = xchacha20poly1305(key, nonce, aad);
+  return cipher.decrypt(ciphertext);
+}
+
 // ============================================================================
 // Password-based key derivation
 // ============================================================================
