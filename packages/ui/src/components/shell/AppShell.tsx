@@ -46,6 +46,21 @@ export interface AppShellProps {
    */
   onPopOut?: () => void;
   /**
+   * Optional callback for the open-in-tab button. A tab survives a click
+   * elsewhere, which a popup does not, and unlike the pop-out window it keeps
+   * the browser's own tab management (pinning, restore on relaunch). Hidden
+   * when omitted.
+   */
+  onOpenInTab?: () => void;
+  /**
+   * Optional callback for the lock button. Locking had no control at all: the
+   * only ways out were the auto-lock timer and closing the window, so a user
+   * stepping away from an unlocked wallet had nothing to press. Hidden when
+   * omitted, and shown in both the popup header and the pop-out sidebar,
+   * because wanting to lock does not depend on which one you are looking at.
+   */
+  onLock?: () => void;
+  /**
    * Brand mark in the header / sidebar. Defaults to text-only "Smirk
    * Wallet". Pass an icon URL to render a logo glyph alongside the
    * label; extension/mobile/desktop each supply their own.
@@ -67,7 +82,16 @@ export interface AppShellProps {
   class?: string;
 }
 
-export function AppShell({ routes, onPopOut, brand, headerActions, tabBadges, class: className }: AppShellProps) {
+export function AppShell({
+  routes,
+  onPopOut,
+  onOpenInTab,
+  onLock,
+  brand,
+  headerActions,
+  tabBadges,
+  class: className,
+}: AppShellProps) {
   const { tab } = useRoute();
   const isPopout = useIsPopout();
   const showPopOutButton = !isPopout && onPopOut !== undefined;
@@ -91,6 +115,8 @@ export function AppShell({ routes, onPopOut, brand, headerActions, tabBadges, cl
           label={label}
           {...(iconUrl ? { iconUrl } : {})}
           {...(showPopOutButton ? { onPopOut } : {})}
+          {...(onOpenInTab ? { onOpenInTab } : {})}
+          {...(onLock ? { onLock } : {})}
           {...(headerActions !== undefined ? { extra: headerActions } : {})}
         />
       )}
@@ -100,6 +126,8 @@ export function AppShell({ routes, onPopOut, brand, headerActions, tabBadges, cl
           label={label}
           {...(iconUrl ? { iconUrl } : {})}
           {...(tabBadges ? { badges: tabBadges } : {})}
+          {...(onOpenInTab ? { onOpenInTab } : {})}
+          {...(onLock ? { onLock } : {})}
           {...(headerActions !== undefined ? { extra: headerActions } : {})}
         />
       )}
@@ -126,10 +154,12 @@ interface HeaderProps {
   label: string;
   iconUrl?: string;
   onPopOut?: () => void;
+  onOpenInTab?: () => void;
+  onLock?: () => void;
   extra?: ComponentChildren;
 }
 
-function Header({ label, iconUrl, onPopOut, extra }: HeaderProps) {
+function Header({ label, iconUrl, onPopOut, onOpenInTab, onLock, extra }: HeaderProps) {
   return (
     <header
       style={{
@@ -145,25 +175,76 @@ function Header({ label, iconUrl, onPopOut, extra }: HeaderProps) {
       <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={16} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         {extra}
-        {onPopOut && (
-          <button
-            onClick={onPopOut}
-            aria-label="Open in window"
-            title="Open in window"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: 'inherit',
-              cursor: 'pointer',
-              fontSize: 14,
-              padding: '4px 8px',
-            }}
-          >
-            ⤢
-          </button>
-        )}
+        <ShellActions
+          {...(onOpenInTab ? { onOpenInTab } : {})}
+          {...(onPopOut ? { onPopOut } : {})}
+          {...(onLock ? { onLock } : {})}
+        />
       </div>
     </header>
+  );
+}
+
+/**
+ * The header/sidebar icon buttons, in one place so the popup and the pop-out
+ * cannot drift into offering different controls.
+ *
+ * Lock is rendered last and given its own separating margin: it is the only one
+ * that throws away wallet state, and it should not sit flush against a button
+ * that merely moves the window.
+ */
+function ShellActions({
+  onOpenInTab,
+  onPopOut,
+  onLock,
+}: {
+  onOpenInTab?: () => void;
+  onPopOut?: () => void;
+  onLock?: () => void;
+}) {
+  return (
+    <>
+      {onOpenInTab && (
+        <ShellIconButton onClick={onOpenInTab} label="Open in a browser tab" glyph="⧉" />
+      )}
+      {onPopOut && <ShellIconButton onClick={onPopOut} label="Open in its own window" glyph="⤢" />}
+      {onLock && (
+        <ShellIconButton onClick={onLock} label="Lock wallet" glyph="🔒" style={{ marginLeft: 4 }} />
+      )}
+    </>
+  );
+}
+
+function ShellIconButton({
+  onClick,
+  label,
+  glyph,
+  style,
+}: {
+  onClick: () => void;
+  label: string;
+  glyph: string;
+  style?: Record<string, string | number>;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      style={{
+        background: 'transparent',
+        border: 'none',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: 14,
+        lineHeight: 1,
+        padding: '4px 8px',
+        ...style,
+      }}
+    >
+      {glyph}
+    </button>
   );
 }
 
@@ -196,11 +277,15 @@ function SidebarNav({
   label,
   iconUrl,
   badges,
+  onOpenInTab,
+  onLock,
   extra,
 }: {
   label: string;
   iconUrl?: string;
   badges?: Partial<Record<Tab, number>>;
+  onOpenInTab?: () => void;
+  onLock?: () => void;
   extra?: ComponentChildren;
 }) {
   // Reuse BottomNav's logic but render as a column. Single source of
@@ -226,11 +311,13 @@ function SidebarNav({
         }}
       >
         <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={20} />
-        {extra && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            {extra}
-          </div>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {extra}
+          <ShellActions
+            {...(onOpenInTab ? { onOpenInTab } : {})}
+            {...(onLock ? { onLock } : {})}
+          />
+        </div>
       </div>
       <BottomNav orientation="vertical" {...(badges ? { badges } : {})} />
     </aside>

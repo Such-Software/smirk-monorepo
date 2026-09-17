@@ -535,6 +535,14 @@ const verifyKeyImage = async ({
 
 
 
+/**
+ * The desktop app runs this same popup bundle behind a chrome shim, where the
+ * window controls make no sense: it IS the window, and it has no tabs. Gate the
+ * props on this rather than the handlers, so the buttons are absent instead of
+ * present and inert.
+ */
+const IS_DESKTOP = chrome.runtime.id === 'smirk-desktop';
+
 function openPopOut(unlocked?: UnlockedWallet) {
   // Desktop already IS the popped-out window. The chrome-shim stubs
   // `windows.create` to a no-op there, so running the rest of this would
@@ -542,7 +550,7 @@ function openPopOut(unlocked?: UnlockedWallet) {
   // control is normally hidden by the >=481px media query in styles.css,
   // but the Tauri window can be dragged down to its 380px minWidth, which
   // brings it back on screen.
-  if (chrome.runtime.id === 'smirk-desktop') return;
+  if (IS_DESKTOP) return;
 
   const popoutUrl = chrome.runtime.getURL('popup.html');
   // Hand the session to the window we are about to open, THEN open it.
@@ -563,6 +571,29 @@ function openPopOut(unlocked?: UnlockedWallet) {
       width: 480,
       height: 720,
     });
+    window.close();
+  })();
+}
+
+/**
+ * Open the wallet as a normal browser tab.
+ *
+ * A tab is the surface that survives clicking elsewhere, which is the thing the
+ * popup fundamentally cannot do, and unlike the pop-out window it gets the
+ * browser's own tab handling: pinning, reopening on relaunch, sitting in a
+ * window the user already arranged.
+ *
+ * Same session handoff as popping out, and for the same reason: the new tab
+ * cold-starts and reads the session cache, which with auto-lock at 0 is
+ * deliberately never written, so without the handoff a wallet unlocked a
+ * moment earlier would ask for the password again.
+ */
+function openInTab(unlocked?: UnlockedWallet) {
+  if (IS_DESKTOP) return;
+
+  void (async () => {
+    if (unlocked) await writeSessionHandoff(unlocked);
+    await chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
     window.close();
   })();
 }
@@ -2052,6 +2083,13 @@ function App() {
     <StateProvider store={store} router={router}>
       <AppShell
         onPopOut={() => openPopOut(walletState?.kind === 'unlocked' ? walletState.wallet : undefined)}
+        {...(IS_DESKTOP
+          ? {}
+          : {
+              onOpenInTab: () =>
+                openInTab(walletState?.kind === 'unlocked' ? walletState.wallet : undefined),
+            })}
+        onLock={() => void lockHandler()}
         brand={{
           label: 'Smirk Wallet',
           iconUrl: chrome.runtime.getURL('icons/favicon-16.png'),
