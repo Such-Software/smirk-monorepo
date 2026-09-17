@@ -144,11 +144,16 @@ export function parseTipEnvelope(payload: Uint8Array): TipEnvelope {
   if (!isTipEnvelope(payload)) {
     throw new Error('not a Smirk tip envelope');
   }
+  const header = payload.slice(0, HEADER_LEN);
+  const [version, suite, asset] = header;
+  if (version === undefined || suite === undefined || asset === undefined) {
+    throw new Error('tip envelope header truncated');
+  }
   return {
-    version: payload[0],
-    suite: payload[1],
-    asset: payload[2],
-    header: payload.slice(0, HEADER_LEN),
+    version,
+    suite,
+    asset,
+    header,
     body: payload.slice(HEADER_LEN),
   };
 }

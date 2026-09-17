@@ -38,7 +38,6 @@ import {
   wowAddress,
   bytesToHex,
   hexToBytes,
-  createEncryptedTipPayload,
   createPublicTipPayload,
   generatePrivateKey,
   generateUrlFragmentKey,
@@ -48,6 +47,15 @@ import {
 } from '@smirk/core';
 import type { TipPlatform, TipSubmitFields, TipSubmitOutcome } from '@smirk/ui';
 import { grin as wasmGrin } from '@smirk/wasm';
+import {
+  TIP_ASSET_SUITE,
+  TipSuite,
+  sealAge,
+  sealSecp256k1,
+  tipHeader,
+  type AgeSealer,
+  type AssetType,
+} from '@smirk/core';
 import { send } from './send-handler';
 import { resolveGrinSpendable } from './grin-flows';
 import { recordGrinTx } from './grin-tx-journal';
@@ -207,16 +215,13 @@ async function createBtcLtcTip(
 ): Promise<TipSubmitOutcome> {
   const asset = fields.assetId as 'btc' | 'ltc';
 
-  // 1. Resolve recipient's BTC pubkey if this is a targeted tip.
-  // We always encrypt to BTC pubkey regardless of asset, since the
-  // claimer's BTC private key is the universal decryption key (the
-  // recipient might not have a wallet for this asset yet, but every
-  // Smirk wallet has a BTC key). Mirrors v0.2.4.
-  let recipientBtcPubkeyHex: string | undefined;
+  // 1. Resolve the recipient's key FOR THIS ASSET if the tip is targeted.
+  // Previously this was always the BTC key, whatever was being sent.
+  let recipientTipKeyHex: string | undefined;
   if (!fields.isPublic) {
-    const lookup = await lookupRecipientBtcPubkey(fields.platform, fields.username);
+    const lookup = await lookupRecipientTipKey(fields.platform, fields.username, asset);
     if (!lookup.ok) return { ok: false, error: lookup.error };
-    recipientBtcPubkeyHex = lookup.btcPubkeyHex;
+    recipientTipKeyHex = lookup.targetKeyHex;
   }
 
   // 2. Generate fresh tip keypair.
@@ -228,7 +233,8 @@ async function createBtcLtcTip(
   const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
     keyMaterial: tipPrivateKey,
     isPublic: fields.isPublic,
-    recipientBtcPubkeyHex,
+    asset,
+    recipientTipKeyHex,
   });
 
   // 4. Two-phase create, phase 1: persist the encrypted key + address
@@ -344,14 +350,25 @@ async function createBtcLtcTip(
 }
 
 /**
- * Resolve a recipient's BTC pubkey (lowercase hex, 33 bytes/66 chars).
- * BTC pubkey is the universal encryption target for tip keys: every
- * Smirk wallet has one, regardless of which asset the tip funds.
+ * Resolve the key a tip for `asset` should be encrypted to.
+ *
+ * This used to return the recipient's BTC pubkey for every asset, on the
+ * reasoning that every Smirk wallet has one. It does, but it is the wrong key:
+ * a Grin-only or Monero-only recipient had their tip locked behind a secp256k1
+ * key from a chain they may never use, and Litecoin was encrypted to the
+ * Bitcoin key while having a perfectly good registered key of its own.
+ *
+ * Now each asset resolves its OWN key from the same lookup call, per
+ * `TIP_TARGET_KEY_TYPE`. There is deliberately no fallback to the BTC key when
+ * the per-asset one is missing: that fallback IS the bug, and reintroducing it
+ * silently would put us straight back here. A missing key fails the send with
+ * an asset-named error and the public-link path stays available.
  */
-async function lookupRecipientBtcPubkey(
+async function lookupRecipientTipKey(
   platform: TipPlatform,
   username: string,
-): Promise<{ ok: true; btcPubkeyHex: string } | { ok: false; error: string }> {
+  asset: AssetType,
+): Promise<{ ok: true; targetKeyHex: string } | { ok: false; error: string }> {
   const r =
     platform === 'smirk'
       ? await api.lookupSmirkName(username)
@@ -368,23 +385,28 @@ async function lookupRecipientBtcPubkey(
       error: `@${username} isn't a Smirk user yet — they'd have nothing to claim with. Switch to a public tip and share the link?`,
     };
   }
-  const btc = r.data.public_keys?.btc;
-  if (!btc) {
+  const key = r.data.public_keys?.[asset];
+  if (!key) {
+    const upper = asset.toUpperCase();
     return {
       ok: false,
-      error: `Recipient @${username} doesn't have a BTC key registered.`,
+      error: `@${username} hasn't published a ${upper} key yet, so a targeted ${upper} tip can't be encrypted to them. Ask them to unlock their wallet once, or send a public link instead.`,
     };
   }
-  return { ok: true, btcPubkeyHex: btc };
+  return { ok: true, targetKeyHex: key };
 }
 
 /**
- * Encrypt arbitrary tip-key material (bytes) for either targeted
- * (ECIES to recipient's BTC pubkey) or public (URL-fragment-key) tips.
+ * Encrypt arbitrary tip-key material (bytes) for either targeted (to the
+ * recipient's key FOR THIS ASSET) or public (URL-fragment-key) tips.
  *
- * Wire format mirrors v0.2.4 so existing claim paths stay compatible:
- * targeted → `ephemeralPubkey(66 hex chars) || ciphertext(hex)`,
- * public → `ciphertext(hex)` (fragment key lives in URL).
+ * The public path is unchanged: `ciphertext(hex)`, fragment key in the URL.
+ *
+ * The targeted path now emits the versioned envelope from
+ * `@smirk/core`'s `tip-envelope`, which carries the suite and asset in three
+ * authenticated header bytes and encrypts to a key belonging to the asset being
+ * sent. A pre-envelope payload starts with a compressed secp256k1 point, so the
+ * claim side tells them apart on the first byte with no migration.
  *
  * `keyMaterial` is whatever the asset's claim flow needs to decrypt:
  *   - BTC/LTC: 32-byte secp256k1 private key
@@ -395,7 +417,8 @@ async function lookupRecipientBtcPubkey(
 function encryptTipKey(args: {
   keyMaterial: Uint8Array;
   isPublic: boolean;
-  recipientBtcPubkeyHex: string | undefined;
+  asset: AssetType;
+  recipientTipKeyHex: string | undefined;
 }): {
   encryptedKey: string;
   claimKeyHash: string | undefined;
@@ -411,23 +434,41 @@ function encryptTipKey(args: {
     };
   }
 
-  if (!args.recipientBtcPubkeyHex) {
-    throw new Error('Targeted tip is missing recipientBtcPubkeyHex');
+  if (!args.recipientTipKeyHex) {
+    throw new Error(`Targeted ${args.asset} tip is missing the recipient key`);
   }
-  const recipientPubkeyBytes = hexToBytes(args.recipientBtcPubkeyHex);
-  const { encryptedKey, ephemeralPubkey } = createEncryptedTipPayload(
-    args.keyMaterial,
-    recipientPubkeyBytes,
-  );
-  // v0.2.4 wire format: concatenate ephemeralPubkey || ciphertext so
-  // the backend stores a single `encrypted_key` string. Claimer
-  // splits at 66 chars to recover both halves.
+  const header = tipHeader(args.asset);
+  const suite = TIP_ASSET_SUITE[args.asset];
+
+  let envelope: Uint8Array;
+  if (suite === TipSuite.Secp256k1Ecies) {
+    envelope = sealSecp256k1(args.keyMaterial, hexToBytes(args.recipientTipKeyHex), header);
+  } else if (suite === TipSuite.AgeSlatepack) {
+    // grin publishes a bech32 grin1 address, not raw key bytes. Decoding it via
+    // wasm rather than a regex is what validates the checksum.
+    const pubkeyHex = wasmGrin.slatepackAddressToPubkeyHex(args.recipientTipKeyHex);
+    envelope = sealAge(args.keyMaterial, hexToBytes(pubkeyHex), header, wasmAgeSealer);
+  } else {
+    envelope = sealAge(args.keyMaterial, hexToBytes(args.recipientTipKeyHex), header, wasmAgeSealer);
+  }
+
   return {
-    encryptedKey: ephemeralPubkey + encryptedKey,
+    encryptedKey: bytesToHex(envelope),
     claimKeyHash: undefined,
     urlFragmentEncoded: undefined,
   };
 }
+
+/**
+ * The wasm-backed `age` operations the envelope's age suites need. Kept here
+ * rather than in `@smirk/core` so the core stays free of a wasm-init
+ * dependency; callers have already run `ensureWasmInit()` by this point.
+ */
+const wasmAgeSealer: AgeSealer = {
+  seal: (payload, recipientPub) =>
+    hexToBytes(wasmGrin.ageSeal(bytesToHex(payload), bytesToHex(recipientPub))),
+  open: (body, seed) => hexToBytes(wasmGrin.ageOpen(bytesToHex(body), bytesToHex(seed))),
+};
 
 // ============================================================================
 // XMR / WOW
@@ -448,11 +489,11 @@ async function createXmrWowTip(
   const asset = fields.assetId as 'xmr' | 'wow';
 
   // 1. Resolve recipient BTC pubkey for targeted-tip ECIES.
-  let recipientBtcPubkeyHex: string | undefined;
+  let recipientTipKeyHex: string | undefined;
   if (!fields.isPublic) {
-    const lookup = await lookupRecipientBtcPubkey(fields.platform, fields.username);
+    const lookup = await lookupRecipientTipKey(fields.platform, fields.username, asset);
     if (!lookup.ok) return { ok: false, error: lookup.error };
-    recipientBtcPubkeyHex = lookup.btcPubkeyHex;
+    recipientTipKeyHex = lookup.targetKeyHex;
   }
 
   // 2. Generate fresh tip keypair (spend + view + addresses).
@@ -462,7 +503,8 @@ async function createXmrWowTip(
   const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
     keyMaterial: tipKeys.spendKey,
     isPublic: fields.isPublic,
-    recipientBtcPubkeyHex,
+    asset,
+    recipientTipKeyHex,
   });
 
   // 4. Phase 1: persist the encrypted key + tip_address + view_key on
@@ -657,12 +699,13 @@ async function createGrinTip(
   }
   void senderUserId; // v3 is non-custodial: scan (rewindHash) identifies outputs.
 
-  // 1. Resolve recipient BTC pubkey for targeted tips.
-  let recipientBtcPubkeyHex: string | undefined;
+  // 1. Resolve the recipient's GRIN key for targeted tips: their canonical
+  //    grin1 slatepack address, which is what the backend publishes for grin.
+  let recipientTipKeyHex: string | undefined;
   if (!fields.isPublic) {
-    const lookup = await lookupRecipientBtcPubkey(fields.platform, fields.username);
+    const lookup = await lookupRecipientTipKey(fields.platform, fields.username, 'grin');
     if (!lookup.ok) return { ok: false, error: lookup.error };
-    recipientBtcPubkeyHex = lookup.btcPubkeyHex;
+    recipientTipKeyHex = lookup.targetKeyHex;
   }
 
   // 2. Scan for spendable Grin inputs (each already carries its identified BIP32
@@ -787,7 +830,8 @@ async function createGrinTip(
   const { encryptedKey, claimKeyHash, urlFragmentEncoded } = encryptTipKey({
     keyMaterial: voucherDataBytes,
     isPublic: fields.isPublic,
-    recipientBtcPubkeyHex,
+    asset: 'grin',
+    recipientTipKeyHex,
   });
 
   // 7. Phase 1: persist the encrypted voucher data on the backend
