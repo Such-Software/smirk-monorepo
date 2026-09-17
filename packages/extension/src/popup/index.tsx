@@ -1166,6 +1166,53 @@ function App() {
     void sweepStaleGrinWizards();
   }, []);
 
+  // Publish the per-asset ENCRYPTION subkeys, so someone can send this wallet a
+  // targeted XMR or WOW tip.
+  //
+  // These cannot ride the bootstrap keys list. That list registers the key a
+  // signature is verified against, one row per asset, and for a Cryptonote
+  // wallet that key is the public SPEND key. An encryption subkey is 32 opaque
+  // bytes that look exactly like it, so it needs an explicit `key_type` or the
+  // upsert on `(user_id, asset, key_type)` would overwrite the identity key and
+  // break sign-in.
+  //
+  // Sealing to the spend key instead was the obvious shortcut and is not
+  // available: that scalar is the spend authority AND an ed25519 signing oracle
+  // already exposed to dapps, and as a raw reduced scalar it does not pair with
+  // age's `SHA512(seed)[0..32]` derivation anyway.
+  //
+  // Idempotent UPSERT, so this runs once per unlocked session as a cheap fixup,
+  // the same shape as the Grin re-registration below. A backend that predates
+  // `key_type` refuses these with a 400; that is logged and ignored, because the
+  // only consequence is that targeted Cryptonote tips stay unavailable, which is
+  // exactly the state such a backend is already in.
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked') return;
+    if (!session?.bootstrap?.userId) return;
+    if (!api.getAccessToken()) return;
+    const encKeys = walletState.wallet.keys.enc;
+    if (!encKeys) return;
+    void (async () => {
+      for (const asset of ['xmr', 'wow'] as const) {
+        const subkey = encKeys[asset];
+        if (!subkey) continue;
+        try {
+          const res = await api.registerKey(
+            asset,
+            bytesToHex(subkey.publicKey),
+            undefined,
+            'enc',
+          );
+          if (res.error) {
+            console.warn(`[smirk-popup] register ${asset} enc key rejected:`, res.error);
+          }
+        } catch (e) {
+          console.warn(`[smirk-popup] register ${asset} enc key threw:`, e);
+        }
+      }
+    })();
+  }, [walletState, session?.bootstrap?.userId]);
+
   // Re-register the wallet's CANONICAL grin slatepack address
   // (grin-wallet/Grim-compatible derivation, via wasm) once the wallet
   // is unlocked AND wasm is up. The bootstrap registered

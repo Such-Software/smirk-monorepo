@@ -49,6 +49,7 @@ import type { TipPlatform, TipSubmitFields, TipSubmitOutcome } from '@smirk/ui';
 import { grin as wasmGrin } from '@smirk/wasm';
 import {
   TIP_ASSET_SUITE,
+  TIP_TARGET_KEY_TYPE,
   TipSuite,
   sealAge,
   sealSecp256k1,
@@ -363,6 +364,14 @@ async function createBtcLtcTip(
  * the per-asset one is missing: that fallback IS the bug, and reintroducing it
  * silently would put us straight back here. A missing key fails the send with
  * an asset-named error and the public-link path stays available.
+ *
+ * The backend answers with two maps. `tip_keys` is the authoritative one: it
+ * already applies `TIP_TARGET_KEY_TYPE` server-side, so for XMR and WOW it
+ * carries the encryption subkey rather than the spend key. `public_keys` is the
+ * identity map, and it is only safe to read for assets whose tip target IS the
+ * identity key. A backend predating `tip_keys` therefore still sends BTC, LTC
+ * and Grin tips, and declines Cryptonote ones, which is correct: such a backend
+ * has no encryption subkey to hand out.
  */
 async function lookupRecipientTipKey(
   platform: TipPlatform,
@@ -382,15 +391,17 @@ async function lookupRecipientTipKey(
   if (!r.data.registered) {
     return {
       ok: false,
-      error: `@${username} isn't a Smirk user yet — they'd have nothing to claim with. Switch to a public tip and share the link?`,
+      error: `@${username} isn't a Smirk user yet, so they'd have nothing to claim with. Switch to a public tip and share the link?`,
     };
   }
-  const key = r.data.public_keys?.[asset];
+  const key =
+    r.data.tip_keys?.[asset] ??
+    (TIP_TARGET_KEY_TYPE[asset] === 'enc' ? null : r.data.public_keys?.[asset]);
   if (!key) {
     const upper = asset.toUpperCase();
     return {
       ok: false,
-      error: `@${username} hasn't published a ${upper} key yet, so a targeted ${upper} tip can't be encrypted to them. Ask them to unlock their wallet once, or send a public link instead.`,
+      error: `@${username} hasn't published a ${upper} tip key yet, so a targeted ${upper} tip can't be encrypted to them. Ask them to unlock their wallet once, or send a public link instead.`,
     };
   }
   return { ok: true, targetKeyHex: key };

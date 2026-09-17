@@ -9,16 +9,32 @@ import { ApiClient, ApiResponse } from './client';
 // Types
 // ============================================================================
 
+/** Per-asset public key map, one entry per asset the backend knows. */
+export type PublicKeyMap = {
+  btc: string | null;
+  ltc: string | null;
+  xmr: string | null;
+  wow: string | null;
+  grin: string | null;
+};
+
 export interface SocialLookupResponse {
   registered: boolean;
   user_id: string | null;
-  public_keys: {
-    btc: string | null;
-    ltc: string | null;
-    xmr: string | null;
-    wow: string | null;
-    grin: string | null;
-  } | null;
+  /** The receiving / identity key per asset. */
+  public_keys: PublicKeyMap | null;
+  /**
+   * The key a sender seals a TARGETED tip to, per asset.
+   *
+   * Differs from `public_keys` for XMR and WOW, where the identity key is the
+   * spend key and sealing to it is not an option. `null` for an asset means the
+   * recipient has published no usable target, which is a refusal to send, never
+   * a cue to fall back to `public_keys`.
+   *
+   * Absent entirely on a backend older than the field; see the send path for how
+   * that degrades.
+   */
+  tip_keys?: PublicKeyMap | null;
 }
 
 /**

@@ -1940,6 +1940,7 @@ export interface components {
             public_keys?: null | components["schemas"]["PublicKeysInfo"];
             /** @description Whether a user owns this username. */
             registered: boolean;
+            tip_keys?: null | components["schemas"]["PublicKeysInfo"];
             /** @description The resolved user id (UUID string), if registered. */
             user_id?: string | null;
             /** @description The canonical (lowercased) username, if registered. */
@@ -2242,6 +2243,16 @@ export interface components {
         RegisterKeyRequest: {
             /** @description Asset the key is for (`btc`, `ltc`, `xmr`, `wow`, `grin`). */
             asset: string;
+            /**
+             * @description Which row this key belongs in (`primary`, `enc`, `slatepack`).
+             *
+             *     Omitted by every shipped wallet, and by anything registering the key a
+             *     signature is verified against. Required for a key whose role cannot be
+             *     read off its own value: an `enc` key is 32 opaque bytes that look exactly
+             *     like a `primary` one, so without this it would silently overwrite the
+             *     identity key on `(user_id, asset, key_type)`.
+             */
+            key_type?: string | null;
             /** @description The public key (format depends on the asset). */
             public_key: string;
             /** @description XMR/WOW only: the public spend key. */
