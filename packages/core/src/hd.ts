@@ -116,6 +116,25 @@ export interface DerivedKeys {
   grin: GrinKeys;
   /** NIP-06 nostr identity keypair, account 0. `publicKey` is x-only (schnorr). */
   nostr: { privateKey: Uint8Array; publicKey: Uint8Array };
+  /**
+   * Per-asset ed25519 **encryption** subkeys, for receiving encrypted payloads
+   * (targeted tips today). One per asset rather than one per wallet, so xmr and
+   * wow can be rotated independently.
+   *
+   * These exist so encryption never borrows a key that already has another job.
+   * See {@link deriveEncryptionKey}.
+   */
+  enc: { xmr: EncryptionKeys; wow: EncryptionKeys };
+}
+
+/**
+ * An ed25519 encryption subkey. `seed` is the 32-byte ed25519 SEED, not a
+ * reduced scalar: `age` derives its X25519 secret as `SHA512(seed)[0..32]`, and
+ * that only pairs with a public key formed the standard way.
+ */
+export interface EncryptionKeys {
+  seed: Uint8Array;
+  publicKey: Uint8Array;
 }
 
 // ============================================================================
@@ -464,6 +483,37 @@ function deriveGrinKey(masterSeed: Uint8Array): GrinKeys {
   return { privateKey, publicKey };
 }
 
+/**
+ * Per-asset ed25519 encryption subkey: `SHA256(master || "smirk:enc:<asset>:v1")`.
+ *
+ * Purpose-separated from every other key in the wallet, and that separation is
+ * the point rather than a nicety. The obvious target for an encrypted payload
+ * to a CryptoNote user is their registered `publicSpendKey`, but that scalar is
+ * already an arbitrary-message ed25519 signing oracle exposed to dapps (see
+ * `dapp-popup/signers.ts`) AND the spend authority for the funds. Running key
+ * agreement against it would make one secret serve three unrelated roles, so
+ * that a weakness in any one of them reaches the other two.
+ *
+ * The result is a STANDARD ed25519 keypair: the hash output is used as the
+ * seed, and the public key is derived through `ed25519.getPublicKey`, which
+ * clamps `SHA512(seed)` the usual way. That is what lets stock `age` be used
+ * unmodified. Deriving it like a CryptoNote key instead (reduce the hash mod L,
+ * multiply the basepoint) would produce a key that no `age` implementation can
+ * pair with, and would need a bespoke scheme to work at all.
+ *
+ * The domain separator carries the asset, so xmr and wow get different keys and
+ * one can be rotated without touching the other.
+ */
+export function deriveEncryptionKey(masterSeed: Uint8Array, assetId: string): EncryptionKeys {
+  const domainSeparator = new TextEncoder().encode(`smirk:enc:${assetId}:v1`);
+  const combined = new Uint8Array(masterSeed.length + domainSeparator.length);
+  combined.set(masterSeed);
+  combined.set(domainSeparator, masterSeed.length);
+
+  const seed = sha256(combined);
+  return { seed, publicKey: ed25519.getPublicKey(seed) };
+}
+
 // ============================================================================
 // Nostr identity (NIP-06): version-independent secp256k1 schnorr
 // ============================================================================
@@ -514,6 +564,19 @@ export type DerivationVersion = 1 | 2 | 3;
  * @param passphrase Optional BIP39 passphrase (defaults to empty)
  * @param version    1 = legacy custom, 2 = buggy SLIP-10, 3 = current
  */
+/**
+ * Encryption subkeys for every asset that needs one. Independent of the
+ * BTC/LTC derivation version: these hang off the master seed under their own
+ * domain separator, so a wallet's encryption identity does not change when the
+ * spend-key derivation does.
+ */
+function encryptionKeys(masterSeed: Uint8Array): { xmr: EncryptionKeys; wow: EncryptionKeys } {
+  return {
+    xmr: deriveEncryptionKey(masterSeed, 'xmr'),
+    wow: deriveEncryptionKey(masterSeed, 'wow'),
+  };
+}
+
 export function deriveAllKeys(
   mnemonic: string,
   passphrase = '',
@@ -543,6 +606,7 @@ export function deriveAllKeys(
       wow: deriveBip32MoneroKeys(masterSeed, COIN_TYPES.wow),
       grin: deriveGrinKey(masterSeed),
       nostr: deriveNostrKeyFromSeed(masterSeed, 0),
+      enc: encryptionKeys(masterSeed),
     };
   }
 
@@ -556,6 +620,7 @@ export function deriveAllKeys(
       wow: deriveBip44MoneroKeys(masterSeed, COIN_TYPES.wow),
       grin: deriveGrinKey(masterSeed),
       nostr: deriveNostrKeyFromSeed(masterSeed, 0),
+      enc: encryptionKeys(masterSeed),
     };
   }
 
@@ -566,6 +631,7 @@ export function deriveAllKeys(
     wow: deriveCryptonoteKeys(masterSeed, 'wow'),
     grin: deriveGrinKey(masterSeed),
     nostr: deriveNostrKeyFromSeed(masterSeed, 0),
+    enc: encryptionKeys(masterSeed),
   };
 }
 
