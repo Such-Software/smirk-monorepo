@@ -301,8 +301,12 @@ mod generic_age_tests {
             let seed = crate::slatepack_address_ed25519_secret(mnemonic, index).expect("secret");
 
             let payload = b"voucher body".to_vec();
-            let opened = age_open(&age_seal(&payload, &pubkey).expect("seal"), &seed).expect("open");
-            assert_eq!(opened, payload, "address index {index} does not open its own seal");
+            let opened =
+                age_open(&age_seal(&payload, &pubkey).expect("seal"), &seed).expect("open");
+            assert_eq!(
+                opened, payload,
+                "address index {index} does not open its own seal"
+            );
         }
     }
 
