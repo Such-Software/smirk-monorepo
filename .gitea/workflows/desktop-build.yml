@@ -146,27 +146,64 @@ jobs:
           }
           Write-Host 'preflight: breaker clear and broker queue present.'
 
-          # The broker must also be RUNNING, not merely configured. It is a
+          # The broker must also be alive, not merely configured. It is a
           # scheduled task with an at-logon trigger, so it dies with its session
           # and nothing re-launches it: on 2026-09-12 it had been dead long enough
           # to cost three builds, each discovering it only after a full compile and
           # then waiting the broker's ten minute timeout per artifact.
           #
-          # Checked by task state rather than by signing a probe file, because an
-          # earlier probe that signed a throwaway PE reported a healthy token as
-          # broken and failed builds that would have succeeded.
+          # Liveness is read from the keepalive's heartbeat rather than from the
+          # task list. Asking the task list does not work from here: this job runs
+          # as NT SERVICE\act_runner in session 0, the tasks are registered to run
+          # as the interactive user that owns the token, and a task registered to
+          # another principal is not enumerable by an unrelated service account. So
+          # Get-ScheduledTask returns nothing on a host where schtasks /query plainly
+          # shows the task Running, and with -ErrorAction SilentlyContinue that
+          # permission failure was indistinguishable from an absent task. It blocked
+          # every Windows release while the signing chain was perfectly healthy,
+          # which is the same false-negative trap the removed signtool probe fell
+          # into, one comment below.
+          #
+          # token-state.txt is what the keepalive stamps each time it exercises the
+          # private key, and the runner can read it. Warm and recent proves the
+          # interactive session is alive, that its scheduled tasks are firing, and
+          # that the token login is still open, which is the whole precondition for
+          # signing. The broker shares that session and trigger, so it stands or
+          # falls with the evidence here.
+          $state = 'C:\signing\token-state.txt'
+          if (-not (Test-Path $state)) {
+              throw 'preflight: no token-state.txt, so the keepalive has never run on this host.'
+          }
+          $stamp = (Get-Content $state -Raw).Trim()
+          if ($stamp -notmatch '^warm\s+(\S+)') {
+              Write-Host "preflight: token state is '$stamp'."
+              Write-Host 'Cold means the hardware token is logged out. Someone at the console'
+              Write-Host 'must log it in; no password is ever supplied from here, so the'
+              Write-Host "token's three-attempt lockout is not at risk."
+              throw 'preflight: the signing token is not logged in.'
+          }
+          # The keepalive fires every four hours, and SafeNet drops an idle login at
+          # roughly fourteen. Nine hours is two missed cycles of slack while still
+          # failing well before the login would lapse mid-build.
+          $age = (Get-Date) - [datetime]::Parse($Matches[1])
+          if ($age.TotalHours -gt 9) {
+              Write-Host "preflight: last keepalive was $([int]$age.TotalHours)h ago ($stamp)."
+              Write-Host 'The interactive session is gone or its tasks stopped firing, so'
+              Write-Host 'nothing is consuming C:\signing\in and every signature would queue'
+              Write-Host 'and then time out after ten minutes.'
+              Write-Host 'An operator logs in at the console; the at-logon triggers do the rest.'
+              throw 'preflight: the signing session looks dead.'
+          }
+          Write-Host "preflight: token warm, last keepalive $([int]$age.TotalMinutes)m ago."
+
+          # Best effort, and deliberately not fatal: when this job CAN see the task
+          # list, a stopped broker is worth saying out loud. When it cannot, that is
+          # the permission case above and not evidence of anything.
           $broker = Get-ScheduledTask -TaskName 'SuchSoftwareSigningBroker' -ErrorAction SilentlyContinue
-          if (-not $broker) {
-              throw 'preflight: the SuchSoftwareSigningBroker task is not registered on this runner.'
-          }
-          if ($broker.State -ne 'Running') {
-              Write-Host "preflight: broker task state is $($broker.State), expected Running."
-              Write-Host 'Nothing consumes C:\signing\in while it is stopped, so every signature'
-              Write-Host 'would queue and then time out after ten minutes.'
+          if ($broker -and $broker.State -ne 'Running') {
+              Write-Host "preflight: WARNING broker task state is $($broker.State), expected Running."
               Write-Host 'Start it with: schtasks /run /tn SuchSoftwareSigningBroker'
-              throw 'preflight: the signing broker is not running.'
           }
-          Write-Host 'preflight: broker task is running.'
 
           # A live-token probe was tried here and removed. It signed a throwaway
           # copy of where.exe, which Windows already ships signed by Microsoft, so
