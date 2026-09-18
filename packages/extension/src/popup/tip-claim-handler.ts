@@ -1142,7 +1142,10 @@ async function sweepGrin(
   // The claimer output's index was already reserved atomically above; do NOT
   // bump again here or it would double-advance and skip an index.
   await overlay.addPending(sweepSlateId, {
-    incoming: { commit: result.output.commitment_hex, value: voucher.amount - fee },
+    // The overlay carries a display delta as a JS number. Exact here: the
+    // MAX_SAFE_INTEGER guard above already refused anything a double cannot
+    // represent, so this is the same value the sweep was built with.
+    incoming: { commit: result.output.commitment_hex, value: Number(voucher.amount) - fee },
   });
 
   // Use the kernel excess as the txid for UI display: Grin txs
