@@ -1917,6 +1917,23 @@ export interface components {
              * @description Block height (`0`/negative for unconfirmed).
              */
             height: number;
+            /**
+             * Format: int64
+             * @description Satoshis this transaction paid to the queried address, when known.
+             *
+             *     Electrum's `get_history` carries no amounts at all, so these are filled
+             *     in from the verbose transaction. Absent means "not determined", never
+             *     zero: a client that defaults a missing amount to 0 renders every row as
+             *     a confident "sent 0", which is what this wallet used to do.
+             */
+            total_received?: number | null;
+            /**
+             * Format: int64
+             * @description Satoshis this transaction spent FROM the queried address, when the
+             *     server resolved every input's prevout. Absent on a server that resolves
+             *     none (public ElectrumX), because a partial answer would look exact.
+             */
+            total_sent?: number | null;
             txid: string;
         };
         HistoryResponse: {
@@ -2486,6 +2503,16 @@ export interface components {
              * @description Block height (`0`/negative for unconfirmed).
              */
             height: number;
+            /**
+             * Format: int64
+             * @description See [`HistoryEntry::total_received`].
+             */
+            total_received?: number | null;
+            /**
+             * Format: int64
+             * @description See [`HistoryEntry::total_sent`].
+             */
+            total_sent?: number | null;
             txid: string;
         };
         /**
