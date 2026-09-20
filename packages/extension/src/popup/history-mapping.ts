@@ -75,12 +75,18 @@ export function utxoTxToRow(t: {
   total_received?: number;
   total_sent?: number;
 }): AssetDetailTxRow {
-  const hasAmounts = t.total_received !== undefined || t.total_sent !== undefined;
+  // BOTH sides are required to net, and netting is the only way to tell a
+  // receive from a send whose change came back to us. Electrum only reports the
+  // spent side when the server resolved every input's prevout, which ours does
+  // not, so a send would otherwise read as an incoming transfer of its own
+  // change: the very bug this mapping exists to prevent. Knowing the credit
+  // alone is not knowing the amount.
+  const canNet = t.total_received !== undefined && t.total_sent !== undefined;
   const net = BigInt(t.total_received ?? 0) - BigInt(t.total_sent ?? 0);
   return {
     kind: 'utxo',
     direction: net >= 0n ? 'in' : 'out',
-    ...(hasAmounts ? { amountAtomic: net >= 0n ? net : -net } : {}),
+    ...(canNet ? { amountAtomic: net >= 0n ? net : -net } : {}),
     txid: t.txid,
     heightOrPending: t.height > 0 ? t.height : 'pending',
     ...(t.fee !== undefined ? { feeAtomic: BigInt(t.fee) } : {}),

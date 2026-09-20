@@ -855,7 +855,7 @@ function TxRow({
             flexShrink: 0,
           }}
         >
-          <span style={{ fontSize: 16 }}>{arrow}</span>
+          <span style={{ fontSize: 16 }}>{amount === null ? '·' : arrow}</span>
           {isTip && (
             <span
               aria-label="tip"

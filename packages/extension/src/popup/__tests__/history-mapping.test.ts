@@ -103,8 +103,17 @@ test('a UTXO send with change is a send, netted', () => {
   assert.equal(row.kind === 'utxo' ? row.amountAtomic : undefined, 30n);
 });
 
-test('a UTXO receive is a receive', () => {
+test('a credit with no known debit is not reported as a receive', () => {
+  // Electrum reports the spent side only when the server resolved every input's
+  // prevout. Ours does not, so a SEND arrives as just its change. Claiming that
+  // as an incoming transfer is the bug this mapping exists to prevent, and
+  // knowing one side is not knowing the amount.
   const row = utxoTxToRow({ txid: 'aa', height: 10, total_received: 70 });
+  assert.ok(!('amountAtomic' in row) || row.amountAtomic === undefined);
+});
+
+test('a UTXO receive is a receive when both sides are known', () => {
+  const row = utxoTxToRow({ txid: 'aa', height: 10, total_received: 70, total_sent: 0 });
   assert.equal(row.direction, 'in');
   assert.equal(row.kind === 'utxo' ? row.amountAtomic : undefined, 70n);
 });
