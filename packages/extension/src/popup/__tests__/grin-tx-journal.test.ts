@@ -24,10 +24,21 @@ function installChromeMock(): void {
   (globalThis as unknown as { chrome: unknown }).chrome = {
     storage: {
       local: {
-        get: async (key: string) =>
-          key in store ? { [key]: store[key] } : {},
+        // chrome.storage.local.get takes a single key OR an array of keys, and
+        // the journal reads two at once (its scoped slot plus the pre-scope
+        // global one it adopts from). A mock that only understood a string
+        // silently returned {} for the array form.
+        get: async (keys: string | string[]) => {
+          const list = Array.isArray(keys) ? keys : [keys];
+          const out: Record<string, unknown> = {};
+          for (const k of list) if (k in store) out[k] = store[k];
+          return out;
+        },
         set: async (obj: Record<string, unknown>) => {
           Object.assign(store, obj);
+        },
+        remove: async (keys: string | string[]) => {
+          for (const k of Array.isArray(keys) ? keys : [keys]) delete store[k];
         },
       },
     },
@@ -39,11 +50,20 @@ const {
   recordGrinTx,
   updateGrinTxStatus,
   readGrinJournal,
+  setGrinJournalScope,
+  clearGrinJournal,
   GRIN_TX_JOURNAL_KEY,
 } = await import('../grin-tx-journal');
 
+/** The journal is scoped to a wallet, so every test binds one first. Without a
+ *  scope it reads empty and drops writes, which is the point: it must never
+ *  serve one wallet's history to another. */
+const TEST_FINGERPRINT = 'fp-test-wallet';
+setGrinJournalScope(TEST_FINGERPRINT);
+
 test('records a send then reads it back as a journal row', async () => {
   installChromeMock();
+  setGrinJournalScope(TEST_FINGERPRINT);
   await recordGrinTx({
     slateId: 's-send-1',
     direction: 'send',
@@ -68,6 +88,7 @@ test('records a send then reads it back as a journal row', async () => {
 
 test('a finalize record MERGES onto the pending row: keeps createdAt/direction/amount, upgrades status + kernelExcess', async () => {
   installChromeMock();
+  setGrinJournalScope(TEST_FINGERPRINT);
   await recordGrinTx({
     slateId: 's-send-2',
     direction: 'send',
@@ -103,6 +124,7 @@ test('a finalize record MERGES onto the pending row: keeps createdAt/direction/a
 
 test('updateGrinTxStatus flips an existing entry to cancelled', async () => {
   installChromeMock();
+  setGrinJournalScope(TEST_FINGERPRINT);
   await recordGrinTx({
     slateId: 's-send-3',
     direction: 'send',
@@ -118,12 +140,14 @@ test('updateGrinTxStatus flips an existing entry to cancelled', async () => {
 
 test('updateGrinTxStatus is a no-op for an unknown slateId (no phantom row)', async () => {
   installChromeMock();
+  setGrinJournalScope(TEST_FINGERPRINT);
   await updateGrinTxStatus('nope', 'cancelled');
   assert.deepEqual(await readGrinJournal(), []);
 });
 
 test('distinct slateIds append as separate rows', async () => {
   installChromeMock();
+  setGrinJournalScope(TEST_FINGERPRINT);
   await recordGrinTx({ slateId: 'a', direction: 'send', amountNanogrin: 1, status: 'pending', createdAt: 1 });
   await recordGrinTx({ slateId: 'b', direction: 'receive', amountNanogrin: 2, status: 'pending', createdAt: 2 });
   const rows = await readGrinJournal();
@@ -150,10 +174,12 @@ test('best-effort: writes never reject and reads return [] when chrome is unavai
   await updateGrinTxStatus('x', 'cancelled');
   assert.deepEqual(await readGrinJournal(), []);
   installChromeMock();
+  setGrinJournalScope(TEST_FINGERPRINT);
 });
 
 test('load tolerates a garbage / legacy value in the slot', async () => {
   installChromeMock();
+  setGrinJournalScope(TEST_FINGERPRINT);
   store[GRIN_TX_JOURNAL_KEY] = 'not-an-object';
   assert.deepEqual(await readGrinJournal(), []);
   // A subsequent record still works (overwrites the garbage with a valid shape).

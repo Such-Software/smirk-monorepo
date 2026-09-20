@@ -24,6 +24,13 @@ import { clawbackSocialTip } from '../tip-claim-handler';
 import { listTipKeyBackups, removeTipKeyBackup } from '../tip-key-backup';
 import { isTipStale } from '../tip-inbox';
 import { bytesToHex } from '../format';
+import { verifyKeyImage } from '../key-image';
+import {
+  settleCryptonote,
+  dedupeByTxid,
+  sortUtxoTxs,
+  utxoTxToRow,
+} from '../history-mapping';
 import { readGrinJournal, type GrinTxJournalEntry } from '../grin-tx-journal';
 import type { WalletSession } from '../types';
 
@@ -381,11 +388,11 @@ async function loadAssetHistory(
       const refs = await buildUtxoScanRefs(book, assetId, accountXpub);
       const rm = await chainProviders.utxo(assetId).getHistoryMulti(refs.map((x) => x.address));
       if (rm.error || !rm.data) return [];
-      return rm.data.transactions.map(utxoTxToRow);
+      return sortUtxoTxs(dedupeByTxid(rm.data.transactions)).map(utxoTxToRow);
     }
     const r = await chainProviders.utxo(assetId).getHistory(addr);
     if (r.error || !r.data) return [];
-    return r.data.transactions.map(utxoTxToRow);
+    return sortUtxoTxs(dedupeByTxid(r.data.transactions)).map(utxoTxToRow);
   }
   if (assetId === 'xmr' || assetId === 'wow') {
     const addr = wallet.addresses[assetId];
@@ -393,22 +400,59 @@ async function loadAssetHistory(
     if (!addr) return [];
     const r = await chainProviders.lws(assetId).getHistory(addr, viewKeyHex);
     if (r.error || !r.data) return [];
-    return r.data.transactions.map((t): AssetDetailTxRow => {
-      // Atomic amounts are strings (may exceed 2^53); compare + sum as BigInt.
-      // total_received > 0 means we received; spent_outputs presence means we sent.
-      // LWS rows can be both (change): direction = 'in' if net positive, else 'out'.
-      const received = BigInt(t.total_received) > 0n;
-      return {
+    const spendKeyHex = bytesToHex(wallet.keys[assetId].privateSpendKey);
+    const rows: AssetDetailTxRow[] = [];
+    for (const t of r.data.transactions) {
+      // `spent_outputs` are CANDIDATES, not facts. monero-lws records a spend
+      // for every ring member matching one of this account's outputs, with no
+      // key-image check, so an output of ours used as somebody else's DECOY
+      // arrives here looking exactly like our own spend. Counting those was
+      // showing strangers' transactions as our sends, one per decoy sampling,
+      // each for the full value of the decoyed output.
+      //
+      // Recomputing the key image with the spend key is the only thing that
+      // separates the two, which is what the balance path already does
+      // (wallet-flow.ts). History has to do it too or it disagrees with the
+      // balance, and a wallet whose history and balance disagree reads as
+      // theft.
+      let spent = 0n;
+      for (const o of t.spent_outputs) {
+        let ours = false;
+        try {
+          const computed = await verifyKeyImage({
+            privateViewKeyHex: viewKeyHex,
+            privateSpendKeyHex: spendKeyHex,
+            txPubKeyHex: o.tx_pub_key,
+            outputIndex: o.out_index,
+            ...(o.subaddr_index
+              ? { subaddrMajor: o.subaddr_index.major, subaddrMinor: o.subaddr_index.minor }
+              : {}),
+          });
+          ours = computed.toLowerCase() === o.key_image.toLowerCase();
+        } catch {
+          // History is display-only and never gates spending, so the safe
+          // direction here is the OPPOSITE of the balance path's fail-closed
+          // rule: omitting one real send beats inventing sends that are not
+          // ours. A verifier that throws leaves this candidate out.
+          ours = false;
+        }
+        if (ours) spent += BigInt(o.amount);
+      }
+
+      const settled = settleCryptonote(BigInt(t.total_received), spent);
+      // Drop rows where nothing was ours: a decoy-only appearance is not the
+      // user's transaction and has no business in their activity list.
+      if (!settled) continue;
+      rows.push({
         kind: 'cryptonote',
-        direction: received ? 'in' : 'out',
-        amountAtomic: received
-          ? BigInt(t.total_received)
-          : t.spent_outputs.reduce((s, o) => s + BigInt(o.amount), 0n),
+        direction: settled.direction,
+        amountAtomic: settled.amountAtomic,
         txid: t.txid,
         heightOrPending: t.is_pending ? 'pending' : t.height,
         timestamp: t.timestamp,
-      };
-    });
+      });
+    }
+    return rows;
   }
   if (assetId === 'grin') {
     // Grin on v3 is non-custodial: `POST /wallet/grin/scan` returns the current
@@ -423,27 +467,9 @@ async function loadAssetHistory(
   return [];
 }
 
-/** Map an Electrum UTXO history row (single- or multi-address) to the UI row.
- *  Electrum returns total_received / total_sent in atomic units; direction is
- *  whichever is non-zero, amount is the absolute value. */
-function utxoTxToRow(t: {
-  txid: string;
-  height: number;
-  fee?: number;
-  total_received?: number;
-  total_sent?: number;
-}): AssetDetailTxRow {
-  return {
-    kind: 'utxo',
-    direction: (t.total_received ?? 0) > 0 ? 'in' : 'out',
-    amountAtomic: BigInt(
-      (t.total_received ?? 0) > 0 ? (t.total_received ?? 0) : (t.total_sent ?? 0),
-    ),
-    txid: t.txid,
-    heightOrPending: t.height > 0 ? t.height : 'pending',
-    ...(t.fee !== undefined ? { feeAtomic: BigInt(t.fee) } : {}),
-  };
-}
+
+
+
 
 /** Map a client tx-journal entry onto the UI's `grin` history-row shape. */
 function grinJournalEntryToRow(e: GrinTxJournalEntry): AssetDetailTxRow {

@@ -228,7 +228,21 @@ export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpen
 
   // Reconcile BEFORE reading the overlay so settled entries stop excluding
   // inputs / inflating the counter.
+  //
+  // Capture which slates were still pending first, so the journal can be
+  // advanced for the ones this reconcile settles. A receive is signed as S2 and
+  // then BROADCAST BY THE SENDER, so the receiving wallet never has a moment
+  // where it knows the transfer went through, and its history row sat on
+  // "pending" forever. The scan settling the entry IS that moment, and it is
+  // the only one the receiver gets.
+  const pendingBefore = await deps.overlay.pendingSlateIds();
   await deps.overlay.reconcile(scanned);
+  const pendingAfter = await deps.overlay.pendingSlateIds();
+  for (const slateId of pendingBefore) {
+    if (!pendingAfter.has(slateId)) {
+      void updateGrinTxStatus(slateId, 'finalized').catch(() => undefined);
+    }
+  }
   const pendingSpent = await deps.overlay.selectablePendingSpent();
 
   const selectable = scanned.filter((o) => {
@@ -1048,6 +1062,18 @@ export async function signGrinInvoice(args: {
       : {}),
   });
 
+  // Best-effort tx-journal. Paying an invoice was the one money flow that
+  // never wrote a row, so the payer's Activity simply never showed it: money
+  // left the wallet with no history entry anywhere.
+  void recordGrinTx({
+    slateId: parsed.id,
+    direction: 'send',
+    amountNanogrin: Number(parsed.amt),
+    ...(i1Sender ? { counterparty: i1Sender } : {}),
+    status: 'pending',
+    createdAt: Date.now(),
+  }).catch(() => undefined);
+
   return {
     slate_id: parsed.id,
     // Encrypt I2 back to whoever sent us I1 (invoice originator); plaintext
@@ -1287,6 +1313,22 @@ export function createChromeGrinPendingStore(): GrinPendingStore {
         const got = await chrome.storage.local.get(GRIN_PENDING_STORAGE_KEY);
         const raw = got[GRIN_PENDING_STORAGE_KEY];
         if (raw && typeof raw === 'object' && 'entries' in raw) {
+          const owner = (raw as { fingerprint?: string }).fingerprint;
+          // This slot is global to the browser profile, so without an owner
+          // stamp a different seed inherited the previous wallet's pending
+          // entries and its child-index counter: phantom pending balance for
+          // up to the 7-day sweep, on coins this wallet never had.
+          //
+          // A mismatch resets rather than merges. Starting a DIFFERENT wallet
+          // at child index 0 is correct and safe; the reuse that loses funds is
+          // reusing an index within ONE wallet, which this cannot cause.
+          //
+          // An unstamped slot (written before this shipped) is adopted as-is:
+          // the overwhelmingly common case is the one wallet that wrote it, and
+          // discarding a live counter would be the dangerous direction.
+          if (owner && overlayFingerprint && owner !== overlayFingerprint) {
+            return empty();
+          }
           return raw as GrinPending;
         }
         return empty();
@@ -1295,9 +1337,33 @@ export function createChromeGrinPendingStore(): GrinPendingStore {
       }
     },
     async save(p: GrinPending): Promise<void> {
-      await chrome.storage.local.set({ [GRIN_PENDING_STORAGE_KEY]: p });
+      await chrome.storage.local.set({
+        [GRIN_PENDING_STORAGE_KEY]: overlayFingerprint
+          ? { ...p, fingerprint: overlayFingerprint }
+          : p,
+      });
     },
   };
+}
+
+/**
+ * Which wallet the pending overlay currently belongs to. Set on unlock; see the
+ * ownership check in `load` above.
+ */
+let overlayFingerprint: string | null = null;
+
+/** Bind the pending overlay to a wallet. Call on unlock, `null` on lock. */
+export function setGrinOverlayScope(fingerprint: string | null): void {
+  overlayFingerprint = fingerprint;
+}
+
+/** Drop the pending overlay outright. Used when a wallet is forgotten. */
+export async function clearGrinOverlay(): Promise<void> {
+  try {
+    await chrome.storage.local.remove(GRIN_PENDING_STORAGE_KEY);
+  } catch {
+    // Best-effort: never block forgetting a wallet on a display/pending store.
+  }
 }
 
 /**

@@ -294,6 +294,18 @@ export class GrinPendingOverlay {
   }
 
   /** The selection exclude set (just-spent, not yet mined). */
+  /**
+   * The slate ids currently held pending. Read-only.
+   *
+   * Callers diff this across a {@link reconcile} to learn which transfers the
+   * scan just settled. That is the only signal a RECEIVING wallet ever gets:
+   * the sender broadcasts, so the receiver has no other moment at which it
+   * learns the transfer completed.
+   */
+  async pendingSlateIds(): Promise<Set<string>> {
+    return new Set(Object.keys((await this.store.load()).entries));
+  }
+
   async selectablePendingSpent(): Promise<Set<string>> {
     return selectablePendingSpentSet(await this.store.load());
   }

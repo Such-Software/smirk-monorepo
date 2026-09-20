@@ -88,14 +88,51 @@ function enqueue<T>(op: () => Promise<T>): Promise<T> {
   return result;
 }
 
+// ── Wallet scope ─────────────────────────────────────────────────────────────
+//
+// The journal used to live in ONE global slot, so it was not a record of "this
+// wallet's Grin activity" but of "whatever wallet last used this browser
+// profile". Import a different seed, or use Forget wallet and restore another,
+// and the new wallet's Activity listed the old wallet's transactions. Nothing
+// ever cleared it.
+//
+// Scoping the slot by seed fingerprint fixes that without threading an
+// argument through all six write sites: the scope is set once at unlock.
+// Unset, every read is empty and every write is dropped, which is the right
+// failure for a display-only store: no history beats another wallet's history.
+
+let scopeFingerprint: string | null = null;
+
+/** Bind the journal to a wallet. Call on unlock, and with `null` on lock. */
+export function setGrinJournalScope(fingerprint: string | null): void {
+  scopeFingerprint = fingerprint;
+}
+
+function scopedKey(fingerprint: string): string {
+  return `${GRIN_TX_JOURNAL_KEY}:${fingerprint}`;
+}
+
 // ── Storage adapter (best-effort; tolerates a missing `chrome`) ───────────────
 
 async function loadJournal(): Promise<GrinTxJournal> {
+  if (!scopeFingerprint) return { entries: {} };
   try {
-    const got = await chrome.storage.local.get(GRIN_TX_JOURNAL_KEY);
-    const raw = got[GRIN_TX_JOURNAL_KEY];
+    const key = scopedKey(scopeFingerprint);
+    const got = await chrome.storage.local.get([key, GRIN_TX_JOURNAL_KEY]);
+    const raw = got[key];
     if (raw && typeof raw === 'object' && 'entries' in raw) {
       return raw as GrinTxJournal;
+    }
+    // One-time adoption of the pre-scope global slot. A single-wallet profile,
+    // which is almost all of them, keeps the history it already had rather than
+    // watching it vanish on upgrade. On a multi-wallet profile whichever wallet
+    // unlocks first adopts it, which is no worse than the old behaviour of
+    // showing it to every wallet, and it stops leaking from then on.
+    const legacy = got[GRIN_TX_JOURNAL_KEY];
+    if (legacy && typeof legacy === 'object' && 'entries' in legacy) {
+      await chrome.storage.local.set({ [key]: legacy });
+      await chrome.storage.local.remove(GRIN_TX_JOURNAL_KEY);
+      return legacy as GrinTxJournal;
     }
   } catch {
     // chrome undefined (tests) or storage error: degrade to empty.
@@ -104,7 +141,17 @@ async function loadJournal(): Promise<GrinTxJournal> {
 }
 
 async function saveJournal(j: GrinTxJournal): Promise<void> {
-  await chrome.storage.local.set({ [GRIN_TX_JOURNAL_KEY]: j });
+  if (!scopeFingerprint) return;
+  await chrome.storage.local.set({ [scopedKey(scopeFingerprint)]: j });
+}
+
+/** Drop a wallet's journal. Called when the user forgets that wallet. */
+export async function clearGrinJournal(fingerprint: string): Promise<void> {
+  try {
+    await chrome.storage.local.remove(scopedKey(fingerprint));
+  } catch {
+    // Best-effort: a stale display journal must never block forgetting a wallet.
+  }
 }
 
 // ── Public API: every function is best-effort and can never reject ───────────

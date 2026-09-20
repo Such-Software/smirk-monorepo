@@ -90,6 +90,7 @@ import {
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
 import { formatUsd, parseAmount, bytesToHex, hexToBytes } from './format';
+import { verifyKeyImage } from './key-image';
 import {
   validateSendRecipient,
   recipientNpubToHex,
@@ -161,6 +162,8 @@ import {
   resolveGrinSpendable,
   grinRewindHashFromMnemonic,
   grinOverlay,
+  setGrinOverlayScope,
+  clearGrinOverlay,
 } from './grin-flows';
 import { dispatchSocialTip } from './tip-handler';
 import {
@@ -194,6 +197,7 @@ import { probeBackend, BackendRoute } from './routes/backend';
 import { FeedRoute } from './routes/feed';
 import { SettingsRouter } from './routes/settings';
 import { ensureWasmInit } from './wasm-init';
+import { setGrinJournalScope, clearGrinJournal } from './grin-tx-journal';
 import { ApprovalApp } from './routes/approval';
 import { AssetDetailRoute } from './routes/asset-detail';
 import { SwapRouter } from './routes/swap';
@@ -485,53 +489,6 @@ async function buildUtxoScanContext(wallet: UnlockedWallet): Promise<{
   };
 }
 
-/**
- * Recompute a spent-output's key image with the wallet's spend key, so the
- * balance path can tell a real spend from a ring decoy.
- *
- * `subaddrMajor` / `subaddrMinor` are the index the output was RECEIVED at, as
- * reported on the spend record. Both omitted (or `(0, 0)`) is the primary
- * address and produces the exact pre-subaddress call. For a subaddress output
- * both MUST reach wasm: the subaddress secret is folded into the key offset, so
- * computing it against the primary index yields a key image that never matches
- * the reported one, the spend reads as a decoy, and its amount is never
- * subtracted, so the wallet shows money it has already spent, forever, and
- * later sends fail for insufficient funds while the UI insists otherwise.
- *
- * A half-supplied index is an error inside wasm, not a quiet fall back to the
- * primary address, so a plumbing mistake surfaces as a failure rather than as a
- * wrong balance.
- */
-const verifyKeyImage = async ({
-  privateViewKeyHex,
-  privateSpendKeyHex,
-  txPubKeyHex,
-  outputIndex,
-  subaddrMajor,
-  subaddrMinor,
-}: {
-  privateViewKeyHex: string;
-  privateSpendKeyHex: string;
-  txPubKeyHex: string;
-  outputIndex: number;
-  subaddrMajor?: number;
-  subaddrMinor?: number;
-}): Promise<string> => {
-  await ensureWasmInit();
-  const resultJson = wasmMonero.computeKeyImage(
-    privateViewKeyHex,
-    privateSpendKeyHex,
-    txPubKeyHex,
-    outputIndex,
-    subaddrMajor,
-    subaddrMinor,
-  );
-  const result = JSON.parse(resultJson) as { success: boolean; data?: string; error?: string };
-  if (!result.success || !result.data) {
-    throw new Error(result.error ?? 'compute_key_image failed');
-  }
-  return result.data;
-};
 
 
 
@@ -1197,6 +1154,16 @@ function App() {
     // 7-day floor wipes local state, in lockstep with the backend.
     void sweepStaleGrinWizards();
   }, []);
+
+  // Bind the Grin display journal and pending overlay to THIS wallet. Both were
+  // single global slots, so their contents followed the browser profile rather
+  // than the seed: a different wallet saw the previous wallet's Grin history
+  // and pending balance.
+  useEffect(() => {
+    const fp = walletState?.kind === 'unlocked' ? walletState.wallet.fingerprint : null;
+    setGrinJournalScope(fp);
+    setGrinOverlayScope(fp);
+  }, [walletState]);
 
   // Publish the per-asset ENCRYPTION subkeys, so someone can send this wallet a
   // targeted XMR or WOW tip.
@@ -2176,6 +2143,15 @@ function App() {
                 await clearBootstrapCache();
                 await clearDappPublicCache();
                 await stopDmWatch();
+                // Grin keeps two client-side stores that nothing else clears:
+                // the display journal and the pending overlay. Left behind,
+                // the next wallet in this profile inherits the forgotten
+                // wallet's Grin history and a pending balance for coins it
+                // does not own.
+                const forgotten = walletState.wallet.fingerprint;
+                setGrinJournalScope(null);
+                await clearGrinJournal(forgotten);
+                await clearGrinOverlay();
                 await walletKeystore.destroy();
                 // Drop the v0.2 blob too, or a migrated user is trapped forever.
                 //

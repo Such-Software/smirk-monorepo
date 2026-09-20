@@ -26,7 +26,14 @@ export type AssetDetailTxRow =
   | {
       kind: 'utxo';
       direction: 'in' | 'out';
-      amountAtomic: bigint;
+      /**
+       * Absent when the backend's history rows carry no amounts. Electrum's
+       * native `get_history` returns only txid/height/fee, so a backend that
+       * passes it straight through cannot say what a transaction moved. Better
+       * to render the transaction without a figure than to invent a confident
+       * `0`, which is what it used to show for every BTC and LTC row.
+       */
+      amountAtomic?: bigint;
       txid: string;
       heightOrPending: number | 'pending';
       timestamp?: string;
@@ -657,7 +664,14 @@ function TxRow({
       incoming = row.direction === 'in';
       const status =
         row.heightOrPending === 'pending' ? 'pending' : `#${row.heightOrPending}`;
-      meta = `${status} · ${truncId(row.txid)}`;
+      // The fee was already being carried on the row and then thrown away. It
+      // is the difference between "you sent 0.01" and "0.01 left your wallet",
+      // so show it where we have it.
+      const fee =
+        row.feeAtomic !== undefined
+          ? ` · fee ${formatAmount(row.feeAtomic, assetId, 8)}`
+          : '';
+      meta = `${status} · ${truncId(row.txid)}${fee}`;
       break;
     }
     case 'cryptonote': {
@@ -714,7 +728,12 @@ function TxRow({
     }
   }
 
-  const amount = hidden ? '••••' : formatAmount(row.amountAtomic, assetId, 8);
+  const amount =
+    hidden
+      ? '••••'
+      : row.amountAtomic === undefined
+        ? null
+        : formatAmount(row.amountAtomic, assetId, 8);
 
   const arrowColor = incoming
     ? 'var(--smirk-positive)'
@@ -857,7 +876,18 @@ function TxRow({
               textOverflow: 'ellipsis',
             }}
           >
-            {incoming ? '+' : '−'} {amount} {asset.ticker}
+            {amount === null ? (
+              <span
+                title="This backend's history does not report per-transaction amounts."
+                style={{ color: 'var(--smirk-fg-muted)' }}
+              >
+                amount not reported
+              </span>
+            ) : (
+              <>
+                {incoming ? '+' : '−'} {amount} {asset.ticker}
+              </>
+            )}
             {row.kind === 'tip-sent' && row.hasLocalBackup && (
               <span
                 title="Local IndexedDB backup exists — clawback works even if the backend forgets this row."

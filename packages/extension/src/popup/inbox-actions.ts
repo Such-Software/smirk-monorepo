@@ -12,6 +12,7 @@ import { api, buildSlatepackChannels, type GrinPendingOverlay } from '@smirk/cor
 import { parseRelayRef } from './relay-ref';
 import { getActiveNostrIdentity } from './nostr-vault';
 import { grinOverlay } from './grin-flows';
+import { updateGrinTxStatus } from './grin-tx-journal';
 
 async function channelsFor(userId: string, mnemonic: string) {
   const identity = await getActiveNostrIdentity(mnemonic);
@@ -87,6 +88,12 @@ export async function cancelInboxItem(params: {
     } else {
       await channels.backend.cancel(ref.relayId);
     }
+    // Mark the history row too. Freeing the inputs already happened above, but
+    // the journal row stayed 'pending' forever, so a cancelled exchange sat in
+    // Activity indefinitely looking like money still in flight.
+    // A backend relayId is the bare slate id; the nostr ref carries it explicitly.
+    const cancelledSlateId = ref.channel === 'nostr' ? ref.slateId : ref.relayId;
+    void updateGrinTxStatus(cancelledSlateId, 'cancelled').catch(() => undefined);
     return {};
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Failed to cancel' };
