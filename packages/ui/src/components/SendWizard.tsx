@@ -317,23 +317,47 @@ export type GrinFinalizeOutcome = GrinFinalizeResult | { ok: false; error: strin
 const WIZARD_ID = 'send';
 const TOTAL_STEPS = 4; // 0=asset 1=address 2=compose 3=review (success at step >=4)
 
+/** How long the send receipt stays up before returning home on its own. */
+const AUTO_DISMISS_SECS = 12;
+
 export function SendWizard(props: SendWizardProps) {
   const wizard = useWizard<SendFields>(WIZARD_ID, {});
   const fields = wizard.fields;
 
+  // The mount effect below must read the wizard's CURRENT state, not the
+  // first-render snapshot. `fields` and `step` come from session state that is
+  // still hydrating on the first render, so a closure over them reports an
+  // empty, step-0 wizard even when a real draft is persisted. This ref always
+  // holds the latest.
+  const liveRef = useRef<{ step: number; fields: Partial<SendFields>; active: boolean }>({
+    step: 0,
+    fields: {},
+    active: false,
+  });
+  liveRef.current = { step: wizard.step, fields, active: wizard.active };
+
   // Start the wizard once on mount. eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     void (async () => {
-      if (!wizard.active) await wizard.start();
-      // Preselect the coin when we arrived from its detail screen. Tapping a
-      // coin and then Send used to drop you on the asset chooser, asking which
-      // coin you meant when you had just told it.
+      // A completed send parks the wizard past the last step, and that state is
+      // PERSISTED. Opening Send again therefore replayed the previous
+      // transaction's receipt and silently ignored the coin just chosen, which
+      // is why preselect looked broken even once it worked. A finished wizard
+      // is finished business: clear it before starting the next send.
+      if (liveRef.current.active && liveRef.current.step >= TOTAL_STEPS) {
+        await wizard.cancel();
+      }
+      if (!liveRef.current.active) await wizard.start();
+
+      // Preselect the coin when we arrived from its detail screen, and move
+      // PAST the chooser. Seeding the field alone still left you staring at the
+      // asset list being asked which coin you meant, having just said.
       //
-      // `fields` here is the mount-time snapshot, which is exactly the right
-      // thing to test: a draft already in progress has fromAssetId set, and
-      // must not be silently retargeted at whatever screen you came from.
-      if (props.initialAssetId && !fields.fromAssetId) {
+      // A draft already in progress keeps its own target: arriving from some
+      // other coin's screen must not silently retarget a half-written send.
+      if (props.initialAssetId && !liveRef.current.fields.fromAssetId) {
         await wizard.setField('fromAssetId', props.initialAssetId);
+        await wizard.goToStep(1);
       }
     })();
   }, []);
@@ -1953,8 +1977,32 @@ function DoneStep({
 }) {
   const explorerUrl = txid && assetId ? explorerTxUrl(assetId, txid) : null;
   const [copied, setCopied] = useState(false);
+
+  // Auto-return home. The receipt had exactly one exit, a button press, so a
+  // send left the wallet parked on a success screen until the user came back
+  // and dismissed it, sometimes an hour later. The transaction id is on the
+  // asset's Activity list either way, so there is nothing here that is lost by
+  // leaving.
+  //
+  // The countdown is visible and cancellable rather than silent: a screen that
+  // vanishes while you are copying a txid is worse than one that lingers.
+  const [secondsLeft, setSecondsLeft] = useState(AUTO_DISMISS_SECS);
+  const [autoDismiss, setAutoDismiss] = useState(true);
+  useEffect(() => {
+    if (!autoDismiss) return undefined;
+    const id = window.setInterval(() => {
+      setSecondsLeft((n) => n - 1);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [autoDismiss]);
+  useEffect(() => {
+    if (autoDismiss && secondsLeft <= 0) onClose();
+  }, [autoDismiss, secondsLeft, onClose]);
   const copyTxid = () => {
     if (!txid) return;
+    // Copying is the clearest signal the user still wants this screen. Stop the
+    // countdown rather than yanking it away mid-interaction.
+    setAutoDismiss(false);
     void copyText(txid).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
@@ -1966,9 +2014,14 @@ function DoneStep({
   // patches `lastTxid` on result.ok, so an absent txid here means
   // the wizard advanced without going through the success path
   // (or the send-handler returned ok:true with a falsy txid).
-  if (!txid && typeof console !== 'undefined') {
-    console.warn('[smirk send] DoneStep rendered without txid', { assetId });
-  }
+  // Diagnostics belong in an effect, not in render: this component now
+  // re-renders once a second for the auto-dismiss countdown, and a warn in
+  // render would emit one line per tick.
+  useEffect(() => {
+    if (!txid && typeof console !== 'undefined') {
+      console.warn('[smirk send] DoneStep rendered without txid', { assetId });
+    }
+  }, [txid, assetId]);
   // Grin-specific: the "sent" state really means "broadcast: kernel
   // is in the node's pool". On-chain confirmation takes ~10 minutes
   // (10 blocks at the conservative confirmation threshold). Make this
@@ -2100,7 +2153,27 @@ function DoneStep({
           </div>
         </div>
       )}
-      <PrimaryButton testid="send-done-close" onClick={onClose}>Done</PrimaryButton>
+      <PrimaryButton testid="send-done-close" onClick={onClose}>
+        {autoDismiss && secondsLeft > 0 ? `Done (${secondsLeft})` : 'Done'}
+      </PrimaryButton>
+      {autoDismiss && secondsLeft > 0 && (
+        <button
+          type="button"
+          onClick={() => setAutoDismiss(false)}
+          style={{
+            display: 'block',
+            margin: '8px auto 0',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--smirk-fg-muted)',
+            fontSize: 11,
+            cursor: 'pointer',
+            textDecoration: 'underline',
+          }}
+        >
+          Stay on this screen
+        </button>
+      )}
     </div>
   );
 }
