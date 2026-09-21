@@ -37,23 +37,41 @@ trap 'rm -rf "$work"' EXIT
 
 shopt -s nullglob
 zips=("$SRC"/smirk-desktop-*-v"$VERSION"*.zip "$SRC"/smirk-extension-v"$VERSION"*.zip)
-[ ${#zips[@]} -gt 0 ] || fail "no smirk artifact zips for v$VERSION found in $SRC"
 
-echo "staging ${#zips[@]} artifact zip(s) into $DEST"
+# Two source shapes, because the collection path changed. Gitea's Actions
+# artifacts API reports total_count 0 on our instance, so desktop-build.yml
+# attaches each leg's archive to a RELEASE instead, and those are the bare
+# tar.gz + zip files rather than Gitea's per-artifact zip wrapper. Accept both:
+# staging is the step that normalises whatever we managed to download.
+bare=("$SRC"/smirk-desktop-*-v"$VERSION"*.tar.gz)
+[ ${#zips[@]} -gt 0 ] || [ ${#bare[@]} -gt 0 ] \
+  || fail "no smirk artifacts for v$VERSION found in $SRC (looked for the artifact zips and the release tar.gz files)"
+
+echo "staging ${#zips[@]} artifact zip(s) and ${#bare[@]} release archive(s) into $DEST"
 echo
 echo "CHECK THESE DATES. A previous release's download sitting in the same folder"
 echo "is indistinguishable by name, and staging it ships the pre-fix build:"
-for z in "${zips[@]}"; do
+for z in ${zips[@]+"${zips[@]}"} ${bare[@]+"${bare[@]}"}; do
   printf '  %-46s %s\n' "$(basename "$z")" "$(date -r "$z" '+%Y-%m-%d %H:%M')"
 done
 echo
 
-for z in "${zips[@]}"; do
+# The bare release files are already in the shape the zip wrapper unpacks TO, so
+# the source directory itself is a valid extraction dir for the loop below.
+if [ ${#bare[@]} -gt 0 ]; then
+  zips+=("$SRC")
+fi
+
+for z in ${zips[@]+"${zips[@]}"}; do
   name="$(basename "$z")"
   echo "  $name"
-  ex="$work/$(basename "$z" .zip)"
-  mkdir -p "$ex"
-  unzip -qo "$z" -d "$ex" || fail "could not unzip $name"
+  if [ -d "$z" ]; then
+    ex="$z"
+  else
+    ex="$work/$(basename "$z" .zip)"
+    mkdir -p "$ex"
+    unzip -qo "$z" -d "$ex" || fail "could not unzip $name"
+  fi
 
   # Desktop artifacts: a tar.gz per platform, named smirk-desktop-<os>-v<ver>.
   for t in "$ex"/smirk-desktop-*.tar.gz; do

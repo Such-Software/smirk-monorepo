@@ -61,7 +61,12 @@ mkdir -p "$DEST"
 
 # Names and download URLs, one per line. Parsed in python rather than sed so a
 # name containing a space (the Tauri bundles do) survives.
-mapfile -t ROWS < <(python3 - "$REL" <<'PY'
+# Read with a while-loop rather than `mapfile`: that is a bash 4 builtin, and
+# macOS still ships bash 3.2, which is exactly where release signing happens.
+ROWS=()
+while IFS= read -r line; do
+  [ -n "$line" ] && ROWS+=("$line")
+done < <(python3 - "$REL" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 for a in (d.get("assets") or []):
