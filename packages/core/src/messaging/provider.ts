@@ -18,6 +18,12 @@ export interface MessagingProvider {
     recipientPubkeyHex: string;
     text: string;
     relays: string[];
+    /**
+     * NIP-13 difficulty to mine into the gift wrap, when the relay gates
+     * delivery from unknown authors behind proof-of-work. `0` or omitted mines
+     * nothing. Read it from the backend's advertised `inbound_pow_bits`.
+     */
+    powBits?: number;
   }): Promise<void>;
 
   /**

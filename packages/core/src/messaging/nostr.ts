@@ -12,7 +12,15 @@
 
 import { SimplePool } from 'nostr-tools/pool';
 import { wrapEvent } from 'nostr-tools/nip17';
-import { finalizeEvent } from 'nostr-tools/pure';
+import { createRumor, createSeal } from 'nostr-tools/nip59';
+import { encrypt as nip44Encrypt, getConversationKey } from 'nostr-tools/nip44';
+import { getPow } from 'nostr-tools/nip13';
+import {
+  finalizeEvent,
+  generateSecretKey,
+  getEventHash,
+  getPublicKey,
+} from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 
 import type { NostrIdentity } from '../nostr';
@@ -65,6 +73,59 @@ export function wrapToDirectMessage(
   };
 }
 
+/**
+ * Build a gift wrap whose id carries `difficulty` leading zero bits (NIP-13).
+ *
+ * Relays increasingly gate delivery from authors they do not know behind
+ * proof-of-work: ours requires 8 bits for a gift wrap from an unregistered
+ * npub, and without it every message from a burner or a fresh identity is
+ * refused. That matters more as identities get cheaper to create, not less.
+ *
+ * nostr-tools' `minePow` is not usable here. It resets `created_at` to the
+ * current second on every iteration, and NIP-59 deliberately BACKDATES the wrap
+ * by a random interval so the timestamp cannot be correlated with when you
+ * actually sent it. Mining with it would buy relay admission by leaking send
+ * time. Only the nonce varies here; the randomised timestamp survives.
+ *
+ * 8 bits averages 256 hashes, which is imperceptible. The cost is exponential
+ * in the bit count, so a relay demanding a large difficulty will be slow by
+ * design, and the caller decides whether that is worth it.
+ */
+function wrapWithPow(
+  sealed: ReturnType<typeof createSeal>,
+  recipientPublicKey: string,
+  difficulty: number,
+): ReturnType<typeof finalizeEvent> {
+  const ephemeral = generateSecretKey();
+  // Same shape createWrap produces, including NIP-59's backdated timestamp.
+  const base = {
+    kind: GIFT_WRAP_KIND,
+    content: nip44Encrypt(
+      JSON.stringify(sealed),
+      getConversationKey(ephemeral, recipientPublicKey),
+    ),
+    created_at: Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 172800),
+    pubkey: getPublicKey(ephemeral),
+  };
+  if (difficulty <= 0) {
+    const { pubkey: _drop, ...rest } = base;
+    return finalizeEvent({ ...rest, tags: [['p', recipientPublicKey]] }, ephemeral);
+  }
+  const tags: string[][] = [
+    ['p', recipientPublicKey],
+    ['nonce', '0', String(difficulty)],
+  ];
+  const nonceTag = tags[1]!;
+  for (let count = 1; ; count++) {
+    nonceTag[1] = String(count);
+    if (getPow(getEventHash({ ...base, tags })) >= difficulty) break;
+  }
+  const { pubkey: _drop, ...rest } = base;
+  // finalizeEvent recomputes the id over these exact bytes, so the mined id is
+  // the one that ships.
+  return finalizeEvent({ ...rest, tags }, ephemeral);
+}
+
 export class NostrMessagingProvider implements MessagingProvider {
   readonly kind = 'nostr';
   private pool = new SimplePool();
@@ -106,13 +167,23 @@ export class NostrMessagingProvider implements MessagingProvider {
     recipientPubkeyHex,
     text,
     relays,
+    powBits,
   }: {
     identity: NostrIdentity;
     recipientPubkeyHex: string;
     text: string;
     relays: string[];
+    powBits?: number;
   }): Promise<void> {
-    const giftWrap = wrapEvent(identity.privateKey, { publicKey: recipientPubkeyHex }, text);
+    const difficulty = powBits ?? 0;
+    let giftWrap;
+    if (difficulty > 0) {
+      const rumor = createRumor({ kind: 14, content: text, tags: [['p', recipientPubkeyHex]] }, identity.privateKey);
+      const seal = createSeal(rumor, identity.privateKey, recipientPubkeyHex);
+      giftWrap = wrapWithPow(seal, recipientPubkeyHex, difficulty);
+    } else {
+      giftWrap = wrapEvent(identity.privateKey, { publicKey: recipientPubkeyHex }, text);
+    }
     await this.publish(relays, giftWrap);
   }
 

@@ -69,6 +69,14 @@ export async function sendDm(
   identity: NostrIdentity,
   recipient: string,
   text: string,
+  /**
+   * NIP-13 difficulty to mine into the gift wrap. Pass the relay's advertised
+   * `messaging.inbound_pow_bits`: relays gate delivery from authors they do not
+   * know behind proof-of-work, so without it a message from an identity the
+   * relay has never seen is simply refused. Mining a small difficulty costs
+   * milliseconds and makes burner and fresh identities work.
+   */
+  powBits?: number,
 ): Promise<void> {
   const { pubkeyHex, relays } = await resolveDmRelays(recipient);
   const deliveryRelays = dedup([...relays, ...messagingRelays()]);
@@ -77,6 +85,7 @@ export async function sendDm(
     recipientPubkeyHex: pubkeyHex,
     text,
     relays: deliveryRelays,
+    ...(powBits ? { powBits } : {}),
   });
 }
 

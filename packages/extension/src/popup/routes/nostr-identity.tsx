@@ -42,13 +42,14 @@ import { writeSessionCache } from '../session-cache';
  * encrypted at rest under a mnemonic-derived key; the plaintext never leaves an
  * unlocked context. See nostr-vault.ts + @smirk/core identity-store.
  */
-/**
- * Every per-identity action needs the seed: renaming writes the vault, Use
- * re-derives, Reveal exports an nsec. A session restored from the keep-unlocked
- * cache deliberately has no mnemonic, so those buttons were disabled and inert
- * with nothing explaining why, which reads as broken rather than as locked.
- */
-const LOCKED_ACTION_HINT = 'Unlock your wallet to manage identities';
+// Every per-identity action needs the seed: renaming writes the vault, Use
+// re-derives, Reveal exports an nsec. A session restored from the keep-unlocked
+// cache deliberately has no mnemonic, so these used to sit DISABLED, which reads
+// as "this wallet is broken" when the wallet is in fact unlocked and working.
+//
+// They stay pressable and ask for the password inline instead, the same way
+// `commit` and `onLinkActive` already do. Telling someone to unlock a wallet
+// they have unlocked is not an instruction they can follow.
 
 export function NostrIdentityRoute({
   wallet,
@@ -681,30 +682,40 @@ export function NostrIdentityRoute({
                 ) : (
                   <button
                     data-testid={`nostr-switch-${id.pubkeyHex}`}
-                    onClick={() => onSwitch(id.pubkeyHex)}
-                    disabled={!!busy || !mnemonic}
+                    onClick={() =>
+                      mnemonic
+                        ? onSwitch(id.pubkeyHex)
+                        : promptUnlock('Enter your password to switch identity.')
+                    }
+                    disabled={!!busy}
                     style={smallBtn}
-                    title={mnemonic ? 'Use this identity' : LOCKED_ACTION_HINT}
+                    title="Use this identity"
                   >
                     Use
                   </button>
                 )}
                 <button
-                  onClick={() => setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })}
-                  disabled={!!busy || !mnemonic}
+                  onClick={() =>
+                    mnemonic
+                      ? setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })
+                      : promptUnlock('Enter your password to rename this identity.')
+                  }
+                  disabled={!!busy}
                   style={smallBtn}
-                  title={mnemonic ? 'Rename' : LOCKED_ACTION_HINT}
+                  title="Rename"
                 >
                   ✎
                 </button>
                 <button
                   data-testid={`nostr-reveal-${id.pubkeyHex}`}
-                  onClick={() => onReveal(id)}
-                  disabled={!!busy || !mnemonic}
-                  style={smallBtn}
-                  title={
-                    mnemonic ? 'Reveal / export secret key (nsec)' : LOCKED_ACTION_HINT
+                  onClick={() =>
+                    mnemonic
+                      ? onReveal(id)
+                      : promptUnlock('Enter your password to reveal this secret key.')
                   }
+                  disabled={!!busy}
+                  style={smallBtn}
+                  title="Reveal / export secret key (nsec)"
                 >
                   🔑
                 </button>

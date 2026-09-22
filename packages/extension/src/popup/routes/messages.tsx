@@ -130,7 +130,11 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
     setStatus('sending');
     setError(undefined);
     try {
-      await sendDm(identity, recipient.trim(), text.trim());
+      // Mine the relay's advertised difficulty. Without it, a message from an
+      // identity this relay has not registered is refused outright, which is
+      // every burner and every freshly created identity.
+      const powBits = (await api.getCapabilities()).data?.messaging?.inbound_pow_bits ?? 0;
+      await sendDm(identity, recipient.trim(), text.trim(), powBits);
       setText('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Send failed');
