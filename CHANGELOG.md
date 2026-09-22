@@ -11,131 +11,93 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
-## [0.3.0] - 2026-09-08
+## [0.3.0] - 2026-09-21
 
-The stable v0.3.0 release. It carries the v0.3.0-rc1 feature drop plus a round of
-cross-chain compatibility, balance and send reliability, real-money validation, the
-self-hostable backend components that make Smirk federated end to end, and a
-Nostr-identity overhaul finished during the release window.
+Adds a desktop wallet, Nostr identity and messaging, and a self-hostable
+backend, alongside broad reliability work across all five chains.
 
-A full pre-ship review of the tree landed before the first store submission, and
-its fixes are folded in below. Nothing here shipped to users earlier: v0.3.0 was
-tagged during development and re-cut at the reviewed commit.
+### Added
 
-- **Taproot addresses work.** Sending to a `bc1p…` / `ltc1p…` recipient was
-  rejected outright, in Send and in the Swap tab's receive and refund fields.
-  The signer always supported taproot; only the address check did not. It now
-  accepts exactly what the signer can pay, so an address that passes the form
-  can no longer fail at the last step.
-- **Websites can talk to the wallet again.** On the default auto-lock setting
-  the dapp bridge reported the wallet as locked seconds after you approved a
-  connection, so `window.smirk` returned nothing to every site.
-- **Firefox can create and restore a wallet.** Registration and sign-in ran only
-  through a Chrome-only mechanism, so the Firefox build could not complete
-  either. Chrome also no longer gets stuck if that mechanism fails once.
-- **One account per wallet.** Signing in after a "stay unlocked" session could
-  create a second, empty account instead of returning you to yours, leaving your
-  handle, tips and premium behind on the first one.
-- **Your Nostr identity stops broadcasting when you stop using it.** The
-  background direct-message poller kept announcing your npub to the relay after
-  locking, after switching backend, and after "Forget this wallet".
-- **Burner identities never quietly fall back.** If the active identity could
-  not be unlocked, the wallet used your main identity instead of saying so.
-- **Public tip keys are encrypted at rest**, rather than sitting beside the
-  value they protect.
-- **The fee you see is the fee you sign.** A custom fee rate below the relay
-  minimum was displayed as typed and quietly raised at broadcast; a MAX sweep now
-  says when its fee is an estimate.
-- **Grin slates from a counterparty are parsed safely.** A crafted slatepack
-  could desynchronise the parser on the wasm build and, on the same input, crash
-  it. Both are rejected now.
-- **Sending across chains is blocked.** A Monero address could be used as a
-  Wownero destination and the reverse, which would have destroyed the funds.
-- **The store listings and privacy policy describe what actually happens.** The
-  previous declarations said no data was collected, while balances and history
-  are served from view keys the wallet sends to the backend. The retention
-  windows the policy promises are now enforced rather than merely configured.
-- **Connected sites are visible and revocable** in Settings, and a site can no
-  longer spam approval windows.
-- **Desktop wallet.** The Tauri 2.x shell for Windows, macOS and Linux ships
-  alongside the extension, sharing the same code path and carrying the embedded
-  dapp browser. Capacitor mobile is deferred to v0.4.
-- **Reliable sends and balances on every backend.** Resolved a set of
-  client/backend contract mismatches that could disable Bitcoin/Litecoin fee
-  estimation (and with it sends and public-tip funding) and Monero/Wownero sends
-  against the modern self-hostable backend. Fee estimation now degrades to a safe
-  floored rate instead of blocking a send when an estimate is briefly
-  unavailable, and transaction-history amounts and identifiers read correctly
-  across backends.
-- **Seamless balances.** Home paints your last-known balance instantly, refreshes
-  it in the background and when you refocus the wallet, and shows a clear
-  freshness indicator: quiet when healthy, an amber "may be out of date" if
-  updates stall, and a plain "can't reach the server" message during a sustained
-  outage.
-- **Chat and Nostr work after a "stay unlocked" session.** Signing a Nostr event
-  (chat, sign-in, public-key requests) no longer fails on a wallet restored from
-  the keep-unlocked cache: the Nostr identity key is now cached like your payment
-  keys, without ever storing your seed phrase.
-- **Public tips, validated on-chain.** The full public social-tip lifecycle
-  (fund, verify, claim, sweep) was exercised end to end with real funds on
-  Bitcoin and Grin.
-- **grin-lws.** Grin scanning is served by a standalone, self-hostable Grin
-  light-wallet-server (public, MIT: github.com/Such-Software/grin-lws), so an
-  operator can run the full non-custodial Grin path without the main backend.
-- **Self-hosted BTC/LTC invoicing.** A small, non-custodial BTC/LTC payment
-  processor (`smirk-backend-minibtc-paymentprocessor`) exposes a BTCPay-style
-  invoice surface for self-hosters: funds go straight to operator-controlled
-  addresses and the service never holds keys.
-- **Grin: wallets are now recoverable from your seed phrase alone.** Grin outputs
-  now use the standard deterministic (view-key) rewind-nonce scheme, so a
-  restored wallet rediscovers its outputs directly from the chain instead of
-  relying on server-side records, matching how Bitcoin/Litecoin and
-  Monero/Wownero already restore. Outputs created by earlier builds remain
-  spendable. See `docs/grin.md`, "Output recovery".
-- **Nostr / Goblin interop.** The wallet exposes a NIP-07 `window.nostr`
-  provider, so Nostr-native sites (including Goblin / Magick Market dapps) can
-  request your public key and have events signed without a separate extension. A
-  multi-identity vault with an in-wallet identity switcher keeps distinct Nostr
-  keypairs apart, and payment-capable actions sit behind a short-lived
-  "money-tier" session so a signing grant can't silently move funds. Grin
-  payments can also travel as NIP-59 gift-wrapped direct messages, so a slatepack
-  exchange no longer needs a shared server.
-- **Federation: no single hard-coded backend.** Smirk is self-hostable end to
-  end: the backend host (`homeDomain`) is configurable and nothing assumes
-  `api.smirk.cash`. You can pay by NIP-05 address (`name@domain`), with a
-  counterparty's key pinned on first use (TOFU) so a later key swap is flagged
-  rather than trusted silently.
-- **Grin is now fully non-custodial.** The backend no longer holds Grin balances,
-  outputs, or transaction records; the old custodial endpoints and the
-  server-side wallets table are gone. The client scans the chain with its own
-  view key (building on the seed-only recovery above) and tracks in-flight sends
-  with a client-side pending overlay, while the backend keeps only stateless
-  scan / height / broadcast / relay helpers. See `docs/grin.md`.
-- **Nostr identity, reworked around per-service identities.** The single-npub
-  model became a switchable vault: you can hold distinct Nostr identities and
-  choose which one a given site, Feed post, or message uses, with a per-origin
-  picker the first time a dapp asks and a header switcher to change your active
-  identity. Messaging moved into the Inbox tab and the separate Settings ->
-  Messages screen was retired, so direct messages and tips share one surface.
-- **Publish a NIP-05 handle.** Claiming a Smirk handle can publish a NIP-05
-  (`name@domain`) record, so others can find and verify your Nostr identity by
-  its human-readable name.
-- **Encrypted identity-vault backup and restore.** Your Nostr identities can be
-  backed up as an encrypted blob and restored later, so a switchable-identity
-  vault survives a reinstall without exposing keys at rest.
-- **Primary identity auto-links on handle claim.** Claiming a handle now links
-  your primary Nostr identity automatically, instead of leaving you to wire the
-  two together by hand.
-- **Dapp payments quote human amounts.** A site now passes `requestPayment` a
-  plain decimal amount (`"9"`, `"9.5"`); the wallet converts to atomic units
-  using the asset's own decimals. Website operators no longer compute per-asset
-  atomic units themselves, and a payment for `9` WOW no longer crashes the
-  approval; a malformed amount is refused with a clear error instead. The
-  confirmation reads `9 WOW`, matching what actually gets sent.
-- **Payment approval covered end to end.** A Playwright spec now drives the real
-  dapp payment popup (the surface the decimal-amount bug slipped through).
-  Setting `CAPTURE_VIDEO=1` records the popup and approval window at a
-  mobile-portrait size so an e2e run doubles as demo-clip capture.
+- **Desktop wallet.** A Tauri 2.x shell for Windows, macOS and Linux, sharing
+  the extension's code and carrying the embedded dapp browser. Mobile is
+  deferred to v0.4.
+- **Nostr identity.** A NIP-07 `window.nostr` provider, so Nostr-native sites
+  can request your key and have events signed without a second extension.
+  Identities live in a switchable vault, with a per-origin picker and a header
+  switcher; payment-capable actions sit behind a short-lived session so a
+  signing grant cannot move funds. Identities can be backed up and restored as
+  an encrypted blob.
+- **NIP-05 handles.** Claiming a Smirk handle can publish a `name@domain`
+  record, and links your primary identity automatically.
+- **Messaging.** Encrypted direct messages share the Inbox with tips. Grin
+  payments can travel as NIP-59 gift-wrapped messages, so a slatepack exchange
+  needs no shared server.
+- **Federation.** The backend host is configurable; nothing assumes
+  `api.smirk.cash`. You can pay a NIP-05 address, with the counterparty's key
+  pinned on first use so a later swap is flagged rather than trusted.
+- **Self-hostable components.** A standalone Grin light-wallet-server
+  (`grin-lws`, MIT) and a non-custodial BTC/LTC invoicing service, so an
+  operator can run the full stack without the main backend.
+- **Wallet controls.** A lock button, and the option to open the wallet in a
+  browser tab as well as its own window.
+
+### Changed
+
+- **Grin is fully non-custodial.** The backend holds no Grin balances, outputs
+  or transaction records, and the custodial endpoints and server-side wallets
+  table are gone. The wallet derives a view-only rewind credential from your
+  seed; scanning runs against a `grin-lws` instance that can read your outputs
+  but cannot spend them, and in-flight sends are tracked client-side. See
+  `docs/grin.md`.
+- **Grin wallets restore from the seed phrase alone.** Outputs use the standard
+  deterministic rewind-nonce scheme, so a restored wallet rediscovers them from
+  the chain rather than from server records, matching how the other chains
+  already restore. Outputs from earlier builds remain spendable.
+- **Tips are encrypted to a key of the sending coin.** Each asset uses its own
+  encryption target rather than a shared Bitcoin key, so a recipient who does
+  not use Bitcoin is no longer sent funds locked behind one.
+- **Balances load instantly.** Home paints the last known balance immediately,
+  refreshes in the background and on refocus, and shows a freshness indicator
+  when updates stall or the server is unreachable.
+- **Dapp payments take decimal amounts.** A site passes `"9"` or `"9.5"`; the
+  wallet converts using the asset's decimals. A malformed amount is refused
+  with a clear error.
+- **Store listings and the privacy policy describe what actually happens**, and
+  the stated retention windows are enforced rather than configured.
+
+### Fixed
+
+- **Transaction history is correct on every chain.** Monero and Wownero listed
+  transactions that were not yours: the light-wallet server reports candidate
+  spends, which include your outputs appearing as decoys in other people's
+  transactions, and these were shown as your own sends. They are now verified
+  against your spend key. A send with change is reported as a send rather than
+  as an incoming transfer of its change. Bitcoin and Litecoin show real amounts
+  instead of zero, are no longer listed once per address, and read newest-first.
+  Grin history is per-wallet rather than per-device.
+- **Send opens on the coin you selected**, and no longer replays the previous
+  transaction's receipt. The receipt returns home on its own.
+- **Monero and Wownero sends no longer fail intermittently.** Rings could be
+  built with a repeated member, which the signer rejects.
+- **Taproot addresses are accepted** for sending, swapping and refunds.
+- **Websites can talk to the wallet.** The dapp bridge reported the wallet as
+  locked shortly after a connection was approved.
+- **Firefox can create and restore a wallet.**
+- **Signing in returns you to your account** instead of creating a second,
+  empty one after a keep-unlocked session.
+- **Your Nostr identity stops broadcasting when you stop using it**, including
+  after locking, switching backend and forgetting a wallet.
+- **Burner identities never fall back to your main identity** silently.
+- **The fee you see is the fee you sign.** A rate below the relay minimum was
+  displayed as typed and raised at broadcast.
+- **Cross-chain sends are blocked.** A Monero address could be used as a
+  Wownero destination, and the reverse.
+- **Malformed Grin slates are rejected** rather than crashing or desynchronising
+  the parser.
+- **Connected sites are visible and revocable**, and a site cannot spam
+  approval windows.
+- **Chat and Nostr work after a keep-unlocked session.**
+- **Public tip keys are encrypted at rest.**
 
 ## [0.3.0-rc1] - 2026-06-04
 
