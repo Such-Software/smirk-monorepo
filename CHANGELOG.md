@@ -11,7 +11,7 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
-## [0.3.0] - 2026-09-21
+## [0.3.0] - 2026-09-22
 
 Adds a desktop wallet, Nostr identity and messaging, and a self-hostable
 backend, alongside broad reliability work across all five chains.
