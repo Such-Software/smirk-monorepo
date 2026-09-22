@@ -35,6 +35,8 @@
 
 // ----- Components -----
 export { copyText } from './clipboard';
+export { CopyableNpub } from './components/CopyableNpub';
+export type { CopyableNpubProps } from './components/CopyableNpub';
 
 export { ActionButton, ActionRow } from './components/ActionButton';
 export type { ActionButtonProps, ActionRowProps } from './components/ActionButton';

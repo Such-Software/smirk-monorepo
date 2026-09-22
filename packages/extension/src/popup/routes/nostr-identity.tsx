@@ -15,7 +15,7 @@ import {
   type StoredIdentity,
   type UnlockedWallet,
 } from '@smirk/core';
-import { IdentityAvatar, copyText } from '@smirk/ui';
+import { IdentityAvatar, copyText, CopyableNpub } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
 import {
   loadVault,
@@ -42,6 +42,14 @@ import { writeSessionCache } from '../session-cache';
  * encrypted at rest under a mnemonic-derived key; the plaintext never leaves an
  * unlocked context. See nostr-vault.ts + @smirk/core identity-store.
  */
+/**
+ * Every per-identity action needs the seed: renaming writes the vault, Use
+ * re-derives, Reveal exports an nsec. A session restored from the keep-unlocked
+ * cache deliberately has no mnemonic, so those buttons were disabled and inert
+ * with nothing explaining why, which reads as broken rather than as locked.
+ */
+const LOCKED_ACTION_HINT = 'Unlock your wallet to manage identities';
+
 export function NostrIdentityRoute({
   wallet,
   onBack,
@@ -661,17 +669,32 @@ export function NostrIdentityRoute({
                     {linked ? <span style={{ fontSize: 10, color: '#22c55e' }}>✓ linked</span> : null}
                   </div>
                   <div style={{ fontFamily: 'monospace', fontSize: 10, opacity: 0.55, wordBreak: 'break-all' }}>
-                    {shortNpub(id.npub)}
+                    <CopyableNpub
+                      value={id.npub}
+                      display={shortNpub(id.npub)}
+                      testid={`nostr-copy-npub-${id.pubkeyHex}`}
+                    />
                   </div>
                 </div>
                 {active ? (
                   <span style={{ fontSize: 11, color: '#6366f1' }}>active</span>
                 ) : (
-                  <button data-testid={`nostr-switch-${id.pubkeyHex}`} onClick={() => onSwitch(id.pubkeyHex)} disabled={!!busy || !mnemonic} style={smallBtn}>
+                  <button
+                    data-testid={`nostr-switch-${id.pubkeyHex}`}
+                    onClick={() => onSwitch(id.pubkeyHex)}
+                    disabled={!!busy || !mnemonic}
+                    style={smallBtn}
+                    title={mnemonic ? 'Use this identity' : LOCKED_ACTION_HINT}
+                  >
                     Use
                   </button>
                 )}
-                <button onClick={() => setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })} disabled={!!busy || !mnemonic} style={smallBtn} title="Rename">
+                <button
+                  onClick={() => setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })}
+                  disabled={!!busy || !mnemonic}
+                  style={smallBtn}
+                  title={mnemonic ? 'Rename' : LOCKED_ACTION_HINT}
+                >
                   ✎
                 </button>
                 <button
@@ -679,7 +702,9 @@ export function NostrIdentityRoute({
                   onClick={() => onReveal(id)}
                   disabled={!!busy || !mnemonic}
                   style={smallBtn}
-                  title="Reveal / export secret key (nsec)"
+                  title={
+                    mnemonic ? 'Reveal / export secret key (nsec)' : LOCKED_ACTION_HINT
+                  }
                 >
                   🔑
                 </button>

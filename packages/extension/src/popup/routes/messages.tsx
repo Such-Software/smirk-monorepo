@@ -11,7 +11,7 @@ import {
   type DmSubscription,
   type GiftWrapEvent,
 } from '@smirk/core';
-import { IdentityPicker, type PickerIdentity } from '@smirk/ui';
+import { IdentityPicker, CopyableNpub, type PickerIdentity } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
 import {
   getActiveNostrIdentityFromWallet,
@@ -187,6 +187,21 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
                 compact
                 testid="messages-identity-picker"
               />
+              {/* The picker itself opens the identity list, so copying needs its
+                  own affordance: this is the npub you hand someone so they can
+                  message you back, and it was previously unobtainable here. */}
+              {(() => {
+                const sel =
+                  identities.find((i) => i.pubkeyHex === selectedPubkey) ?? identities[0];
+                return sel ? (
+                  <CopyableNpub
+                    value={sel.npub}
+                    display="copy npub"
+                    testid="messages-copy-npub"
+                    style={{ fontSize: 11 }}
+                  />
+                ) : null;
+              })()}
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>

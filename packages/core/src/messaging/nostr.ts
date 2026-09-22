@@ -74,9 +74,31 @@ export class NostrMessagingProvider implements MessagingProvider {
   private async publish(relays: string[], event: Parameters<SimplePool['publish']>[1]): Promise<void> {
     relays.forEach((r) => this.relaysSeen.add(r));
     const results = await Promise.allSettled(this.pool.publish(relays, event));
-    if (!results.some((r) => r.status === 'fulfilled')) {
-      throw new Error('failed to publish to any relay');
-    }
+    if (results.some((r) => r.status === 'fulfilled')) return;
+
+    // Relays say WHY they refused, in the OK message, and nostr-tools rejects
+    // with it. Throwing a bare "failed to publish to any relay" discarded the
+    // one piece of information that tells a user what to do: an unregistered
+    // identity, a missing proof-of-work, a membership requirement and an
+    // unreachable relay all produced the same dead end.
+    const reasons = [
+      ...new Set(
+        results
+          .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+          .map((r) => {
+            const e = r.reason;
+            const msg = e instanceof Error ? e.message : String(e ?? '');
+            // nostr-tools prefixes the relay's text; keep the text itself.
+            return msg.replace(/^.*?:\s*/, '').trim();
+          })
+          .filter((m) => m.length > 0),
+      ),
+    ];
+    throw new Error(
+      reasons.length > 0
+        ? `relay refused this message: ${reasons.join('; ')}`
+        : 'could not reach any relay to send this message',
+    );
   }
 
   async sendDm({
