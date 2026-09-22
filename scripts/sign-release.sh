@@ -116,6 +116,52 @@ if [ -d "$BUNDLE_DIR" ]; then
 fi
 desktop_count=$(( ${#artifacts[@]} - ext_count ))
 
+# macOS has no `sha256sum`; it ships `shasum`. Same split the verify step makes.
+if command -v sha256sum >/dev/null 2>&1; then SUMGEN=(sha256sum)
+else SUMGEN=(shasum -a 256); fi
+
+# Widen SHA256SUMS to cover EVERY artifact being signed, before it is signed.
+#
+# pack-release.sh writes it with the two extension zips alone, because the job
+# that builds those never sees the desktop bundles, and its comment already
+# promises this script publishes the rest. It did not: the file shipped
+# describing 2 of 14 artifacts, so anyone reaching for the signed checksums to
+# verify a .dmg or an .AppImage found nothing, and a per-file .asc does not help
+# when a store or mirror strips the sidecar.
+#
+# Rebuilt rather than appended so re-running is idempotent, and written with
+# paths relative to the bundle root so `shasum -c` works from where the release
+# actually lives. Signatures and updater .sig files are excluded: they are not
+# artifacts, and a checksum over a signature proves nothing about the thing it
+# signs.
+if [ "$VERIFY_ONLY" -eq 0 ] && [ ${#artifacts[@]} -gt 0 ]; then
+  sums_tmp="$(mktemp)"
+  for f in "${artifacts[@]}"; do
+    case "$f" in *.asc|*.sig) continue ;; esac
+    [ "$f" = "$SUMS" ] && continue
+    # Record the PUBLISHED name, not the staging path. Assets are uploaded flat,
+    # so a verifier downloads them into one directory and runs `shasum -c` there;
+    # a `linux/` or `macos/` prefix from our bundle layout would make every
+    # desktop line fail with "no such file" on their machine.
+    base="$(basename "$f")"
+    ( cd "$(dirname "$f")" && "${SUMGEN[@]}" "$base" ) >> "$sums_tmp"
+  done
+  # Flattening is only safe while basenames are unique; a collision would put two
+  # different files under one name and silently verify the wrong one.
+  dupes="$(awk '{print $2}' "$sums_tmp" | LC_ALL=C sort | uniq -d)"
+  if [ -n "$dupes" ]; then
+    echo "refusing to write SHA256SUMS: duplicate asset names" >&2
+    echo "$dupes" | sed 's/^/  /' >&2
+    rm -f "$sums_tmp"
+    exit 1
+  fi
+  if [ -s "$sums_tmp" ]; then
+    LC_ALL=C sort -k2 "$sums_tmp" > "$SUMS"
+    echo "SHA256SUMS covers $(wc -l < "$SUMS" | tr -d ' ') artifact(s)"
+  fi
+  rm -f "$sums_tmp"
+fi
+
 [ -f "$SUMS" ] && artifacts+=("$SUMS")
 [ -f "$TOOLCHAIN" ] && artifacts+=("$TOOLCHAIN")
 
