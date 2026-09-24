@@ -219,6 +219,22 @@ pub struct SignedTx {
     pub tx_hash: String,
     /// Fee paid
     pub fee: u64,
+    /// SECRET. The per-transaction `outgoing_view_key` this signature used.
+    ///
+    /// Returned so the wallet can persist it and later reproduce the
+    /// transaction key, which is what a payment proof is made from. The key is
+    /// fresh OS randomness per call and is not recoverable from the seed, so a
+    /// caller that drops this can never prove this payment afterwards: the same
+    /// reason monero-core stores `m_tx_keys[txid]` in its wallet cache rather
+    /// than deriving them.
+    ///
+    /// monero-oxide derives the transaction key from this plus the input keys
+    /// (`TransactionKeys::new`), so storing these 32 bytes reproduces the tx key
+    /// AND the additional keys a subaddress send uses, rather than just one.
+    ///
+    /// Treat it as key material: never log it, and store it where the wallet
+    /// stores secrets.
+    pub outgoing_view_key: String,
 }
 
 // ============================================================================
@@ -661,6 +677,9 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         .ok_or("Invalid fee rate")?;
 
     let outgoing_view_key = fresh_outgoing_view_key();
+    // Capture it before the builder consumes it: this is the only moment the
+    // value exists, and it is what makes a later payment proof possible.
+    let outgoing_view_key_hex = hex::encode(*outgoing_view_key);
 
     // Build SignableTransaction
     // Note: Change::fingerprintable is used as we don't have the full view pair
@@ -706,6 +725,10 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         tx_hex,
         tx_hash,
         fee,
+        // Hand the caller the key material needed to prove this payment later.
+        // Dropping it here is irreversible: it is fresh OS randomness, so no
+        // amount of seed knowledge reconstructs it afterwards.
+        outgoing_view_key: outgoing_view_key_hex,
     })
 }
 

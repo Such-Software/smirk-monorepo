@@ -198,6 +198,7 @@ import { FeedRoute } from './routes/feed';
 import { SettingsRouter } from './routes/settings';
 import { ensureWasmInit } from './wasm-init';
 import { setGrinJournalScope, clearGrinJournal } from './grin-tx-journal';
+import { setSendJournalScope, clearSendJournal } from './send-journal';
 import { ApprovalApp } from './routes/approval';
 import { AssetDetailRoute } from './routes/asset-detail';
 import { SwapRouter } from './routes/swap';
@@ -1163,6 +1164,7 @@ function App() {
     const fp = walletState?.kind === 'unlocked' ? walletState.wallet.fingerprint : null;
     setGrinJournalScope(fp);
     setGrinOverlayScope(fp);
+    setSendJournalScope(fp);
   }, [walletState]);
 
   // Publish the per-asset ENCRYPTION subkeys, so someone can send this wallet a
@@ -2150,7 +2152,9 @@ function App() {
                 // does not own.
                 const forgotten = walletState.wallet.fingerprint;
                 setGrinJournalScope(null);
+                setSendJournalScope(null);
                 await clearGrinJournal(forgotten);
+                await clearSendJournal(forgotten);
                 await clearGrinOverlay();
                 await walletKeystore.destroy();
                 // Drop the v0.2 blob too, or a migrated user is trapped forever.
