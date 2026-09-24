@@ -15,6 +15,7 @@ import { useMemo, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
 import { formatAmount, formatAmountWithAsset } from '../format';
 import { AssetIcon } from './AssetIcon';
+import { CopyableNpub } from './CopyableNpub';
 
 /**
  * Single transaction row, agnostic of chain. The shell normalizes
@@ -658,6 +659,12 @@ function TxRow({
   // control-flow narrowing through closure boundaries.
   let incoming: boolean;
   let meta: string;
+  // The on-chain identifier for this row, in full. `meta` renders a truncated
+  // form for width, but a transaction id is the one thing a user needs to hand
+  // to someone else (an explorer, a merchant, support), and a truncated string
+  // in plain text can be neither read nor copied.
+  let copyableId: string | null = null;
+  let copyableLabel = 'transaction ID';
   let isTip = false;
   switch (row.kind) {
     case 'utxo': {
@@ -671,22 +678,26 @@ function TxRow({
         row.feeAtomic !== undefined
           ? ` · fee ${formatAmount(row.feeAtomic, assetId, 8)}`
           : '';
-      meta = `${status} · ${truncId(row.txid)}${fee}`;
+      meta = `${status} · ${fee ? fee.replace(/^ · /, '') : ''}`.replace(/ · $/, '');
+      copyableId = row.txid;
       break;
     }
     case 'cryptonote': {
       incoming = row.direction === 'in';
       const status =
         row.heightOrPending === 'pending' ? 'pending' : `#${row.heightOrPending}`;
-      meta = `${status} · ${truncId(row.txid)}`;
+      meta = status;
+      copyableId = row.txid;
       break;
     }
     case 'grin': {
       incoming = row.direction === 'in';
-      const idOrKernel = row.kernelExcess
-        ? truncId(row.kernelExcess)
-        : `slate ${truncId(row.slateId)}`;
-      meta = `${row.status} · ${idOrKernel}`;
+      // Grin has no txid. The kernel excess is what an explorer indexes on, so
+      // it is the identifier a user needs to hand to anyone else; before it is
+      // on chain, the slate id is what identifies the exchange.
+      meta = row.status + (row.kernelExcess ? '' : ' · slate');
+      copyableId = row.kernelExcess ?? row.slateId;
+      copyableLabel = row.kernelExcess ? 'kernel ID' : 'slate ID';
       break;
     }
     case 'tip-sent': {
@@ -722,7 +733,11 @@ function TxRow({
       } else if (ctx?.kind === 'tip-fund') {
         meta = `pending · funding tip ${truncId(ctx.tipId)}`;
       } else {
-        meta = `pending · to ${truncId(row.recipient)}`;
+        // The recipient address is the other half of "did this reach them?",
+        // and a truncated one cannot be checked against anything.
+        meta = 'pending · to';
+        copyableId = row.recipient;
+        copyableLabel = 'recipient address';
       }
       break;
     }
@@ -912,6 +927,17 @@ function TxRow({
             }}
           >
             {meta}
+            {copyableId ? (
+              <>
+                {meta ? ' · ' : ''}
+                <CopyableNpub
+                  value={copyableId}
+                  display={truncId(copyableId)}
+                  label={copyableLabel}
+                  style={{ fontSize: 10, fontFamily: 'var(--smirk-font-family-mono)' }}
+                />
+              </>
+            ) : null}
           </div>
           {row.kind === 'tip-sent' &&
             row.status === 'pending_confirmation' &&
