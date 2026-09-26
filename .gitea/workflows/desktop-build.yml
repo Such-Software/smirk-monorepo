@@ -342,6 +342,12 @@ jobs:
             echo "no usable rustup; using a job-scoped RUSTUP_HOME/CARGO_HOME under $wtmp"
           fi
 
+      - name: Install rustup without editing shell profiles
+        # The action below would install rustup with profile edits that point at
+        # this job's temporary CARGO_HOME; see the script for the host-mode cost.
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-rustup-job-scoped.sh
+
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
         # decide which compiler builds our code. rust-toolchain.toml pins that, and
@@ -791,6 +797,12 @@ jobs:
           }
           apt_retry update
           apt_retry install -y clang
+
+      - name: Install rustup without editing shell profiles
+        # The action below would install rustup with profile edits that point at
+        # this job's temporary CARGO_HOME; see the script for the host-mode cost.
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-rustup-job-scoped.sh
 
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
