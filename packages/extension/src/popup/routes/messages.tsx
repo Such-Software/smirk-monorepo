@@ -35,6 +35,9 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
   const [text, setText] = useState('');
   const [status, setStatus] = useState<'idle' | 'sending'>('idle');
   const [error, setError] = useState<string | undefined>(undefined);
+  // Set when a send reached only our own relay: fine for someone on this
+  // server, invisible to someone on another. Not an error, so not red.
+  const [reachNotice, setReachNotice] = useState<string | undefined>(undefined);
   // Per-conversation identity: which of the wallet's identities you send/receive as.
   const [identities, setIdentities] = useState<PickerIdentity[]>([]);
   const [selectedPubkey, setSelectedPubkey] = useState<string>('');
@@ -129,13 +132,21 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
     if (!identity || !recipient.trim() || !text.trim()) return;
     setStatus('sending');
     setError(undefined);
+    setReachNotice(undefined);
     try {
       // Mine the relay's advertised difficulty. Without it, a message from an
       // identity this relay has not registered is refused outright, which is
       // every burner and every freshly created identity.
       const powBits = (await api.getCapabilities()).data?.messaging?.inbound_pow_bits ?? 0;
-      await sendDm(identity, recipient.trim(), text.trim(), powBits);
+      const sent = await sendDm(identity, recipient.trim(), text.trim(), powBits);
       setText('');
+      if (!sent.inboxFound) {
+        setReachNotice(
+          "Sent to this server's relay. We couldn't find where this person receives " +
+            'messages, so if they use a different Smirk server they will not see it. ' +
+            'Message them by their name@domain address instead.',
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Send failed');
     }
@@ -167,8 +178,9 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
       ) : (
         <>
           <p style={{ fontSize: 11, opacity: 0.6, lineHeight: 1.4, marginTop: 4 }}>
-            End-to-end encrypted (NIP-17). Send to an npub; incoming messages appear
-            below while this screen is open.
+            End-to-end encrypted (NIP-17). Send to an npub, or to name@domain for
+            someone on another server; incoming messages appear below while this
+            screen is open.
           </p>
 
           {identities.length > 0 && (
@@ -211,7 +223,7 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
             <input
               data-testid="dm-recipient-input"
-              placeholder="recipient npub1…"
+              placeholder="npub1… or name@domain"
               value={recipient}
               onInput={(e) => setRecipient((e.target as HTMLInputElement).value)}
               style={settingsInputStyle}
@@ -248,6 +260,14 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
           {error && (
             <div data-testid="messages-error" style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
               {error}
+            </div>
+          )}
+          {reachNotice && !error && (
+            <div
+              data-testid="messages-reach-notice"
+              style={{ fontSize: 12, marginTop: 8, opacity: 0.8, lineHeight: 1.4 }}
+            >
+              {reachNotice}
             </div>
           )}
 

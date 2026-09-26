@@ -30,7 +30,7 @@ export function recipientToHex(recipient: string): string {
  */
 export async function resolveDmRelays(
   recipient: string,
-): Promise<{ pubkeyHex: string; relays: string[] }> {
+): Promise<{ pubkeyHex: string; relays: string[]; inboxFound: boolean }> {
   let pubkeyHex: string;
   let hintRelays: string[] = [];
   if (recipient.includes('@')) {
@@ -57,7 +57,22 @@ export async function resolveDmRelays(
   // substituting third-party relays sends the gift-wrap somewhere the operator
   // never sanctioned, and the caller cannot tell that it happened.
   const relays = dedup([...inbox, ...hintRelays, ...messagingRelays()]);
-  return { pubkeyHex, relays };
+  // Did we learn where THEY read, or are we only publishing where WE read?
+  // The second still reaches someone on this same server, which is why it is
+  // not an error, but across servers it lands where the recipient never looks.
+  const inboxFound = inbox.length > 0 || hintRelays.length > 0;
+  return { pubkeyHex, relays, inboxFound };
+}
+
+/** What a send learned about reaching the recipient. */
+export interface DmSendResult {
+  /**
+   * `false` when neither the recipient's kind-10050 inbox nor their NIP-05
+   * relay hints were found, so the message went only to our own relays. That
+   * reaches a user of this same server and nobody else: a caller should warn
+   * rather than report plain success.
+   */
+  inboxFound: boolean;
 }
 
 /**
@@ -77,8 +92,8 @@ export async function sendDm(
    * milliseconds and makes burner and fresh identities work.
    */
   powBits?: number,
-): Promise<void> {
-  const { pubkeyHex, relays } = await resolveDmRelays(recipient);
+): Promise<DmSendResult> {
+  const { pubkeyHex, relays, inboxFound } = await resolveDmRelays(recipient);
   const deliveryRelays = dedup([...relays, ...messagingRelays()]);
   await messagingProvider().sendDm({
     identity,
@@ -87,6 +102,7 @@ export async function sendDm(
     relays: deliveryRelays,
     ...(powBits ? { powBits } : {}),
   });
+  return { inboxFound };
 }
 
 /** Subscribe to incoming DMs for `identity`, delivering each to `onMessage`. */

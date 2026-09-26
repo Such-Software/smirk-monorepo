@@ -10,7 +10,9 @@ import { encrypt as nip44Encrypt, getConversationKey } from 'nostr-tools/nip44';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 
 import { deriveNostrIdentity } from '../../nostr';
-import { recipientToHex } from '../dm';
+import { recipientToHex, sendDm } from '../dm';
+import { initSmirkMessaging, messagingProvider, setMessagingProvider } from '../registry';
+import type { MessagingProvider } from '../provider';
 import { unwrapDmSecurely, wrapToDirectMessage } from '../nostr';
 
 const MNEMONIC =
@@ -101,4 +103,43 @@ test('recipientToHex accepts npub and hex, rejects junk', () => {
   assert.equal(recipientToHex(b.pubkeyHex), b.pubkeyHex);
   assert.equal(recipientToHex(b.npub), b.pubkeyHex, 'npub decodes to the same hex');
   assert.throws(() => recipientToHex('not-a-key'));
+});
+
+// ── Reaching someone on another server ─────────────────────────────────────
+
+function withProvider(inbox: string[], run: (sent: string[][]) => Promise<void>) {
+  const previous = messagingProvider();
+  const sent: string[][] = [];
+  const fake = {
+    async queryDmRelayList() {
+      return inbox;
+    },
+    async sendDm(p: { relays: string[] }) {
+      sent.push(p.relays);
+    },
+  } as unknown as MessagingProvider;
+  setMessagingProvider(fake);
+  return run(sent).finally(() => setMessagingProvider(previous));
+}
+
+test('a recipient whose inbox cannot be found is reported, not silently "sent"', async () => {
+  // Their kind-10050 lives on their own server's relay, which we do not read.
+  // The message still goes to our relay (same-server users read there), but the
+  // caller must learn that is ALL it reached.
+  initSmirkMessaging({ relayUrl: 'wss://relay.ours.example/' });
+  await withProvider([], async (sent) => {
+    const r = await sendDm(alice(), bob().npub, 'hi', 0);
+    assert.equal(r.inboxFound, false);
+    assert.deepEqual(sent[0], ['wss://relay.ours.example/']);
+  });
+});
+
+test('a recipient with a published inbox is delivered there too', async () => {
+  initSmirkMessaging({ relayUrl: 'wss://relay.ours.example/' });
+  await withProvider(['wss://relay.theirs.example/'], async (sent) => {
+    const r = await sendDm(alice(), bob().npub, 'hi', 0);
+    assert.equal(r.inboxFound, true);
+    assert.ok(sent[0]?.includes('wss://relay.theirs.example/'));
+    assert.ok(sent[0]?.includes('wss://relay.ours.example/'), 'our copy still lands where we read');
+  });
 });
