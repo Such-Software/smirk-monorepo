@@ -191,6 +191,12 @@ test('the feed composer agrees with the server about posting rights', async ({
     // publishes plans in /capabilities, and the message used to be a dead end
     // with no price and no way to buy.
     await expect(blocked).toContainText(/premium/i);
+    // When the operator sells plans, the refusal must offer a way to act on
+    // it: buy, or redeem an invoice already paid.
+    if (await page.getByTestId('feed-premium-plans').isVisible().catch(() => false)) {
+      const act = page.getByTestId('premium-buy').or(page.getByTestId('premium-redeem'));
+      await expect(act, 'plans are listed but there is no way to buy one').toBeVisible();
+    }
     footage.mark('feed-posting-refused', 'server says no; UI explains why');
     return;
   }

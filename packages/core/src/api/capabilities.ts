@@ -168,6 +168,29 @@ export interface PremiumCapability {
   plans: PremiumPlanInfo[];
   /** The relay premium posting targets (mirrors `messaging.relay_url`). */
   relay_url: string;
+  /** Ways to pay, primary first. Absent on backends that predate payment
+   *  rails; those take the primary processor only, so omit `rail`. */
+  rails?: PremiumRailInfo[];
+}
+
+/** One way to pay for premium (a processor and the assets it takes). */
+export interface PremiumRailInfo {
+  /** Pass as `rail` to `POST /premium/invoice`, e.g. `btcpay`, `xmrcheckout`. */
+  id: string;
+  /** Asset codes, e.g. `["BTC","LTC"]`. Empty when the operator did not say. */
+  assets: string[];
+}
+
+/** A freshly minted premium invoice (`POST /premium/invoice`). */
+export interface PremiumInvoice {
+  invoice_id: string;
+  /** Hosted checkout URL (or, for some processors, a bare address). */
+  pay_to: string;
+  plan: string;
+  amount: string;
+  currency: string;
+  /** The rail it was minted on. Absent from backends that predate rails. */
+  rail?: string;
 }
 
 /**

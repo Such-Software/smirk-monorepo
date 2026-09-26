@@ -13,6 +13,7 @@ import {
 } from '@smirk/core';
 import { IdentityPicker, type PickerIdentity } from '@smirk/ui';
 import { feedTimeAgo } from '../format';
+import { PremiumPurchase } from './premium-purchase';
 import {
   getActiveNostrIdentityFromWallet,
   resolveNostrIdentityForOrigin,
@@ -121,6 +122,8 @@ export function FeedRoute({
   // an older backend that does not send it. Failures read as non-premium.
   const [hasPremium, setHasPremium] = useState(false);
   const [canPostGeneral, setCanPostGeneral] = useState<boolean | undefined>(undefined);
+  // Bumped after a purchase so posting rights are re-read from the server.
+  const [premiumEpoch, setPremiumEpoch] = useState(0);
   useEffect(() => {
     let cancelled = false;
     void api
@@ -134,7 +137,7 @@ export function FeedRoute({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [premiumEpoch]);
 
   const feed = caps?.feed ?? null;
   const writePolicy = caps?.messaging?.write_policy;
@@ -278,19 +281,23 @@ export function FeedRoute({
           </button>
         </div>
       ) : posting.kind === 'needs-premium' ? (
-        <div data-testid="feed-needs-premium" style={muted}>
-          <p style={{ margin: 0 }}>
+        <div
+          data-testid="feed-needs-premium"
+          style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+        >
+          <p style={{ ...muted, margin: 0 }}>
             Posting to this feed needs a premium subscription. You can read it below.
           </p>
-          {/* The operator publishes plans in /capabilities, so quote real prices
-              from THIS backend rather than hardcoding ours. Without this the
-              message was a dead end: no price, no way to buy. */}
+          {/* Plans and payment methods come from THIS backend's /capabilities,
+              so prices are the operator's, never hardcoded ours. */}
           {caps?.premium?.plans?.length ? (
-            <p data-testid="feed-premium-plans" style={{ margin: '6px 0 0' }}>
-              {caps.premium.plans
-                .map((pl) => `${pl.days}d for ${pl.amount} ${caps.premium?.currency ?? ''}`.trim())
-                .join(' · ')}
-            </p>
+            <div data-testid="feed-premium-plans">
+              <PremiumPurchase
+                premium={caps.premium}
+                fingerprint={wallet.fingerprint}
+                onActivated={() => setPremiumEpoch((n) => n + 1)}
+              />
+            </div>
           ) : null}
         </div>
       ) : null}

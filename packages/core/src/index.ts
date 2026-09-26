@@ -80,6 +80,9 @@ export * from './wallet-flow';
 // Anti-abuse client-side helpers (ALTCHA proof-of-work for wallet creation)
 export * from './pow';
 
+// Buying premium: plan and payment-method labels, pending invoice lifetime
+export * from './premium-purchase';
+
 // Popup state, route persistence, wizard scaffold
 export * from './state';
 

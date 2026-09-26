@@ -199,6 +199,7 @@ import { SettingsRouter } from './routes/settings';
 import { ensureWasmInit } from './wasm-init';
 import { setGrinJournalScope, clearGrinJournal } from './grin-tx-journal';
 import { setSendJournalScope, clearSendJournal } from './send-journal';
+import { clearPendingPremium } from './premium-pending';
 import { ApprovalApp } from './routes/approval';
 import { AssetDetailRoute } from './routes/asset-detail';
 import { SwapRouter } from './routes/swap';
@@ -2155,6 +2156,7 @@ function App() {
                 setSendJournalScope(null);
                 await clearGrinJournal(forgotten);
                 await clearSendJournal(forgotten);
+                await clearPendingPremium(forgotten);
                 await clearGrinOverlay();
                 await walletKeystore.destroy();
                 // Drop the v0.2 blob too, or a migrated user is trapped forever.

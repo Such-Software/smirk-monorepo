@@ -23,7 +23,7 @@ import { createWalletUtxoMethods, WalletUtxoMethods } from './wallet-utxo';
 import { createWalletLwsMethods, WalletLwsMethods } from './wallet-lws';
 import { createGrinMethods, GrinMethods } from './grin';
 import { createSwapMethods, SwapMethods } from './swap';
-import type { BackendCapabilities, PremiumStatus } from './capabilities';
+import type { BackendCapabilities, PremiumInvoice, PremiumStatus } from './capabilities';
 
 export type { ApiResponse, WalletApiStyle } from './client';
 export { ApiClient } from './client';
@@ -266,6 +266,30 @@ export class SmirkApi
    */
   getPremiumStatus(): Promise<ApiResponse<PremiumStatus>> {
     return this.request('/premium/status', { method: 'GET' });
+  }
+
+  /**
+   * Mint a premium invoice for `plan`, payable on `rail` (a
+   * `capabilities.premium.rails[].id`). Omit `rail` for the primary processor;
+   * a backend refuses a rail it does not offer rather than substituting one.
+   */
+  createPremiumInvoice(plan: string, rail?: string): Promise<ApiResponse<PremiumInvoice>> {
+    return this.request('/premium/invoice', {
+      method: 'POST',
+      body: JSON.stringify(rail ? { plan, rail } : { plan }),
+    });
+  }
+
+  /**
+   * Redeem a paid premium invoice. The backend asks the processor that minted
+   * it; until that processor reports it settled this returns an error and the
+   * invoice stays redeemable, so it is safe to retry.
+   */
+  activatePremium(invoiceId: string): Promise<ApiResponse<PremiumStatus>> {
+    return this.request('/premium/activate', {
+      method: 'POST',
+      body: JSON.stringify({ invoice_id: invoiceId }),
+    });
   }
 
   /** Current cryptocurrency prices. */
