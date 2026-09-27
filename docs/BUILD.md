@@ -160,10 +160,16 @@ affiliate input is readable in the distributed client bundle; keep its value
 out of source, commands and logs. Reproduction requires the same build inputs.
 
 Build from one clean, reviewed source commit with the required source checks
-green. Record the complete SHA. The
+green. The protected Builds branch receives a two-parent ingress wrapper whose
+second parent is that source commit and whose tree is identical. Fleet retains
+both identities. The candidate workflow accepts only an explicit dispatch on
+`Builds/smirk-monorepo` main with `expected_sha` equal to the actual wrapper
+commit. Its admission job verifies the parent/tree proof before any platform
+job can consume signing credentials. Tags do not start candidate builds. The
 [candidate workflow](../.gitea/workflows/desktop-build.yml) stages extension,
 macOS, Windows and Linux artifacts internally. Each carries generated provenance
-binding its digests to the exact source commit and tree. Public tags and release
+binding its digests to the exact build commit and tree, approved source parent,
+and previous ingress parent. Public tags and release
 assets are not moved or replaced by that workflow.
 
 Collect one successful workflow run, then verify and sign its complete set.
@@ -172,15 +178,19 @@ fingerprint, optionally followed by `!`. This public selector is required for
 both signing and verification; credential values remain in custody.
 
 ```sh
-scripts/fetch-release-artifacts.sh VERSION --run-id RUN_ID --expect-commit FULL_SOURCE_SHA --dest /path/to/candidate
-scripts/sign-release.sh VERSION --bundle-dir /path/to/candidate --expect-commit FULL_SOURCE_SHA
-scripts/sign-release.sh VERSION --bundle-dir /path/to/candidate --expect-commit FULL_SOURCE_SHA --verify
+scripts/fetch-release-artifacts.sh VERSION --run-id RUN_ID --expect-commit FULL_BUILD_WRAPPER_SHA --dest /path/to/candidate
+scripts/sign-release.sh VERSION --bundle-dir /path/to/candidate --expect-commit FULL_BUILD_WRAPPER_SHA
+scripts/sign-release.sh VERSION --bundle-dir /path/to/candidate --expect-commit FULL_BUILD_WRAPPER_SHA --verify
 ```
 
 The collector uses the enrolled local Gitea credential without placing its value
 in command arguments or output. It verifies HTTPS, refuses cross-host redirects,
 and validates archive paths before extraction. Missing, expired or inaccessible
-artifacts are failures, even when the workflow says it succeeded. No release-tag
+artifacts are failures, even when the workflow says it succeeded. Collection
+reads the exact wrapper and source-parent trees from Gitea and compares every
+artifact receipt to that binding. `source_commit` in the receipt names the
+actual checked-out build commit; `approved_source_commit` names canonical source.
+Do not substitute one identity for the other. No release-tag
 fallback substitutes another run's output.
 
 The signer requires all platforms from the expected commit and source tree. It

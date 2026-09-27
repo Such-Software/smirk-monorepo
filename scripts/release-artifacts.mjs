@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspectBuildIdentity } from './release-admission.mjs';
 
 const platforms = ['extension', 'macos', 'linux', 'windows'];
 const commitPattern = /^[a-f0-9]{40}$/;
@@ -61,9 +62,12 @@ function assertRegularFile(path) {
 }
 
 /** Record only build output. Signing and the combined checksum list come later. */
-export function recordArtifacts(directory, platform, version, sourceCommit, sourceTree) {
+export function recordArtifacts(directory, platform, version, sourceCommit, sourceTree, binding) {
   if (!versionPattern.test(version)) fail('invalid release version');
   if (!commitPattern.test(sourceCommit) || !commitPattern.test(sourceTree)) fail('invalid source identity');
+  if (!commitPattern.test(binding?.approvedSourceCommit ?? '') || !commitPattern.test(binding?.ingressBaseCommit ?? '')
+      || binding.approvedSourceCommit === sourceCommit || binding.ingressBaseCommit === sourceCommit
+      || binding.approvedSourceCommit === binding.ingressBaseCommit) fail('invalid ingress source binding');
   const names = filesIn(directory);
   assertRequired(names, platform, version);
   const artifacts = names.map((name) => {
@@ -72,25 +76,29 @@ export function recordArtifacts(directory, platform, version, sourceCommit, sour
     return { name, sha256: digest(path) };
   });
   const receipt = {
-    schema: 'smirk-release-artifacts-v1', version, platform,
-    source_commit: sourceCommit, source_tree: sourceTree, artifacts,
+    schema: 'smirk-release-artifacts-v2', version, platform,
+    source_commit: sourceCommit, source_tree: sourceTree,
+    approved_source_commit: binding.approvedSourceCommit,
+    ingress_base_commit: binding.ingressBaseCommit, artifacts,
   };
   writeFileSync(join(directory, receiptName(platform, version)), JSON.stringify(receipt, null, 2) + '\n');
   return receipt;
 }
 
 /** Refuse mixed builds, incomplete platforms, changed bytes, or extra artifacts. */
-export function verifyArtifacts(directory, version, expectedCommit) {
+export function verifyArtifacts(directory, version, expectedCommit, expectedBinding) {
   if (!versionPattern.test(version)) fail('invalid release version');
   if (!commitPattern.test(expectedCommit)) fail('--expect-commit must be a full source commit');
   let sourceTree;
+  let approvedSourceCommit;
+  let ingressBaseCommit;
   for (const platform of platforms) {
     const platformDir = platform === 'extension' ? directory : join(directory, platform);
     const receiptPath = join(platformDir, receiptName(platform, version));
     if (!existsSync(receiptPath)) fail(`${platform} source provenance is missing; rebuild this release`);
     assertRegularFile(receiptPath);
     const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
-    if (receipt.schema !== 'smirk-release-artifacts-v1' || receipt.platform !== platform || receipt.version !== version) {
+    if (receipt.schema !== 'smirk-release-artifacts-v2' || receipt.platform !== platform || receipt.version !== version) {
       fail(`${platform} provenance does not describe the requested release`);
     }
     if (receipt.source_commit !== expectedCommit || !commitPattern.test(receipt.source_tree)) {
@@ -98,6 +106,18 @@ export function verifyArtifacts(directory, version, expectedCommit) {
     }
     sourceTree ??= receipt.source_tree;
     if (receipt.source_tree !== sourceTree) fail(`${platform} source tree differs from the other platforms`);
+    if (!commitPattern.test(receipt.approved_source_commit ?? '') || !commitPattern.test(receipt.ingress_base_commit ?? '')
+        || receipt.approved_source_commit === expectedCommit || receipt.ingress_base_commit === expectedCommit
+        || receipt.approved_source_commit === receipt.ingress_base_commit) fail(`${platform} ingress source binding is invalid`);
+    approvedSourceCommit ??= receipt.approved_source_commit;
+    ingressBaseCommit ??= receipt.ingress_base_commit;
+    if (receipt.approved_source_commit !== approvedSourceCommit || receipt.ingress_base_commit !== ingressBaseCommit) {
+      fail(`${platform} ingress source binding differs from the other platforms`);
+    }
+    if (expectedBinding && (receipt.approved_source_commit !== expectedBinding.approvedSourceCommit
+        || receipt.ingress_base_commit !== expectedBinding.ingressBaseCommit || receipt.source_tree !== expectedBinding.sourceTree)) {
+      fail(`${platform} ingress source binding differs from the verified workflow commit`);
+    }
     if (!Array.isArray(receipt.artifacts)) fail(`${platform} artifact evidence is missing`);
     const recorded = new Set();
     for (const entry of receipt.artifacts) {
@@ -127,7 +147,7 @@ export function verifyArtifacts(directory, version, expectedCommit) {
       }
     }
   }
-  return { sourceCommit: expectedCommit, sourceTree };
+  return { sourceCommit: expectedCommit, sourceTree, approvedSourceCommit, ingressBaseCommit };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -145,7 +165,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
       const git = (...argv) => execFileSync('git', ['-C', root, ...argv], { encoding: 'utf8' }).trim();
       if (git('status', '--porcelain', '--', ':!packages/extension/releases')) fail('release source is dirty');
-      const receipt = recordArtifacts(directory, options['--platform'], version, git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}'));
+      const binding = inspectBuildIdentity(root, git('rev-parse', 'HEAD'));
+      const receipt = recordArtifacts(directory, options['--platform'], version, binding.sourceCommit, binding.sourceTree, binding);
       console.log(`Recorded ${receipt.platform} artifact evidence at source ${receipt.source_commit}`);
     } else if (command === 'verify') {
       const result = verifyArtifacts(directory, version, options['--expect-commit']);

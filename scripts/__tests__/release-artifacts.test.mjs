@@ -5,13 +5,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recordArtifacts, verifyArtifacts } from '../release-artifacts.mjs';
+import { recordArtifacts as recordPlatform, verifyArtifacts } from '../release-artifacts.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const source = 'a'.repeat(40);
 const tree = 'b'.repeat(40);
 const version = '0.3.0';
 const signingFingerprint = 'C'.repeat(40);
+const binding = { approvedSourceCommit: 'c'.repeat(40), ingressBaseCommit: 'e'.repeat(40) };
+const recordArtifacts = (...args) => recordPlatform(...args, binding);
 
 function release(t) {
   const directory = mkdtempSync(join(tmpdir(), 'smirk-release-test-'));
@@ -33,7 +35,23 @@ function release(t) {
 }
 
 test('complete candidates verify against one exact source commit and tree', (t) => {
-  assert.deepEqual(verifyArtifacts(release(t), version, source), { sourceCommit: source, sourceTree: tree });
+  assert.deepEqual(verifyArtifacts(release(t), version, source), { sourceCommit: source, sourceTree: tree, ...binding });
+});
+
+test('candidate collection binds every platform to the verified ingress parents', t => {
+  const directory = release(t);
+  assert.doesNotThrow(() => verifyArtifacts(directory, version, source, { ...binding, sourceTree: tree }));
+  assert.throws(() => verifyArtifacts(directory, version, source, {
+    ...binding, sourceTree: tree, approvedSourceCommit: 'f'.repeat(40),
+  }), /verified workflow commit/);
+  const path = join(directory, 'linux', `RELEASE-PROVENANCE-linux-v${version}.json`);
+  const receipt = JSON.parse(readFileSync(path, 'utf8'));
+  receipt.approved_source_commit = 'f'.repeat(40);
+  writeFileSync(path, JSON.stringify(receipt));
+  assert.throws(() => verifyArtifacts(directory, version, source), /binding differs/);
+  delete receipt.approved_source_commit;
+  writeFileSync(path, JSON.stringify(receipt));
+  assert.throws(() => verifyArtifacts(directory, version, source), /binding is invalid/);
 });
 
 test('a different build of the same version cannot pass', (t) => {

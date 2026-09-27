@@ -5,7 +5,9 @@ import { join, resolve, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { verifyArtifacts } from './release-artifacts.mjs';
+import { proveBuildIdentity } from './release-admission.mjs';
 
 export function selectCandidates(run, listing, version, commit) {
   if ((run.head_sha ?? run.commit_sha) !== commit) throw new Error('Workflow run source does not match --expect-commit');
@@ -19,6 +21,48 @@ export function selectCandidates(run, listing, version, commit) {
     if (candidate.expired || !Number.isSafeInteger(candidate.id) || candidate.id <= 0) throw new Error(`${platform} candidate is expired or has an invalid artifact ID`);
     return { platform, name, id: candidate.id, url: candidate.archive_download_url };
   });
+}
+
+/** Gitea tree.sha can echo the requested commit. Hash the complete tree object. */
+export function treeObjectId(response) {
+  if (!Array.isArray(response?.tree) || response.truncated !== false
+      || response.page !== 1 || response.total_count !== response.tree.length) {
+    throw new Error('Complete nonrecursive tree evidence is unavailable');
+  }
+  const modes = { '040000': 'tree', '100644': 'blob', '100755': 'blob', '120000': 'blob', '160000': 'commit' };
+  const names = new Set();
+  const entries = response.tree.map(entry => {
+    if (!entry || modes[entry.mode] !== entry.type || !/^[0-9a-f]{40}$/.test(entry.sha ?? '')
+        || typeof entry.path !== 'string' || !entry.path || /[\0/]/.test(entry.path)
+        || entry.path === '.' || entry.path === '..' || names.has(entry.path)) {
+      throw new Error('Tree evidence has an invalid or duplicate entry');
+    }
+    names.add(entry.path);
+    return { ...entry, order: Buffer.from(entry.path + (entry.type === 'tree' ? '/' : '')) };
+  }).sort((a, b) => Buffer.compare(a.order, b.order));
+  const bytes = Buffer.concat(entries.flatMap(entry => [
+    Buffer.from(`${entry.mode.replace(/^0+/, '')} ${entry.path}\0`), Buffer.from(entry.sha, 'hex'),
+  ]));
+  return createHash('sha1').update(`tree ${bytes.length}\0`).update(bytes).digest('hex');
+}
+
+export async function readRunBinding(run, api, commit, getJson) {
+  if (run.event !== 'workflow_dispatch' || run.head_branch !== 'main'
+      || run.path !== 'desktop-build.yml@refs/heads/main') {
+    throw new Error('Candidate run is not the admitted main-branch release workflow dispatch');
+  }
+  const build = await getJson(`${api}/git/commits/${commit}`);
+  const parents = build.parents?.map(parent => parent.sha);
+  if (!Array.isArray(parents) || parents.length !== 2 || parents.some(parent => !/^[0-9a-f]{40}$/.test(parent ?? ''))) {
+    throw new Error('Candidate build does not have two exact ingress parents');
+  }
+  const [source, buildTree, sourceTree] = await Promise.all([
+    getJson(`${api}/git/commits/${parents[1]}`),
+    getJson(`${api}/git/trees/${commit}?recursive=false&per_page=1000&page=1`),
+    getJson(`${api}/git/trees/${parents[1]}?recursive=false&per_page=1000&page=1`),
+  ]);
+  return proveBuildIdentity({ sha: build.sha, tree: treeObjectId(buildTree), parents },
+    { sha: source.sha, tree: treeObjectId(sourceTree) }, commit);
 }
 
 export async function fetchSameOrigin(url, origin, token, fetchImpl = fetch) {
@@ -73,6 +117,7 @@ async function main(argv) {
   const run = await (await get(`${api}/actions/runs/${runId}`)).json();
   const listing = await (await get(`${api}/actions/runs/${runId}/artifacts?limit=100`)).json();
   const candidates = selectCandidates(run, listing, version, commit);
+  const binding = await readRunBinding(run, api, commit, async url => (await get(url)).json());
   await mkdir(dirname(dest), { recursive: true });
   const temp = await mkdtemp(join(dirname(dest), '.smirk-candidate-'));
   const staged = join(temp, 'staged');
@@ -94,9 +139,9 @@ async function main(argv) {
         execFileSync('python3', [extractor, join(unpacked, expected), join(staged, candidate.platform)], { stdio: ['ignore', 'ignore', 'inherit'] });
       }
     }
-    await verifyArtifacts(staged, version, commit);
+    await verifyArtifacts(staged, version, commit, binding);
     await rename(staged, dest);
-    console.log(`Verified candidates from run ${runId}, source ${commit}, staged in ${dest}`);
+    console.log(`Verified candidates from run ${runId}, build ${commit}, approved source ${binding.approvedSourceCommit}, staged in ${dest}`);
     console.log(`Next, with SMIRK_SIGNING_KEY set to the full release subkey fingerprint: scripts/sign-release.sh ${version} --bundle-dir '${dest.replaceAll("'", "'\\''")}' --expect-commit ${commit}`);
   } finally { await rm(temp, { recursive: true, force: true }); }
 }

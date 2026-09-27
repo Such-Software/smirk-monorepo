@@ -7,12 +7,35 @@ name: Release build (Gitea)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+    inputs:
+      expected_sha:
+        description: 'Exact protected Builds commit admitted by Fleet'
+        required: true
+        type: string
 
 jobs:
+  admission:
+    name: Admit exact candidate source
+    runs-on: ubuntu-latest
+    outputs:
+      build_commit: ${{ steps.admit.outputs.build_commit }}
+      approved_source_commit: ${{ steps.admit.outputs.approved_source_commit }}
+      ingress_base_commit: ${{ steps.admit.outputs.ingress_base_commit }}
+      source_tree: ${{ steps.admit.outputs.source_tree }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify dispatch and tree-identical ingress wrapper
+        id: admit
+        env:
+          EXPECTED_SHA: ${{ github.event.inputs.expected_sha }}
+        run: node scripts/release-admission.mjs
+
   build:
+    needs: admission
     # Isolated toolchain homes, one per job. These runners execute several jobs
     # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
     # job's toolchain install rewrites binaries another job is mid-way through
@@ -64,6 +87,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.admission.outputs.build_commit }}
+          fetch-depth: 2
+          persist-credentials: false
 
       - name: Require release swap configuration
         run: |
@@ -621,6 +648,7 @@ jobs:
 
 
   extension:
+    needs: admission
     # Isolated toolchain homes, one per job. These runners execute several jobs
     # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
     # job's toolchain install rewrites binaries another job is mid-way through
@@ -639,6 +667,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.admission.outputs.build_commit }}
+          fetch-depth: 2
+          persist-credentials: false
 
       - name: Require release swap configuration
         run: |
