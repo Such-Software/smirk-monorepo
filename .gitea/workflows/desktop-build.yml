@@ -410,10 +410,10 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
-          # Updater signing. tauri.conf.json carries the PUBLIC half and sets
-          # updater.active = true, so every shipped build checks for updates.
-          # Without these the bundler emits no .sig, and an update the app finds
-          # can never be verified, stranding users on the version they installed.
+          # Payload signing is configured in tauri.conf.json and requires this
+          # private key to match its pinned public key. The current client does
+          # not invoke update checks or installation; users download and reinstall.
+          # Retain verified .sig files for the configured updater payloads.
           # minisign, from `tauri signer generate`. NOT the PGP release key: that
           # signs artifacts for humans, this signs update payloads for the app.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
