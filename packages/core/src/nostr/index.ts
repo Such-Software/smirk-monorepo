@@ -17,3 +17,4 @@ export * from './app-enc';
 export * from './nip07';
 export * from './payments';
 export * from './giftwrap';
+export * from './session-roots';

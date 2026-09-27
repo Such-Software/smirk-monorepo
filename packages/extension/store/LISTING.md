@@ -1,5 +1,7 @@
 # Store listings: Smirk Wallet v0.3.0
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Source of truth for what goes in the Chrome Web Store and addons.mozilla.org
 listings. Edit here, paste from here, so the two stores cannot drift apart.
 
@@ -24,17 +26,14 @@ disproves by looking at the picture is worse than no caption.
 
     Smirk Wallet
 
-45 char limit on Chrome. Fine.
-
 ## Short description / summary
 
-131 chars, inside Chrome's 132 limit and Mozilla's 250. Kept identical to the
+Within the [Chrome manifest's 132-character limit](https://developer.chrome.com/docs/extensions/reference/manifest/description). Kept identical to the
 `description` field in `manifest.json` and `manifest.firefox.json`, because
 Chrome reads the listing summary from the manifest on first upload and a
 mismatch is confusing later.
 
-    Non-custodial Bitcoin, Litecoin, Monero, Wownero and Grin wallet with a
-    built-in Nostr identity. Your keys never leave your device.
+    Bitcoin, Litecoin, Monero, Wownero and Grin wallet with Nostr. Your spending keys stay on your device.
 
 This replaced "Non-custodial multi-currency tip wallet for Telegram, Discord,
 and more", which described v0.2.x. Tipping is still in the product; it is no
@@ -50,9 +49,9 @@ longer the whole of it.
 
     YOUR KEYS, YOUR COINS
     Your seed is generated on your device, encrypted with your password, and
-    never sent anywhere. There is no signup, no email, no KYC and no account to
-    freeze. Smirk cannot move your funds, and neither can anyone who runs a
-    Smirk server.
+    never sent to a backend. Backend registration policy depends on the
+    operator. A server can restrict its services, but it does not hold the
+    spending keys needed to move your wallet funds.
 
     A NOSTR IDENTITY FROM THE SAME SEED
     Your Nostr key is derived from your wallet seed, so your identity travels
@@ -62,9 +61,10 @@ longer the whole of it.
 
     WORKS WITH WEB APPS
     Smirk exposes a wallet API to sites that ask for it, so a web app can request
-    a payment or a signature. Every request shows you exactly what you are
-    approving before anything is signed, and a site gets access only after you
-    grant it.
+    a payment or a signature. The approval screen shows what you are
+    approving when a request needs confirmation. Optional scoped permissions
+    can cover later requests; revoke them in Settings. You can also require a
+    password for each send or signing request while keeping the wallet unlocked.
 
     RUN YOUR OWN SERVER
     Smirk talks to a backend for chain data. The default is ours; the wallet
@@ -123,7 +123,7 @@ compare the answer against the code.
 | `storage` | Stores the password-encrypted seed, wallet settings and per-site permission grants locally. The seed and the spend keys derived from it never leave the device, and neither do the permission grants; what the wallet does send to a backend is listed under Data disclosures below. |
 | `alarms` | Wakes the service worker on a schedule to refresh balances and to enforce the auto-lock timeout. MV3 service workers are killed when idle, so a timer alone cannot do this. |
 | `notifications` | Notifies the user when a payment arrives or a site is waiting on an approval. |
-| `offscreen` | The wallet's cryptography runs in an offscreen document. Key derivation and signing need a DOM-bearing context that MV3 service workers do not provide. |
+| `offscreen` | Keeps long-running wallet registration and proof-of-work jobs alive when Chrome suspends a popup or service worker. Sensitive signing remains in an authorized wallet context. |
 | `clipboardRead` | Pastes an address, a Grin slatepack or a tip link, all of which are far too long to retype. |
 | `clipboardWrite` | Copies the user's receive address or slatepack to the clipboard. |
 | `<all_urls>` | See below. |
@@ -140,8 +140,9 @@ The one that gets extensions rejected, so answer it precisely:
     The content script only announces that a wallet is present and relays
     messages the page explicitly sends to it. It does not read page content, and
     it does not act on any site the user has not granted. No site gets an
-    address, a balance, a signature or a payment without an explicit approval
-    the user sees and confirms.
+    address, balance, signature or payment outside the permissions the user
+    granted. Sensitive requests use the wallet approval flow; allowed scoped
+    requests can reuse an existing grant.
 
     Users who do not want this at all can turn the injection off entirely in
     Settings ("Disable window.smirk on websites").
@@ -189,8 +190,8 @@ Do NOT tick these, and the code backs that up:
 
 - Health information: never touched.
 - Location: no geolocation API, no location lookup. The backend sees request IPs
-  as any server does and stores them only as a salted one-way hash for
-  rate-limiting.
+  as any server does. The application uses keyed hashes for rate-limit
+  records; infrastructure and third-party logging are separate policies.
 - Web history and user activity: the content script announces the wallet and
   relays only messages a page explicitly sends it. Per-site permission grants
   stay in local `storage`; no browsing data, page content or site list is
@@ -255,7 +256,7 @@ the root of the source archive:
 
     Build environment
       Linux x86_64 (macOS arm64 also reproduces)
-      Node 22.x (the workspace `engines` field requires >=20), npm as shipped
+      Node 22.x or newer, npm as shipped
         with that Node release
       GNU make
       Rust via rustup. The exact version and the wasm32-unknown-unknown

@@ -7,14 +7,14 @@
  * cancel button (routes/inbox.tsx).
  */
 
-import { api, buildSlatepackChannels, type GrinPendingOverlay } from '@smirk/core';
+import { api, buildSlatepackChannels, type GrinPendingOverlay, type NostrKeySource } from '@smirk/core';
 
 import { parseRelayRef } from './relay-ref';
 import { getActiveNostrIdentity } from './nostr-vault';
 import { grinOverlay } from './grin-flows';
 import { updateGrinTxStatus } from './grin-tx-journal';
 
-async function channelsFor(userId: string, mnemonic: string) {
+async function channelsFor(userId: string, mnemonic: NostrKeySource) {
   const identity = await getActiveNostrIdentity(mnemonic);
   return buildSlatepackChannels({ grin: api, userId, identity });
 }
@@ -25,11 +25,13 @@ export async function respondToInboxItem(params: {
   relayId: string;
   s2Armored: string;
   userId: string;
-  mnemonic: string;
+  mnemonic: NostrKeySource;
+  assertSession?: () => void;
 }): Promise<{ error?: string }> {
   const ref = parseRelayRef(params.relayId);
   try {
     const channels = await channelsFor(params.userId, params.mnemonic);
+    params.assertSession?.();
     if (ref.channel === 'nostr') {
       await channels.nostr.respond(ref.slateId, params.s2Armored, ref.counterparty);
     } else {
@@ -75,14 +77,18 @@ export async function freeInboxReservedInputs(
 export async function cancelInboxItem(params: {
   relayId: string;
   userId: string;
-  mnemonic: string;
+  mnemonic: NostrKeySource;
+  beforeSign?: () => Promise<void>;
+  assertSession?: () => void;
 }): Promise<{ error?: string }> {
   const ref = parseRelayRef(params.relayId);
   // Free the reserved inputs first, before the transport cancel, so a transport
   // failure can't leave the inputs wedged until the age-out.
   await freeInboxReservedInputs(params.relayId);
   try {
+    if (ref.channel === 'nostr') await params.beforeSign?.();
     const channels = await channelsFor(params.userId, params.mnemonic);
+    params.assertSession?.();
     if (ref.channel === 'nostr') {
       await channels.nostr.cancel(ref.slateId, ref.counterparty);
     } else {

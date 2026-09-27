@@ -1,5 +1,7 @@
 # Smirk Monorepo Architecture
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 This document captures the long-form design decisions behind the
 monorepo's package layout, what's shared vs. platform-specific, and
 the build-pipeline gotchas that bit us so they don't bite again.
@@ -137,22 +139,12 @@ that out of the box; the popup tries to instantiate WASM and gets
 `LinkError: Import #0 "env" "malloc": function import requires a
 callable`.
 
-**Resolution options** (decreasing complexity, increasing portability):
-
-1. **`--target no-modules`**: single-file IIFE-style glue. No `import`
-   statements. Self-contained. Works in any WebView (extension,
-   Capacitor, Tauri). Slight payload increase. **Recommended for
-   v0.3.**
-2. **`--target web` + Vite plugin** (`vite-plugin-wasm` or hand-rolled
-   `resolveId` for `env`). More moving parts.
-3. **`--target bundler` + Webpack**: works but requires us to ship a
-   Webpack pipeline alongside Vite. No.
-4. **Pin to wasm-bindgen 0.2.92**: last version without the env
-   placeholders. Works but tech-debts us into an old wasm-bindgen.
-
-The build script lives at `crates/smirk-wasm/build.sh`. Whoever
-touches it: stay on `--target no-modules` until the bundler ecosystem
-catches up.
+The shipped build uses `--target no-modules` and
+`crates/smirk-wasm/postprocess.mjs` to provide the C import shims and ESM export.
+`make wasm` owns that build path. Install the wasm-bindgen CLI version resolved
+in `Cargo.lock`; do not downgrade it to an old example version. Browser and
+Node-target smoke tests have different import environments, so verify the target
+that is actually packaged.
 
 ### MV3 popup CSP
 
@@ -184,16 +176,25 @@ but `__wbg_get_imports()` then references the aliased empty module as
 the source of WASM's `env.malloc`/`env.free`, and `WebAssembly.instantiate`
 throws `LinkError`. Use `--target no-modules` instead.
 
-### chrome.storage.session structured clone
+### Wallet unlock lifetime
 
-**Problem:** `JSON.stringify(Infinity)` returns `"null"`, so a "never
-expires" sentinel of `Infinity` round-tripped through a JSON-based
-storage layer becomes invalid. We use `chrome.storage.session` which
-uses structured cloning (preserves `Infinity` correctly), but it's
-fragile to depend on. The session-cache for opt-in auto-unlock has no
-"never" option: `clampAutoLockMinutes` bounds the lifetime to
-`AUTO_LOCK_MAX_MINUTES` (24h), and a legacy sentinel read from storage
-collapses to that cap.
+An unlocked wallet holds complete signing authority for supported operations.
+Password unlock derives scoped BTC/LTC account nodes, Grin spend and slatepack
+keys, Nostr identity roots, an identity-vault key, and app encryption roots. The
+version 3 session cache retains those scoped keys in memory-backed session
+storage. It never contains the recovery phrase, BIP39 seed or BIP32 master root.
+Disclosure still exposes spend and signing authority for the session lifetime.
+
+The selected grace period, including one hour or four hours, survives popup
+close, pop-out and background-worker restart. Restore never extends the original
+deadline. Explicit Lock clears both cache and pending handoffs, revokes other open
+wallet windows, and cancels password verification or unlock already in progress.
+A window-only session can transfer once through a 30-second pop-out handoff.
+Incomplete version 2 caches require one password unlock to populate scoped keys.
+
+Password confirmation for sending and signing is independently configurable.
+Verifying an operation password neither replaces the wallet session nor extends
+its deadline. Recovery-phrase display still requires password verification.
 
 ### LWS admin endpoint hard rules
 
@@ -395,3 +396,10 @@ When porting code from the legacy `smirk-extension` v0.2.x codebase
 into a monorepo package, treat it as a rewrite target rather than a
 copy-paste source. Several patterns (fresh per-tx OVK, MV3 CSP,
 derived build ordering) have to be re-architected to fit this repo.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

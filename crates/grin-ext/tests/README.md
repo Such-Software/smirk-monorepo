@@ -1,5 +1,7 @@
 # `grin-ext` validation strategy
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 This crate implements the Grin slate / slatepack / kernel ceremony from
 scratch (not a fork). The unit tests in `src/**/tests` verify internal
 correctness (given inputs we control, do our functions produce the
@@ -86,3 +88,10 @@ fn our_slate_v4_parses_in_grin_wallet() {
 No local setup is required: `cargo test -p grin-ext` fetches the pinned
 reference automatically. To move the pin, bump the `rev` in
 `Cargo.toml::dev-dependencies`.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

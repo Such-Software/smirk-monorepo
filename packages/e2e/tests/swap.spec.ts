@@ -84,12 +84,6 @@ test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)',
   footage,
 }) => {
   const page = await context.newPage();
-  page.on('console', (m) => {
-    const t = m.text();
-    if (/swap|trocador|quote|error|fail|401/i.test(t)) {
-      console.log('CONSOLE', m.type(), t.slice(0, 200));
-    }
-  });
 
   // Intercept the client-direct Trocador quote call and return a
   // deterministic stub, so QuoteStep renders without an external rate

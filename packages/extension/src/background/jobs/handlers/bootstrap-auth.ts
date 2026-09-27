@@ -29,7 +29,7 @@
  * with HTTP 422 'altcha_solution: missing field `challenge`'.
  */
 
-import { api, solvePowChallenge } from '@smirk/core';
+import { api, solvePowChallenge, requireRestoreState } from '@smirk/core';
 
 import type { JobHandler } from '../types';
 import { PAYMENT_PENDING_SENTINEL } from '../types';
@@ -109,27 +109,14 @@ function friendlyRegisterError(result: {
 export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
   kind: 'bootstrap-auth',
   async run(input, ctx) {
-    // ---- 1. checkRestore: best-effort lookup for resume heights ----
-    let xmrStartHeight: number | undefined;
-    let wowStartHeight: number | undefined;
-    let isKnownWallet = false;
-    try {
-      const restoreCheck = await api.checkRestore({
-        fingerprint: input.fingerprint,
-        keys: input.keys as Parameters<typeof api.checkRestore>[0]['keys'],
-      });
-      if (restoreCheck.data?.exists) {
-        isKnownWallet = true;
-        if (typeof restoreCheck.data.xmrStartHeight === 'number') {
-          xmrStartHeight = restoreCheck.data.xmrStartHeight;
-        }
-        if (typeof restoreCheck.data.wowStartHeight === 'number') {
-          wowStartHeight = restoreCheck.data.wowStartHeight;
-        }
-      }
-    } catch (e) {
-      console.warn('[bootstrap-auth] checkRestore failed, treating as new:', e);
-    }
+    // Read restore evidence before deriving a new birthday or starting PoW.
+    const restore = await requireRestoreState(api, {
+      fingerprint: input.fingerprint,
+      keys: input.keys as Parameters<typeof api.checkRestore>[0]['keys'],
+    });
+    const isKnownWallet = restore.exists;
+    const xmrStartHeight = isKnownWallet ? restore.xmrStartHeight ?? undefined : undefined;
+    const wowStartHeight = isKnownWallet ? restore.wowStartHeight ?? undefined : undefined;
 
     const walletBirthday = isKnownWallet
       ? undefined
@@ -229,6 +216,7 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
         // Namespaced backend puts is_new at the top level (data.isNew); a flat
         // backend may nest it under user. Read both so onboarding branches right.
         isNew: result.data.isNew ?? result.data.user.isNew ?? false,
+        restoreState: isKnownWallet ? 'existing' : 'new',
         ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
         ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
       },

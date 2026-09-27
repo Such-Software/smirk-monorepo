@@ -64,7 +64,7 @@ export async function readBootstrapCache(
       entry.expiresAtMs ?? entry.cachedAt + BOOTSTRAP_CACHE_FALLBACK_TTL_MS;
     if (Date.now() >= expiresAtMs) return null;
     if (!entry.accessToken || !entry.bootstrap?.userId) return null;
-    return { accessToken: entry.accessToken, bootstrap: entry.bootstrap };
+    return { accessToken: entry.accessToken, bootstrap: withoutNewWalletAdmission(entry.bootstrap) };
   } catch {
     return null;
   }
@@ -91,7 +91,7 @@ export async function writeBootstrapCache(
   const entry: BootstrapCacheEntry = {
     fingerprint: walletFingerprint,
     accessToken,
-    bootstrap,
+    bootstrap: withoutNewWalletAdmission(bootstrap),
     cachedAt,
     expiresAtMs: sessionExpiry ?? cachedAt + BOOTSTRAP_CACHE_FALLBACK_TTL_MS,
   };
@@ -100,6 +100,13 @@ export async function writeBootstrapCache(
   } catch (e) {
     console.warn('[smirk] bootstrap cache write failed', e);
   }
+}
+
+/** Cached login state cannot replay the initial permission to create at tip. */
+function withoutNewWalletAdmission(bootstrap: BootstrapAuthResult): BootstrapAuthResult {
+  const projected = { ...bootstrap };
+  if (projected.restoreState === 'new') delete projected.restoreState;
+  return projected;
 }
 
 export async function clearBootstrapCache(): Promise<void> {

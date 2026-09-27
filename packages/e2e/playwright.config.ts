@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
 
 /**
  * The MV3 extension runs in a persistent Chromium context with a background
@@ -7,13 +8,8 @@ import { defineConfig } from '@playwright/test';
  * paper over). `BACKEND_URL` targets the instance under test; default is the
  * local smirk-backend-core.
  */
-// CAPTURE_VIDEO=1|on records EVERY test's video + screenshots (not just failures) so an
-// e2e run doubles as demo-video capture. The extension's own persistent context records
-// the popup / approval window at a mobile-portrait size (see fixtures/extension.ts);
-// this covers any Playwright-managed contexts too. Default stays lean: on-failure only.
-const CAPTURE = ['1', 'on', 'true', 'yes'].includes(
-  (process.env.CAPTURE_VIDEO ?? '').toLowerCase(),
-);
+assertPrivateCapture();
+process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
 
 export default defineConfig({
   testDir: './tests',
@@ -28,17 +24,10 @@ export default defineConfig({
   // `skip-guard` fails the run when specs skip without an expected reason, or
   // when overall coverage collapses. Without it the suite can report
   // "2 passed, 23 skipped" and exit 0. A skip is not a pass.
-  // WARNING: `--reporter=<x>` on the CLI REPLACES this whole list, which
-  // silently drops the skip guard. A local `npx playwright test --reporter=line`
-  // therefore reports "28 passed, 8 skipped" and exits 0 even when specs that
-  // should have run were quietly excused. That happened during development of
-  // this very suite, so use `npm test` (no --reporter) or, if you must override,
-  // keep the guard: `--reporter=list,./skip-guard-reporter.ts` (which is what
-  // the CI workflows do).
-  reporter: [['list'], ['html', { open: 'never' }], ['./skip-guard-reporter.ts']],
-  use: {
-    trace: 'retain-on-failure',
-    screenshot: CAPTURE ? 'on' : 'only-on-failure',
-    video: CAPTURE ? 'on' : 'retain-on-failure',
-  },
+  // Reporter overrides are refused by preflight: generic reporters can retain
+  // input values, assertion diffs, browser logs and page snapshots.
+  reporter: [['./private-reporter.ts'], ['./skip-guard-reporter.ts']],
+  quiet: true,
+  preserveOutput: 'never',
+  use: PRIVATE_USE,
 });

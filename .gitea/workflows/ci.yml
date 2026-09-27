@@ -185,10 +185,11 @@ jobs:
         run: |
           for pkg in @smirk/assets @smirk/core @such-software/smirk-dapp-api \
                      @smirk/dapp-browser @smirk/extension @smirk/keymap \
-                     @smirk/swap @smirk/ui; do
+                     @smirk/swap @smirk/ui @smirk/desktop; do
             echo "── $pkg ──"
             npm test -w "$pkg"
           done
+          node --test scripts/__tests__/*.test.mjs
 
   openapi-drift:
     name: API client is current

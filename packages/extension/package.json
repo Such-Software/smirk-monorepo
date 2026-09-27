@@ -2,10 +2,10 @@
   "name": "@smirk/extension",
   "version": "0.3.0",
   "private": true,
-  "description": "Smirk browser extension (Chrome MV3 + Firefox). v0.3 monorepo build — the canonical Smirk client.",
+  "description": "Smirk browser extension for Chrome MV3 and Firefox, built from the shared wallet core.",
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "vite build --watch",

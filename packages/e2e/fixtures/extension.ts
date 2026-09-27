@@ -1,4 +1,6 @@
-import { test as base, chromium, type BrowserContext } from '@playwright/test';
+import { chromium, type BrowserContext } from '@playwright/test';
+import { test as base } from './private-test.js';
+import { assertPrivateCapture, sanitizeTestErrors } from '../capture-policy.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
@@ -9,65 +11,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXTENSION_DIST =
   process.env.EXTENSION_DIST ?? join(__dirname, '..', '..', 'extension', 'dist');
 
-/**
- * `CAPTURE_VIDEO=1` records EVERY page in the context (popup, approval window, dapp
- * page) to `CAPTURE_VIDEO_DIR` (default `packages/e2e/videos/`), not just on failure,
- * so an e2e run doubles as raw demo-video capture of real flows (payment popup, connect,
- * operator console) that feeds the such-graphics branding pipeline. Default off: normal
- * runs keep only the config's on-failure video. Video needs a headed/new-headless
- * Chromium, which the extension context already uses.
- */
-import { homedir } from 'node:os';
 import { Footage } from './footage.js';
 
-/**
- * Marketing capture: same phone-shaped viewport as demo video, but at 2x device
- * scale so a 500x900 popup renders 1000x1800. Store listings want 1290x2796
- * (iOS 6.7") and 1280x800 (Chrome), and downscaling a 2x capture is clean while
- * upscaling a 1x one is visibly soft.
- */
-export const MARKETING_SHOTS = ['1', 'on', 'true', 'yes'].includes(
-  (process.env.MARKETING_SHOTS ?? '').toLowerCase(),
-);
-
-/**
- * Which surface the marketing capture is shooting. See the viewport note in the
- * context fixture for why one shape cannot serve both store families.
- *   popup  the real Chrome popup, for the Chrome Web Store and AMO
- *   phone  a phone screen, for the App Store and Google Play
- */
+// Legacy exports remain for closed marketing specs. Capture cannot be enabled
+// in a wallet context; a future demo needs its own reviewed secret-free fixture.
+export const MARKETING_SHOTS = false;
+export const CAPTURE_VIDEO = false;
 export const MARKETING_VARIANT = process.env.MARKETING_VARIANT === 'phone' ? 'phone' : 'popup';
-
-export const MARKETING_VIEWPORT =
-  MARKETING_VARIANT === 'phone' ? { width: 390, height: 844 } : { width: 380, height: 600 };
-
-export const CAPTURE_VIDEO = ['1', 'on', 'true', 'yes'].includes(
-  (process.env.CAPTURE_VIDEO ?? '').toLowerCase(),
-);
-// Captures are regenerable, so they land under `~/Build/smirk-monorepo/e2e/`,
-// never in the worktree. `CAPTURE_VIDEO_DIR` overrides. Raw captures are
-// intermediates; promote finished clips with `scripts/process-footage.mjs
-// --promote`, which a human runs after watching them.
-const VIDEO_DIR =
-  process.env.CAPTURE_VIDEO_DIR ??
-  join(homedir(), 'Build', 'smirk-monorepo', 'e2e', 'videos');
-
-/**
- * Capture at a MOBILE-PORTRAIT size by default. The wallet popup + the dapp approval
- * window are already phone-shaped, so a portrait viewport yields clean vertical clips
- * ideal for mobile / short-form content (App Store previews, Reels/TikTok), feeding
- * the such-graphics pipeline (which upscales to the canonical 1920x1080@60 with brand
- * framing). Override with CAPTURE_VIDEO_W / CAPTURE_VIDEO_H for a different aspect.
- */
-// MUST be >= 481px wide. styles.css locks html/body to a fixed 380x600 popup
-// and only switches to `100%/100vh` above a 481px breakpoint, so a narrower
-// capture leaves the wallet letterboxed at 600px inside a taller frame: dead
-// grey space below, and the bottom nav stranded mid-video. 500x900 clears the
-// breakpoint so the layout fills, while staying portrait for short-form.
-const VIDEO_SIZE = {
-  width: Number(process.env.CAPTURE_VIDEO_W ?? 500),
-  height: Number(process.env.CAPTURE_VIDEO_H ?? 900),
-};
 
 /**
  * Load the built extension into a persistent Chromium context and expose its id.
@@ -84,10 +34,11 @@ export const test = base.extend<{
   /** Mark moments worth showing; see fixtures/footage.ts. */
   footage: Footage;
 }>({
-  context: async ({}, use) => {
+  context: async ({ trace, screenshot, video }, use, testInfo) => {
+    assertPrivateCapture({ trace, screenshot, video });
     if (!existsSync(join(EXTENSION_DIST, 'manifest.json'))) {
       throw new Error(
-        `extension build not found at ${EXTENSION_DIST} — run \`npm run build:chrome -w @smirk/extension\` first`,
+        `extension build not found at ${EXTENSION_DIST}; run \`npm run build:chrome -w @smirk/extension\` first`,
       );
     }
     const context = await chromium.launchPersistentContext('', {
@@ -98,43 +49,17 @@ export const test = base.extend<{
         `--load-extension=${EXTENSION_DIST}`,
         '--no-sandbox',
       ],
-      // Demo capture: record every page (popup, approval window, dapp) at a
-      // mobile-portrait viewport so the clips are phone-shaped. Off by default.
-      ...(CAPTURE_VIDEO
-        ? { recordVideo: { dir: VIDEO_DIR, size: VIDEO_SIZE }, viewport: VIDEO_SIZE }
-        : {}),
-      // Marketing stills: high-DPI, at the shape of the surface being sold.
-      // Kept separate from CAPTURE_VIDEO because recording while screenshotting
-      // produces neither a good clip nor a sharp frame.
-      //
-      // The video viewport (500x900) was the obvious reuse and is wrong for
-      // stills: it clears the 481px breakpoint into the wide layout, so content
-      // sits in a short block with dead area beneath and the wallet reads as
-      // empty.
-      //
-      // Two variants, because one shape cannot serve both store families:
-      //   popup  380x600  the ACTUAL Chrome popup, for the Chrome/AMO listing
-      //   phone  390x844  a phone screen, for the App Store and Play listings
-      // 380x600 is aspect 0.63 and an iPhone 6.7" canvas is 0.46, so a popup
-      // frame CANNOT fill a mobile canvas at any scale and leaves a dead band
-      // no captioning can hide. 390x844 is 0.462 against the canvas' 0.461, so
-      // it fills. It is also honest: the mobile app is this same UI full-screen
-      // on a phone, so it is the shape a store visitor will actually get.
-      ...(MARKETING_SHOTS && !CAPTURE_VIDEO ? { viewport: MARKETING_VIEWPORT, deviceScaleFactor: 3 } : {}),
     });
-    await use(context);
-    await context.close();
+    try {
+      await use(context);
+    } finally {
+      sanitizeTestErrors(testInfo);
+      await context.close();
+    }
   },
 
-  footage: async ({ context }, use, testInfo) => {
-    const f = new Footage(testInfo);
-    // Track pages as they open; see the note in footage.ts on why reading
-    // context.pages() at teardown loses almost every video.
-    context.on('page', (p) => f.track(p));
-    for (const p of context.pages()) f.track(p);
-    await use(f);
-    // Written after the test body so page.video() paths have resolved.
-    await f.writeManifest(context);
+  footage: async ({}, use) => {
+    await use(new Footage());
   },
 
   extensionId: async ({ context }, use) => {

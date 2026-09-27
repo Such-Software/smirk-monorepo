@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   api,
   deriveNostrIdentity,
+  nostrKeySource,
   addDerivedIdentity,
   addBurnerIdentity,
   importIdentity,
@@ -31,6 +32,7 @@ import { publishNip05Profile } from '../nostr-link';
 import { nip05HomeDomain } from '../nip05';
 import { walletKeystore, store } from '../singletons';
 import { writeSessionCache } from '../session-cache';
+import { authorizeOperation, assertOperationSession } from '../operation-auth';
 
 /**
  * Settings → Nostr identities (P2 multi-identity switcher). One wallet, many
@@ -42,14 +44,8 @@ import { writeSessionCache } from '../session-cache';
  * encrypted at rest under a mnemonic-derived key; the plaintext never leaves an
  * unlocked context. See nostr-vault.ts + @smirk/core identity-store.
  */
-// Every per-identity action needs the seed: renaming writes the vault, Use
-// re-derives, Reveal exports an nsec. A session restored from the keep-unlocked
-// cache deliberately has no mnemonic, so these used to sit DISABLED, which reads
-// as "this wallet is broken" when the wallet is in fact unlocked and working.
-//
-// They stay pressable and ask for the password inline instead, the same way
-// `commit` and `onLinkActive` already do. Telling someone to unlock a wallet
-// they have unlocked is not an instruction they can follow.
+// Scoped roots keep identity management available throughout the unlock period.
+// The inline unlock remains a recovery path for an incomplete legacy session.
 
 export function NostrIdentityRoute({
   wallet,
@@ -61,12 +57,10 @@ export function NostrIdentityRoute({
   /** Called after a successful inline unlock so the app can adopt the full wallet. */
   onUnlocked?: (w: UnlockedWallet) => void;
 }) {
-  // On a warm resume the seed isn't in memory (wallet.mnemonic is undefined). We
-  // keep the hub VIEWABLE read-only and let the user re-enter their password
-  // inline to unlock management; that fresh unlock lives here for the session.
+  // A fresh password unlock can replace an incomplete legacy session.
   const [reunlocked, setReunlocked] = useState<UnlockedWallet | null>(null);
   const activeWallet = reunlocked ?? wallet;
-  const mnemonic = activeWallet.mnemonic;
+  const keySource = nostrKeySource(activeWallet);
   const [vault, setVault] = useState<IdentityVault | null>(null);
   const [linkedPubkey, setLinkedPubkey] = useState<string | null>(null);
   // The account's claimed Smirk username, so we can lead with the human handle
@@ -102,25 +96,21 @@ export function NostrIdentityRoute({
   const [publishingProfile, setPublishingProfile] = useState(false);
 
   useEffect(() => {
-    if (mnemonic) {
-      void loadVault(mnemonic).then(setVault).catch((e) => setError(String(e)));
+    if (keySource) {
+      void loadVault(keySource).then(setVault).catch((e) => setError(String(e)));
       return;
     }
-    // Warm resume: no seed in memory, but the roster (labels + active pointer)
-    // is readable by fingerprint. Show it read-only instead of a "locked" wall;
-    // writes prompt for the password inline (doInlineUnlock).
+    // An incomplete legacy session can still read public vault metadata.
     setError(undefined);
     void loadVaultByFingerprint(activeWallet.fingerprint)
       .then((v) => {
         if (v) setVault(v);
       })
       .catch(() => {});
-  }, [mnemonic]);
+  }, [keySource]);
 
-  // Re-derive the seed for this session by re-entering the password, without
-  // leaving the hub. Mirrors the whole-app unlock (index.tsx): keystore.unlock
-  // then re-warm the (mnemonic-less) session cache. Setting reunlocked flips
-  // `mnemonic` on, so the effect above reloads the full vault.
+  // Recover an incomplete legacy session through the normal password unlock.
+  // Complete restored sessions already have the scoped authority needed here.
   const doInlineUnlock = async () => {
     if (!unlockPw) return;
     setUnlocking(true);
@@ -132,7 +122,7 @@ export function NostrIdentityRoute({
       setReunlocked(w);
       // Tell the app, not just this component. `reunlocked` is local state, so
       // without this the rest of the popup kept the stripped wallet: Send still
-      // reported "Wallet not unlocked (no mnemonic available)", Grin flows still
+      // reported "Wallet not unlocked (no keySource available)", Grin flows still
       // refused, and the header chip still would not persist a switch. The user
       // typed their password and the wallet appeared to get worse.
       onUnlocked?.(w);
@@ -206,8 +196,8 @@ export function NostrIdentityRoute({
   // Persist a mutated vault + reflect it in state. `op` labels the in-flight
   // action so buttons can show progress; errors surface, never throw.
   const commit = async (op: string, next: IdentityVault) => {
-    if (!mnemonic) {
-      // Warm resume: a write needs the seed; surface the inline unlock instead
+    if (!keySource) {
+      // An incomplete legacy session needs password recovery before a write
       // of throwing on the saveVault non-null assertion.
       promptUnlock('Enter your password to change your identities.');
       return;
@@ -215,7 +205,7 @@ export function NostrIdentityRoute({
     setBusy(op);
     setError(undefined);
     try {
-      await saveVault(mnemonic, next);
+      await saveVault(keySource, next);
       setVault(next);
       // Keep the session-cached active key in sync so a switched burner/imported
       // identity survives a warm resume too (see nostr-vault.ts).
@@ -232,34 +222,34 @@ export function NostrIdentityRoute({
     void commit('switch', setActiveIdentity(vault, pubkeyHex));
   };
   const onAddDerived = () => {
-    if (!vault || !mnemonic) return;
-    void commit('add-derived', addDerivedIdentity(vault, mnemonic).vault);
+    if (!vault || !keySource) return;
+    void commit('add-derived', addDerivedIdentity(vault, keySource).vault);
   };
   const onAddBurner = () => {
-    if (!vault || !mnemonic) return;
+    if (!vault || !keySource) return;
     // Burner keys are random, NOT seed-derived; restoring the seed on a new
     // device will not bring them back. Make that explicit at creation time.
     const ok = window.confirm(
       'Create a new burner identity?\n\n' +
         'A burner has a fresh random key that is NOT part of your seed phrase. ' +
-        'Restoring your seed on a new device will NOT recover it — back up its nsec ' +
+        'Restoring your seed on a new device will NOT recover it. back up its nsec ' +
         '(🔑 Reveal) if you want to keep it.',
     );
     if (!ok) return;
-    void commit('add-burner', addBurnerIdentity(vault, vaultCrypto(mnemonic).encrypt).vault);
+    void commit('add-burner', addBurnerIdentity(vault, vaultCrypto(keySource).encrypt).vault);
   };
   const onImport = () => {
-    if (!vault || !mnemonic || !nsec.trim()) return;
+    if (!vault || !keySource || !nsec.trim()) return;
     // Imported keys are external: stored encrypted here but outside your seed.
     const ok = window.confirm(
       'Import this nsec?\n\n' +
         'Imported keys are stored encrypted in this wallet but are NOT part of your ' +
-        'seed phrase. Keep your own backup of the nsec — restoring your seed elsewhere ' +
+        'seed phrase. Keep your own backup of the nsec. restoring your seed elsewhere ' +
         'will not recover it.',
     );
     if (!ok) return;
     try {
-      const next = importIdentity(vault, nsec.trim(), vaultCrypto(mnemonic).encrypt).vault;
+      const next = importIdentity(vault, nsec.trim(), vaultCrypto(keySource).encrypt).vault;
       setNsec('');
       void commit('import', next);
     } catch (e) {
@@ -277,7 +267,7 @@ export function NostrIdentityRoute({
     const backupNote =
       id.source === 'derived'
         ? 'It can be re-derived from your seed.'
-        : 'Its key is NOT in your seed — back up the nsec first or it is gone.';
+        : 'Its key is NOT in your seed. back up the nsec first or it is gone.';
     if (!window.confirm(`Remove "${id.label ?? shortNpub(id.npub)}"?\n\n${backupNote}`)) return;
     try {
       void commit('remove', removeIdentity(vault, id.pubkeyHex));
@@ -288,11 +278,7 @@ export function NostrIdentityRoute({
 
   const onLinkActive = async () => {
     if (!vault) return;
-    // Warm resume drops the seed, and linking has to sign with account-0. Returning
-    // silently here would leave the one control that activates your handle doing
-    // nothing with nothing said. Prompt for the password instead, exactly as
-    // `commit` and `onPublishProfile` do.
-    if (!mnemonic) {
+    if (!keySource) {
       promptUnlock('Enter your password to link your identity.');
       return;
     }
@@ -302,15 +288,17 @@ export function NostrIdentityRoute({
       // Backend "Sign in with Nostr" binds the STABLE primary (account-0), the same
       // key the auth bootstrap signs with, NOT the switchable active identity, so
       // compartmentalizing with a burner never changes or breaks your Smirk account.
-      const primary = deriveNostrIdentity(mnemonic, 0);
+      await authorizeOperation('sign', activeWallet, 'Link your identity and publish your profile');
+      assertOperationSession(activeWallet);
+      const primary = deriveNostrIdentity(keySource, 0);
       const r = await api.linkNostr(primary);
       if (r.data?.nostrPubkey) {
         setLinkedPubkey(r.data.nostrPubkey);
         // Advertise the now-linked handle on Nostr so external clients verify it.
-        void publishNip05Profile(primary);
+        await publishNip05Profile(primary, () => assertOperationSession(activeWallet));
       }
       else if (r.status === 409) setError('This identity is already linked to a different Smirk account.');
-      else if (r.status === 401) setError('Your session expired — unlock and try again.');
+      else if (r.status === 401) setError('Your session expired. unlock and try again.');
       else setError(r.error ?? 'Link failed');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Link failed');
@@ -321,8 +309,8 @@ export function NostrIdentityRoute({
 
   // Reveal/export the nsec for backup (esp. burner/imported keys, which live ONLY in
   // the encrypted vault). Gated behind an explicit confirm; toggles off on re-tap.
-  const onReveal = (id: StoredIdentity) => {
-    if (!vault || !mnemonic) return;
+  const onReveal = async (id: StoredIdentity) => {
+    if (!vault || !keySource) return;
     if (revealedNsec?.pubkeyHex === id.pubkeyHex) {
       setRevealedNsec(null);
       return;
@@ -330,11 +318,13 @@ export function NostrIdentityRoute({
     const ok = window.confirm(
       `Reveal the secret key (nsec) for "${id.label ?? shortNpub(id.npub)}"?\n\n` +
         'Anyone with this nsec fully controls this identity. Only reveal it to back it ' +
-        'up somewhere safe — never paste it into a website.',
+        'up somewhere safe. never paste it into a website.',
     );
     if (!ok) return;
     try {
-      const resolved = resolveIdentity(vault, id.pubkeyHex, mnemonic, vaultCrypto(mnemonic).decrypt);
+      await authorizeOperation('sign', activeWallet, "Reveal this identity's private key");
+      assertOperationSession(activeWallet);
+      const resolved = resolveIdentity(vault, id.pubkeyHex, keySource, vaultCrypto(keySource).decrypt);
       setRevealedNsec({ pubkeyHex: id.pubkeyHex, nsec: encodeNsec(resolved.privateKey) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not reveal the key');
@@ -347,6 +337,8 @@ export function NostrIdentityRoute({
     setClaiming(true);
     setClaimErr(null);
     try {
+      if (keySource) await authorizeOperation('sign', activeWallet, 'Claim your handle and publish your profile');
+      assertOperationSession(activeWallet);
       const res = await api.setMySmirkUsername(wanted);
       if (res.status === 409) {
         // The single most likely outcome when reclaiming a name you used on an
@@ -354,7 +346,7 @@ export function NostrIdentityRoute({
         // account even though it is the same person.
         setClaimErr(
           `"${wanted}" is already taken. If it was yours on an older wallet, it is still ` +
-            `held by that wallet's account — the operator has to release or move it.`,
+            `held by that wallet's account. the operator has to release or move it.`,
         );
         return;
       }
@@ -365,7 +357,7 @@ export function NostrIdentityRoute({
       setHandle(res.data.username);
       setClaimInput('');
       // A claimed handle is not discoverable until a kind-0 advertises it.
-      if (mnemonic) void publishNip05Profile(deriveNostrIdentity(mnemonic, 0));
+      if (keySource) await publishNip05Profile(deriveNostrIdentity(keySource, 0), () => assertOperationSession(activeWallet));
     } catch (e) {
       setClaimErr(e instanceof Error ? e.message : 'Could not claim that handle.');
     } finally {
@@ -373,42 +365,40 @@ export function NostrIdentityRoute({
     }
   };
 
-  const onPublishProfile = () => {
-    if (!mnemonic) {
+  const onPublishProfile = async () => {
+    if (!keySource) {
       promptUnlock('Enter your password to publish your handle.');
       return;
     }
     setPublishingProfile(true);
     setPublishMsg(null);
-    void publishNip05Profile(deriveNostrIdentity(mnemonic, 0))
-      .then((res) => {
-        if (res.ok) {
-          setPublishMsg(`Published ${res.nip05} to Nostr.`);
-          return;
-        }
-        // The overwhelmingly common case, and previously invisible: this backend
-        // account never claimed a name, so there is no handle to advertise.
-        if (res.reason === 'no-handle')
-          setPublishMsg(
-            'This account has no Smirk handle claimed, so there is nothing to publish yet.',
-          );
-        else if (res.reason === 'no-relays')
-          setPublishMsg('No Nostr relays are configured on this backend.');
-        else setPublishMsg(`Could not publish: ${res.detail ?? 'the relays did not accept it'}`);
-      })
-      .finally(() => setPublishingProfile(false));
+    try {
+      await authorizeOperation('sign', activeWallet, 'Sign and publish your profile');
+      assertOperationSession(activeWallet);
+      const res = await publishNip05Profile(
+        deriveNostrIdentity(keySource, 0), () => assertOperationSession(activeWallet),
+      );
+      if (res.ok) setPublishMsg(`Published ${res.nip05} to Nostr.`);
+      else if (res.reason === 'no-handle') setPublishMsg('Claim a Smirk handle before publishing it.');
+      else if (res.reason === 'no-relays') setPublishMsg('No Nostr relays are configured on this backend.');
+      else setPublishMsg(`Could not publish: ${res.detail ?? 'the relays did not accept it'}`);
+    } catch (e) {
+      setPublishMsg(e instanceof Error ? e.message : 'Could not publish your profile.');
+    } finally {
+      setPublishingProfile(false);
+    }
   };
 
   // Download an encrypted backup of the whole identity vault so burner/imported keys
   // survive a reinstall. Sealed under the mnemonic-derived key (same trust boundary
   // as the seed): only THIS wallet's seed can restore it.
   const onExportBackup = async () => {
-    if (!mnemonic) {
+    if (!keySource) {
       setShowUnlock(true);
       return;
     }
     try {
-      const blob = await exportVaultBackup(mnemonic);
+      const blob = await exportVaultBackup(keySource);
       const url = URL.createObjectURL(new Blob([blob], { type: 'application/json' }));
       const a = document.createElement('a');
       a.href = url;
@@ -422,14 +412,14 @@ export function NostrIdentityRoute({
   };
 
   const onRestoreBackup = async () => {
-    if (!mnemonic) {
+    if (!keySource) {
       setShowUnlock(true);
       return;
     }
     const text = backupText.trim();
     if (!text) return;
     if (
-      isForeignVaultBackup(mnemonic, text) &&
+      isForeignVaultBackup(keySource, text) &&
       !window.confirm(
         'This backup was made with a DIFFERENT wallet seed, so its keys cannot be ' +
           'decrypted here. Continue anyway?',
@@ -440,7 +430,7 @@ export function NostrIdentityRoute({
     setBusy('restore');
     setError(undefined);
     try {
-      const merged = await restoreVaultBackup(mnemonic, text);
+      const merged = await restoreVaultBackup(keySource, text);
       setVault(merged);
       void refreshActiveNostrKeyCache(activeWallet);
       setBackupText('');
@@ -467,10 +457,10 @@ export function NostrIdentityRoute({
       <h2 style={{ fontSize: 16, marginTop: 4 }}>Nostr identities</h2>
       <p style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.4, marginTop: 4 }}>
         Switch which identity signs, pays, and receives. Burner + imported keys are
-        encrypted with your wallet — back up an nsec before removing it.
+        encrypted with your wallet. Back up an nsec before removing it.
       </p>
 
-      {!mnemonic && (
+      {!keySource && (
         <div
           data-testid="nostr-locked-notice"
           style={{
@@ -610,7 +600,7 @@ export function NostrIdentityRoute({
           </span>
           <span style={{ fontSize: 11, opacity: 0.75 }}>
             {linkedPubkey
-              ? '✓ verified — people can find and pay you by this name'
+              ? '✓ verified. people can find and pay you by this name'
               : 'Reserved. Link your identity below to activate it.'}
           </span>
         </div>
@@ -683,7 +673,7 @@ export function NostrIdentityRoute({
                   <button
                     data-testid={`nostr-switch-${id.pubkeyHex}`}
                     onClick={() =>
-                      mnemonic
+                      keySource
                         ? onSwitch(id.pubkeyHex)
                         : promptUnlock('Enter your password to switch identity.')
                     }
@@ -696,7 +686,7 @@ export function NostrIdentityRoute({
                 )}
                 <button
                   onClick={() =>
-                    mnemonic
+                    keySource
                       ? setRenaming({ pubkeyHex: id.pubkeyHex, label: id.label ?? '' })
                       : promptUnlock('Enter your password to rename this identity.')
                   }
@@ -709,7 +699,7 @@ export function NostrIdentityRoute({
                 <button
                   data-testid={`nostr-reveal-${id.pubkeyHex}`}
                   onClick={() =>
-                    mnemonic
+                    keySource
                       ? onReveal(id)
                       : promptUnlock('Enter your password to reveal this secret key.')
                   }
@@ -738,7 +728,7 @@ export function NostrIdentityRoute({
                   }}
                 >
                   <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600 }}>
-                    Secret key — back this up, never share it
+                    Secret key. back this up, never share it
                   </span>
                   <div
                     data-testid={`nostr-nsec-${id.pubkeyHex}`}
@@ -773,10 +763,10 @@ export function NostrIdentityRoute({
       ) : null}
 
       <div style={{ marginTop: 14, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <button data-testid="nostr-add-derived" onClick={onAddDerived} disabled={!!busy || !mnemonic} style={actionBtn}>
+        <button data-testid="nostr-add-derived" onClick={onAddDerived} disabled={!!busy || !keySource} style={actionBtn}>
           + Seed account
         </button>
-        <button data-testid="nostr-add-burner" onClick={onAddBurner} disabled={!!busy || !mnemonic} style={actionBtn}>
+        <button data-testid="nostr-add-burner" onClick={onAddBurner} disabled={!!busy || !keySource} style={actionBtn}>
           + Burner
         </button>
       </div>
@@ -789,7 +779,7 @@ export function NostrIdentityRoute({
           onInput={(e) => setNsec((e.target as HTMLInputElement).value)}
           style={{ ...settingsInputStyle, flex: 1 }}
         />
-        <button data-testid="nostr-import-btn" onClick={onImport} disabled={!!busy || !nsec.trim() || !mnemonic} style={actionBtn}>
+        <button data-testid="nostr-import-btn" onClick={onImport} disabled={!!busy || !nsec.trim() || !keySource} style={actionBtn}>
           Import
         </button>
       </div>
@@ -798,15 +788,15 @@ export function NostrIdentityRoute({
           imported keys, which are NOT re-derivable from the seed. */}
       <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <button data-testid="nostr-export-backup" onClick={() => void onExportBackup()} disabled={!!busy || !mnemonic} style={actionBtn}>
+          <button data-testid="nostr-export-backup" onClick={() => void onExportBackup()} disabled={!!busy || !keySource} style={actionBtn}>
             ⬇ Export identities backup
           </button>
-          <button data-testid="nostr-restore-toggle" onClick={() => setShowRestore((s) => !s)} disabled={!!busy || !mnemonic} style={actionBtn}>
+          <button data-testid="nostr-restore-toggle" onClick={() => setShowRestore((s) => !s)} disabled={!!busy || !keySource} style={actionBtn}>
             Restore…
           </button>
         </div>
         <p style={{ fontSize: 11, opacity: 0.6, lineHeight: 1.4, margin: 0 }}>
-          Encrypted with your seed — only THIS wallet can restore it. It's how burner
+          Encrypted with a key derived from your recovery phrase. Only this wallet can restore it. It's how burner
           and imported keys survive a reinstall.
         </p>
         {showRestore && (
@@ -835,7 +825,7 @@ export function NostrIdentityRoute({
             <div data-testid="nostr-linked-badge" style={linkedBadge}>
               ✓ Your account is linked to your primary Nostr identity
             </div>
-            {/* Rendered unconditionally: gating this on `mnemonic` would hide the
+            {/* Rendered unconditionally: gating this on `keySource` would hide the
                 control outright on a warm resume. The handler prompts for the
                 password. */}
             <button data-testid="nostr-publish-profile" onClick={onPublishProfile} disabled={publishingProfile} style={{ ...smallBtn, alignSelf: 'flex-start' }}>
@@ -851,7 +841,7 @@ export function NostrIdentityRoute({
         )}
         {/* Shown at the control that was pressed. Without it the only feedback is a
             field far above the fold, which reads as a dead button. */}
-        {unlockPrompt && !mnemonic && (
+        {unlockPrompt && !keySource && (
           <div
             data-testid="nostr-unlock-prompt"
             style={{ fontSize: 12, color: '#f5c542', marginTop: 8 }}

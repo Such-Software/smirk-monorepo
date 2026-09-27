@@ -92,9 +92,12 @@ export async function sendDm(
    * milliseconds and makes burner and fresh identities work.
    */
   powBits?: number,
+  /** Recheck foreground authorization after asynchronous recipient lookup. */
+  assertSession?: () => void,
 ): Promise<DmSendResult> {
   const { pubkeyHex, relays, inboxFound } = await resolveDmRelays(recipient);
   const deliveryRelays = dedup([...relays, ...messagingRelays()]);
+  assertSession?.();
   await messagingProvider().sendDm({
     identity,
     recipientPubkeyHex: pubkeyHex,

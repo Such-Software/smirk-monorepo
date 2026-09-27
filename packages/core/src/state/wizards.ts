@@ -49,6 +49,8 @@ export class Wizard<TFields extends Record<string, unknown>> {
    * state load completing after the React-style mount-time
    * `if (!active) start()` guard fires), returns the existing state
    * unchanged. Use [`cancel`] + [`start`] for an explicit restart.
+   * An optional preparation callback can initialize from persisted state inside
+   * the same serialized update, without racing the component's first render.
    *
    * Idempotency is load-bearing: SendWizard / TipMaker / etc. call
    * `start()` from a `useEffect([])` on mount. Without idempotency,
@@ -57,7 +59,7 @@ export class Wizard<TFields extends Record<string, unknown>> {
    * persisted wizard state with a fresh step-0, losing whatever
    * progress the user had before closing the popup.
    */
-  async start(): Promise<WizardState> {
+  async start(prepare?: (current: WizardState) => WizardState): Promise<WizardState> {
     const next = await this.store.update((s) => {
       if (!Object.prototype.hasOwnProperty.call(s.wizards, this.id)) {
         s.wizards[this.id] = {
@@ -66,6 +68,9 @@ export class Wizard<TFields extends Record<string, unknown>> {
           startedAt: Date.now(),
         };
       }
+      // Initialization reads persisted state inside the same serialized update.
+      // A component's first render may still contain the unhydrated defaults.
+      if (prepare) s.wizards[this.id] = prepare(s.wizards[this.id]!);
     });
     return next.wizards[this.id]!;
   }

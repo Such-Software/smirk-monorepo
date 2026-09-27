@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { api, setActiveIdentity, type UnlockedWallet } from '@smirk/core';
+import { api, setActiveIdentity, nostrKeySource, type UnlockedWallet } from '@smirk/core';
 import { IdentityPicker, useRoute, type PickerIdentity } from '@smirk/ui';
 import { bytesToHex } from './format';
 import { nip05HomeDomain } from './nip05';
@@ -144,7 +144,7 @@ export function HeaderIdentitySwitcher({ wallet }: { wallet: UnlockedWallet }) {
   }, [wallet.fingerprint, onIdentityHub]);
 
   const onSelect = (pubkey: string) => {
-    const mnemonic = wallet.mnemonic;
+    const mnemonic = nostrKeySource(wallet);
     // Don't claim a switch that cannot be committed. On a warm resume there is
     // no seed, so the vault write below is skipped and nothing ever reverts the
     // optimistic update: the chip showed the newly-picked identity while every
@@ -158,12 +158,12 @@ export function HeaderIdentitySwitcher({ wallet }: { wallet: UnlockedWallet }) {
       void navigate('settings/nostr');
       return;
     }
-    setActivePubkey(pubkey); // optimistic; the vault write below commits it
     void (async () => {
       const vault = await loadVault(mnemonic);
       await saveVault(mnemonic, setActiveIdentity(vault, pubkey));
       await refreshActiveNostrKeyCache(wallet);
-    })();
+      setActivePubkey(pubkey);
+    })().catch(() => { void navigate('settings/nostr'); });
   };
 
   // Hand the handle to the ONE identity that owns it; every other row keeps its

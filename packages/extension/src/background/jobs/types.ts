@@ -69,6 +69,7 @@ export interface JobKindMap {
         userId: string;
         username?: string;
         isNew: boolean;
+        restoreState?: 'new' | 'existing';
         xmrStartHeight?: number;
         wowStartHeight?: number;
       };

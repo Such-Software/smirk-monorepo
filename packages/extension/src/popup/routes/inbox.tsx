@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { type UnlockedWallet } from '@smirk/core';
+import { nostrKeySource, type UnlockedWallet } from '@smirk/core';
 import {
   InboxTab,
   useRoute,
@@ -11,6 +11,7 @@ import {
 import { store } from '../singletons';
 import { cancelInboxItem } from '../inbox-actions';
 import { MessagesRoute } from './messages';
+import { authorizeOperation, assertOperationSession } from '../operation-auth';
 
 /**
  * InboxPasteRouter: universal paste-and-dispatch screen.
@@ -464,12 +465,15 @@ export function InboxRouter({
     // it. Routes over the item's transport: a Nostr item (relayId packs the
     // counterparty) gift-wraps a cancel back to the sender; a backend item hits
     // the relay cancel endpoint.
-    const mnemonic = wallet.mnemonic;
+    const mnemonic = nostrKeySource(wallet);
     if (!mnemonic) {
       window.alert("Couldn't cancel: wallet is locked");
       return;
     }
-    const cancelRes = await cancelInboxItem({ relayId: item.relayId, userId, mnemonic });
+    const cancelRes = await cancelInboxItem({ relayId: item.relayId, userId, mnemonic,
+      beforeSign: () => authorizeOperation('sign', wallet, 'Cancel this Grin exchange'),
+      assertSession: () => assertOperationSession(wallet),
+    });
     if (cancelRes.error) {
       window.alert(`Couldn't cancel: ${cancelRes.error}`);
       return;

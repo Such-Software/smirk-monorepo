@@ -1,15 +1,14 @@
 # @smirk/swap
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Swap orchestration layer for Smirk Wallet.
 
-This package answers one question:
-
-> How does the wallet swap asset A for asset B without the UI
-> having to know whether it's going through an aggregator (today)
-> or a native peer-to-peer adaptor-signature flow (later)?
+The shared swap interface separates quote and trade lifecycle from the UI.
+Trocador is the implemented provider; native peer-to-peer swaps are future work.
 
 The UI talks to a `Swap`. The `Swap` decides whether to drive an
-aggregator round-trip or, in v0.4+, an end-to-end cryptographic
+aggregator round-trip or, in a future release, an end-to-end cryptographic
 exchange.
 
 ## Implementations
@@ -18,7 +17,7 @@ exchange.
 |----------------|--------------|---------------------------------------------------|
 | `ThorchainSwap`| aggregator   | stub: `supports()` only; every call throws `not_implemented` |
 | `TrocadorSwap` | aggregator   | quote / start / status against trocador.app       |
-| `NativeSwap`   | adaptor sigs | planned: Grin ↔ BTC/LTC in v0.4, WOW ↔ XMR in v0.6 |
+| `NativeSwap`   | adaptor sigs | not implemented; no release commitment |
 
 Aggregator implementations call out to a third-party service for
 the route + escrow address. Native implementations will run the
@@ -60,3 +59,10 @@ if (swap.supports('btc', 'ltc')) {
 ## License
 
 MIT OR Apache-2.0.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

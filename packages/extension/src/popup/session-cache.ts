@@ -1,252 +1,139 @@
 import {
-  SESSION_CACHE_KEY,
-  reviveForSessionCache,
-  parseSessionCache,
-  derivedKeysUsable,
-  restoreUnlockedFromCache,
-  clampAutoLockMinutes,
-  serializeForSessionCache,
-  sweepLegacyBtcLtc,
-  LEGACY_WALLET_KEY,
-  type SessionCachePayload,
-  type UnlockedWallet,
-  type LegacySweepResult,
+  SESSION_CACHE_KEY, parseSessionCache, reviveForSessionCache, serializeForSessionCache,
+  derivedKeysUsable, restoreUnlockedFromCache, hasCompleteSigningMaterial,
+  clampAutoLockMinutes, sweepLegacyBtcLtc, LEGACY_WALLET_KEY,
+  type SessionCachePayload, type UnlockedWallet, type LegacySweepResult,
 } from '@smirk/core';
 import { storage, walletKeystore, sessionStorage } from './singletons';
-import { cacheActiveNostrKeyForSession, clearCachedActiveNostrKey } from './nostr-vault';
+import { clearCachedActiveNostrKey } from './nostr-vault';
+import { ensureSessionSecrets } from './session-signing';
+import { authorizeOperation, assertOperationSession } from './operation-auth';
+import { SESSION_LOCK_KEY, canRestoreLocalSession, acknowledgePasswordUnlock } from './session-lock';
 
-/**
- * Try to restore a previously-cached unlocked wallet from
- * `chrome.storage.session`. Returns `null` if the cache is empty,
- * expired, malformed, or the wallet keystore's fingerprint doesn't
- * match (defensive: a re-imported wallet should NOT be auto-unlocked
- * from another wallet's cache).
- *
- * On a successful restore, writes the wallet back into
- * `walletKeystore.cached` so the rest of the app treats the state as
- * normally-unlocked.
- */
-export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
-  // Never downgrade a wallet that is already unlocked in memory.
-  //
-  // The cached payload is mnemonic-less by design, and this function writes
-  // whatever it restores into `walletKeystore.cached`. The unlock path calls
-  // `writeSessionCache` and then `refresh`, and `refresh` calls this first, so
-  // with auto-lock above zero the sequence was: unlock produces a wallet WITH
-  // the mnemonic, the cache is written without it, and this immediately
-  // replaced the good wallet with the stripped one. npub sign-in then failed
-  // with "needs the unlocked mnemonic" on a password unlock that had just
-  // succeeded, and unlocking again repeated it.
-  //
-  // It only bit users who had set a timeout: at zero, `writeSessionCache`
-  // deletes the entry instead of writing one, so there was nothing here to
-  // clobber with, and "lock immediately" looked like a fix for an unrelated
-  // problem.
-  const live = await walletKeystore.getState();
-  if (live.kind === 'unlocked' && live.wallet.mnemonic) {
-    return live.wallet;
-  }
+const SESSION_HANDOFF_KEY = 'smirk.session.handoff.v1';
+export const HANDOFF_TTL_MS = 30_000;
 
-  // A handoff from a window that is popping out. Consumed once and deleted: it
-  // is a transfer between two windows of one session, not a stored session, and
-  // leaving it behind would let a stale 30-second entry unlock a later window.
-  //
-  // Read BEFORE the real cache so a pop-out under auto-lock 0 works at all: at
-  // 0 there is no real cache by design, and the handoff is the only thing
-  // carrying the session across.
-  const handoff = await sessionStorage.get(SESSION_HANDOFF_KEY);
-  if (handoff) {
-    await sessionStorage.remove(SESSION_HANDOFF_KEY);
-    const revived = parseSessionCache(reviveForSessionCache(handoff));
-    if (revived && Date.now() < revived.expiresAtMs && derivedKeysUsable(revived.keys)) {
-      const ks = await walletKeystore.getState();
-      if (ks.kind !== 'empty' && ks.keystore.fingerprint === revived.fingerprint) {
-        const wallet = restoreUnlockedFromCache({
-          keys: revived.keys,
-          addresses: revived.addresses,
-          fingerprint: revived.fingerprint,
-        });
-        (walletKeystore as unknown as { cached: UnlockedWallet }).cached = wallet;
-        return wallet;
-      }
-    }
-  }
-
-  const stored = await sessionStorage.get(SESSION_CACHE_KEY);
-  if (!stored) return null;
-  // Revive `{__u8:hex}` (and recover a legacy numeric-object form) back to real
-  // Uint8Arrays before validating: see serializeForSessionCache in keystore.ts.
-  const raw = reviveForSessionCache(stored);
-
-  // Parse via @smirk/core's `parseSessionCache`. Rejects:
-  //   - legacy v0.2.x { mnemonic, fingerprint, expiresAtMs } shape
-  //   - missing version: 2 or missing _noMnemonic brand
-  //   - any payload that re-introduces a `mnemonic` field
-  // Any rejection drops the stored entry; the user re-enters their
-  // password once. See keystore.ts SessionCachePayload.
-  const entry = parseSessionCache(raw);
-  if (!entry) {
-    await sessionStorage.remove(SESSION_CACHE_KEY);
-    return null;
-  }
-  if (Date.now() >= entry.expiresAtMs) {
-    await sessionStorage.remove(SESSION_CACHE_KEY);
-    return null;
-  }
-  // Cross-check fingerprint against the keystore on disk: if the
-  // user re-imported a different wallet, the stale cache must not
-  // unlock it.
-  const ksState = await walletKeystore.getState();
-  if (ksState.kind === 'empty' || ksState.keystore.fingerprint !== entry.fingerprint) {
-    await sessionStorage.remove(SESSION_CACHE_KEY);
-    return null;
-  }
-  // Guard: if the key bytes didn't survive storage (revive couldn't recover real
-  // Uint8Arrays), drop the cache and fall back to a password unlock instead of
-  // restoring a wallet whose keys crash the auth bootstrap.
-  if (!derivedKeysUsable(entry.keys)) {
-    await sessionStorage.remove(SESSION_CACHE_KEY);
-    return null;
-  }
-  try {
-    const wallet = restoreUnlockedFromCache({
-      keys: entry.keys,
-      addresses: entry.addresses,
-      fingerprint: entry.fingerprint,
-    });
-    (walletKeystore as unknown as { cached: UnlockedWallet }).cached = wallet;
-    return wallet;
-  } catch {
-    await sessionStorage.remove(SESSION_CACHE_KEY);
-    return null;
-  }
+export async function clearSessionCache(): Promise<void> {
+  await Promise.all([
+    sessionStorage.remove(SESSION_CACHE_KEY),
+    sessionStorage.remove(SESSION_HANDOFF_KEY),
+    clearCachedActiveNostrKey(),
+  ]);
 }
 
-/**
- * Persist the unlocked wallet's derived keys + addresses for
- * `minutes` of auto-unlock. Mnemonic is NEVER cached, so a disclosure
- * costs spend authority for the cache window and not the recovery
- * phrase; the full threat model is in the keystore.ts file header.
- *
- * `minutes` is clamped to `[0, AUTO_LOCK_MAX_MINUTES]`. The legacy
- * "Never" sentinel (negative / MAX_SAFE_INTEGER) was dropped in
- * v0.3.0; a stored legacy value self-heals to the 24h cap on read.
- */
-/**
- * @returns the session's expiry, or `null` when auto-lock is "lock immediately"
- * and nothing was cached. Callers pass it to `writeBootstrapCache` so the auth
- * token expires exactly when the unlocked session does; a token with a shorter
- * life leaves the wallet unlocked but unable to authenticate, which is the dead
- * zone described in `bootstrap-cache.ts`.
- */
-/**
- * When the current unlocked session expires, or `null` if there is none.
- *
- * Exposed so the bootstrap (auth token) cache can expire with the session
- * rather than on a timer of its own. Reads the raw entry deliberately: it wants
- * the timestamp, not a revived wallet, and must not disturb the restore path.
- */
+async function currentLockId(): Promise<string | null> {
+  return sessionStorage.get<string>(SESSION_LOCK_KEY);
+}
+
+/** A late storage write must not leave revoked signing keys resident. */
+async function finishCacheWrite(key: string, entry: SessionCachePayload, wallet: UnlockedWallet): Promise<void> {
+  if (await currentLockId() === entry.lockId && hasCompleteSigningMaterial(wallet)) return;
+  const current = await sessionStorage.get<{ lockId?: unknown; expiresAtMs?: unknown }>(key);
+  // Do not clear a later session deliberately established after the lock.
+  if (current?.lockId === entry.lockId && current.expiresAtMs === entry.expiresAtMs) {
+    await sessionStorage.remove(key);
+  }
+  throw new Error('Wallet was locked while its session was being saved.');
+}
+
+/** Restore complete scoped keys only, preserving the original expiry. */
+export async function tryRestoreSessionCache(): Promise<UnlockedWallet | null> {
+  const generation = walletKeystore.captureSessionGeneration();
+  const live = await walletKeystore.getState();
+  if (live.kind === 'unlocked' && hasCompleteSigningMaterial(live.wallet)) {
+    if (live.wallet.mnemonic && live.wallet.seed) acknowledgePasswordUnlock();
+    if (canRestoreLocalSession()) return live.wallet;
+  }
+  if (!canRestoreLocalSession()) return null;
+  const lockId = await currentLockId();
+  for (const key of [SESSION_HANDOFF_KEY, SESSION_CACHE_KEY]) {
+    const stored = await sessionStorage.get(key);
+    if (!stored) continue;
+    if (key === SESSION_HANDOFF_KEY) await sessionStorage.remove(key);
+    let entry: SessionCachePayload | null = null;
+    try { entry = parseSessionCache(reviveForSessionCache(stored)); } catch { /* malformed cache */ }
+    if (!entry || Date.now() >= entry.expiresAtMs || entry.lockId !== lockId
+      || (key === SESSION_HANDOFF_KEY && entry.sessionExpiresAtMs === undefined)
+      || !derivedKeysUsable(entry.keys)) {
+      await sessionStorage.remove(key);
+      continue;
+    }
+    const state = await walletKeystore.getState();
+    if (state.kind === 'empty' || state.keystore.fingerprint !== entry.fingerprint) {
+      await sessionStorage.remove(key);
+      continue;
+    }
+    const expiry = key === SESSION_HANDOFF_KEY ? entry.sessionExpiresAtMs : entry.expiresAtMs;
+    if (expiry !== undefined && expiry !== null && Date.now() >= expiry) continue;
+    const wallet = restoreUnlockedFromCache({
+      keys: entry.keys, addresses: entry.addresses, fingerprint: entry.fingerprint,
+      sessionSecrets: entry.sessionSecrets,
+      ...(expiry !== undefined && expiry !== null ? { sessionExpiresAtMs: expiry } : {}),
+    });
+    // A concurrent explicit lock revokes even a cache read that began earlier.
+    const unchangedEpoch = await currentLockId() === lockId;
+    // The read above can finish while local lock publication is delayed or fails.
+    // Admission rechecks the synchronous keystore generation, never only storage.
+    return walletKeystore.admitRestoredSession(
+      wallet, generation, state.keystore.fingerprint,
+      unchangedEpoch && canRestoreLocalSession() && Date.now() < entry.expiresAtMs,
+    );
+  }
+  await clearCachedActiveNostrKey();
+  return null;
+}
+
 export async function readSessionExpiry(): Promise<number | null> {
   try {
-    const raw = await sessionStorage.get(SESSION_CACHE_KEY);
-    if (!raw || typeof raw !== 'object') return null;
-    const expiresAtMs = (raw as { expiresAtMs?: unknown }).expiresAtMs;
-    if (typeof expiresAtMs !== 'number' || Date.now() >= expiresAtMs) return null;
-    return expiresAtMs;
-  } catch {
-    return null;
-  }
+    const raw = await sessionStorage.get<{ expiresAtMs?: unknown }>(SESSION_CACHE_KEY);
+    const expiry = raw?.expiresAtMs;
+    return typeof expiry === 'number' && Number.isFinite(expiry) && Date.now() < expiry ? expiry : null;
+  } catch { return null; }
 }
 
-export async function writeSessionCache(
-  wallet: UnlockedWallet,
-  minutes: number,
-): Promise<number | null> {
+/** Write complete operation keys to memory-backed storage, never a phrase or seed. */
+export async function writeSessionCache(wallet: UnlockedWallet, minutes: number): Promise<number | null> {
   const clamped = clampAutoLockMinutes(minutes);
   if (clamped === 0) {
-    await sessionStorage.remove(SESSION_CACHE_KEY);
-    await clearCachedActiveNostrKey();
+    delete wallet.sessionExpiresAtMs;
+    await clearSessionCache();
     return null;
+  }
+  const lockId = await currentLockId();
+  const secrets = await ensureSessionSecrets(wallet);
+  if (!hasCompleteSigningMaterial(wallet) || await currentLockId() !== lockId) {
+    throw new Error('Wallet was locked before its session could be saved.');
   }
   const expiresAtMs = Date.now() + clamped * 60_000;
   const entry: SessionCachePayload = {
-    version: 2,
-    _noMnemonic: true,
-    fingerprint: wallet.fingerprint,
-    keys: wallet.keys,
-    addresses: wallet.addresses,
-    expiresAtMs,
+    version: 3, _noMnemonic: true, fingerprint: wallet.fingerprint,
+    keys: wallet.keys, addresses: wallet.addresses, sessionSecrets: secrets,
+    lockId, expiresAtMs,
   };
-  // Serialize Uint8Array key material to `{__u8:hex}`; chrome.storage.session
-  // would otherwise flatten it to a numeric-keyed object that breaks signing on
-  // restore ("private key must be hex string or Uint8Array").
+  wallet.sessionExpiresAtMs = expiresAtMs;
   await sessionStorage.set(SESSION_CACHE_KEY, serializeForSessionCache(entry));
-  // Also cache a NON-default active Nostr identity's key on the same lifetime so it
-  // survives a warm resume (the default account-0 key already rides in wallet.keys).
-  await cacheActiveNostrKeyForSession(wallet, expiresAtMs);
+  await finishCacheWrite(SESSION_CACHE_KEY, entry, wallet);
+  await clearCachedActiveNostrKey();
   return expiresAtMs;
 }
 
-/**
- * Hand the unlocked session to a window this popup is about to spawn.
- *
- * Popping out is `windows.create` followed by `window.close()`: the new window
- * boots a fresh popup that reads the session cache like any cold start. With
- * auto-lock set to 0 the cache is deliberately never written, so the wallet the
- * user unlocked a millisecond ago asks for the password again, and again on
- * every subsequent pop-out. "Lock immediately" should mean locking when you
- * close the wallet, not when you open a second view of it.
- *
- * So this writes the same payload as `writeSessionCache`, with a deliberately
- * tiny lifetime, for the spawning window to consume. It is NOT a way around the
- * user's setting: the entry survives {@link HANDOFF_TTL_MS} and no longer, it
- * carries no mnemonic exactly as the normal cache does not, and once the new
- * window unlocks from it the usual `writeSessionCache` runs with the real
- * setting, which at 0 removes it again.
- *
- * The exposure this adds over an unlocked popup is a few seconds of derived
- * keys in `chrome.storage.session`, which is memory-backed and dies with the
- * browser. That is the narrowest channel available: MV3 can kill the service
- * worker at any moment, so passing it through the background is less reliable,
- * and desktop has no background worker at all.
- */
-export const HANDOFF_TTL_MS = 30_000;
-
-/**
- * The handoff lives under its OWN key.
- *
- * It used to reuse SESSION_CACHE_KEY, which quietly rewrote the user's real
- * session with a 30-second expiry: nothing re-stamps the cache on a handoff
- * restore (that path exists precisely to skip the unlock screen, and unlock is
- * where writeSessionCache is called), so an auto-lock of 4 hours silently
- * became 30 seconds for the rest of the browser session. The next toolbar click
- * or dapp approval asked for the password again, which is the complaint popping
- * out was supposed to fix, moved one step downstream.
- */
-const SESSION_HANDOFF_KEY = 'smirk.session.handoff.v1';
-
+/** Transfer a complete window-only or grace-period session without renewing it. */
 export async function writeSessionHandoff(wallet: UnlockedWallet): Promise<void> {
-  const expiresAtMs = Date.now() + HANDOFF_TTL_MS;
+  const lockId = await currentLockId();
+  const secrets = await ensureSessionSecrets(wallet);
+  if (!hasCompleteSigningMaterial(wallet) || await currentLockId() !== lockId) {
+    throw new Error('Wallet was locked before the new window could open.');
+  }
+  const sessionExpiresAtMs = wallet.sessionExpiresAtMs ?? null;
+  if (sessionExpiresAtMs !== null && Date.now() >= sessionExpiresAtMs) throw new Error('Wallet session expired.');
   const entry: SessionCachePayload = {
-    version: 2,
-    _noMnemonic: true,
-    fingerprint: wallet.fingerprint,
-    keys: wallet.keys,
-    addresses: wallet.addresses,
-    expiresAtMs,
+    version: 3, _noMnemonic: true, fingerprint: wallet.fingerprint,
+    keys: wallet.keys, addresses: wallet.addresses, sessionSecrets: secrets,
+    lockId, sessionExpiresAtMs,
+    expiresAtMs: Math.min(Date.now() + HANDOFF_TTL_MS, sessionExpiresAtMs ?? Infinity),
   };
   await sessionStorage.set(SESSION_HANDOFF_KEY, serializeForSessionCache(entry));
-  // Deliberately does NOT touch the active-identity key cache.
-  //
-  // Passing this 30-second expiry to cacheActiveNostrKeyForSession put a
-  // selected burner on the handoff clock, so it expired half a minute after the
-  // window opened and Messages and Feed asked to re-unlock an identity chosen
-  // while fully unlocked. Worse, when the spawning window was itself warm that
-  // function takes its `!wallet.mnemonic` branch and DELETES the key outright,
-  // breaking the new window from its first paint.
-  //
-  // Whatever the real writeSessionCache stored is still valid and still has the
-  // right lifetime. A handoff is a transfer, not a re-issue.
+  await finishCacheWrite(SESSION_HANDOFF_KEY, entry, wallet);
 }
 
 /**
@@ -290,7 +177,10 @@ export async function convergeLegacySweep(
     // it; the sweep then retries after a full password unlock.
     if (!wallet.mnemonic) return out;
     for (const asset of ['btc', 'ltc'] as const) {
-      const r = await sweepLegacyBtcLtc(asset, wallet, storage);
+      const r = await sweepLegacyBtcLtc(asset, wallet, storage, {
+        authorize: () => authorizeOperation('send', wallet, `Move legacy ${asset.toUpperCase()} funds to your current wallet address`),
+        assertActive: () => assertOperationSession(wallet),
+      });
       out[asset] = r;
       if (r.status === 'swept') {
         out.anySwept = true;

@@ -1,5 +1,7 @@
 # Building Smirk
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client builds and release candidates
+
 How to build the Smirk clients from this monorepo: the **browser extension**
 (Chrome + Firefox) and the **desktop app** (Tauri). The backend lives in the
 separate `smirk-backend-core` repo and is not built here.
@@ -115,7 +117,7 @@ npm run tauri:build -w @smirk/desktop        # native app + installers
 
 Output: `packages/desktop/src-tauri/target/release/`, the raw binary
 (`smirk-desktop`) and, under `bundle/`, the platform artifacts as configured by
-`bundle.targets` in `src-tauri/tauri.conf.json` (Linux: AppImage; macOS: `.app`;
+`bundle.targets` in `src-tauri/tauri.conf.json` (Linux: AppImage and Debian package; macOS: `.app`;
 Windows: NSIS). The **first** build compiles the full Rust webview stack and can
 take several minutes.
 
@@ -134,9 +136,10 @@ npm run typecheck        # all workspaces
 # are listed: add new ones here.
 for pkg in @smirk/assets @smirk/core @such-software/smirk-dapp-api \
            @smirk/dapp-browser @smirk/extension @smirk/keymap \
-           @smirk/swap @smirk/ui; do
+           @smirk/swap @smirk/ui @smirk/desktop; do
   npm test -w "$pkg"
 done
+node --test scripts/__tests__/*.test.mjs
 ```
 
 Root `npm test` is not the unit gate: `--workspaces --if-present` also reaches
@@ -144,3 +147,66 @@ Root `npm test` is not the unit gate: `--workspaces --if-present` also reaches
 running backend, and an extension built against that backend, and aborts on its
 own preflight. Run the Playwright suite in its own environment with
 `npm run e2e -w @smirk/e2e`.
+
+## Release candidates and signatures
+
+The app repository owns client source and build inputs. Use the declared source
+remote and reviewed release ingress. A successful candidate build does not
+publish a release, approve a store submission, or change source authority.
+
+Both release jobs require `TROCADOR_API_KEY` in build custody and refuse before
+building when it is absent. Local development may leave swaps disabled. The
+affiliate input is readable in the distributed client bundle; keep its value
+out of source, commands and logs. Reproduction requires the same build inputs.
+
+Build from one clean, reviewed source commit with the required source checks
+green. Record the complete SHA. The
+[candidate workflow](../.gitea/workflows/desktop-build.yml) stages extension,
+macOS, Windows and Linux artifacts internally. Each carries generated provenance
+binding its digests to the exact source commit and tree. Public tags and release
+assets are not moved or replaced by that workflow.
+
+Collect one successful workflow run, then verify and sign its complete set.
+Set `SMIRK_SIGNING_KEY` to the independently verified full signing subkey
+fingerprint, optionally followed by `!`. This public selector is required for
+both signing and verification; credential values remain in custody.
+
+```sh
+scripts/fetch-release-artifacts.sh VERSION --run-id RUN_ID --expect-commit FULL_SOURCE_SHA --dest /path/to/candidate
+scripts/sign-release.sh VERSION --bundle-dir /path/to/candidate --expect-commit FULL_SOURCE_SHA
+scripts/sign-release.sh VERSION --bundle-dir /path/to/candidate --expect-commit FULL_SOURCE_SHA --verify
+```
+
+The collector uses the enrolled local Gitea credential without placing its value
+in command arguments or output. It verifies HTTPS, refuses cross-host redirects,
+and validates archive paths before extraction. Missing, expired or inaccessible
+artifacts are failures, even when the workflow says it succeeded. No release-tag
+fallback substitutes another run's output.
+
+The signer requires all platforms from the expected commit and source tree. It
+checks required deliverables and their hashes before creating signatures, and
+never borrows an archive from the working checkout. Verification requires GPG's
+machine-readable valid signature from that exact subkey, including refusal of
+expired, revoked or ambiguous evidence. macOS candidates must pass
+Developer ID, expected team, hardened runtime, notarization staple and Gatekeeper
+checks. Windows candidates must pass the signing broker's Authenticode,
+publisher and timestamp checks. See the [desktop owner](../packages/desktop/README.md)
+for platform behavior and the [extension release process](../packages/extension/RELEASE.md)
+for reproduction and store submission.
+
+Credential enrollment belongs to the reviewed custody procedure. Routine builds
+consume enrolled credentials. Store submissions and public uploads remain
+separate release actions against the declared target. Retain source admission,
+candidate hashes, signatures, platform checks and submission receipts in
+`~/journal`. Report staged, submitted, approved and publicly available as distinct
+states.
+
+## Build and release checklist
+
+- [ ] Build tools match the pinned inputs and candidate toolchain record.
+- [ ] Required source checks passed for the reviewed source commit.
+- [ ] Every candidate names that commit and the same source tree.
+- [ ] Platform signatures, provenance, checksums and detached signatures verify.
+- [ ] Final packages pass installation and relevant wallet-operation checks.
+- [ ] Extension source reproduction and store disclosures match the package.
+- [ ] Publication target and actual release state are recorded privately.

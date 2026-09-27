@@ -1,5 +1,7 @@
 # @smirk/extension
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Chrome MV3 + Firefox MV3 wallet extension: the canonical Smirk
 client. v0.3.0+.
 
@@ -87,3 +89,10 @@ Load the unpacked extension from `packages/extension/dist/`.
   message-transport adapter is platform-specific
   (`chrome.runtime.sendMessage` ↔ `__TAURI__.event` ↔
   `Capacitor.WebView`).
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

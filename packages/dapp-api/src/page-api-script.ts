@@ -149,9 +149,8 @@ export function getPageApiInjectionScript(
     '    handleResponse(ev.data.payload);',
     '  });',
     '}',
-    // The window.smirk surface itself. Mirror the methods declared in
-    // `page-api.ts::SmirkPageApi`. Update both together when methods
-    // are added.
+    // Native injection currently exposes the core subset. Keep the integration
+    // guide's platform table aligned when adding methods from SmirkPageApi.
     'var api = {',
     '  isInstalled: function(){ return true; },',
     '  protocolVersion: function(){ return 1; },',

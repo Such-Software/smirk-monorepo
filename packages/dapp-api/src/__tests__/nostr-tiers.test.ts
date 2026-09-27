@@ -59,3 +59,27 @@ test('mergeNostrSession: an all-money grant yields no new session (keeps existin
   const now = 1_000_000;
   assert.equal(mergeNostrSession(undefined, { kinds: [30402, 17], expiresAt: now + 60_000 }, now), undefined);
 });
+
+test('stored grants cannot authorize unknown kinds or an unbounded session', () => {
+  const now = 1_000_000;
+  for (const kind of [0, 3, 30023, 42]) {
+    assert.equal(isNostrSessionActive({ kinds: [kind], expiresAt: now + 60_000 }, kind, now), false);
+  }
+  assert.equal(isNostrSessionActive({ kinds: [1], expiresAt: Infinity }, 1, now), false);
+});
+
+test('merging revalidates existing authority and refuses expired or unbounded additions', () => {
+  const now = 1_000_000;
+  const existing = { kinds: [1, 17, 30023], expiresAt: now + 30_000 };
+  const merged = mergeNostrSession(existing, { kinds: [7], expiresAt: now + 60_000 }, now);
+  assert.ok(merged?.kinds.includes(1));
+  assert.ok(merged?.kinds.includes(7));
+  assert.ok(merged?.kinds.every((kind) => nostrKindTier(kind) === 'session-grantable'));
+  for (const expiresAt of [now - 1, Infinity, NaN]) {
+    const retained = mergeNostrSession(existing, { kinds: [1059], expiresAt }, now);
+    assert.ok(retained?.kinds.includes(1));
+    assert.ok(!retained?.kinds.includes(1059));
+    assert.ok(retained?.kinds.every((kind) => nostrKindTier(kind) === 'session-grantable'));
+    assert.equal(retained?.expiresAt, existing.expiresAt);
+  }
+});

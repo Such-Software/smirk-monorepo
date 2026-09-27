@@ -14,6 +14,7 @@
  * | `chrome.storage.onChanged`| Custom EventTarget around the two backends     |
  * | `chrome.runtime.getURL`   | Identity transform: Tauri serves from /       |
  * | `chrome.windows.create`   | No-op stub: there's no "popped out" in Tauri |
+ * | `chrome.tabs.create`      | Rejects: wallet tabs belong to the extension |
  *
  * Install order matters: this module's side-effects MUST run before
  * any popup code (which calls `chrome.*` at module top-level). See
@@ -316,6 +317,14 @@ export function installChromeShim(): void {
         // popped-out experience. The action-popup "pop out" button
         // is a no-op here; no log because this fires every time the
         // user clicks it and the existing window stays focused.
+      },
+    },
+    tabs: {
+      async create(_options: unknown): Promise<never> {
+        throw new Error(
+          'Opening the wallet in a browser tab is unavailable on desktop. ' +
+            'Use the current Smirk window.',
+        );
       },
     },
   };

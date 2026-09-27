@@ -85,7 +85,7 @@ function ffmpegAvailable() {
 
 function main() {
   if (!existsSync(VIDEO_DIR)) {
-    console.error(`No capture directory at ${VIDEO_DIR}.\nRun the suite with CAPTURE_VIDEO=1 first.`);
+    console.error(`No capture directory at ${VIDEO_DIR}.\nWallet E2E capture is closed. Use a separately reviewed secret-free demo producer.`);
     process.exit(1);
   }
 

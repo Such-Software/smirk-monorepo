@@ -24,6 +24,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import {
   api,
   deriveAppEncryptionKey,
+  nostrKeySource,
   sealOpen,
   signBitcoinMessage,
   signEd25519WithScalar,
@@ -173,15 +174,15 @@ function assertNotSelfAuthToken(event: UnsignedNostrEvent): void {
  * login, kind-1 notes, …). The caller (execute-approval) resolves WHICH identity
  * the origin acts as (account-0, a per-origin compartmentalized identity, or a
  * vault burner/imported) via `resolveNostrIdentityForOrigin`, keeping this a pure,
- * storage-free signer. `null` means the identity couldn't be produced (e.g. a
- * per-origin/vault key on a warm resume) → re-unlock.
+ * storage-free signer. A missing resolved identity refuses signing. Complete
+ * grace-period sessions support the same identities as a fresh password unlock.
  */
 export function signNostrEventWith(
   identity: NostrIdentity | null,
   event: UnsignedNostrEvent,
 ): SignedNostrEvent {
   if (!identity) {
-    throw new Error('Nostr signing needs the unlocked identity — re-unlock the wallet');
+    throw new Error('The selected Nostr signing identity is unavailable. Unlock the wallet to continue.');
   }
   assertNotSelfAuthToken(event);
   return signNostrEvent(event, identity);
@@ -205,23 +206,17 @@ function base64ToBytes(b64: string): Uint8Array {
 /**
  * Derive the origin's app-scoped e2ee PUBLIC key (x25519 hex). `domainScope` is
  * the wallet-verified origin, supplied by the handler, never a page string.
- * Requires the unlocked mnemonic (absent on a session-cache restore).
+ * Uses the scoped app root after session restore.
  */
 export function deriveAppEncKeyWithUnlocked(
   wallet: UnlockedWallet,
   domainScope: string,
   context: string,
 ): string {
-  // NOTE: still mnemonic-gated on a session-cache restore. Unlike the nostr
-  // identity, the domain-scoped app-encryption key is not cached in
-  // DerivedKeys, so e2ee-on-restore needs its own fix (out of scope for the
-  // chat-signing bug).
-  if (!wallet.mnemonic) {
-    throw new Error(
-      'App encryption needs the unlocked mnemonic — re-unlock the wallet',
-    );
-  }
-  return deriveAppEncryptionKey(wallet.mnemonic, domainScope, context).publicKeyHex;
+  const source = nostrKeySource(wallet);
+  if (!source) throw new Error('The wallet session has no app encryption key. Unlock the wallet to continue.');
+  const key = deriveAppEncryptionKey(source, domainScope, context);
+  try { return key.publicKeyHex; } finally { key.privateKey.fill(0); }
 }
 
 /**
@@ -235,17 +230,13 @@ export function openAppSealWithUnlocked(
   sealedBase64: string,
   context: string,
 ): string {
-  // NOTE: still mnemonic-gated on a session-cache restore (see
-  // deriveAppEncKeyWithUnlocked): the app-encryption key is not cached, so
-  // e2ee-on-restore needs a separate fix beyond the nostr-key caching here.
-  if (!wallet.mnemonic) {
-    throw new Error(
-      'App decryption needs the unlocked mnemonic — re-unlock the wallet',
-    );
-  }
-  const key = deriveAppEncryptionKey(wallet.mnemonic, domainScope, context);
-  const plaintext = sealOpen(key.privateKey, base64ToBytes(sealedBase64));
-  return bytesToBase64(plaintext);
+  const source = nostrKeySource(wallet);
+  if (!source) throw new Error('The wallet session has no app decryption key. Unlock the wallet to continue.');
+  const key = deriveAppEncryptionKey(source, domainScope, context);
+  try {
+    const plaintext = sealOpen(key.privateKey, base64ToBytes(sealedBase64));
+    try { return bytesToBase64(plaintext); } finally { plaintext.fill(0); }
+  } finally { key.privateKey.fill(0); }
 }
 
 /**

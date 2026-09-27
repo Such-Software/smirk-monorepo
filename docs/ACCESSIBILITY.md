@@ -1,5 +1,7 @@
 # Accessibility
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Smirk Wallet's accessibility is not an after-ship project. It is a
 property of the codebase, enforced at code review, test runs, and CI.
 This document is the single source of truth for the standards, the
@@ -43,7 +45,7 @@ If an OS feature exists, we follow it. We do not override.
 
 These patterns are referenced by name throughout the codebase. The
 canonical spec lives here. Component-level docs say
-*"Implements the [tablist pattern](docs/ACCESSIBILITY.md#tablist)"*
+*"Implements the [tablist pattern](#tablist)"*
 and link back; they do not re-document the pattern.
 
 ### Semantic HTML first

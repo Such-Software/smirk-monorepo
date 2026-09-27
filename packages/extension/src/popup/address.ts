@@ -16,6 +16,7 @@ import {
   type UnlockedWallet,
 } from '@smirk/core';
 
+import { grinKeySource } from './session-signing';
 import { canonicalGrinSlatepackAddress } from './grin-flows';
 import {
   receiveSubaddrIndexFor,
@@ -74,8 +75,8 @@ export function validateAddress(assetId: string, addr: string): string | null {
  * and so every non-receive consumer keeps the old, flag-independent behavior.
  */
 export function primaryAddressForAsset(wallet: UnlockedWallet, assetId: string): string {
-  if (assetId === 'grin' && wallet.mnemonic) {
-    return canonicalGrinSlatepackAddress(wallet.mnemonic);
+  if (assetId === 'grin') {
+    return canonicalGrinSlatepackAddress(grinKeySource(wallet));
   }
   const addr = (wallet.addresses as unknown as Record<string, string | undefined>)[assetId];
   if (!addr) throw new Error(`No receive address for asset "${assetId}"`);

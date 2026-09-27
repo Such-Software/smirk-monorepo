@@ -232,6 +232,48 @@ test('startGrinSend reserves inputs + change + bumps index AT BUILD TIME (not ye
   assert.equal(p.entries[SLATE_ID]?.broadcast, undefined, 'not broadcast until finalize');
 });
 
+test('a lock during Grin input resolution prevents signing and delivery', async () => {
+  stubWasmSend();
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+  const { channels, calls } = fakeChannels();
+  let signed = false;
+  const w = wasmGrin as unknown as Record<string, AnyFn>;
+  const original = w.createSendTransaction!;
+  w.createSendTransaction = (...args) => { signed = true; return original(...args); };
+  let active = true;
+  try {
+    await assert.rejects(startGrinSend({
+      mnemonic: 'unused by the WASM fixture', senderSlatepackAddress: 'grin1sender',
+      channels, amount: 1_000_000_000, overlay,
+      resolver: { fetchSpendable: async () => {
+        active = false;
+        return fakeResolver().fetchSpendable();
+      } },
+      assertSession: () => { if (!active) throw new Error('Session was locked.'); },
+    }));
+    assert.equal(signed, false);
+    assert.equal(calls.some((call) => call.includes('deliver')), false);
+    assert.equal((await overlay.selectablePendingSpent()).has(INPUT_COMMIT), false);
+  } finally { w.createSendTransaction = original; }
+});
+
+test('Grin finalization refuses a revoked session before signing or broadcast', async () => {
+  stubWasm();
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+  const { channels } = fakeChannels();
+  let finalized = false;
+  const w = wasmGrin as unknown as Record<string, AnyFn>;
+  const original = w.finalizeSendSlate!;
+  w.finalizeSendSlate = (...args) => { finalized = true; return original(...args); };
+  try {
+    await assert.rejects(processGrinS2({ ...s2Args(overlay, channels),
+      assertSession: () => { throw new Error('Session was locked.'); },
+    }));
+    assert.equal(finalized, false);
+    assert.equal((await overlay.load()).entries[SLATE_ID]?.broadcast, undefined);
+  } finally { w.finalizeSendSlate = original; }
+});
+
 test('processGrinS2 marks the reserved entry broadcast + settles, WITHOUT bumping the index again', async () => {
   stubWasm();
   stubBroadcast({ data: { success: true }, status: 200 } as never);
@@ -266,6 +308,27 @@ test('processGrinS2 marks the reserved entry broadcast + settles, WITHOUT bumpin
   assert.deepEqual(calls, [`nostr.settle:${SLATE_ID}`]);
 });
 
+test('a lock after Grin broadcast skips the signed settlement notice without losing success', async () => {
+  stubWasm();
+  stubBroadcast({ data: { success: true }, status: 200 } as never);
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+  const { channels, calls } = fakeChannels();
+  let locked = false;
+  const addPending = overlay.addPending.bind(overlay);
+  overlay.addPending = async (...args) => {
+    await addPending(...args);
+    locked = true;
+  };
+  const result = await processGrinS2({
+    ...s2Args(overlay, channels),
+    relay_id: 'nostr:deadbeef',
+    assertSession: () => { if (locked) throw new Error('Wallet locked'); },
+  });
+  assert.equal(result.slate_id, SLATE_ID);
+  assert.equal((await overlay.load()).entries[SLATE_ID]?.broadcast, true);
+  assert.ok(!calls.some((call) => call.includes('.settle:')));
+});
+
 test('processGrinS2 throws and records NOTHING when the broadcast fails', async () => {
   stubWasm();
   stubBroadcast({ error: 'node rejected: low fee' });
@@ -287,6 +350,18 @@ test('cancelGrinSend frees the reserved inputs and cancels on the channel', asyn
 
   assert.equal((await overlay.selectablePendingSpent()).size, 0, 'inputs selectable again');
   assert.deepEqual(calls, [`backend.cancel:${SLATE_ID}`]);
+});
+
+test('canceled password confirmation prevents a signed cancellation but releases local inputs', async () => {
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+  await overlay.addPending(SLATE_ID, { spentCommits: [COMMIT_A] });
+  const { channels, calls } = fakeChannels();
+  await assert.rejects(cancelGrinSend({
+    slate_id: SLATE_ID, relay_id: 'nostr:counterparty', channels, overlay,
+    beforeCancel: async () => { throw new Error('Password confirmation canceled'); },
+  }), /canceled/);
+  assert.equal((await overlay.selectablePendingSpent()).has(COMMIT_A), false);
+  assert.deepEqual(calls, []);
 });
 
 test('startGrinInvoice reserves the child index but does NOT inflate the pending balance', async () => {

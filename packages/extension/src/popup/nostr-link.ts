@@ -20,9 +20,12 @@ import {
   PROFILE_KIND,
   type NostrProfile,
   type NostrIdentity,
+  type UnlockedWallet,
+  requireNostrKeySource,
 } from '@smirk/core';
 
 import { nip05HomeDomain } from './nip05';
+import { authorizeOperation, assertOperationSession } from './operation-auth';
 
 /**
  * Reports an outcome rather than succeeding quietly: the common failure is not an
@@ -43,6 +46,7 @@ export type PublishNip05Result =
  */
 export async function publishNip05Profile(
   identity: NostrIdentity,
+  assertSession: () => void,
 ): Promise<PublishNip05Result> {
   try {
     const username = (await api.getMySmirkUsername()).data;
@@ -68,6 +72,7 @@ export async function publishNip05Profile(
           /* unparseable prior profile → start clean */
         }
       }
+      assertSession();
       const event = buildProfileEvent(identity, { ...base, name: base.name ?? username, nip05 });
       await client.publish(relays, event);
     } finally {
@@ -87,11 +92,13 @@ export async function publishNip05Profile(
  * publish its verified profile. Fire-and-forget for the onboarding path: a link
  * hiccup must never fail the name claim (the user can always Link later in Settings).
  */
-export async function linkPrimaryNostrIdentity(mnemonic: string): Promise<void> {
+export async function linkPrimaryNostrIdentity(wallet: UnlockedWallet): Promise<void> {
   try {
-    const primary = deriveNostrIdentity(mnemonic, 0);
+    await authorizeOperation('sign', wallet, 'Link your identity and publish your profile');
+    assertOperationSession(wallet);
+    const primary = deriveNostrIdentity(requireNostrKeySource(wallet), 0);
     const r = await api.linkNostr(primary);
-    if (r.data?.nostrPubkey) void publishNip05Profile(primary);
+    if (r.data?.nostrPubkey) await publishNip05Profile(primary, () => assertOperationSession(wallet));
   } catch {
     /* non-fatal: claiming the handle already succeeded */
   }

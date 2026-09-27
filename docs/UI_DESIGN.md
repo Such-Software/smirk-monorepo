@@ -1,490 +1,128 @@
-# Smirk Wallet: UI Design Principles
-
-Direction document for the v0.3+ wallet UI overhaul. Captures the
-architectural decisions that shape every screen so we don't drift back
-into a generic asset-list paradigm as the wallet adds chains and
-features.
-
-This is a *principles* doc, not a screen-by-screen mockup. Visual
-design (typography, color, motion) is downstream of the principles
-here.
-
-## What this is replacing
-
-The current production extension at
-[Such-Software/smirk-extension](https://github.com/Such-Software/smirk-extension)
-ships an asset-centric UI: a list of supported coins on the home
-screen, with each coin opening into a per-asset sub-view that gates
-all actions (send, receive, swap, tip).
-
-That model worked at five chains. It won't survive ten, and it
-fights against three of Smirk's differentiators (social tipping
-across platforms, Grin's interactive transactions, and cross-chain
-swaps), all of which span multiple assets and don't fit neatly under
-one coin's view.
-
-The redesign starts from a different question: not "what coin is the
-user looking at," but "what is the user trying to do."
-
-## Principle 1: Action-centric over asset-centric
-
-Top-level navigation is **verbs**, not **nouns**:
-
-| Tab          | Purpose                                                       |
-|--------------|---------------------------------------------------------------|
-| **Home**     | Total balance, action row, asset list, recent activity        |
-| **Swap**     | Cross-chain swap interface (Trocador aggregator v0.3; THORChain/native v0.4+) |
-| **Inbox**    | Slatepacks, swap rounds, incoming tips with notes, e2ee DMs   |
-| **Settings** | Wallet config, custom RPC servers, view-key export, seed      |
-
-Four tabs by default. Two more appear conditionally: **Feed** when
-the active backend advertises an operator feed, and **Browse** when
-the shell installs an embedded-browser controller. The extension
-popup sees the four.
-
-Per-asset detail (address, view key, per-chain
-history, RPC override) lives as a drill-down screen *from* Home, not
-as its own tab: modern wallet pattern (Phantom, Trust, Cake) where
-the asset list IS the wallet view.
-
-Asset selection is a sub-step *inside* each action flow, never the
-entry point. The user clicks "Send" and is then asked which asset;
-the user clicks "Create Tip" and is then asked the amount and asset.
-This inverts the legacy model where the user clicks "BTC" → then
-"Send": the action they wanted was Send, not BTC.
-
-The action row on Home contains the four universal verbs:
-**Tip · Send · Receive · Swap**. "Claim" is contextual: it appears
-only when there's a claimable tip, and it lives where the tip lives
-(Inbox), not as a top-level action.
-
-## Principle 2: No transparent / shielded vault split
-
-A natural-seeming idea is to visually divide assets into transparent
-(BTC, LTC, …) and shielded (XMR, WOW, …) vaults. **We're not doing
-that.**
-
-Rationale: privacy is a per-flow property, not a per-asset property.
-View keys make even "private" CryptoNote assets selectively
-transparent: the user can hand a view key to a tax accountant, post
-a public tip with a published address, or share an LWS endpoint.
-Bitcoin can be made private with care. Splitting assets into two
-vaults oversimplifies and gives the user a false sense of binary
-classification.
-
-Where privacy considerations *do* surface in the UI:
-
-- At tip creation, choosing public-link vs encrypted-to-recipient.
-- At connection grant, granting per-asset visibility to a site.
-- At view-key export, with explicit consent flows.
-
-Not in the asset list.
-
-## Principle 3: Unified Inbox for everything that arrives
-
-Slatepacks aren't the only thing that flows in. Atomic-swap rounds
-(v0.4+) need responses. Incoming tips can carry notes. Free-form
-e2ee messages between users (v0.4+) ride the same relay. Lumping
-all of these into one tab, **Inbox**, gives users a single
-"what needs my attention" surface and re-uses one backend primitive
-across four item kinds.
-
-| Kind | Source | Visual / actions |
-|---|---|---|
-| 📝 Slatepack | Grin sender | "Sign" / "Finalize" / "Cancel" |
-| ⇄ Swap round | v0.4 atomic-swap counterparty | "Respond" / "Cancel" |
-| 🎁 Tip | Incoming tip with optional note | "Claim" + read note |
-| 💬 Message | Free text, ≤240 chars, e2ee | Read + "Reply" + "Block" |
-
-All four ride the same backend envelope: the existing slatepack
-relay endpoint generalizes to take a `kind` field plus an
-encrypted-to-recipient payload. Backend stores ciphertext + metadata
-+ TTL only; never sees plaintext. Same relay primitive for all
-four = one schema to maintain, one code path to harden.
-
-**Versioning:**
-- v0.3: Inbox surface ships with slatepacks (existing) + tips with
-  optional notes.
-- v0.4: adds swap-round items.
-- v0.4 (or v0.5): adds free-form e2ee messages.
-
-**Slatepack-specific behaviors:**
-
-- **Clipboard auto-detect**: when the popup opens, scan for
-  `BEGINSLATEPACK…ENDSLATEPACK` and offer to ingest via a non-modal
-  toast (with explicit consent for clipboard read).
-- **Invoice flow** as a first-class peer to standard Send: the
-  user can request payment by generating an invoice slatepack,
-  distinct from "give me your address."
-
-The `addressKind: 'interactive'` flag on the asset registry (Principle
-6) is what flips an asset out of the Send-to-address flow into the
-slatepack paradigm. Grin is the only such asset today; design has
-to accommodate future MW chains (Beam, MWC).
-
-**Anti-spam for free-form messages.** Three modes the user picks
-from in Settings:
-
-1. **Tip-gated** (default): accept only from users you've previously
-   tipped, or who've previously tipped you. Social graph as filter.
-2. **Open**: any registered Smirk user can DM. Power users / public
-   tip-link recipients.
-3. **Closed**: only people in your contacts (manually allowed).
-
-Plus per-sender rate limit (default 3 / hour) and a per-recipient
-block list at every level. Block lists are encrypted blobs the
-backend stores; server has zero plaintext access.
-
-**Strategic posture.** End-to-end-encrypted messages sit Signal/Matrix
-shape (operator is a relay, never sees plaintext, can't moderate).
-That carries no MTL or chat-platform classification: Cash App and
-Venmo carry tx notes without messaging-specific licensing. The
-moderation-as-implicit-liability angle that bites unencrypted
-platforms doesn't apply here because we structurally cannot read
-content. Block + report just deletes the relayed ciphertext.
-
-What we do **NOT** ship:
-- A general /messages tab with contact list. Messages render in
-  context (alongside the tip in Inbox, alongside the slate in
-  Inbox), never as a standalone messenger app.
-- Group chat.
-- Any image / file / link surface. Text-only at 240 chars
-  trivially eliminates CSAM and spam-file vectors.
-- Search / indexing. Backend can't index ciphertext.
-
-## Principle 4: Swaps are top-level, with a step tracker
-
-Swap UX has its own physics: multiple network fees (inbound +
-outbound), asymmetric confirmation times (10 min for BTC inbound vs
-seconds for LTC), liquidity-dependent slippage, and a routing path
-the user usually wants to inspect.
-
-Burying swap inside a per-asset Send flow misrepresents what's
-happening. Swap is a top-level tab.
-
-Inside the Swap tab:
-
-- **Asset pair selector**: from / to, with a search box (since the
-  list of supported assets grows over time).
-- **Quote panel**: output amount, slippage, route, fees.
-- **Confirmation step**: explicit "yes, swap N BTC for M XMR" with
-  the receiving address shown (it's *the user's own* address, but
-  saying so explicitly avoids confusion).
-- **Step tracker post-broadcast**: a visual progress indicator with
-  states like *Broadcast → Awaiting Inbound Confirmation → Routed →
-  Awaiting Outbound → Funds Available*. Each step shows estimated
-  time remaining when known.
-
-The same Swap tab eventually hosts native (P2P, adaptor-signature)
-swaps in v0.4+. Same UI surface, different backend. Aggregator
-(Trocador today; THORChain planned) vs Native (P2P) is a sub-toggle,
-not a separate tab.
-
-## Principle 5: Tip Maker as one screen, not a wizard
-
-Social tipping is the wallet's primary differentiator. The flow has
-to feel slick.
-
-**One compose screen** rather than a multi-step wizard: a
-platform-first gate buries the only interesting decision, which is
-who and how much.
-
-- **To**: recipient field with autocomplete from recent tips.
-- **Amount**: free entry plus quick-amount chips when a fiat
-  denomination is set.
-- **Asset**: a chip that cycles; defaults to the last asset used for
-  that recipient, falling back to the largest balance.
-- **Public link** and **anonymous** are checkboxes, properties of a
-  tip rather than separate flows.
-
-Submission hands off to a result view carrying the share URL and a
-copy button, so creating a tip stays satisfying.
-
-Pending tips (funded but unclaimed) live in the Sent Tips screen,
-reached from Settings or from the ready-to-share banner on Home, with
-a prominent **Clawback** button. Unclaimed tips are the user's funds
-in limbo; recovering them shouldn't take three taps.
-
-## Principle 6: Asset registry, not hardcoded chains
-
-Today: BTC, LTC, XMR, WOW, Grin. Tomorrow: probably more BTC forks,
-Litecoin MWEB, additional CryptoNote chains, possibly an EVM chain or
-two for ERC-20 tipping, possibly Beam or MWC for the Grin family.
-
-The wallet has to scale to this without a flag day. Concretely:
-
-```ts
-// Shape sketch; the shipped registry is packages/assets/src/types.ts
-export interface AssetDefinition {
-  id: string;                      // 'btc', 'ltc', 'xmr', 'wow', 'grin'
-  displayName: string;             // 'Bitcoin', ...
-  ticker: string;                  // 'BTC', ...
-  decimals: number;                // 8, 8, 12, 11, 9
-  iconPath: string;                // resolved by the UI layer
-
-  // Derivation
-  derivationPath: string;          // BIP32 path; null for non-BIP32 chains
-  deriveAddress: (mnemonic: string, index: number) => string;
-
-  // Address handling
-  validateAddress: (address: string) => boolean;
-  addressKind: 'address' | 'interactive'; // 'interactive' = slatepack-style
-
-  // Confirmations / claim semantics
-  confirmationsRequired: number;   // BTC/LTC = 0, WOW = 4, XMR/Grin = 10
-
-  // Capabilities
-  swapAggregator: 'thorchain' | 'native' | 'both' | 'none';
-  paymentProofs: boolean;          // Grin payment proof support
-  socialTipping: boolean;          // every chain we list supports this
-
-  // Reserved for future flags as new chain capabilities surface
-}
-```
-
-The shipped definition differs on three points: icons resolve through
-`iconKey`, swap capability is `swapRoutes`, and derive / validate /
-sign live in `@smirk/wasm` and `@smirk/core` rather than on the
-definition, which stays pure data.
-
-Adding asset N+1 is then **additive**: register the definition, drop
-in the icon, plug in the derive/sign functions, done. UI components
-iterate over the registry rather than running `if (asset === 'btc')`
-branches.
-
-This also gives us a single place to introduce per-chain quirks (the
-Grin "pending balance includes locked outputs" thing, the Wownero
-"4-confirmation requirement," the future "this chain requires
-PSBT-signing instead of raw-tx-signing" thing) without leaking them
-into UI code.
-
-### Principle 6a: User-curated visibility, registry-driven feature inclusion
-
-Two related rules that fall out of "scales to N assets":
-
-**User-curated visibility.** Every surface that lists assets honours
-the user's `ui.hiddenAssets` preference through a single helper
-(`visibleAssetIds(state, assets)` in `@smirk/core/state/visibility`).
-*Nowhere else* in the codebase should `state.ui.hiddenAssets.includes(...)`
-appear inline: that's how visibility decisions drift apart across
-surfaces. Hiding an asset:
-
-- Removes it from Home, the Send/Receive/Tip choosers, and the
-  unified-balance total.
-- Skips balance-poll round-trips for it (cost-proportional to what
-  the user actually uses: hiding 2-3 of 5 assets saves 40-60% of
-  the popup-open backend traffic).
-- Leaves the asset routable directly (claim notifications, external
-  links) and leaves the wallet's keys intact.
-- Auto-unhides if the user claims an incoming tip for that asset
-  (explicit "I want to see this" signal).
-
-**Registry-driven feature inclusion.** Features decide whether to
-include an asset by checking a capability flag on the registry, not
-by maintaining an inclusion list. Today these flags are `sendable`,
-`receivable`, `dappBridge`, `socialTipping`, and `defaultVisible`;
-adding a flag is registry-level, no UI code changes. Consumer pattern:
-
-```ts
-const tippable = visibleAssetIds(state, listAssets())
-  .filter((a) => a.socialTipping);
-```
-
-vs the anti-pattern `['btc', 'ltc', 'xmr', 'wow', 'grin'].includes(asset.id)`
-which guarantees a regression the day someone adds ETH.
-
-See [`MULTI_ASSET_ARCHITECTURE.md`](./MULTI_ASSET_ARCHITECTURE.md)
-for the longer-form story on where capability flags + visibility +
-per-family adapters fit together as the wallet scales past 5 assets.
-
-## Principle 7: Granular per-asset connection grants
-
-When a site calls `window.smirk.connect()`, the approval UI shouldn't
-be all-or-nothing. A Monero-only shop should be able to ask for the
-user's XMR address only, and the user should see exactly which assets
-they're consenting to share.
-
-The connection screen also needs to make the **origin** un-spoofable.
-Big monospace `https://app.example.com` badge near the top, distinct
-from the site's self-reported title or favicon. (The site's reported
-metadata is shown alongside, but never as the primary identifier.)
-
-Persisted grants live per-origin × per-asset. Revoking an asset's
-grant for a site is a single click.
-
-## Principle 8: Unified balance, with denomination + hide
-
-The Home tab leads with a single large total balance (the answer to
-"how much do I have?") rather than a stack of per-asset numbers.
-Per-asset balances are still visible (one row each in the asset
-list below), but the headline number is the sum.
-
-**Denomination is configurable.** Default to the user's reference
-fiat (USD picked at onboarding; switchable to EUR / GBP / etc.).
-Bitcoiners often want totals shown in BTC, not dollars; satoshi /
-nanogrin / atomic-WOW modes follow naturally. Tap the total to
-cycle, long-press to open the picker. Settings carries the
-permanent choice.
-
-**Pending is shown but separated.** The big number is *confirmed*
-balance. A small "+\$X.XX pending" line beneath surfaces incoming
-tips, mempool tx, swap-in-progress amounts. Different visual weight
-makes the distinction unmissable.
-
-**Hide toggle is mandatory.** An eye-icon next to the total masks
-all balance fields ("●●●●") for screen-share / coffee-shop /
-shared-laptop scenarios. This is a privacy expectation, not a
-nice-to-have: Coinbase, Trust, and most modern wallets ship it
-because users learned to expect it.
-
-**Failure states.** When the price feed is stale or unavailable,
-the fiat denomination renders as `—` with a tooltip ("Rate
-unavailable, last fetched 12m ago"). The native-denomination total
-(BTC mode, sat mode) keeps working since it's just summed atomic
-units divided by registered decimals: no network dependency.
-
-**Implementation note.** Atomic-units math is BigInt end-to-end;
-fiat conversion happens at the display layer only. Asset registry
-provides decimals, price feed provides USD-per-asset, denomination
-picker translates. No floating-point on consensus-critical values.
-
-## Principle 9: Themable surface, registry-driven
-
-The wallet ships with a theme registry in `@smirk/ui/themes/` that mirrors
-the asset-registry pattern from Principle 6. A theme is pure data:
-
-```ts
-interface Theme {
-  id: string;
-  name: string;
-  description?: string;
-  tokens: ThemeTokens;   // colors, typography, geometry, effects
-  css?: string;          // optional theme-specific selectors (bevels, etc.)
-}
-```
-
-`@smirk/ui` components consume themes **only** via CSS custom properties
-(`var(--smirk-bg)`, `var(--smirk-accent)`, …): they never import a theme
-object. That keeps the component library theme-agnostic and lets shells
-(extension / mobile / desktop) register their own themes (e.g. macOS Aqua,
-material-mobile) without rebuilding `@smirk/ui`.
-
-**Built-ins (as of 2026-05-13):**
-- `defaultTheme`: dark "Smirk Bauhaus" look, the fallback for missing
-  tokens.
-- `win95Theme` (Chicago '95): chunky bevels, MS Sans Serif, gray
-  system palette.
-- `winxpTheme` (Luna): Luna blue/silver gradient, smoother bevels.
-- `amigaTheme` (Workbench): orange-on-blue Workbench 1.3 palette.
-- `iosClassicTheme` (Glassy '07): glossy iOS 1–6 era gradients.
-- `gameboyTheme` (DMG): 4-color green LCD palette + Press Start 2P pixel font.
-- `n64Theme` (Ultra 64): molded gray plastic with Lilita One display font.
-
-Codename naming (not "Windows 95", "Game Boy") avoids trademark exposure
-while staying identifiable. Fonts (Press Start 2P, Lilita One) are
-bundled as ~39KB and lazy-loaded only when the theme is active.
-
-**Apply path:** at boot (and on every change) the shell calls
-`applyTheme(theme)`, which sets `--smirk-*` custom properties on `<html>`,
-swaps the `smirk-theme-<id>` class, and injects the theme's optional CSS
-payload into a stable `<style>` element.
-
-**Persistence:** the active theme id lives in `SessionState.ui.theme`
-(schema v3). Survives session restart via the platform's persistent
-storage tier.
-
-**Token coverage** (canonical set as of 2026-05-11): `bg`, `bgElevated`,
-`bgSunken`, `fg`, `fgMuted`, `accent`, `accentHover`, `accentFg`, `border`,
-`borderStrong`, `positive`, `negative`, `warning`, `fontFamily`,
-`fontFamilyMono`, `fontSizeBase`, `fontSizeSmall`, `radius`, `radiusSm`,
-`radiusLg`, `shadowRaised`, `shadowSunken`.
-
-**Migration debt:** v0.3 components are *progressively* moving from
-hardcoded `rgba(255,...)` inline styles to `var(--smirk-*)` consumption.
-ActionButton, Button, BalanceCard, UnifiedBalance, BottomNav, HomeTab,
-SendWizard's Grin Exchange affordance, and GrinRequestWizard pull from
-tokens; the older portions of SendWizard, ReceiveScreen,
-OnboardingWizard, LockScreen, and the settings page still carry inline
-styles. Touch as you go: no big-bang sweep planned.
-
-## Navigation summary
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Home          Swap          Inbox          Settings    │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  HOME:    total balance (denomination toggle, hide);    │
-│           action row (Tip · Send · Receive · Swap);     │
-│           asset list (BalanceCard per chain →           │
-│             asset detail screen);                       │
-│           recent activity strip                          │
-│                                                          │
-│  SWAP:    aggregator vs native toggle; from/to picker;  │
-│           quote; step tracker for active swaps          │
-│                                                          │
-│  INBOX:   unified item list:  slatepacks, swap rounds,  │
-│           incoming tips with notes, e2ee DMs (v0.4+);   │
-│           per-item action verbs (Sign / Claim / Reply)  │
-│                                                          │
-│  SETTINGS: wallet config, per-asset RPC overrides,      │
-│            view-key export, seed reveal,                │
-│            inbox-spam mode, denomination, etc.           │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-```
-
-The box shows the default four. Feed slots in before Settings when
-the backend advertises one, and Browse appends when the shell
-installs an embedded-browser controller.
-
-Asset detail (balance, address, view key, per-chain history, RPC
-override) is a drill-down screen *from* Home: tap any asset row.
-
-The same nav structure works on extension popup (360–400px wide),
-mobile (Capacitor full screen), and desktop (Tauri windowed). Shared
-Preact components in `packages/ui/` keep visual consistency.
-
-## Out of scope for this doc
-
-- Visual design (color palette, typography, motion).
-- Specific component library (Preact + which CSS approach).
-- Onboarding flow (handled separately as part of v0.3 onboarding
-  rework).
-- Mobile-specific affordances (push notifications, haptics, deep
-  linking): covered in the Capacitor track.
-- Auth / login (Telegram-based today; may evolve).
-
-## Status
-
-- **Principle 1 (action-centric)**: shipped. Bottom nav has Home /
-  Swap / Inbox / Settings; Home leads with UnifiedBalance + ActionRow
-  (Tip · Send · Receive · Swap); asset picker is a sub-step inside Send
-  and Receive flows.
-- **Principle 2 (no vault split)**: shipped. Asset list is flat.
-- **Principle 3 (Unified Inbox)**: partial. The Inbox ships two item
-  families: Grin slatepacks awaiting sign or finalize, and incoming
-  social tips split into waiting-for-confirmations and ready-to-claim
-  with a one-tap sweep. Public social tips work on all five assets,
-  Grin included. Swap rounds and free-form e2ee DMs (v0.4+) are still
-  future.
-- **Principle 4 (Swap top-level)**: Trocador is the shipped swap
-  aggregator; THORChain and native (P2P) swaps deferred to v0.4+.
-- **Principle 5 (Tip Maker)**: shipped as `TipMaker`, the
-  single-screen composer described above. Clawback for unclaimed tips
-  lives in `SentTipsScreen`, reached from Settings or the
-  ready-to-share banner on Home.
-- **Principle 6 (asset registry)**: shipped via `@smirk/assets` (44
-  unit tests). Three chain-id branches remain in UI code:
-  `SendWizard`'s manual-slatepack toggle and its Broadcast-vs-Sent
-  headline, and `InboxTab`'s slow-claim notice. They should key off
-  registry data instead: `addressKind === 'interactive'` for the Grin
-  cases, `family.family === 'cryptonote'` for the claim notice.
-- **Principle 7 (granular connection grants)**: pending; deferred to
-  v0.4 dapp work.
-- **Principle 8 (unified balance + denomination + hide)**: shipped via
-  `UnifiedBalance` + tri-state pending/locked rendering.
-- **Principle 9 (themable surface)**: shipped; 7 themes registered.
-
-Send is end-to-end on all 5 assets, Grin via the interactive Exchange
-step. Migration debt for inline-styled components tracked above.
+# Smirk wallet UI principles
+
+> Status: stable · Updated 2026-09-27 · Applies to: v0.3 extension and desktop clients
+
+This document owns the wallet's interaction and copy principles. Component APIs
+live in [the UI package](../packages/ui/README.md), send behavior in
+[SEND_FLOW.md](SEND_FLOW.md), and platform boundaries in
+[ARCHITECTURE.md](ARCHITECTURE.md). A design goal is not evidence that a feature
+is implemented or deployed.
+
+## Actions and navigation
+
+Home presents balances, recent activity and Tip, Send, Receive and Swap actions.
+Asset details are a drill-down from Home. The default navigation contains Home,
+Swap, Inbox and Settings. Feed appears only when the backend advertises it;
+Browse appears only when the desktop shell provides its browser controller.
+
+General Send begins with an asset chooser. Send from an asset detail screen
+already knows the asset and begins with the destination. An unfinished send or
+Grin exchange retains its draft when the window reopens. A completed receipt
+must not become a new send draft. Back from the initial destination screen
+returns to the asset detail rather than making the user select that asset again.
+
+Amount and review show the native amount and an approximate USD value when a
+usable price exists. Missing prices show an unavailable state, never a fabricated
+zero. USD is display-only: all transaction amounts, fee calculations and signing
+inputs remain integer atomic units. Max uses the current fee-adjusted preview;
+the review identifies it as an estimate because the actual fee can change.
+
+## Unlock and operation confirmation
+
+An unlocked wallet must hold the authority needed for its supported operations.
+A one-hour or four-hour unlock preference survives popup reopening without
+renewing its original deadline. Explicit Lock revokes other open wallet windows
+and pending handoffs. Recovery-phrase display remains password protected.
+
+Settings offers independent password confirmation for sends and for signing or
+private-key requests. Both default off. When enabled, confirmation is per
+operation and does not extend the unlock period. Background sign-in and incoming
+message checks continue without these prompts. Cancellation or an incorrect
+password prevents the requested operation. Lock during an asynchronous check
+prevents later signing or broadcast; an already broadcast transaction remains
+reported as sent.
+See [the session architecture](ARCHITECTURE.md#wallet-unlock-lifetime).
+
+## Balances and privacy
+
+Keep confirmed, pending and locked amounts distinct. Unknown balance or price
+information is unavailable, not healthy or zero. Balance masking applies across
+the wallet's balance surfaces. Never suggest that a price estimate is a quote or
+that a submitted transaction is confirmed.
+
+Do not split assets into reassuring "private" and "public" vaults. Privacy
+varies by operation: a Monero or Wownero light-wallet server receives a private
+view key, while BTC/LTC addresses and transaction outputs are public chain data.
+Explain the data shared at the relevant action. Spending keys remain on the
+client; that statement does not mean that all keys remain there.
+
+## Inbox, identities and messages
+
+Inbox collects incoming tips and Grin slatepacks, with actions appropriate to
+their actual state. Messages is an Inbox drill-down. Encrypted direct messages
+use Nostr gift-wrap and the configured relay/provider interfaces. Slatepack
+transport can use the backend relay or Nostr; these are separate protocols.
+Do not claim that every inbox item shares one backend envelope.
+
+Users can select derived, burner or imported Nostr identities. Every signing
+surface must honor that selection. An unavailable identity must refuse rather
+than silently switch to the primary identity. Burner and imported identities
+require their own backup; restoring the wallet phrase alone does not recover
+them. Publishing a handle-to-identity mapping requires explicit user consent.
+
+A successful relay publish does not prove that a remote recipient received a
+message. When inbox discovery fails, show the delivery limitation. Tip-gated
+messaging, generalized contact moderation, group messaging and atomic-swap inbox
+items are not v0.3 guarantees.
+
+## Swaps and tips
+
+Trocador supplies the implemented aggregator flow. Quote, deposit and completion
+are separate stages. Show the selected pair, input amount, output estimate,
+provider, deposit destination and refund destination before sending funds.
+A quote error must identify the failed operation without exposing configuration
+credentials. THORChain and native atomic swaps are not available in v0.3.
+
+Tip Maker is a single composer with recipient, asset and amount. A funded tip is
+not necessarily claimed. Sent Tips retains claim status and the available
+clawback action. State changes must come from receipts or current backend data.
+
+## Assets, grants and themes
+
+The pure-data asset registry owns decimals, families and capabilities. Shared UI
+uses those definitions and `visibleAssetIds` rather than repeating asset lists.
+Hiding an asset changes its visibility, not its keys or on-chain funds. Backend
+capabilities also gate availability; an absent advertisement never enables a
+feature by inference.
+
+Dapp grants are scoped to the verified origin and requested assets or operation.
+Show the real origin prominently, separately from page-supplied names. Existing
+grants may permit an operation without a fresh approval screen, but never bypass
+a user's enabled operation-password policy.
+
+Themes supply CSS tokens and optional theme styles. Keep balances, errors and
+confirmation controls legible across themes. Layout must work in a narrow
+extension popup and a desktop window. Mobile, Ethereum and Safari are future
+release work; native atomic swaps follow later.
+
+## Voice
+
+Use precise, short sentences and familiar terms. Explain what happened and the
+next available action. Avoid hype, absolute privacy claims, unnecessary jargon,
+em dashes and promises about confirmation time. Use "we" for the product team;
+use "you" for a user's deliberate action. Humor is optional and never belongs in
+a loss, signing, recovery or error message.
+
+Examples: "Get quote", "Review send", "USD estimate unavailable", and
+"The wallet locked before signing. Unlock it to continue."
+
+## Review checklist
+
+- [ ] Entry context and persisted drafts survive navigation correctly.
+- [ ] Display estimates cannot alter signed integer amounts.
+- [ ] Unknown data, pending operations and confirmed results are distinct.
+- [ ] Unlock preferences and optional password checks behave independently.
+- [ ] The selected identity and verified origin remain visible and binding.
+- [ ] Feature availability follows registry and backend evidence.
+- [ ] Copy describes implemented behavior and its actual privacy boundary.
+- [ ] Narrow layouts, themes, keyboard use and error recovery are checked.

@@ -3,8 +3,7 @@
  *
  * Layered above `@smirk/core/api` (raw HTTP client) and
  * `@smirk/core/keystore` (unlocked wallet). Belongs in core because
- * it's identical across extension / mobile / desktop wallets; only
- * the storage and UI shells differ.
+ * extension and desktop share the flow; the storage and UI shells differ.
  *
  * ## Auth
  *
@@ -33,6 +32,7 @@
  * surface.
  */
 
+import { requireRestoreState } from './restore-state';
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
@@ -55,6 +55,8 @@ export interface BootstrapAuthResult {
   userId: string;
   username?: string;
   isNew: boolean;
+  /** Fresh check-restore evidence. Missing cached evidence never admits creation. */
+  restoreState?: 'new' | 'existing';
   /** LWS scan-start heights echoed by the backend, if known. */
   xmrStartHeight?: number;
   wowStartHeight?: number;
@@ -100,7 +102,7 @@ function buildKeysList(wallet: UnlockedWallet) {
  * registration: we stamp `walletBirthday = now` so the backend has the
  * height to resume from on the next import. (A user importing a
  * non-Smirk seed would land here with the wrong birthday and a missed
- * scan; that's acceptable since non-Smirk imports are out of scope.)
+ * scan; import callers must apply their selected historical restore height.)
  *
  * Throws if the backend rejects the signature or the network fails.
  * Caller should surface the error to the user: auth is required for
@@ -142,30 +144,10 @@ export async function bootstrapAuth(
 ): Promise<BootstrapAuthResult> {
   const keys = buildKeysList(wallet);
 
-  // Best-effort restore lookup. Failure here (network blip, fresh
-  // backend) doesn't abort the bootstrap; we just register fresh.
-  let xmrStartHeight: number | undefined;
-  let wowStartHeight: number | undefined;
-  let isKnownWallet = false;
-  try {
-    const restoreCheck = await api.checkRestore({ fingerprint: wallet.fingerprint, keys });
-    if (restoreCheck.data?.exists) {
-      isKnownWallet = true;
-      // Backend returns `null` for wallets registered before height
-      // tracking shipped; don't pass that downstream; treat as
-      // "no stored height".
-      xmrStartHeight =
-        typeof restoreCheck.data.xmrStartHeight === 'number'
-          ? restoreCheck.data.xmrStartHeight
-          : undefined;
-      wowStartHeight =
-        typeof restoreCheck.data.wowStartHeight === 'number'
-          ? restoreCheck.data.wowStartHeight
-          : undefined;
-    }
-  } catch (e) {
-    console.warn('[smirk-bootstrap] checkRestore threw', e);
-  }
+  const restore = await requireRestoreState(api, { fingerprint: wallet.fingerprint, keys });
+  const isKnownWallet = restore.exists;
+  const xmrStartHeight = isKnownWallet ? restore.xmrStartHeight ?? undefined : undefined;
+  const wowStartHeight = isKnownWallet ? restore.wowStartHeight ?? undefined : undefined;
 
   const timestamp = Math.floor(Date.now() / 1000);
   const message = `smirk-auth-${timestamp}`;
@@ -240,6 +222,7 @@ export async function bootstrapAuth(
     // Namespaced backend puts is_new at the top level (data.isNew); a flat
     // backend may nest it under user. Read both so onboarding branches correctly.
     isNew: result.data.isNew ?? result.data.user.isNew ?? false,
+    restoreState: isKnownWallet ? 'existing' : 'new',
     ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
     ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
   };
@@ -632,6 +615,7 @@ export async function fetchAllBalances(
             xmrViewKeyHex,
             xmrSpendKeyHex,
             bootstrap.xmrStartHeight,
+            bootstrap.restoreState === 'new' && bootstrap.isNew === true,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
             restorePolicy,
@@ -650,6 +634,7 @@ export async function fetchAllBalances(
             wowViewKeyHex,
             wowSpendKeyHex,
             bootstrap.wowStartHeight,
+            bootstrap.restoreState === 'new' && bootstrap.isNew === true,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
             restorePolicy,
@@ -761,19 +746,17 @@ async function fetchLwsBalance(
   viewKeyHex: string,
   spendKeyHex: string,
   startHeight: number | undefined,
+  allowNewRegistration: boolean,
   verifyKeyImage: KeyImageVerifier | undefined,
   strictSpentIndex: boolean,
   restorePolicy?: RestorePowPolicy | undefined,
 ): Promise<AssetBalance> {
-  // Best-effort registration, at most ONCE per account per session (see
-  // `registeredLwsAccounts` for why repeating it corrupts the balance).
-  //
-  // Still awaited before the FIRST read (not raced): for a first-ever XMR/WOW
-  // use the LWS account doesn't exist yet, so an unregistered getLwsBalance
-  // errors; surfacing that as a one-tick "0 with error" is jank we shouldn't
-  // ship. Every subsequent read skips registration and just reads.
+  // A missing historical height is unknown, not permission to create at tip.
+  // Read an existing account without mutation unless a fresh new-wallet result
+  // or an explicit height admits registration. Other assets remain independent.
+  const observeExisting = startHeight === undefined && !allowNewRegistration;
   const acctKey = `${backendUrl}|${userId}|${asset}:${address}`;
-  if (!registeredLwsAccounts.has(acctKey)) {
+  if (!observeExisting && !registeredLwsAccounts.has(acctKey)) {
     registeredLwsAccounts.add(acctKey);
 
     // Registering with a start height IS declaring a restore depth, and an
@@ -796,14 +779,25 @@ async function fetchLwsBalance(
       }
     }
 
-    await providers
+    const registration = await providers
       .lws(asset)
       .registerAccount(userId, address, viewKeyHex, startHeight, undefined, restorePowNonce)
-      .catch(() => undefined);
+      .catch((error: unknown) => ({ error: error instanceof Error ? error.message : 'Registration request failed' }));
+    if (registration.error || !('data' in registration) || registration.data?.success !== true) {
+      registeredLwsAccounts.delete(acctKey);
+      return { confirmed: 0n, pending: 0n, error: registration.error ?? 'Scan registration was not confirmed by the backend.' };
+    }
   }
 
-  const result = await providers.lws(asset).getBalance(address, viewKeyHex);
-  if (result.error || !result.data) {
+  const result = await providers.lws(asset).getBalance(address, viewKeyHex)
+    .catch((error: unknown) => ({ error: error instanceof Error ? error.message : 'Balance request failed' }));
+  if (observeExisting && (result.error || !('data' in result) || !result.data
+    || !Number.isSafeInteger(result.data.start_height) || result.data.start_height < 0)) {
+    const cause = result.error ?? 'the backend did not return an existing account with a valid scan start height';
+    return { confirmed: 0n, pending: 0n,
+      error: `${asset.toUpperCase()} scan coverage is unknown: no saved start height, and ${cause}. No new scan was created.` };
+  }
+  if (result.error || !('data' in result) || !result.data) {
     return { confirmed: 0n, pending: 0n, error: result.error ?? 'Network error' };
   }
 

@@ -15,15 +15,13 @@
 # mirror, where the .asc may not travel with the file.
 #
 # Usage:
-#   scripts/sign-release.sh 0.3.0                    # sign, then verify
-#   scripts/sign-release.sh 0.3.0 --verify           # verify only, sign nothing
-#   SMIRK_SIGNING_KEY=<keyid> scripts/sign-release.sh 0.3.0
-#   scripts/sign-release.sh 0.3.0 --bundle-dir /path/to/downloaded/ci/bundles
+#   scripts/sign-release.sh 0.3.0 --bundle-dir DIR --expect-commit FULL_SHA
+#   scripts/sign-release.sh 0.3.0 --bundle-dir DIR --expect-commit FULL_SHA --verify
 #
-# SMIRK_SIGNING_KEY should name the RELEASE SIGNING SUBKEY, not the primary. Give
-# it the subkey with an exclamation mark (`ABCD1234!`) so gpg uses exactly that
-# subkey rather than picking one itself. The primary never needs to be present on
-# a build machine or in CI.
+# SMIRK_SIGNING_KEY must contain the full release signing subkey fingerprint,
+# optionally followed by !. Signing pins that exact subkey; verification requires
+# GPG's machine-readable VALIDSIG to name the same fingerprint. A default key,
+# short key ID, or a human-readable "Good signature" is insufficient.
 set -euo pipefail
 
 VERSION="${1:-}"
@@ -35,32 +33,40 @@ shift || true
 
 VERIFY_ONLY=0
 BUNDLE_DIR=""
+EXPECTED_COMMIT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --verify)     VERIFY_ONLY=1 ;;
     --bundle-dir) BUNDLE_DIR="${2:-}"; shift ;;
+    --expect-commit) EXPECTED_COMMIT="${2:-}"; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
   shift
 done
 
+EXPECTED_SIGNER="${SMIRK_SIGNING_KEY:-}"
+EXPECTED_SIGNER="${EXPECTED_SIGNER%!}"
+[[ "$EXPECTED_SIGNER" =~ ^[A-Fa-f0-9]{40}$ ]] || {
+  echo 'sign-release: SMIRK_SIGNING_KEY must be the full release signing subkey fingerprint' >&2; exit 1;
+}
+EXPECTED_SIGNER="$(printf '%s' "$EXPECTED_SIGNER" | tr '[:lower:]' '[:upper:]')"
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUNDLE_DIR="${BUNDLE_DIR:-$ROOT/packages/desktop/src-tauri/target/release/bundle}"
-# `--bundle-dir` covers the extension archives too when they are staged there.
-#
-# It used to apply only to the desktop bundles, so a run against a freshly
-# downloaded CI directory signed those bundles but reached into the working
-# tree for the extension zips. On 2026-09-08 that meant signing four-day-old
-# archives alongside a current desktop build, in one release, with no
-# indication in the signing output. Only the checksum step caught it, and only
-# because the stale zips happened to disagree with a newer sums file; had both
-# been stale together it would have verified clean and shipped.
-if [ -n "${BUNDLE_DIR:-}" ] && ls "$BUNDLE_DIR"/smirk-wallet-*-v"$VERSION".zip >/dev/null 2>&1; then
-  EXT_DIR="$BUNDLE_DIR"
-else
-  EXT_DIR="$ROOT/packages/extension/releases"
-fi
+[ -n "$BUNDLE_DIR" ] && [ -d "$BUNDLE_DIR" ] || {
+  echo 'sign-release: --bundle-dir must contain the complete staged CI release' >&2; exit 1;
+}
+[ -n "$EXPECTED_COMMIT" ] || {
+  echo 'sign-release: --expect-commit is required to distinguish builds of the same version' >&2; exit 1;
+}
+# Validate all inputs before touching signatures or replacing the checksum list.
+# Never fill gaps from a different checkout or a previous release directory.
+node "$ROOT/scripts/release-artifacts.mjs" verify --dir "$BUNDLE_DIR" \
+  --version "$VERSION" --expect-commit "$EXPECTED_COMMIT"
+EXT_DIR="$BUNDLE_DIR"
 SUMS="$EXT_DIR/SHA256SUMS-v$VERSION.txt"
+if [ "$VERIFY_ONLY" -eq 1 ] && [ ! -f "$SUMS" ]; then
+  echo 'sign-release: the staged release has no SHA256SUMS file to verify' >&2; exit 1;
+fi
 # The toolchain record is signed alongside the sums, so the release directory
 # verifies on its own. It states which rustc, wasm-bindgen and C compiler
 # produced these bytes, which is exactly what a reviewer needs when the wasm
@@ -71,18 +77,9 @@ TOOLCHAIN="$EXT_DIR/TOOLCHAIN-v$VERSION.txt"
 
 command -v gpg >/dev/null 2>&1 || { echo "gpg not found on this machine" >&2; exit 1; }
 
-# `--local-user` only when the caller pinned a key: with no key set, gpg's default
-# is correct on a machine that holds exactly one secret key, and being explicit
-# about "no key selected" beats silently signing with an unexpected one.
-KEYARGS=()
-if [ -n "${SMIRK_SIGNING_KEY:-}" ]; then
-  KEYARGS=(--local-user "$SMIRK_SIGNING_KEY")
-fi
+KEYARGS=(--local-user "${EXPECTED_SIGNER}!")
 
-# Collect the artifacts that actually exist. A missing desktop bundle is normal
-# (the desktop release is built by CI on a tag, not locally), so absence is
-# reported rather than treated as failure. An absent EXTENSION zip is a real
-# problem and is called out separately below.
+# The provenance gate above requires every shipping platform.
 artifacts=()
 for f in \
   "$EXT_DIR/smirk-wallet-chrome-v$VERSION.zip" \
@@ -116,6 +113,12 @@ if [ -d "$BUNDLE_DIR" ]; then
 fi
 desktop_count=$(( ${#artifacts[@]} - ext_count ))
 
+# Sign the source-bound CI evidence alongside its artifacts.
+while IFS= read -r -d '' f; do artifacts+=("$f"); done < <(
+  find "$BUNDLE_DIR" -type f -name "RELEASE-PROVENANCE-*-v$VERSION.json" -print0 | sort -z
+)
+artifacts+=("$TOOLCHAIN")
+
 # macOS has no `sha256sum`; it ships `shasum`. Same split the verify step makes.
 if command -v sha256sum >/dev/null 2>&1; then SUMGEN=(sha256sum)
 else SUMGEN=(shasum -a 256); fi
@@ -148,7 +151,7 @@ if [ "$VERIFY_ONLY" -eq 0 ] && [ ${#artifacts[@]} -gt 0 ]; then
   done
   # Flattening is only safe while basenames are unique; a collision would put two
   # different files under one name and silently verify the wrong one.
-  dupes="$(awk '{print $2}' "$sums_tmp" | LC_ALL=C sort | uniq -d)"
+  dupes="$(cut -c67- "$sums_tmp" | LC_ALL=C sort | uniq -d)"
   if [ -n "$dupes" ]; then
     echo "refusing to write SHA256SUMS: duplicate asset names" >&2
     echo "$dupes" | sed 's/^/  /' >&2
@@ -163,7 +166,6 @@ if [ "$VERIFY_ONLY" -eq 0 ] && [ ${#artifacts[@]} -gt 0 ]; then
 fi
 
 [ -f "$SUMS" ] && artifacts+=("$SUMS")
-[ -f "$TOOLCHAIN" ] && artifacts+=("$TOOLCHAIN")
 
 if [ ${#artifacts[@]} -eq 0 ]; then
   echo "nothing to sign: no v$VERSION artifacts under" >&2
@@ -173,8 +175,6 @@ if [ ${#artifacts[@]} -eq 0 ]; then
 fi
 
 echo "v$VERSION: $ext_count extension, $desktop_count desktop, $([ -f "$SUMS" ] && echo 1 || echo 0) checksum file, $([ -f "$TOOLCHAIN" ] && echo 1 || echo 0) toolchain record"
-[ "$ext_count" -lt 3 ] && echo "  WARNING: expected 3 extension artifacts, found $ext_count"
-[ "$desktop_count" -eq 0 ] && echo "  note: no desktop bundles present (CI builds those on a tag)"
 
 if [ "$VERIFY_ONLY" -eq 0 ]; then
   echo
@@ -182,7 +182,7 @@ if [ "$VERIFY_ONLY" -eq 0 ]; then
   for f in "${artifacts[@]}"; do
     # --yes so a re-run after a rebuild replaces the stale signature instead of
     # prompting; a signature for bytes that no longer exist is worse than none.
-    gpg --batch --yes --armor --detach-sign "${KEYARGS[@]}" --output "$f.asc" "$f"
+    gpg --batch --yes --armor --detach-sign ${KEYARGS[@]+"${KEYARGS[@]}"} --output "$f.asc" "$f"
     echo "  $(basename "$f").asc"
   done
 fi
@@ -194,23 +194,60 @@ for f in "${artifacts[@]}"; do
   if [ ! -f "$f.asc" ]; then
     echo "  MISSING  $(basename "$f").asc"; rc=1; continue
   fi
-  if out=$(gpg --batch --verify "$f.asc" "$f" 2>&1); then
-    # Report the signing key so a wrong-key signature is visible rather than
-    # just "Good signature", which is true of any key in the local keyring.
-    who=$(printf '%s\n' "$out" | grep -oE 'using [A-Za-z0-9]+ key [A-F0-9]+' | head -1)
-    echo "  OK       $(basename "$f")  ${who:-}"
+  # Parse only the status channel. A UID or diagnostic can contain misleading
+  # text, so stderr must never become signer evidence.
+  if status=$(gpg --batch --status-fd 1 --verify "$f.asc" "$f" 2>/dev/null); then
+    signer=$(printf '%s\n' "$status" | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print toupper($3) }')
+    invalid=$(printf '%s\n' "$status" | awk '$1 == "[GNUPG:]" && $2 ~ /^(BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|KEYEXPIRED|SIGEXPIRED|KEYREVOKED)$/ { print $2 }')
+    if [ "$signer" = "$EXPECTED_SIGNER" ] && [ -z "$invalid" ]; then
+      echo "  OK       $(basename "$f")  signer $signer"
+    else
+      if [ -n "$invalid" ]; then
+        printf '  BAD      %s: GPG rejected signature validity: %s\n' "$(basename "$f")" "$invalid" >&2
+      elif [ -z "$signer" ]; then
+        echo "  BAD      $(basename "$f"): GPG supplied no VALIDSIG fingerprint" >&2
+      elif [[ "$signer" == *$'\n'* ]]; then
+        echo "  BAD      $(basename "$f"): GPG supplied multiple VALIDSIG fingerprints" >&2
+      elif [[ "$signer" =~ ^[A-F0-9]{40}$ ]]; then
+        echo "  BAD      $(basename "$f"): signer $signer differs from expected $EXPECTED_SIGNER" >&2
+      else
+        echo "  BAD      $(basename "$f"): GPG supplied a malformed VALIDSIG fingerprint" >&2
+      fi
+      rc=1
+    fi
   else
-    echo "  BAD      $(basename "$f")"; printf '%s\n' "$out" | sed 's/^/             /'; rc=1
+    gpg_rc=$?
+    reason=$(printf '%s\n' "$status" | awk '$1 == "[GNUPG:]" && $2 ~ /^(BADSIG|ERRSIG|NO_PUBKEY|NODATA|FAILURE|ERROR)$/ { print $2 }')
+    echo "  BAD      $(basename "$f"): GPG verification failed (exit $gpg_rc)${reason:+: $reason}" >&2
+    rc=1
   fi
 done
 
 if [ -f "$SUMS" ]; then
   echo
   echo "checksums:"
-  # macOS ships `shasum`, not GNU coreutils' `sha256sum`, and jw-macbook is Darwin.
-  if command -v sha256sum >/dev/null 2>&1; then SUMCHECK=(sha256sum -c)
-  else SUMCHECK=(shasum -a 256 -c); fi
-  ( cd "$EXT_DIR" && "${SUMCHECK[@]}" "$(basename "$SUMS")" 2>&1 | sed 's/^/  /' ) || rc=1
+  # Published names are flat, but the staged artifacts live in platform
+  # subdirectories. Verify those actual files without copying or flattening.
+  node --input-type=module - "$SUMS" "${artifacts[@]}" <<'JS' || rc=1
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+const [sums, ...paths] = process.argv.slice(2);
+const expected = new Map(readFileSync(sums, 'utf8').trim().split('\n').map((line) => {
+  const match = /^([a-f0-9]{64}) [ *](.+)$/.exec(line);
+  if (!match) throw new Error('Invalid SHA256SUMS entry');
+  return [match[2], match[1]];
+}));
+for (const path of paths) {
+  if (path === sums) continue;
+  const name = basename(path);
+  const hash = createHash('sha256').update(readFileSync(path)).digest('hex');
+  if (expected.get(name) !== hash) throw new Error(`Checksum mismatch or missing entry: ${name}`);
+  expected.delete(name);
+  console.log(`  OK ${name}`);
+}
+if (expected.size) throw new Error('SHA256SUMS contains unstaged artifacts');
+JS
 fi
 
 exit $rc

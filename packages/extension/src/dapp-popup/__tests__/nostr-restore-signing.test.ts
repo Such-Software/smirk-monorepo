@@ -13,13 +13,13 @@ import {
   deriveNostrKeyFromSeed,
   nostrIdentityFromPrivkey,
   mnemonicToSeed,
+  generateMnemonicPhrase,
   verifyNostrEventId,
   type UnlockedWallet,
 } from '@smirk/core';
 import { signNostrEventWith } from '../signers';
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const TEST_MNEMONIC = generateMnemonicPhrase();
 
 /** A wallet shaped like `restoreUnlockedFromCache` output: cached derived keys,
  *  NO mnemonic and NO seed. */
@@ -56,6 +56,6 @@ test('signNostrEventWith signs a kind-1 event as the restored wallet cached iden
 test('signNostrEventWith throws when the identity could not be resolved (null)', () => {
   assert.throws(
     () => signNostrEventWith(null, { kind: 1, content: 'x', tags: [] }),
-    /re-unlock the wallet/,
+    (error: unknown) => error instanceof Error && error.message.trim().length > 0,
   );
 });

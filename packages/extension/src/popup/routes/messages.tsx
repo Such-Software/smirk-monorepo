@@ -13,6 +13,7 @@ import {
 } from '@smirk/core';
 import { IdentityPicker, CopyableNpub, type PickerIdentity } from '@smirk/ui';
 import { settingsInputStyle } from '../ui-shared';
+import { authorizeOperation, assertOperationSession } from '../operation-auth';
 import {
   getActiveNostrIdentityFromWallet,
   resolveNostrIdentityForOrigin,
@@ -134,11 +135,13 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
     setError(undefined);
     setReachNotice(undefined);
     try {
+      await authorizeOperation('sign', wallet, 'Encrypt, sign, and send this message');
       // Mine the relay's advertised difficulty. Without it, a message from an
       // identity this relay has not registered is refused outright, which is
       // every burner and every freshly created identity.
       const powBits = (await api.getCapabilities()).data?.messaging?.inbound_pow_bits ?? 0;
-      const sent = await sendDm(identity, recipient.trim(), text.trim(), powBits);
+      assertOperationSession(wallet);
+      const sent = await sendDm(identity, recipient.trim(), text.trim(), powBits, () => assertOperationSession(wallet));
       setText('');
       if (!sent.inboxFound) {
         setReachNotice(

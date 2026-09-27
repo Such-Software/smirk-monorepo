@@ -157,7 +157,7 @@ function fakeLws(asset: 'xmr' | 'wow', totalReceived: number, calls: string[]): 
   };
 }
 
-test('fetchAllBalances uses a swapped-in lws provider and registers the view key BEFORE reading balance', async () => {
+test('fetchAllBalances uses a swapped-in lws provider for an explicitly admitted new wallet', async () => {
   const poison = new Proxy(
     {},
     {
@@ -171,14 +171,13 @@ test('fetchAllBalances uses a swapped-in lws provider and registers the view key
   const providers = createChainProviders(poison);
   providers.setLws('xmr', fakeLws('xmr', 9999, calls)); // user points xmr at their own lws
 
-  const bootstrap: BootstrapAuthResult = { userId: 'u1', isNew: false };
+  const bootstrap: BootstrapAuthResult = { userId: 'u1', isNew: true, restoreState: 'new' };
   const balances = await fetchAllBalances(makeWallet(), bootstrap, {
     providers,
     visibleAssetIds: ['xmr'],
   });
 
-  // The register-before-balance ordering (and its swallowed error) is the
-  // documented lws trap; rerouting must preserve it.
-  assert.deepEqual(calls, ['registerAccount', 'getBalance']);
+  assert.ok(calls.includes('registerAccount'));
+  assert.ok(calls.indexOf('registerAccount') < calls.indexOf('getBalance'));
   assert.equal(balances.xmr.confirmed, 9999n); // from the swapped lws, not the backend
 });

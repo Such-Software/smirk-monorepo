@@ -18,6 +18,8 @@
  * `@smirk/wasm` provides the crypto; this glue is platform-side.
  */
 
+import { signUtxoSessionTransaction } from './utxo-session-signing';
+import { authorizeOperation, assertOperationSession } from './operation-auth';
 import {
   chainProviders,
   applyRelayFloor,
@@ -223,7 +225,7 @@ function selectUtxos(
       inputs: selected.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value })),
       recipientSat: targetSat,
       changeSat: numOutputs === 1 ? 0 : changeSat,
-      feeSat,
+      feeSat: numOutputs === 1 ? selectedSat - targetSat : feeSat,
     };
   }
   return { error: 'UTXO selection did not converge (too many inputs needed)' };
@@ -266,8 +268,8 @@ async function sendBtcLtc(
    */
   excludeInputs: Set<string>,
 ): Promise<SendSubmitResult> {
-  if (!wallet.mnemonic) {
-    return { ok: false, error: 'Wallet not unlocked (no mnemonic available)' };
+  if (!wallet.mnemonic && !wallet.sessionSecrets?.[asset]) {
+    return { ok: false, error: 'Signing keys are unavailable. Unlock the wallet again.' };
   }
 
   const fromAddress = (wallet.addresses as unknown as Record<string, string | undefined>)[asset];
@@ -391,6 +393,25 @@ async function sendBtcLtc(
     }
   }
 
+  assertOperationSession(wallet);
+  let txHex: string;
+  if (wallet.sessionSecrets?.[asset]) {
+    try {
+      txHex = signUtxoSessionTransaction({
+        wallet, asset,
+        inputs: selection.inputs.map((input) => ({
+          ...input,
+          masterPath: tagByOutpoint.get(`${input.txid}:${input.vout}`)?.masterPath ?? singlePath,
+          ...(tagByOutpoint.get(`${input.txid}:${input.vout}`)?.ownerAddress
+            ? { ownerAddress: tagByOutpoint.get(`${input.txid}:${input.vout}`)!.ownerAddress! } : {}),
+        })),
+        recipientAddress: toAddress, recipientSat: selection.recipientSat,
+        changeAddress, changeSat: selection.changeSat, feeSat: selection.feeSat,
+      });
+    } catch (e) {
+      return { ok: false, error: `Sign transaction failed: ${e instanceof Error ? e.message : 'Unknown signing error'}` };
+    }
+  } else {
   // 3. Build the unsigned PSBT. Each input carries the path (and, in fresh
   //    mode, the owner-address tag for the fail-closed G9 script assertion)
   //    resolved from `tagByOutpoint`.
@@ -414,7 +435,7 @@ async function sendBtcLtc(
       ...(selection.changeSat > 0
         ? { changeAddress, changeSat: selection.changeSat }
         : {}),
-      mnemonic: wallet.mnemonic,
+      mnemonic: wallet.mnemonic!,
       passphrase: '',
     });
   } catch (e) {
@@ -427,7 +448,7 @@ async function sendBtcLtc(
   let signedJson: string;
   try {
     signedJson = wasmBitcoin.signPsbt(
-      wallet.mnemonic,
+      wallet.mnemonic!,
       '',
       network,
       `m/84'/${asset === 'btc' ? 0 : 2}'/0'`,
@@ -449,11 +470,12 @@ async function sendBtcLtc(
   }
 
   // 6. Extract tx hex.
-  let txHex: string;
   try {
     txHex = wasmBitcoin.extractTx(parsed.psbt);
   } catch (e) {
     return { ok: false, error: `Extract tx failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
   }
 
   // 7. Broadcast. On failure, dump tx hex + the inputs/recipient/change/fee
@@ -461,6 +483,7 @@ async function sendBtcLtc(
   //    (`bitcoin-cli decoderawtransaction <hex>` or
   //    https://blockstream.info/tools/tx-decoder) and find the exact
   //    rejection reason. Diagnostic-only; the hex carries no private data.
+  assertOperationSession(wallet);
   const broadcast = await chainProviders.utxo(asset).broadcast(txHex);
   if (broadcast.error || !broadcast.data) {
     console.error('[smirk send] broadcast failed', {
@@ -814,6 +837,7 @@ async function sendXmrWow(
     outgoing_view_key?: string;
   };
   try {
+    assertOperationSession(wallet);
     const signedJson = wasmMonero.signTransaction(JSON.stringify(params));
     signed = parseWasmResult<{
       tx_hex: string;
@@ -830,6 +854,7 @@ async function sendXmrWow(
   //    metadata; sending it would leak a sender<->recipient<->amount link to the
   //    operator on every send, including external ones). If the pending-transfer
   //    "you have incoming funds" hint returns, deliver it over the E2EE channel.
+  assertOperationSession(wallet);
   const submit = await chainProviders.lws(asset).broadcast(signed.tx_hex);
   if (submit.error || !submit.data) {
     console.error('[smirk send xmr/wow] submit failed', {
@@ -890,6 +915,11 @@ export async function send(
   excludeInputs: Set<string> = new Set(),
 ): Promise<SendSubmitResult> {
   const asset = mustGetAsset(fields.fromAssetId);
+  try {
+    await authorizeOperation('send', wallet, `Send ${asset.ticker} to ${fields.toAddress}`);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Send confirmation failed.' };
+  }
 
   if (asset.id === 'btc' || asset.id === 'ltc') {
     // Clamp to the relay floor: every BTC/LTC broadcast path must, or
