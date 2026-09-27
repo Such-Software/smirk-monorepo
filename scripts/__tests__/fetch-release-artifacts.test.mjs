@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { selectCandidates, fetchSameOrigin, treeObjectId, readRunBinding } from '../fetch-release-artifacts.mjs';
+import { selectCandidates, fetchSameOrigin, treeObjectId, readRunBinding, candidateAccess } from '../fetch-release-artifacts.mjs';
 
 const commit = '1'.repeat(40);
 const version = '0.3.0';
@@ -13,6 +13,25 @@ const listing = () => ({ artifacts: ['macos', 'linux', 'windows', 'extension'].m
   name: `${platform === 'extension' ? 'smirk-extension' : `smirk-desktop-${platform}`}-v${version}-${commit}`,
   id: index + 1, expired: false,
 })) });
+
+test('foreign collector targets refuse before credential access or network', async () => {
+  for (const env of [
+    { SMIRK_GITEA_HOST: 'https://untrusted.test' },
+    { SMIRK_GITEA_HOST: 'https://git.such.software.untrusted.test' },
+    { SMIRK_BUILDS_REPO: 'Builds/unrelated' },
+    { SMIRK_BUILDS_REPO: 'Other/smirk-monorepo' },
+  ]) {
+    let credentialRead = false; let networkReached = false;
+    await assert.rejects(candidateAccess(env, {
+      readCredential: async () => { credentialRead = true; return 'test-only'; },
+      fetchImpl: async () => { networkReached = true; return new Response(); },
+    }), /outside the reviewed/);
+    assert.equal(credentialRead, false);
+    assert.equal(networkReached, false);
+  }
+  const admitted = await candidateAccess({}, { readCredential: async () => 'test-only' });
+  assert.equal(admitted.api, 'https://git.such.software/api/v1/repos/Builds/smirk-monorepo');
+});
 
 test('complete API tree entries reproduce Git identity without trusting the API sha label', t => {
   const temp = mkdtempSync(join(tmpdir(), 'smirk-api-tree-'));

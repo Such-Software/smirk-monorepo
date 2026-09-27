@@ -91,6 +91,25 @@ export async function fetchSameOrigin(url, origin, token, fetchImpl = fetch) {
   throw new Error('Gitea candidate request exceeded the redirect limit');
 }
 
+export async function candidateAccess(env = process.env, dependencies = {}) {
+  const origin = 'https://git.such.software';
+  const repo = 'Builds/smirk-monorepo';
+  if (env.SMIRK_GITEA_HOST !== undefined && env.SMIRK_GITEA_HOST !== origin) {
+    throw new Error('Candidate collection refuses a host outside the reviewed Gitea origin');
+  }
+  if (env.SMIRK_BUILDS_REPO !== undefined && env.SMIRK_BUILDS_REPO !== repo) {
+    throw new Error('Candidate collection refuses a repository outside the reviewed Smirk ingress');
+  }
+  const readCredential = dependencies.readCredential
+    ?? (() => readFile(join(homedir(), '.config/gitea-token'), 'utf8'));
+  const token = (await readCredential()).trim();
+  if (!token || /[\r\n]/.test(token)) throw new Error('Enrolled Gitea token file is empty or malformed');
+  return {
+    api: `${origin}/api/v1/repos/${repo}`,
+    get: url => fetchSameOrigin(url, origin, token, dependencies.fetchImpl ?? fetch),
+  };
+}
+
 async function main(argv) {
   const version = argv.shift();
   const options = {};
@@ -104,16 +123,9 @@ async function main(argv) {
   if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(version ?? '') || !/^[0-9a-f]{40}$/.test(commit ?? '') || !/^[1-9][0-9]*$/.test(runId ?? '')) {
     throw new Error('A version, successful run ID, and full reviewed source commit are required');
   }
-  const host = new URL(process.env.SMIRK_GITEA_HOST ?? 'https://git.such.software');
-  if (host.protocol !== 'https:' || host.username || host.password || host.pathname !== '/' || host.search || host.hash) throw new Error('Gitea host must be a credential-free HTTPS origin');
-  const repo = process.env.SMIRK_BUILDS_REPO ?? 'Builds/smirk-monorepo';
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error('Invalid Builds repository name');
   const dest = resolve(options['--dest'] ?? join(homedir(), `release-v${version}-${commit.slice(0, 12)}`));
   try { await access(dest); throw new Error('Candidate destination already exists; choose a new directory'); } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
-  const token = (await readFile(join(homedir(), '.config/gitea-token'), 'utf8')).trim();
-  if (!token || /[\r\n]/.test(token)) throw new Error('Enrolled Gitea token file is empty or malformed');
-  const api = `${host.origin}/api/v1/repos/${repo}`;
-  const get = url => fetchSameOrigin(url, host.origin, token);
+  const { api, get } = await candidateAccess();
   const run = await (await get(`${api}/actions/runs/${runId}`)).json();
   const listing = await (await get(`${api}/actions/runs/${runId}/artifacts?limit=100`)).json();
   const candidates = selectCandidates(run, listing, version, commit);
