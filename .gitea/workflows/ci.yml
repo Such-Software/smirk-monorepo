@@ -28,6 +28,21 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  source-gate:
+    name: Source gate
+    if: ${{ always() }}
+    needs: [rust, typescript, openapi-drift, secret-scan, supply-chain]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require every source check to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node scripts/ci/source-gate.mjs
+
   rust:
     # Isolated toolchain homes, one per job. These runners execute several jobs
     # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
