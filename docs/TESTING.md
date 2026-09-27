@@ -200,9 +200,8 @@ runs before each public release.
 Automated: `npm run e2e -w @smirk/e2e` builds the extension
 (`packages/e2e/scripts/build-extension.sh`) and runs the Playwright
 specs in `packages/e2e/tests/` against `BACKEND_URL`. Run the suite
-through the package scripts. The `.github/workflows/e2e*.yml` files
-are historical definitions: GitHub Actions is disabled and the active Gitea
-workflows do not currently run this suite. A release therefore needs an
+through the package scripts. The obsolete GitHub E2E workflows have been
+removed. The Gitea workflows do not currently run this suite, so a release needs an
 explicit recorded E2E run; unit CI does not supply that evidence. Keep the
 configured private reporter and skip guard. Reporter overrides, screenshots,
 traces and video capture are refused because wallet tests handle recovery

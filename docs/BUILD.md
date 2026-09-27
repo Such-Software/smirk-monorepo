@@ -150,9 +150,15 @@ own preflight. Run the Playwright suite in its own environment with
 
 ## Release candidates and signatures
 
-The app repository owns client source and build inputs. Use the declared source
-remote and reviewed release ingress. A successful candidate build does not
+`such-gitea/smirk-monorepo` owns canonical client source and build inputs.
+Use that source remote and the reviewed `Builds/smirk-monorepo` release ingress.
+A successful candidate build does not
 publish a release, approve a store submission, or change source authority.
+GitHub receives reviewed source and verified release assets. This tree contains
+no GitHub Actions workflows, so publishing a tag cannot start a second build,
+funded test suite, or asset publisher from this source. Historical refs retain
+their original workflow definitions; their publication requires separate closure
+evidence before a tag is moved.
 
 Both release jobs require `TROCADOR_API_KEY` in build custody and refuse before
 building when it is absent. Local development may leave swaps disabled. The
@@ -191,7 +197,7 @@ reads the exact wrapper and source-parent trees from Gitea and compares every
 artifact receipt to that binding. `source_commit` in the receipt names the
 actual checked-out build commit; `approved_source_commit` names canonical source.
 The matching Fleet dispatch receipt establishes canonical landing: the source
-parent must equal its reviewed GitHub main pin. A tree-identical wrapper alone
+parent must equal its reviewed canonical source pin. A tree-identical wrapper alone
 does not prove that landing. Do not substitute one identity for the other. No release-tag
 fallback substitutes another run's output.
 

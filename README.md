@@ -94,7 +94,7 @@ make test
 
 `make test` fans out to `cargo test --workspace` and `npm test --workspaces`, and neither half passes on a bare checkout: the first includes the vendored monero-oxide subtrees' daemon-RPC integration tests, which need a monerod at 127.0.0.1:18081, and the second includes `@smirk/e2e`, whose Playwright suite needs a browser, a running backend and an extension built against it. The gate is `cargo test --workspace --lib` plus `npm test` per unit package.
 
-CI runs on the Gitea Builds runners: see [.gitea/workflows/ci.yml](.gitea/workflows/ci.yml). It builds the WASM bundle and the TypeScript workspace with `make wasm` and `make libs`, but the Rust jobs call `cargo check --workspace --all-targets`, `cargo test --workspace --lib` and `cargo clippy` directly, so the vendored subtrees' daemon-RPC integration tests and upstream lint style do not gate the build. GitHub Actions is disabled for the Such-Software org, so nothing under `.github/workflows/` executes.
+CI runs on Gitea runners: see [.gitea/workflows/ci.yml](.gitea/workflows/ci.yml). It builds the WASM bundle and the TypeScript workspace with `make wasm` and `make libs`, but the Rust jobs call `cargo check --workspace --all-targets`, `cargo test --workspace --lib` and `cargo clippy` directly, so the vendored subtrees' daemon-RPC integration tests and upstream lint style do not gate the build. GitHub is a publication target. This source tree contains no executable GitHub Actions workflows; publication uses verified Gitea candidates.
 
 ## Reproducible from source
 

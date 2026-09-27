@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import yaml from 'js-yaml';
@@ -13,6 +13,15 @@ const baseCommit = 'c'.repeat(40);
 const tree = 'd'.repeat(40);
 const context = { event: 'workflow_dispatch', repository: 'Builds/smirk-monorepo',
   ref: 'refs/heads/main', sha: buildCommit, expectedSha: buildCommit };
+
+test('GitHub publication cannot execute a second workflow lane', () => {
+  const directory = new URL('../../.github/workflows/', import.meta.url);
+  if (!existsSync(directory)) return;
+  for (const path of readdirSync(directory, { recursive: true })) {
+    assert.equal(/\.ya?ml$/i.test(path), false,
+      `${path} introduces executable GitHub automation outside the Gitea build lane`);
+  }
+});
 
 test('candidate admission refuses any changed dispatch boundary', () => {
   assert.doesNotThrow(() => admitDispatch(context));

@@ -1,17 +1,9 @@
 name: CI (Gitea)
 
-# The real CI gate for this repo.
-#
-# GitHub Actions is disabled at the org level, deliberately: code lives on
-# GitHub but builds run here (see .gitea/workflows/desktop-build.yml). So this
-# file, not `.github/workflows/ci.yml`, is where the correctness gates execute:
-# rust check / test / clippy, the wasm build, the topological TS build,
-# typecheck, unit tests, the API check, the secret scan, and the dependency
-# audit.
-#
-# Keep this in sync with .github/workflows/ci.yml, or delete that one. Two
-# copies of a gate, one of which cannot run, produces a green-looking release
-# gated on nothing.
+# Gitea owns source checks and candidate builds. GitHub is a publication target;
+# this source tree contains no executable GitHub Actions workflows.
+# This gate checks Rust, WASM, TypeScript, API agreement, secret shapes and
+# dependencies. Candidate builds use .gitea/workflows/desktop-build.yml.
 #
 # `runs-on: ubuntu-latest` is the label this instance's Linux runner advertises
 # (see the matrix in desktop-build.yml). A label no runner claims queues forever
