@@ -73,12 +73,6 @@ test('Send → BTC → fee tiers resolve (namespaced) → reach Review (no broad
   });
 
   const page = await context.newPage();
-  page.on('console', (m) => {
-    const t = m.text();
-    if (/fee|auth|bootstrap|error|fail|401/i.test(t)) {
-      console.log('CONSOLE', m.type(), t.slice(0, 180));
-    }
-  });
 
   // --- Onboarding: import alice (returning user → no PoW, no gate). Returns
   //     once authenticated (a real backend balance renders on Home). ---

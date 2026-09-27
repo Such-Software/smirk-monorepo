@@ -177,6 +177,8 @@ export function BrowseTab({
     try {
       const result = await executeApproval(request, approval, {
         wallet: ws.wallet,
+        authorizeOperation,
+        assertOperationSession,
         ensureWasmInit,
         send,
         claimPublicTip,
@@ -185,6 +187,7 @@ export function BrowseTab({
         loadState: () => store.load(),
         updateState: (m) => store.update(m),
       });
+      if (approval.kind !== 'requestPayment' && approval.kind !== 'claimPublicTip') assertOperationSession(ws.wallet);
       queue.resolveCurrent(result);
     } catch (e) {
       console.error('[BrowseTab] executeApproval threw:', e);
@@ -276,3 +279,4 @@ export function BrowseTab({
     </Fragment>
   );
 }
+import { authorizeOperation, assertOperationSession } from '../operation-auth';

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import {
-  SESSION_CACHE_KEY,
   AUTO_LOCK_MAX_MINUTES,
   withAssetVisibility,
   type UnlockedWallet,
@@ -9,7 +8,7 @@ import {
 import { useRoute, useSessionState, listThemes, copyText } from '@smirk/ui';
 import { getAsset, listAssets } from '@smirk/assets';
 import type { OriginPermission } from '@such-software/smirk-dapp-api';
-import { store, sessionStorage, walletKeystore } from '../singletons';
+import { store, walletKeystore } from '../singletons';
 import { APP_VERSION, buildIdentity } from '../build-info';
 import { bytesToHex, feedTimeAgo } from '../format';
 import { settingsInputStyle } from '../ui-shared';
@@ -22,6 +21,7 @@ import type { WalletSession } from '../types';
 import { SentTipsRoute } from './sent-tips';
 import { NostrIdentityRoute } from './nostr-identity';
 import { BackendRoute } from './backend';
+import { OperationAuthSettings } from '../operation-auth-settings';
 
 /**
  * The auto-lock dropdown options. `0` = lock immediately on popup close
@@ -473,6 +473,7 @@ function SecurityPanel({ wallet }: { wallet: UnlockedWallet }) {
       >
         Security
       </label>
+      <OperationAuthSettings wallet={wallet} />
       <div
         style={{
           display: 'flex',
@@ -1094,26 +1095,11 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
     await store.update((s) => {
       s.ui.autoLockMinutes = minutes;
     });
-    if (minutes === 0) {
-      // Immediate-lock chosen: wipe any existing session-cache so the
-      // new policy takes effect now, not when the old timer expires.
-      await sessionStorage.remove(SESSION_CACHE_KEY);
-      // A non-default active Nostr identity's key is cached separately, on
-      // the session cache's original TTL. Dropping only the keystore cache
-      // would leave that private key readable for up to 24h after the user
-      // asked to lock immediately. Same pair the lock handler clears.
-      await clearCachedActiveNostrKey();
-    } else {
-      // Re-stamp the session cache against the currently-unlocked
-      // wallet so the new TTL applies immediately. Without this, a
-      // user who unlocks with "Immediately" (no cache) and then
-      // switches to "Never" sees no effect until the next manual
-      // unlock, defeating the toggle.
-      const ks = await walletKeystore.getState();
-      if (ks.kind === 'unlocked') {
-        await writeSessionCache(ks.wallet, minutes);
-      }
+    const ks = await walletKeystore.getState();
+    if (ks.kind === 'unlocked') {
+      await writeSessionCache(ks.wallet, minutes);
     }
+    if (minutes === 0) await clearCachedActiveNostrKey();
   };
 
   return (
@@ -1165,47 +1151,15 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
               lineHeight: 1.4,
             }}
           >
-            ⚠ While unlocked, this device keeps your derived keys in browser
-            session storage (never your recovery phrase). Only choose a
-            non-immediate option on devices you trust physically.
-          </p>
-        )}
-        {browserController && (
-          // Desktop-only callout: the chrome-shim does not polyfill
-          // `chrome.alarms`, so the auto-lock timer only runs while
-          // the wallet window is open. A user who closes the wallet
-          // does NOT relock until they reopen the app; make sure
-          // they know. Tracked for a `WalletTimers` abstraction in
-          // `@smirk/core/state/platform.ts`.
-          <p
-            style={{
-              fontSize: 11,
-              opacity: 0.7,
-              margin: '6px 0 0',
-              lineHeight: 1.4,
-              color: 'var(--smirk-warn, #c69)',
-            }}
-          >
-            Desktop: the auto-lock timer pauses while the wallet
-            window is closed. Closing the window does not relock
-            until you reopen it. Plan accordingly when stepping
-            away from the device.
+            Keeps signing keys in browser memory for the selected period.
+            Reopening Smirk does not extend it.
           </p>
         )}
         </section>
 
-        {/* Reveal the recovery phrase.
-          *
-          * The wallet never re-showed the phrase after onboarding, so a user who
-          * did not write it down had no way to get it back. On 2026-09-07 that
-          * turned a deleted unpacked extension into a lost wallet, recovered only
-          * by carving deleted LevelDB pages off the disk. Every other wallet
-          * offers this behind a password, and the keystore already returns the
-          * mnemonic from unlock: only the surface was missing.
-          *
-          * Gated on the password rather than the unlocked session, because the
-          * session cache deliberately holds no mnemonic. Held in component state
-          * and never written anywhere. */}
+        {/* Reveal requires the password and current live session. Temporary
+          * decryption does not replace signing keys or renew the grace period.
+          * The displayed phrase stays in component state, never storage. */}
         <section style={{ marginTop: 24 }}>
           <label style={{ display: 'block', fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
             Recovery phrase
@@ -1287,19 +1241,13 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
                   setRevealBusy(true);
                   void (async () => {
                     try {
-                      const w = await walletKeystore.unlock(revealPassword);
-                      if (!w.mnemonic) {
-                        // Defensive: a warm-restored wallet carries no mnemonic.
-                        // Say what is true rather than showing an empty box.
-                        setRevealError(
-                          'Could not read the phrase from this session. Lock the wallet and unlock it again.',
-                        );
-                        return;
-                      }
-                      setRevealedPhrase(w.mnemonic);
-                    } catch {
-                      setRevealError('That password did not match.');
+                      const phrase = await walletKeystore.readRecoveryPhrase(revealPassword, wallet);
+                      walletKeystore.assertUnlockedWallet(wallet);
+                      setRevealedPhrase(phrase);
+                    } catch (error) {
+                      setRevealError(error instanceof Error ? error.message : 'Could not reveal the recovery phrase.');
                     } finally {
+                      setRevealPassword('');
                       setRevealBusy(false);
                     }
                   })();
@@ -1327,8 +1275,7 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         // Desktop-only: surface the v0.3.0 known limitations a user
         // would otherwise blame on a bug. Notifications are silent
         // because chrome.notifications isn't polyfilled. Tracked
-        // alongside auto-lock under `WalletTimers` /
-        // `WalletNotifications` in `@smirk/core/state/platform.ts`.
+        // under `WalletNotifications` in `@smirk/core/state/platform.ts`.
         <section
           style={{
             marginTop: 20,
@@ -1350,10 +1297,6 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
               lineHeight: 1.5,
             }}
           >
-            <li>
-              Auto-lock pauses while the wallet window is closed
-              (no background timer).
-            </li>
             <li>
               Tip-arrival notifications are silent (no OS-level
               alerts). Check the Inbox tab for new tips.

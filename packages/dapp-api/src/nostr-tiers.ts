@@ -48,15 +48,15 @@ export interface NostrSessionGrant {
   expiresAt: number;
 }
 
-/** True iff an active session covers `kind`. A money-tier kind is NEVER covered,
- *  even if a stale/hostile session lists it; the tier check wins. */
+/** Only explicitly session-grantable kinds can use a finite, live grant.
+ *  Stale or malformed stored permissions cannot expand that authority. */
 export function isNostrSessionActive(
   session: NostrSessionGrant | undefined,
   kind: number,
   nowMs: number,
 ): boolean {
-  if (nostrKindTier(kind) === 'money') return false;
-  if (!session) return false;
+  if (nostrKindTier(kind) !== 'session-grantable') return false;
+  if (!session || !Number.isFinite(session.expiresAt) || !Array.isArray(session.kinds)) return false;
   return session.expiresAt > nowMs && session.kinds.includes(kind);
 }
 
@@ -71,10 +71,12 @@ export function mergeNostrSession(
   grant: { kinds: number[]; expiresAt: number },
   nowMs: number,
 ): NostrSessionGrant | undefined {
-  const safeKinds = grant.kinds.filter((k) => nostrKindTier(k) === 'session-grantable');
-  if (safeKinds.length === 0) return existing;
-  // Keep still-live kinds from the existing session, then union the new ones.
-  const kept = existing && existing.expiresAt > nowMs ? existing.kinds : [];
+  const kept = existing && Number.isFinite(existing.expiresAt) && existing.expiresAt > nowMs && Array.isArray(existing.kinds)
+    ? existing.kinds.filter((k) => nostrKindTier(k) === 'session-grantable') : [];
+  const safeKinds = Number.isFinite(grant.expiresAt) && grant.expiresAt > nowMs && Array.isArray(grant.kinds)
+    ? grant.kinds.filter((k) => nostrKindTier(k) === 'session-grantable') : [];
+  if (safeKinds.length === 0) return kept.length > 0 ? { kinds: kept, expiresAt: existing!.expiresAt } : undefined;
+  // Revalidate existing grants before carrying their kinds forward.
   const kinds = [...new Set([...kept, ...safeKinds])];
   return { kinds, expiresAt: grant.expiresAt };
 }

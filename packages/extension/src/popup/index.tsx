@@ -13,7 +13,7 @@
  * |----------------------------------------|----------------------------------|
  * | Asset icon registry                    | `ICON_BY_KEY`                    |
  * | Wallet keystore + storage              | `walletKeystore`                 |
- * | Session cache (auto-lock, bootstrap)   | `SESSION_CACHE_KEY`              |
+ * | Session cache (auto-lock, bootstrap)   | `clearSessionCache`              |
  * | App component + routing                | `function App()`                 |
  * | Onboarding flow                        | `walletState.kind === 'empty'`   |
  * | Lock screen                            | `walletState.kind === 'locked'`  |
@@ -26,6 +26,7 @@
  * | Dapp approval (separate window mode)   | `runMode === 'approval'`         |
  */
 
+import { grinKeySource, grinSlatepackSecret } from './session-signing';
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
@@ -66,6 +67,8 @@ import {
   type Balances,
   type BootstrapAuthResult,
   type Prices,
+  nostrKeySource,
+  requireNostrKeySource,
   type UnlockedWallet,
   type WalletState,
   writeBackendConfig,
@@ -107,7 +110,6 @@ import { respondToInboxItem } from './inbox-actions';
 import {
   getActiveNostrIdentity,
   getActiveNostrIdentityFromWallet,
-  clearCachedActiveNostrKey,
 } from './nostr-vault';
 import { HeaderIdentitySwitcher } from './identity-switcher';
 import { nip05Resolver, instanceHomeDomain } from './nip05';
@@ -144,6 +146,7 @@ import {
 } from '@smirk/ui';
 import { listAssets } from '@smirk/assets';
 import { send } from './send-handler';
+import { authorizeOperation, assertOperationSession } from './operation-auth';
 import { bootstrapAuthInExtension } from './jobs/bootstrap-in-extension';
 import { canHostOnboarding, openOnboardingTab } from './onboarding-surface';
 import { openOrCreateOnboardingWallet } from './onboarding-keystore';
@@ -178,7 +181,6 @@ import {
 import { setInjectDisabled } from '../background/dapp/inject-policy';
 import {
   monero as wasmMonero,
-  grin as wasmGrin,
 } from '@smirk/wasm';
 // --- extracted popup modules (see routes/ + shared modules) ---
 import type { WalletSession } from './types';
@@ -188,9 +190,11 @@ import { dappPublicCacheFor } from './dapp-public-cache';
 import {
   tryRestoreSessionCache,
   writeSessionCache,
+  clearSessionCache,
   writeSessionHandoff,
   convergeLegacySweep,
 } from './session-cache';
+import { lockWalletContexts, subscribeWalletLock } from './session-lock';
 import { readBootstrapCache, writeBootstrapCache, clearBootstrapCache } from './bootstrap-cache';
 import { browserController } from './browser-controller';
 import { probeBackend, BackendRoute } from './routes/backend';
@@ -439,10 +443,10 @@ async function fetchGrinInbox(
  * with no round-trip rather than throwing.
  */
 async function computeGrinRewindHash(wallet: UnlockedWallet): Promise<string | undefined> {
-  if (!wallet.mnemonic) return undefined;
+  if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) return undefined;
   try {
     await ensureWasmInit();
-    return grinRewindHashFromMnemonic(wallet.mnemonic);
+    return grinRewindHashFromMnemonic(grinKeySource(wallet));
   } catch {
     return undefined;
   }
@@ -513,16 +517,7 @@ function openPopOut(unlocked?: UnlockedWallet) {
   if (IS_DESKTOP) return;
 
   const popoutUrl = chrome.runtime.getURL('popup.html');
-  // Hand the session to the window we are about to open, THEN open it.
-  //
-  // The new window is a fresh popup that reads the session cache like any
-  // cold start, and with auto-lock at 0 that cache is deliberately never
-  // written, so popping out demanded the password again every single time
-  // for a wallet that was unlocked a millisecond earlier. Locking
-  // immediately should mean locking when the wallet is closed, not when a
-  // second view of it is opened.
-  //
-  // Order matters: creating the window first races its read of the cache.
+  // Transfer complete scoped signing material through the bounded handoff.
   void (async () => {
     if (unlocked) await writeSessionHandoff(unlocked);
     await chrome.windows.create({
@@ -543,10 +538,8 @@ function openPopOut(unlocked?: UnlockedWallet) {
  * browser's own tab handling: pinning, reopening on relaunch, sitting in a
  * window the user already arranged.
  *
- * Same session handoff as popping out, and for the same reason: the new tab
- * cold-starts and reads the session cache, which with auto-lock at 0 is
- * deliberately never written, so without the handoff a wallet unlocked a
- * moment earlier would ask for the password again.
+ * Complete session signing material transfers through a short-lived handoff;
+ * incomplete legacy handoffs require one password unlock.
  */
 function openInTab(unlocked?: UnlockedWallet) {
   if (IS_DESKTOP) return;
@@ -806,20 +799,9 @@ function App() {
 
   // Refresh from the keystore. Called on mount and after every state
   // transition (create / unlock / lock / destroy) so the gate re-renders.
-  // Also opportunistically restores a non-expired session cache.
+  // Preserve the live session or restore complete, unexpired scoped keys.
   const refresh = async () => {
-    const restored = await tryRestoreSessionCache();
-    // Reapply the user's real auto-lock to whatever we restored.
-    //
-    // A pop-out handoff carries a deliberately short expiry and is consumed on
-    // read, so without this the new window would hold a session with no stored
-    // lifetime at all. Re-stamping puts the configured policy back: at 0 that
-    // correctly writes nothing, so "lock immediately" still means the session
-    // does not outlive the window.
-    if (restored) {
-      const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
-      await writeSessionCache(restored, minutes);
-    }
+    await tryRestoreSessionCache();
     const ks = await walletKeystore.getState();
     setWalletState(ks);
     // Legacy-wallet detection only matters while there's no v0.3 keystore.
@@ -1138,6 +1120,7 @@ function App() {
   };
 
   useEffect(() => {
+    const unsubscribe = subscribeWalletLock(walletKeystore, sessionStorage, refresh);
     void refresh();
     // Kick off WASM load in the background. Grin inbox actions (sign /
     // pay / finalize) all call into wasmGrin synchronously; if the
@@ -1155,6 +1138,7 @@ function App() {
     // anything; the user can still cancel/resume manually. Only the
     // 7-day floor wipes local state, in lockstep with the backend.
     void sweepStaleGrinWizards();
+    return unsubscribe;
   }, []);
 
   // Bind the Grin display journal and pending overlay to THIS wallet. Both were
@@ -1230,7 +1214,7 @@ function App() {
   // pending slatepacks is not preserved; users with rows pending
   // against the LEGACY address must cancel + re-send.
   useEffect(() => {
-    if (walletState?.kind !== 'unlocked' || !walletState.wallet.mnemonic) return;
+    if (walletState?.kind !== 'unlocked' || (!walletState.wallet.mnemonic && !walletState.wallet.sessionSecrets?.grin)) return;
     // Wait until bootstrap auth has set the API token. Firing before
     // that means the register POST goes out unauthenticated, the
     // backend returns 401 with a non-JSON body, the client returns
@@ -1242,7 +1226,7 @@ function App() {
     // bootstrap flag.
     if (!session?.bootstrap?.userId) return;
     if (!api.getAccessToken()) return;
-    const mnemonic = walletState.wallet.mnemonic;
+    const mnemonic = grinKeySource(walletState.wallet);
     void (async () => {
       await ensureWasmInit();
       // Opt-in: skip Grin key registration entirely when the backend advertises
@@ -1277,7 +1261,7 @@ function App() {
   // must be signed with the seed) + auth; idempotent: a no-op once `nostrPubkey` is
   // set. linkPrimaryNostrIdentity both links and publishes the profile.
   useEffect(() => {
-    if (walletState?.kind !== 'unlocked' || !walletState.wallet.mnemonic) return;
+    if (walletState?.kind !== 'unlocked' || !nostrKeySource(walletState.wallet)) return;
     if (!session?.bootstrap?.userId || !api.getAccessToken()) return;
     void (async () => {
       try {
@@ -1313,12 +1297,10 @@ function App() {
 
   // Consent handlers for the Nostr-link banner.
   const confirmNostrLink = async () => {
-    const mnemonic =
-      walletState?.kind === 'unlocked' ? walletState.wallet.mnemonic : undefined;
     setNostrLinkPrompt(null);
-    if (!mnemonic) return;
+    if (walletState?.kind !== 'unlocked') return;
     try {
-      await linkPrimaryNostrIdentity(mnemonic);
+      await linkPrimaryNostrIdentity(walletState.wallet);
     } catch {
       /* non-fatal: Settings → Nostr identities still offers Link */
     }
@@ -1851,71 +1833,51 @@ function App() {
 
   // walletState.kind === 'unlocked'
   const lockHandler = async () => {
-    await sessionStorage.remove(SESSION_CACHE_KEY);
-    await clearCachedActiveNostrKey();
-    await clearBootstrapCache();
-    await clearDappPublicCache();
-    await stopDmWatch();
-    await walletKeystore.lock();
-    await refresh();
+    try {
+      try {
+        await lockWalletContexts(walletKeystore, sessionStorage);
+      } finally {
+        await clearSessionCache();
+      }
+      await clearBootstrapCache();
+      await clearDappPublicCache();
+      await stopDmWatch();
+    } finally {
+      await refresh();
+    }
   };
-  // Enforce the auto-lock setting while the window stays open.
-  //
-  // Auto-lock was implemented purely as a session-cache TTL, which is only
-  // consulted when a popup starts. That is sufficient in the extension, where
-  // clicking away closes the popup, and simply false on desktop: the window
-  // lives for days, nothing re-reads the TTL, and a wallet set to "10 minutes"
-  // stays unlocked indefinitely while the Settings screen says otherwise. An
-  // idle timer makes the label true on both surfaces.
-  //
-  // `0` ("Immediately") is deliberately excluded: it means "do not outlive the
-  // window", not "lock while I am using it". The window-close path already
-  // covers it, and a zero-length idle timer would lock mid-keystroke.
+  // One grace-period deadline applies to popup, pop-out and worker wake.
+  // Restoring or using the wallet never silently renews that deadline.
   useEffect(() => {
     if (walletState.kind !== 'unlocked') return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
-    const clear = () => {
+    const arm = () => {
       if (timer) clearTimeout(timer);
       timer = null;
+      const expiry = walletState.wallet.sessionExpiresAtMs;
+      if (cancelled || expiry === undefined) return;
+      timer = setTimeout(() => void lockHandler(), Math.max(0, expiry - Date.now()));
     };
-    const arm = (minutes: number) => {
-      clear();
-      if (cancelled || minutes <= 0) return;
-      timer = setTimeout(() => void lockHandler(), minutes * 60_000);
-    };
-    // Hold the setting in a local and refresh it when it actually changes.
-    //
-    // The first cut re-read storage inside the event handler, so there was an
-    // async read per keystroke, per wheel tick, per pointer-down. Typing an
-    // amount fired dozens of them, each resolving out of order against a timer
-    // they were all re-arming. Re-arming has to be synchronous and cheap, or the
-    // thing meant to lock the wallet becomes the thing making it stutter.
-    let minutes = 0;
-    const activity = () => arm(minutes);
-    const events = ['mousedown', 'keydown', 'pointerdown', 'wheel', 'focus'];
-    for (const e of events) window.addEventListener(e, activity, { passive: true });
-    void store.load().then((st) => {
-      if (cancelled) return;
-      minutes = st.ui.autoLockMinutes ?? 0;
-      arm(minutes);
-    });
-    // Track later edits so changing the setting in Settings applies now, rather
-    // than at the next relock.
-    const unsubscribe = store.subscribe((st) => {
-      if (cancelled) return;
-      const next = st.ui.autoLockMinutes ?? 0;
-      if (next === minutes) return;
-      minutes = next;
-      arm(minutes);
+    arm();
+    // A deliberate Settings change may replace or remove the deadline.
+    const unsubscribe = sessionStorage.subscribe((key) => {
+      if (key !== SESSION_CACHE_KEY) return;
+      void sessionStorage.get<{ expiresAtMs?: number }>(key).then((entry) => {
+        if (cancelled) return;
+        if (typeof entry?.expiresAtMs === 'number' && Number.isFinite(entry.expiresAtMs)) {
+          walletState.wallet.sessionExpiresAtMs = entry.expiresAtMs;
+        } else {
+          delete walletState.wallet.sessionExpiresAtMs;
+        }
+        arm();
+      });
     });
     return () => {
       cancelled = true;
-      clear();
+      if (timer) clearTimeout(timer);
       unsubscribe();
-      for (const e of events) window.removeEventListener(e, activity);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletState.kind]);
 
   const handleRefresh = () =>
@@ -2141,8 +2103,8 @@ function App() {
               // the stripped cache back over it.
               onUnlocked={() => void refresh()}
               onForgetComplete={async () => {
-                await sessionStorage.remove(SESSION_CACHE_KEY);
-                await clearCachedActiveNostrKey();
+                await lockWalletContexts(walletKeystore, sessionStorage);
+                await clearSessionCache();
                 await clearBootstrapCache();
                 await clearDappPublicCache();
                 await stopDmWatch();
@@ -2302,6 +2264,9 @@ function HomeRouter({
           .map((a) => a.id)}
         validateAddress={validateSendRecipient}
         parseAmount={parseAmount}
+        resolveUsdPrice={(assetId) => capAllowsPrices(caps)
+          ? (session?.prices as Record<string, number | null> | null | undefined)?.[assetId] ?? null
+          : null}
         resolveBalance={(assetId) => {
           // Read confirmed balance from current session. Returns 0n if
           // not yet loaded; Compose surfaces this as "Insufficient
@@ -2336,13 +2301,13 @@ function HomeRouter({
           // useEffect).
           if (assetId === 'grin') {
             if (!options?.amountAtomic) return null;
-            if (!wallet.mnemonic) return null;
+            if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) return null;
             await ensureWasmInit();
             let resolved;
             try {
               resolved = await resolveGrinSpendable({
-                mnemonic: wallet.mnemonic,
-                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                mnemonic: grinKeySource(wallet),
+                rewindHash: grinRewindHashFromMnemonic(grinKeySource(wallet)),
                 overlay: grinOverlay,
               });
             } catch {
@@ -2487,7 +2452,7 @@ function HomeRouter({
         }}
         onGrinBuildSlate={async ({ amountAtomic, toAddress }) => {
           // Resolve mnemonic + wallet's slatepack address.
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
@@ -2548,11 +2513,14 @@ function HomeRouter({
             // THROWS when its secret will not decrypt, rather than silently falling
             // back to account 0. That has to surface as {ok:false} like any other
             // send failure instead of rejecting this handler's promise.
-            const identity = await getActiveNostrIdentity(wallet.mnemonic);
+            await authorizeOperation('send', wallet, 'Start this Grin transfer');
+            assertOperationSession(wallet);
+            const identity = await getActiveNostrIdentity(requireNostrKeySource(wallet));
             const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
             const result = await startGrinSend({
-              mnemonic: wallet.mnemonic,
-              senderSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
+              assertSession: () => assertOperationSession(wallet),
+              mnemonic: grinKeySource(wallet),
+              senderSlatepackAddress: canonicalGrinSlatepackAddress(grinKeySource(wallet)),
               ...(recipientPubkeyHex ? { recipientPubkeyHex } : {}),
               ...(recipientUserId ? { recipientUserId } : {}),
               // Encrypt to the grin address for the non-Nostr paths (backend relay
@@ -2561,8 +2529,8 @@ function HomeRouter({
               channels,
               amount: Number(amountAtomic),
               resolver: makeGrinResolver({
-                mnemonic: wallet.mnemonic,
-                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                mnemonic: grinKeySource(wallet),
+                rewindHash: grinRewindHashFromMnemonic(grinKeySource(wallet)),
                 overlay: grinOverlay,
               }),
               // Reserve the selected inputs + change index at build time.
@@ -2585,17 +2553,20 @@ function HomeRouter({
           }
         }}
         onGrinFinalize={async ({ s2, senderContextJson, senderInputsJson, changeOutputJson, relayId }) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
           try {
             // Inside the try: see the note on onGrinSend. A non-default active
             // identity whose secret will not decrypt now throws here.
-            const identity = await getActiveNostrIdentity(wallet.mnemonic);
+            await authorizeOperation('send', wallet, 'Finalize and send this Grin transfer');
+            assertOperationSession(wallet);
+            const identity = await getActiveNostrIdentity(requireNostrKeySource(wallet));
             const channels = buildSlatepackChannels({ grin: api, userId: grinUserId, identity });
             const result = await processGrinS2({
-              mnemonic: wallet.mnemonic,
+              assertSession: () => assertOperationSession(wallet),
+              mnemonic: grinKeySource(wallet),
               s2,
               sender_context_json: senderContextJson,
               sender_inputs: JSON.parse(senderInputsJson),
@@ -2614,14 +2585,14 @@ function HomeRouter({
           }
         }}
         onGrinCancel={async ({ slateId, relayId }) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             // Still free the reserved inputs locally even if we can't build the
             // channel to notify the counterparty.
             await grinOverlay.remove(slateId).catch(() => undefined);
             return;
           }
           await ensureWasmInit();
-          const identity = await getActiveNostrIdentity(wallet.mnemonic).catch(() => null);
+          const identity = await getActiveNostrIdentity(requireNostrKeySource(wallet)).catch(() => null);
           if (!identity) {
             // The active identity's secret will not decrypt, so we cannot build a
             // channel to tell the counterparty. Free the reserved inputs locally
@@ -2636,6 +2607,10 @@ function HomeRouter({
             ...(relayId ? { relay_id: relayId } : {}),
             channels,
             overlay: grinOverlay,
+            beforeCancel: async () => {
+              await authorizeOperation('sign', wallet, 'Notify the recipient that this Grin send was canceled');
+              assertOperationSession(wallet);
+            },
           }).catch(() => undefined);
         }}
         onExit={() => void navigate('home')}
@@ -2760,19 +2735,22 @@ function HomeRouter({
         assetId="grin"
         parseAmount={parseAmount}
         onBuild={async ({ amountAtomic, feeAtomic }) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
           try {
+            await authorizeOperation('sign', wallet, 'Sign this Grin payment request');
+            assertOperationSession(wallet);
             const result = await startGrinInvoice({
-              mnemonic: wallet.mnemonic,
-              receiverSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
+              assertSession: () => assertOperationSession(wallet),
+              mnemonic: grinKeySource(wallet),
+              receiverSlatepackAddress: canonicalGrinSlatepackAddress(grinKeySource(wallet)),
               amount: Number(amountAtomic),
               fee: Number(feeAtomic),
               resolver: makeGrinResolver({
-                mnemonic: wallet.mnemonic,
-                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                mnemonic: grinKeySource(wallet),
+                rewindHash: grinRewindHashFromMnemonic(grinKeySource(wallet)),
                 overlay: grinOverlay,
               }),
               overlay: grinOverlay,
@@ -2790,13 +2768,16 @@ function HomeRouter({
           }
         }}
         onFinalize={async ({ i2, receiverContextJson }) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
           try {
+            await authorizeOperation('sign', wallet, 'Finalize this Grin payment request');
+            assertOperationSession(wallet);
             const result = await processGrinI2({
-              mnemonic: wallet.mnemonic,
+              assertSession: () => assertOperationSession(wallet),
+              mnemonic: grinKeySource(wallet),
               i2,
               receiver_context_json: receiverContextJson,
               overlay: grinOverlay,
@@ -2831,18 +2812,21 @@ function HomeRouter({
         onReadClipboard={async () => navigator.clipboard.readText()}
         onCopy={(text) => void copyText(text).catch(() => undefined)}
         onSign={async ({ s1Armored, relayId }) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
           try {
+            await authorizeOperation('sign', wallet, 'Sign this incoming Grin transfer');
+            assertOperationSession(wallet);
             const signed = await signIncomingGrinSlate({
-              mnemonic: wallet.mnemonic,
-              receiverSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
+              assertSession: () => assertOperationSession(wallet),
+              mnemonic: grinKeySource(wallet),
+              receiverSlatepackAddress: canonicalGrinSlatepackAddress(grinKeySource(wallet)),
               s1Armored,
               resolver: makeGrinResolver({
-                mnemonic: wallet.mnemonic,
-                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                mnemonic: grinKeySource(wallet),
+                rewindHash: grinRewindHashFromMnemonic(grinKeySource(wallet)),
                 overlay: grinOverlay,
               }),
               overlay: grinOverlay,
@@ -2870,7 +2854,8 @@ function HomeRouter({
                 relayId,
                 s2Armored: signed.s2_armored,
                 userId: grinUserId,
-                mnemonic: wallet.mnemonic,
+                mnemonic: requireNostrKeySource(wallet),
+                assertSession: () => assertOperationSession(wallet),
               });
               if (relayRes.error) {
                 console.warn('[smirk-popup] S2 delivery failed:', relayRes.error);
@@ -2902,7 +2887,7 @@ function HomeRouter({
       <InboxPasteRouter
         onReadClipboard={async () => navigator.clipboard.readText()}
         onDispatch={async (armored) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           // A GoblinPay pay-link (goblin:/nostr:) isn't a slatepack. Parse it
@@ -2936,7 +2921,7 @@ function HomeRouter({
           // Derive the slatepack secret upfront so we can decrypt
           // encrypted slatepacks. Plain slatepacks work too; wasm's
           // unpackWithSecret handles both modes.
-          const secretKeyHex = wasmGrin.slatepackAddressSecret(wallet.mnemonic, 0);
+          const secretKeyHex = grinSlatepackSecret(grinKeySource(wallet));
           let inspected;
           try {
             inspected = inspectSlatepack(armored, secretKeyHex);
@@ -3023,7 +3008,7 @@ function HomeRouter({
       <PasteTipLinkScreen
         onReadClipboard={async () => navigator.clipboard.readText()}
         onClaim={async (url) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           const userId = session?.bootstrap?.userId;
@@ -3077,11 +3062,11 @@ function HomeRouter({
         onReadClipboard={async () => navigator.clipboard.readText()}
         onCopy={(text) => void copyText(text).catch(() => undefined)}
         onInspect={(i1Armored) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           try {
-            const secretKeyHex = wasmGrin.slatepackAddressSecret(wallet.mnemonic, 0);
+            const secretKeyHex = grinSlatepackSecret(grinKeySource(wallet));
             const i = inspectSlatepack(i1Armored, secretKeyHex);
             return {
               ok: true,
@@ -3095,18 +3080,21 @@ function HomeRouter({
           }
         }}
         onSign={async ({ i1Armored, relayId }) => {
-          if (!wallet.mnemonic) {
+          if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
             return { ok: false, error: 'Wallet not unlocked' };
           }
           await ensureWasmInit();
           try {
+            await authorizeOperation('send', wallet, 'Sign and pay this Grin invoice');
+            assertOperationSession(wallet);
             const signed = await signGrinInvoice({
-              mnemonic: wallet.mnemonic,
-              payerSlatepackAddress: canonicalGrinSlatepackAddress(wallet.mnemonic),
+              assertSession: () => assertOperationSession(wallet),
+              mnemonic: grinKeySource(wallet),
+              payerSlatepackAddress: canonicalGrinSlatepackAddress(grinKeySource(wallet)),
               i1Armored,
               resolver: makeGrinResolver({
-                mnemonic: wallet.mnemonic,
-                rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+                mnemonic: grinKeySource(wallet),
+                rewindHash: grinRewindHashFromMnemonic(grinKeySource(wallet)),
                 overlay: grinOverlay,
               }),
               overlay: grinOverlay,
@@ -3120,7 +3108,8 @@ function HomeRouter({
                 relayId,
                 s2Armored: signed.armored,
                 userId: grinUserId,
-                mnemonic: wallet.mnemonic,
+                mnemonic: requireNostrKeySource(wallet),
+                assertSession: () => assertOperationSession(wallet),
               });
               if (relayRes.error) {
                 console.warn('[smirk-popup] I2 delivery failed:', relayRes.error);
@@ -3204,8 +3193,8 @@ function HomeRouter({
           // Grin voucher tips are scan-based (non-custodial): thread the view-only
           // rewind hash + the client pending overlay so createGrinTip can select
           // inputs and reserve child indices.
-          const grinRewindHash = wallet.mnemonic
-            ? grinRewindHashFromMnemonic(wallet.mnemonic)
+          const grinRewindHash = (wallet.mnemonic || wallet.sessionSecrets?.grin)
+            ? grinRewindHashFromMnemonic(grinKeySource(wallet))
             : undefined;
           return dispatchSocialTip({
             wallet,

@@ -1,5 +1,7 @@
 # Testing strategy
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Three layers, each catching a different class of bugs. Each layer requires
 the previous one to be green before it's worth running.
 
@@ -40,16 +42,16 @@ additionally pulls in vendored monero-oxide integration tests that
 require a local monerod on 127.0.0.1:18081. Each crate has its own
 test module per file:
 
-| Crate | Test count | Coverage focus |
-|---|---|---|
-| `crates/monero-oxide/` | upstream tests + Smirk additions | RctType variants (incl. Wownero), address codecs, ringct ops |
-| `crates/grin-ext/` (unit) | 137 | seed derivation, bip32, secp256k1, switch-commitment blind derivation, slatepack address, Schnorr (single + multi-party + adaptor), slate v4 (JSON + binary), Pedersen, Bulletproofs, kernels (incl. NRD), slatepack codec (armor + bin + age encryption), 6 wallet orchestrators, payment proofs |
-| `crates/grin-ext/tests/grin_wallet_compat.rs` | 12 | cross-validation against `grin_wallet_libwallet`, see Layer 2 below |
-| `crates/grin-ext/tests/grin_recovery_vectors.rs` | 6 | output recovery from depth-3, depth-4 and legacy proof builders, both switch types, plus wrong-seed and mismatched-commitment negatives |
-| `crates/btc-ext/` | active | BIP84/BIP86 derivation, PSBT build + sign + extract, fee estimation |
-| `crates/secp256k1zkp/` | upstream tests | covered via `cargo test`; mostly the C lib's own self-tests |
-| `crates/smirk-wasm/` | 28 | exposed Monero/Wownero/Grin functions, subaddress derivation and key-image guards, atomic-amount string deserialization, outgoing view-key freshness |
-| `crates/swap-core/` | 1 | placeholder |
+| Crate | Coverage focus |
+|---|---|
+| `crates/monero-oxide/` | RctType variants (incl. Wownero), address codecs, ringct ops |
+| `crates/grin-ext/` (unit) | seed derivation, bip32, secp256k1, switch-commitment blind derivation, slatepack address, Schnorr (single + multi-party + adaptor), slate v4 (JSON + binary), Pedersen, Bulletproofs, kernels (incl. NRD), slatepack codec (armor + bin + age encryption), 6 wallet orchestrators, payment proofs |
+| `crates/grin-ext/tests/grin_wallet_compat.rs` | cross-validation against `grin_wallet_libwallet`, see Layer 2 below |
+| `crates/grin-ext/tests/grin_recovery_vectors.rs` | output recovery from depth-3, depth-4 and legacy proof builders, both switch types, plus wrong-seed and mismatched-commitment negatives |
+| `crates/btc-ext/` | BIP84/BIP86 derivation, PSBT build + sign + extract, fee estimation |
+| `crates/secp256k1zkp/` | covered via `cargo test`; mostly the C lib's own self-tests |
+| `crates/smirk-wasm/` | exposed Monero/Wownero/Grin functions, subaddress derivation and key-image guards, atomic-amount string deserialization, outgoing view-key freshness |
+| `crates/swap-core/` | placeholder |
 
 **Conventions per module:**
 - Round-trip tests for every (encode, decode) pair
@@ -109,7 +111,7 @@ example caught: c78aff0. `sender_blind_excess` returned
 passed because both sides used the same wrong convention, but a real
 mainnet broadcast would have failed at kernel verification.
 
-### Grin cross-validation tests (12 today)
+### Grin cross-validation tests
 
 `crates/grin-ext/tests/grin_wallet_compat.rs`:
 
@@ -163,7 +165,7 @@ We also commit real-world output from `grin-wallet` / Grim:
 
 ### Grin testnet (planned, not yet built)
 
-Once slate construction lands, the test infrastructure to add:
+Slate construction is implemented. A future automated testnet lane still needs:
 
 - A long-running Grin testnet node + grin-wallet instance, configured
   with a known seed
@@ -197,13 +199,21 @@ runs before each public release.
 
 Automated: `npm run e2e -w @smirk/e2e` builds the extension
 (`packages/e2e/scripts/build-extension.sh`) and runs the Playwright
-specs in `packages/e2e/tests/` against `BACKEND_URL`. CI runs the suite
-in `.github/workflows/e2e.yml` (tier A: no secrets, no funded wallets,
-every PR) and `.github/workflows/e2e-full.yml`. Run it via the package
-scripts. A bare `--reporter=<x>` on the CLI replaces the configured
-reporter list and drops the skip guard, so a run that skips every spec
-exits 0; if you must override, keep
-`--reporter=list,./skip-guard-reporter.ts`.
+specs in `packages/e2e/tests/` against `BACKEND_URL`. Run the suite
+through the package scripts. The `.github/workflows/e2e*.yml` files
+are historical definitions: GitHub Actions is disabled and the active Gitea
+workflows do not currently run this suite. A release therefore needs an
+explicit recorded E2E run; unit CI does not supply that evidence. Keep the
+configured private reporter and skip guard. Reporter overrides, screenshots,
+traces and video capture are refused because wallet tests handle recovery
+phrases and passwords. The reporter records test status without page snapshots,
+assertion values or browser-console output.
+
+`fundless-release-review.spec.ts` exercises fresh-wallet registration, the
+coin-detail Send shortcut, optional password settings, popup reopen and
+cross-window Lock against a disposable local backend. It generates its wallet
+at runtime and performs no funded send. Passing it does not establish live
+chain, packaged desktop or store acceptance.
 
 The rest of this section is what stays hand-run.
 
@@ -237,8 +247,9 @@ For each of `BTC | LTC | XMR | WOW | GRIN`:
 
 - [ ] Chrome MV3 build: install + run + send + receive
 - [ ] Firefox build: install + run + send + receive
-- [ ] Capacitor Android build: same matrix
-- [ ] Capacitor iOS build: same matrix
+- [ ] Desktop: install, restored unlock, native HTTP quote, send and receive.
+
+Mobile is future work and is not a v0.3 release surface.
 
 ### Migration paths
 
@@ -249,9 +260,10 @@ For each of `BTC | LTC | XMR | WOW | GRIN`:
 
 ## What we explicitly DON'T test
 
-- **Mock servers with hand-crafted responses.** We've been burned by this
-  pattern: mocks pass while real backend changes break prod. Integration
-  tests hit a real backend (test instance) or are skipped.
+- **Mock responses as integration evidence.** Unit tests use controlled
+  providers to exercise errors and races. They do not establish compatibility
+  with a real backend. Integration tests use a real disposable backend, and
+  an unavailable required backend is a blocked check, not a pass.
 - **Mocked-out crypto.** Crypto round-trips against the real implementation
   always, never a stub that "pretends to verify."
 

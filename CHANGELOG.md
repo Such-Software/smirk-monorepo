@@ -1,5 +1,7 @@
 # Changelog
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 All notable user-facing changes to Smirk Wallet.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
@@ -10,6 +12,31 @@ the public wallet build.
 
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
+
+## Unreleased v0.3.0 corrections
+
+These changes are in source review. Signed downloads and store availability
+are verified separately.
+
+### Added
+
+- Optional password confirmation for sends and signing in Security settings.
+  Both settings default off; confirmation preserves the unlock deadline.
+- Approximate USD values on Send amount and review when a price is available.
+
+### Fixed
+
+- Desktop swap quotes use the bundled native HTTP transport.
+- Reopening an unlocked wallet restores the scoped keys needed for BTC, LTC,
+  Grin, Nostr and app encryption, preserving the selected grace period.
+  Upgrading an old incomplete session requires one password unlock.
+- Lock revokes other wallet windows and pending session transfers.
+- Send from a coin screen opens at destination entry. Completed receipts and
+  fee estimates from another coin are cleared before starting a new send.
+- A failed wallet-history lookup stops registration instead of assigning a
+  new scan birthday that could hide earlier deposits.
+- Unsupported Nostr signing grants are refused, and a missing selected
+  identity cannot silently fall back to the primary identity.
 
 ## [0.3.0] - 2026-09-22
 
@@ -305,3 +332,10 @@ you tap into the Swap tab.
 
 [Unreleased]: https://github.com/Such-Software/smirk-monorepo/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/Such-Software/smirk-monorepo/releases/tag/v0.3.0
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

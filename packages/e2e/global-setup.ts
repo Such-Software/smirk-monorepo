@@ -15,6 +15,8 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { FullConfig } from '@playwright/test';
+import { assertPrivateCapture } from './capture-policy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -71,7 +73,13 @@ async function assertServesV3Api(base: string): Promise<void> {
   }
 }
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(config: FullConfig): Promise<void> {
+  for (const project of config.projects) assertPrivateCapture(project.use);
+  const approved = ['private-reporter.ts', 'skip-guard-reporter.ts'].map(file => join(__dirname, file));
+  if (config.reporter.some(([name]) => !approved.includes(name)) ||
+      approved.some(file => !config.reporter.some(([name]) => name === file))) {
+    throw new Error('Wallet E2E requires its private reporter and skip guard; reporter overrides may expose secrets.');
+  }
   if (!existsSync(DIST)) {
     throw new Error(
       `[e2e preflight] No extension build at ${DIST}.\n` +

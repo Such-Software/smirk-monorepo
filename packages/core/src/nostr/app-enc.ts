@@ -23,6 +23,7 @@ import { hsalsa, secretbox } from '@noble/ciphers/salsa';
 import { bytesToHex } from '@noble/hashes/utils';
 
 import { mnemonicToSeed } from '../hd';
+import { deriveScopedNostrNode, type NostrKeySource } from './session-roots';
 
 /**
  * BIP-85 purpose (`83696'`) + app-encryption segment (`3'`): disjoint from the
@@ -92,17 +93,20 @@ export function appEncPath(domainScope: string, context = ''): string {
  * federation root); the HANDLER supplies it, never a page-supplied string.
  */
 export function deriveAppEncryptionKey(
-  mnemonic: string,
+  mnemonic: NostrKeySource,
   domainScope: string,
   context = '',
   passphrase = '',
 ): AppEncryptionKey {
   if (!domainScope) throw new Error('app-enc: domainScope is required');
   const path = appEncPath(domainScope, context);
-  const node = HDKey.fromMasterSeed(mnemonicToSeed(mnemonic, passphrase)).derive(path);
+  const node = typeof mnemonic === 'string'
+    ? HDKey.fromMasterSeed(mnemonicToSeed(mnemonic, passphrase)).derive(path)
+    : deriveScopedNostrNode(mnemonic.appEncryptionRoot, APP_ENC_SEGMENT, 'm/' + path.split('/').slice(3).join('/'));
   if (!node.privateKey) throw new Error('app-enc: failed to derive key');
   // X25519 uses the 32-byte scalar directly (clamped internally by the curve ops).
   const privateKey = node.privateKey.slice(0, 32);
+  node.wipePrivateData();
   const publicKeyHex = bytesToHex(x25519.getPublicKey(privateKey));
   return { publicKeyHex, privateKey, path };
 }
@@ -170,7 +174,7 @@ export function sealOpen(recipientSecretKey: Uint8Array, sealed: Uint8Array): Ui
  * bytes (the caller utf8-decodes if the payload is text).
  */
 export function appSealOpen(
-  mnemonic: string,
+  mnemonic: NostrKeySource,
   domainScope: string,
   sealed: Uint8Array,
   context = '',

@@ -66,12 +66,6 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
   });
 
   const page = await context.newPage();
-  page.on('console', (m) => {
-    const t = m.text();
-    if (/auth|bootstrap|token|register|error|fail|401|pow/i.test(t)) {
-      console.log('CONSOLE', m.type(), t.slice(0, 180));
-    }
-  });
 
   // --- Onboarding: import alice (returning user → no PoW, no gate) -------
   // Returns once authenticated; auth is proven by alice's real backend

@@ -348,7 +348,9 @@ export function createWalletLwsMethods(client: ApiClient): WalletLwsMethods {
     },
 
     async registerLws(userId, asset, address, viewKey, startHeight, subaddrCount, restorePowNonce) {
-      return client.request('/wallet/lws/register', {
+      const response = await client.request<{
+        success?: unknown; ok?: unknown; message?: unknown; start_height?: unknown;
+      }>('/wallet/lws/register', {
         method: 'POST',
         body: JSON.stringify({
           user_id: userId,
@@ -365,6 +367,22 @@ export function createWalletLwsMethods(client: ApiClient): WalletLwsMethods {
           ...(subaddrCount !== undefined ? { subaddr_count: subaddrCount } : {}),
         }),
       });
+      const status = response.status !== undefined ? { status: response.status } : {};
+      const data = response.data;
+      const acknowledged = client.getWalletApiStyle() === 'namespaced'
+        ? data?.ok === true : data?.success === true;
+      if (response.error || !data || !acknowledged) {
+        return { ...status, error: response.error ?? 'The backend did not confirm scan registration.' };
+      }
+      if (data.start_height != null
+        && (typeof data.start_height !== 'number' || !Number.isSafeInteger(data.start_height) || data.start_height < 0)) {
+        return { ...status, error: 'The backend returned an invalid scan start height after registration.' };
+      }
+      return { ...status, data: {
+        success: true,
+        message: typeof data.message === 'string' ? data.message : '',
+        ...(typeof data.start_height === 'number' ? { start_height: data.start_height } : {}),
+      } };
     },
 
     async provisionSubaddrs(userId, asset, address, viewKey, maxMinor) {

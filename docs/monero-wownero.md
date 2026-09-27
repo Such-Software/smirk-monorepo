@@ -1,5 +1,7 @@
 # Monero + Wownero
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Smirk supports both Monero (XMR) and Wownero (WOW) through a single Rust + WASM stack.
 
 ## Crates
@@ -9,7 +11,35 @@ Smirk supports both Monero (XMR) and Wownero (WOW) through a single Rust + WASM 
 
 ## Status
 
-**Working in production.** The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships this stack today; the v0.3 monorepo (`packages/extension`) consumes the same `crates/smirk-wasm` bundle (now `--target no-modules` per `ARCHITECTURE.md`). Wallet creation, balance display, key image computation, transaction signing, and broadcast are all live. Every transaction is signed with a fresh `outgoing_view_key` drawn from `OsRng`, so the OVK cannot link transactions across sends (`crates/smirk-wasm/src/signing.rs`).
+The v0.3 client implements wallet creation, balance reads, key-image computation,
+transaction signing, and broadcast through `crates/smirk-wasm`. Each transaction
+uses a fresh `outgoing_view_key` from `OsRng`
+(`crates/smirk-wasm/src/signing.rs`). These are source capabilities; release
+verification and production scan coverage require separate evidence.
+
+## Restore and scan admission
+
+Before authentication registers a wallet, the client requires a successful
+restore lookup. A known fingerprint also requires an explicit matching-key result.
+A failed lookup or a key mismatch stops registration; it cannot select a new
+wallet birthday or replace the existing identity.
+
+XMR and WOW scan admission is per asset. An explicit historical height permits
+registration at that height. A freshly verified new wallet may create its initial
+scan. Cached login state does not retain that initial creation permission.
+
+For an existing wallet without a saved chain height, the client reads the current
+LWS account without creating or resetting it. A valid response retains the
+account's reported start height and balance. If that account cannot be read, or
+its start height is missing or invalid, the asset reports unknown scan coverage
+with the underlying cause. Authentication and other assets remain available.
+The client does not substitute the current chain tip or request a blanket rescan.
+
+A missing saved height can also describe a coin that was never activated. This
+client does not infer that meaning or offer a manual restore-height control.
+Recovering an absent historical account therefore still requires a reviewed
+backend recovery procedure with an evidenced start height. This guard prevents a
+new incomplete scan; it does not prove that an existing scan captured every deposit.
 
 ## Wownero differences from Monero
 
@@ -70,3 +100,10 @@ The Wownero changes (RCT type 8, ring 22, commitment scaling) sit deep in the tr
 The standalone fork at [Such-Software/monero-oxide](https://github.com/Such-Software/monero-oxide) publishes the workspace crates to crates.io under the `wownero-*` namespace (`wownero-oxide`, `wownero-ed25519`, `wownero-clsag`, etc.). Library names stay as `monero_*` so existing Rust code does `use monero_oxide::...` unchanged.
 
 Sync the standalone fork from the monorepo via `git subtree push`: see [MONOREPO.md](../MONOREPO.md#pushing-back-to-the-standalone-monero-oxide-fork-for-cratesio-publish).
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

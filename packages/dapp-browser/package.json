@@ -2,7 +2,7 @@
   "name": "@smirk/dapp-browser",
   "version": "0.3.0",
   "private": true,
-  "description": "Embedded-browser shell abstraction. Defines DappBrowserController, navigation/tab/history types, and a MockController for tests. Platform-agnostic; platform implementations live in packages/desktop (Tauri) and packages/mobile (Capacitor).",
+  "description": "Embedded browser interfaces, navigation state and test controller. Tauri supplies the desktop implementation; mobile integration is planned.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,7 +13,7 @@
     }
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

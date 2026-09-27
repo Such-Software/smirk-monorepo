@@ -5,8 +5,8 @@
  * injected secret crypto to a key DERIVED FROM THE MNEMONIC, so burner/imported
  * private keys are encrypted at rest and only decryptable while unlocked.
  *
- * `getActiveNostrIdentity(mnemonic)` is the single resolver the rest of the popup
- * calls instead of `deriveNostrIdentity(mnemonic, 0)`: switch the active identity
+ * `getActiveNostrIdentity(keySource)` is the single resolver the rest of the popup
+ * calls instead of `deriveNostrIdentity(keySource, 0)`: switch the active identity
  * here and sends/DMs/inbox follow.
  */
 
@@ -35,6 +35,8 @@ import {
   type DecryptSecret,
   type NostrIdentity,
   type UnlockedWallet,
+  nostrKeySource,
+  type NostrKeySource,
 } from '@smirk/core';
 
 import { storage, sessionStorage } from './singletons';
@@ -42,8 +44,12 @@ import { bytesToHex, hexToBytes } from './format';
 
 const VAULT_PREFIX = 'smirk_nostr_vault_v1_';
 
-function vaultStorageKey(mnemonic: string): string {
-  return VAULT_PREFIX + computeSeedFingerprint(mnemonic);
+function sourceFingerprint(source: NostrKeySource): string {
+  return typeof source === 'string' ? computeSeedFingerprint(source) : source.fingerprint;
+}
+
+function vaultStorageKey(keySource: NostrKeySource): string {
+  return VAULT_PREFIX + sourceFingerprint(keySource);
 }
 
 /** 32-byte vault-encryption key, domain-separated from the mnemonic. Anyone with
@@ -54,13 +60,14 @@ function vaultStorageKey(mnemonic: string): string {
  *  doing so re-keys the vault and orphans every already-encrypted burner/imported
  *  secret and every exported backup. It is written as the explicit `\x00` escape
  *  (not a raw NUL byte) so this file stays text-diffable and greppable. */
-function vaultKey(mnemonic: string): Uint8Array {
-  return sha256(utf8ToBytes(`smirk-nostr-vault-v1\x00${mnemonic}`));
+function vaultKey(keySource: NostrKeySource): Uint8Array {
+  if (typeof keySource !== 'string') return keySource.vaultKey.slice();
+  return sha256(utf8ToBytes(`smirk-nostr-vault-v1\x00${keySource}`));
 }
 
 /** Secret crypto bound to this wallet: ciphertext is hex(XChaCha20-Poly1305). */
-export function vaultCrypto(mnemonic: string): { encrypt: EncryptSecret; decrypt: DecryptSecret } {
-  const key = vaultKey(mnemonic);
+export function vaultCrypto(keySource: NostrKeySource): { encrypt: EncryptSecret; decrypt: DecryptSecret } {
+  const key = vaultKey(keySource);
   return {
     encrypt: (secret: Uint8Array) => bytesToHex(cryptoEncrypt(secret, key)),
     decrypt: (ciphertext: string) => cryptoDecrypt(hexToBytes(ciphertext), key),
@@ -78,24 +85,20 @@ function looksLikeVault(v: unknown): v is IdentityVault {
 }
 
 /** Load this wallet's vault, seeding a fresh account-0 one on first use. */
-export async function loadVault(mnemonic: string): Promise<IdentityVault> {
-  const raw = await storage.get(vaultStorageKey(mnemonic));
+export async function loadVault(keySource: NostrKeySource): Promise<IdentityVault> {
+  const raw = await storage.get(vaultStorageKey(keySource));
   if (looksLikeVault(raw)) return raw;
-  const seeded = initIdentityVault(mnemonic);
-  await storage.set(vaultStorageKey(mnemonic), seeded);
+  const seeded = initIdentityVault(keySource);
+  await storage.set(vaultStorageKey(keySource), seeded);
   return seeded;
 }
 
-export async function saveVault(mnemonic: string, vault: IdentityVault): Promise<void> {
-  await storage.set(vaultStorageKey(mnemonic), vault);
+export async function saveVault(keySource: NostrKeySource, vault: IdentityVault): Promise<void> {
+  await storage.set(vaultStorageKey(keySource), vault);
 }
 
-/** Load a wallet's vault by its seed fingerprint WITHOUT the mnemonic. The identity
- *  list + `active` pointer are stored in the clear (only burner/imported SECRETS are
- *  encrypted), so a warm-resume context can read WHICH identity is active even though
- *  it can't decrypt a non-derived one. `wallet.fingerprint === computeSeedFingerprint
- *  (mnemonic)` (keystore.ts), so this hits the same key as {@link loadVault}. Returns
- *  null if the wallet has never opened an identity surface. */
+/** Read identity labels and the active pointer by wallet fingerprint. Private
+ * keys remain encrypted, so this metadata read also works while locked. */
 export async function loadVaultByFingerprint(fingerprint: string): Promise<IdentityVault | null> {
   const raw = await storage.get(VAULT_PREFIX + fingerprint);
   return looksLikeVault(raw) ? raw : null;
@@ -103,27 +106,27 @@ export async function loadVaultByFingerprint(fingerprint: string): Promise<Ident
 
 /** Build a portable, encrypted backup of the whole identity vault (roster + labels
  *  + burner/imported secrets), sealed under the mnemonic-derived key. The user
- *  copies/saves this to survive a reinstall. Needs the mnemonic. */
-export async function exportVaultBackup(mnemonic: string): Promise<string> {
-  const vault = await loadVault(mnemonic);
-  return buildVaultBackup(vault, computeSeedFingerprint(mnemonic), vaultCrypto(mnemonic).encrypt);
+ *  copies or saves this to survive a reinstall. Requires unlocked session keys. */
+export async function exportVaultBackup(keySource: NostrKeySource): Promise<string> {
+  const vault = await loadVault(keySource);
+  return buildVaultBackup(vault, sourceFingerprint(keySource), vaultCrypto(keySource).encrypt);
 }
 
 /** Restore a backup into this wallet's vault. Decrypts under the mnemonic (throws
  *  on a wrong-seed file), merges (base wins on conflicts, appends new identities +
  *  secrets), persists, and returns the merged vault. */
-export async function restoreVaultBackup(mnemonic: string, text: string): Promise<IdentityVault> {
-  const incoming = parseVaultBackup(text, vaultCrypto(mnemonic).decrypt);
-  const merged = mergeVault(await loadVault(mnemonic), incoming);
-  await saveVault(mnemonic, merged);
+export async function restoreVaultBackup(keySource: NostrKeySource, text: string): Promise<IdentityVault> {
+  const incoming = parseVaultBackup(text, vaultCrypto(keySource).decrypt);
+  const merged = mergeVault(await loadVault(keySource), incoming);
+  await saveVault(keySource, merged);
   return merged;
 }
 
 /** True when `text` is a backup made under a DIFFERENT seed than `mnemonic`, used
  *  to warn before a doomed decrypt. Null-safe: returns false for non-backups. */
-export function isForeignVaultBackup(mnemonic: string, text: string): boolean {
+export function isForeignVaultBackup(keySource: NostrKeySource, text: string): boolean {
   const fp = peekVaultBackupFingerprint(text);
-  return fp != null && fp !== computeSeedFingerprint(mnemonic);
+  return fp != null && fp !== sourceFingerprint(keySource);
 }
 
 /**
@@ -135,31 +138,27 @@ export function isForeignVaultBackup(mnemonic: string, text: string): boolean {
  * while they believe they are on a burner. {@link getActiveNostrIdentityFromWallet}
  * turns that into its documented `identity: null, needsUnlock: true`.
  */
-export async function getActiveNostrIdentity(mnemonic: string): Promise<NostrIdentity> {
+export async function getActiveNostrIdentity(keySource: NostrKeySource): Promise<NostrIdentity> {
   // A vault we cannot even READ says nothing about which identity is active, so
   // it cannot be shown to be account-0 either: let that propagate too.
-  const vault = await loadVault(mnemonic);
+  const vault = await loadVault(keySource);
   const active = activeStored(vault);
+  if (!active) throw new Error('The selected Nostr identity is missing from this wallet.');
   // Same rule the wrapper below applies: no entry for the active pointer, or an
   // entry that IS derived account 0.
   const activeIsAccount0 =
-    !active || (active.source === 'derived' && (active.account ?? 0) === 0);
+    active.source === 'derived' && (active.account ?? 0) === 0;
   try {
-    return resolveActiveIdentity(vault, mnemonic, vaultCrypto(mnemonic).decrypt);
+    return resolveActiveIdentity(vault, keySource, vaultCrypto(keySource).decrypt);
   } catch (err) {
     if (!activeIsAccount0) throw err;
-    return deriveNostrIdentity(mnemonic, 0);
+    return deriveNostrIdentity(keySource, 0);
   }
 }
 
-// ── session cache for a NON-default active identity's key ─────────────────────
-// The account-0 key already rides in wallet.keys.nostr (the keystore session cache),
-// so it survives a warm resume for free. A burner/imported/derived-N ACTIVE identity
-// does not: its secret is encrypted under a mnemonic-derived key. To honour the
-// user's choice on a warm resume we cache JUST the active identity's private key in
-// chrome.storage.session, on the SAME lifetime as the keystore session cache
-// (auto-lock wipes it). Single key: only one wallet is unlocked at a time; the
-// fingerprint inside the entry is validated on read.
+// Legacy active-key cache reader. Complete v3 sessions resolve every identity
+// from scoped roots and the encrypted vault; new writes only remove old entries.
+// The compatibility reader still checks wallet, chosen identity, and expiry.
 const ACTIVE_KEY_SESSION_KEY = 'smirk_nostr_active_v1';
 
 interface CachedActiveKey {
@@ -175,46 +174,15 @@ export async function clearCachedActiveNostrKey(): Promise<void> {
 }
 
 /**
- * Cache the active identity's private key for `expiresAtMs`, but ONLY when it differs
- * from the default account-0 key (which is already cached in wallet.keys.nostr).
- * No-op without the mnemonic (nothing to resolve) or when the expiry is already past.
- * Same trust boundary + lifetime as the keystore session cache.
+ * Complete scoped sessions resolve identities from the encrypted vault directly.
+ * Retire older separate-key entries instead of creating a second secret cache
+ * whose asynchronous writes could outlive an explicit lock.
  */
 export async function cacheActiveNostrKeyForSession(
-  wallet: UnlockedWallet,
-  expiresAtMs: number,
+  _wallet: UnlockedWallet,
+  _expiresAtMs: number,
 ): Promise<void> {
-  // A caller with no mnemonic cannot resolve the active identity, so it has
-  // nothing to say about the cached key and must not be able to destroy it.
-  //
-  // Clearing here meant any warm-session caller wiped a burner the user had
-  // selected while fully unlocked: changing the auto-lock duration in Settings
-  // did it, and so did popping out from an already-warm window. The user then
-  // saw "Re-unlock the wallet to message as this identity" for an identity
-  // they had just chosen, with no indication that a settings change had done
-  // it. Absence of the seed is absence of information, not an instruction.
-  if (!wallet.mnemonic) return;
-
-  // An expiry in the past IS an instruction: the caller knows the session is
-  // over and the key should not outlive it.
-  if (expiresAtMs <= Date.now()) {
-    await clearCachedActiveNostrKey();
-    return;
-  }
-  const active = await getActiveNostrIdentity(wallet.mnemonic);
-  const account0Pub = wallet.keys?.nostr ? bytesToHex(wallet.keys.nostr.publicKey) : null;
-  if (active.pubkeyHex === account0Pub) {
-    // Default identity: already warm-resume-safe via wallet.keys.nostr.
-    await clearCachedActiveNostrKey();
-    return;
-  }
-  const entry: CachedActiveKey = {
-    fingerprint: wallet.fingerprint,
-    pubkeyHex: active.pubkeyHex,
-    privKeyHex: bytesToHex(active.privateKey),
-    expiresAtMs,
-  };
-  await sessionStorage.set(ACTIVE_KEY_SESSION_KEY, entry);
+  await clearCachedActiveNostrKey();
 }
 
 /** Read the cached active-identity key if it matches this wallet + the expected
@@ -243,18 +211,19 @@ export async function readCachedActiveNostrKey(
  *
  * - `chosenPubkeyHex` absent → the user's ACTIVE identity (the portable default).
  * - `chosenPubkeyHex` = account-0 → the cached account-0 key (warm-resume-safe).
- * - `chosenPubkeyHex` = the per-origin identity → re-derived from the seed + origin.
+ * - A per-origin identity is derived from the scoped session root and origin.
  * - `chosenPubkeyHex` = a vault identity (burner/imported/derived-N) → resolved from
- *   the vault; on a warm resume falls back to the session-cached active key.
+ *   the vault using the scoped roots and vault encryption key.
  *
- * Returns null when the chosen identity's key isn't available (e.g. a per-origin or
- * vault key on a warm resume with no mnemonic); the caller prompts a re-unlock.
+ * Returns null when the chosen identity cannot be resolved. It never substitutes
+ * a different identity when the requested key is unavailable.
  */
 export async function resolveNostrIdentityForOrigin(
   wallet: UnlockedWallet,
   origin: string,
   chosenPubkeyHex?: string,
 ): Promise<NostrIdentity | null> {
+  const source = nostrKeySource(wallet);
   // account-0: cached, works on a warm resume.
   const account0 = wallet.keys?.nostr ? nostrIdentityFromPrivkey(wallet.keys.nostr.privateKey) : null;
   // No stored choice (a legacy / pre-picker grant) → the wallet's default account-0
@@ -262,29 +231,28 @@ export async function resolveNostrIdentityForOrigin(
   // signing key never diverge. A NEW grant persists an explicit nostrPubkey (the
   // active-at-grant identity or a per-origin one) via the connect-prompt picker.
   if (!chosenPubkeyHex) {
-    return account0 ?? (wallet.mnemonic ? deriveNostrIdentity(wallet.mnemonic, 0) : null);
+    return account0 ?? (source ? deriveNostrIdentity(source, 0) : null);
   }
   if (account0 && account0.pubkeyHex === chosenPubkeyHex) return account0;
-  if (wallet.mnemonic) {
+  if (source) {
     // A per-origin compartmentalized identity?
     if (origin) {
-      const perOrigin = deriveNostrIdentityForOrigin(wallet.mnemonic, origin);
+      const perOrigin = deriveNostrIdentityForOrigin(source, origin);
       if (perOrigin.pubkeyHex === chosenPubkeyHex) return perOrigin;
     }
     // Otherwise a vault identity (burner / imported / derived-N).
-    const vault = await loadVault(wallet.mnemonic);
+    const vault = await loadVault(source);
     if (vault.identities.some((i) => i.pubkeyHex === chosenPubkeyHex)) {
-      return resolveIdentity(vault, chosenPubkeyHex, wallet.mnemonic, vaultCrypto(wallet.mnemonic).decrypt);
+      return resolveIdentity(vault, chosenPubkeyHex, source, vaultCrypto(source).decrypt);
     }
     return null;
   }
-  // Warm resume (no mnemonic): only the session-cached active key is available.
+  // Compatibility for callers without scoped roots: require the exact cached key.
   return readCachedActiveNostrKey(wallet.fingerprint, chosenPubkeyHex);
 }
 
-/** Re-cache the active identity's key after a vault change (e.g. the user switched
- *  active identity), on the SAME remaining lifetime as the keystore session cache.
- *  No-op when the wallet isn't being kept unlocked (no session cache present). */
+/** Retire a legacy active-key entry after a vault change. Scoped session roots
+ *  resolve the selected identity without a second private-key cache. */
 export async function refreshActiveNostrKeyCache(wallet: UnlockedWallet): Promise<void> {
   const stored = (await sessionStorage.get(SESSION_CACHE_KEY)) as
     | { expiresAtMs?: number }
@@ -340,31 +308,30 @@ export interface ActiveNostrResolution {
  * surface (messaging, feed, dapp signing) should use instead of
  * `deriveNostrIdentity(wallet.mnemonic, 0)`.
  *
- * Unlike {@link getActiveNostrIdentity} it works on a WARM RESUME (no mnemonic) for
- * the default identity by using the cached account-0 key (`wallet.keys.nostr`), and
- * it refuses to silently fall back to account-0 for a NON-default active identity:
- * that would post/DM as the user's MAIN identity when they selected a burner. In
- * that case it returns `identity: null, needsUnlock: true` so the surface can show a
- * precise "re-unlock to use <label>" instead of leaking the wrong identity.
+ * Scoped session roots support every identity during the configured unlock period.
+ * If resolution fails, the compatibility cache must match the selected identity.
+ * An unavailable burner or imported key never falls back to account 0.
  */
 export async function getActiveNostrIdentityFromWallet(
   wallet: UnlockedWallet,
 ): Promise<ActiveNostrResolution> {
-  // Fresh unlock: the mnemonic is in memory, so honor the ACTIVE identity fully
-  // (derived-N / burner / imported), decrypting its secret as needed.
-  if (wallet.mnemonic) {
+  const source = nostrKeySource(wallet);
+  // Both fresh and restored sessions resolve the selected identity from their
+  // available key source, including encrypted burner and imported identities.
+  if (source) {
     try {
-      return { identity: await getActiveNostrIdentity(wallet.mnemonic), needsUnlock: false };
+      return { identity: await getActiveNostrIdentity(source), needsUnlock: false };
     } catch {
       // fall through to the cached-key path below
     }
   }
-  // Warm resume (no mnemonic): the account-0 nostr key is cached in wallet.keys.
+  // Compatibility fallback: account 0 is available directly in wallet.keys.
   const account0 = wallet.keys?.nostr
     ? nostrIdentityFromPrivkey(wallet.keys.nostr.privateKey)
     : null;
   const vault = wallet.fingerprint ? await loadVaultByFingerprint(wallet.fingerprint) : null;
   const active = vault ? activeStored(vault) : undefined;
+  if (vault && !active) return { identity: null, needsUnlock: true };
   // No vault yet, or the active identity IS the default account-0 → the cached key
   // is exactly right and warm-resume-safe.
   if (!active || (active.source === 'derived' && (active.account ?? 0) === 0)) {

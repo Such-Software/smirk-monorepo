@@ -8,6 +8,19 @@
 
 import { type AssetDefinition, registry } from '@smirk/assets';
 
+/** Approximate display value; amounts used to sign remain integer atomic units. */
+export function formatApproximateUsd(
+  amountAtomic: bigint,
+  assetId: string,
+  priceUsd: number | null | undefined,
+): string | null {
+  if (amountAtomic <= 0n || priceUsd == null || !Number.isFinite(priceUsd) || priceUsd <= 0) return null;
+  const usd = Number(amountAtomic) / 10 ** registry.mustGet(assetId).decimals * priceUsd;
+  if (!Number.isFinite(usd) || usd <= 0) return null;
+  if (usd < 0.01) return 'Less than $0.01 USD';
+  return `≈ ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(usd)} USD`;
+}
+
 /**
  * Format an atomic-unit amount as a human-readable display string.
  *

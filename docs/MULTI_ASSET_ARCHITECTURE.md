@@ -1,5 +1,7 @@
 # Multi-Asset Architecture
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 > Where Smirk's asset surface is today (5 chains, ~6 capability flags,
 > one visibility helper) and where it goes when we add ETH, Trocador,
 > future stablecoins, future EVM L2s. This doc is the
@@ -215,3 +217,10 @@ Hence `defaultVisible: false` for additions after v0.3.0.
   the canonical `AssetDefinition` shape + capability flags.
 - [`packages/core/src/state/visibility.ts`](../packages/core/src/state/visibility.ts):
   visibility helpers.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

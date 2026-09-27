@@ -46,12 +46,6 @@ test('freshness cue escalates warn → error on sustained refresh failure, then 
   extensionId,
 }) => {
   const page = await context.newPage();
-  page.on('console', (m) => {
-    const t = m.text();
-    if (/freshness|balance|refresh|error|fail|401/i.test(t)) {
-      console.log('CONSOLE', m.type(), t.slice(0, 160));
-    }
-  });
 
   // This test escalates over REAL time (the cue warns at 30s, errors at 60s of
   // sustained failure). We drive it with real timers rather than page.clock: the

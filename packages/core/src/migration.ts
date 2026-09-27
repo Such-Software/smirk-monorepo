@@ -145,10 +145,14 @@ export function legacyBtcLtcKey(
   asset: 'btc' | 'ltc',
 ): { privateKey: Uint8Array; publicKey: Uint8Array; address: string } {
   const seed = mnemonicToSeed(mnemonic);
-  const key = deriveLegacyBtcLtcKey(seed, COIN_TYPE[asset]);
-  const address =
-    asset === 'btc' ? btcAddress(key.publicKey) : ltcAddress(key.publicKey);
-  return { ...key, address };
+  try {
+    const key = deriveLegacyBtcLtcKey(seed, COIN_TYPE[asset]);
+    const address =
+      asset === 'btc' ? btcAddress(key.publicKey) : ltcAddress(key.publicKey);
+    return { ...key, address };
+  } finally {
+    seed.fill(0);
+  }
 }
 
 /** P2WPKH output dust threshold (sats), per Bitcoin Core policy. A single
@@ -209,11 +213,20 @@ export interface LegacySweepResult {
  *   preferences / localStorage), NEVER `storage.session`: a session store dies
  *   on browser close and would defeat the cross-restart double-broadcast guard.
  */
+export interface LegacySweepAuthorization {
+  /** Confirm this specific transfer after a spendable legacy balance is known. */
+  authorize(): Promise<void>;
+  /** Refuse a locked, expired or replaced wallet before signing or broadcasting. */
+  assertActive(): void;
+}
+
 export async function sweepLegacyBtcLtc(
   asset: 'btc' | 'ltc',
   wallet: UnlockedWallet,
   storage: PlatformStorage,
+  authorization: LegacySweepAuthorization,
 ): Promise<LegacySweepResult> {
+  authorization.assertActive();
   // 1. Re-entry guard: a durable txid record means this already broadcast.
   //    Never rebuild/rebroadcast (broadcast is a non-retryable POST).
   const prior = await storage.get<{ txid: string }>(legacySweepKey(asset));
@@ -236,82 +249,89 @@ export async function sweepLegacyBtcLtc(
 
   // 4. Derive the legacy m/44' key + its P2WPKH source address.
   const legacy = legacyBtcLtcKey(wallet.mnemonic, asset);
+  try {
+    // 5. Scan UTXOs AT the legacy address. Confirmed-only: a one-shot fund move
+    //    must not chase an unconfirmed (reorg/RBF-able) legacy deposit; the
+    //    convergent design sweeps it on a later unlock once it confirms.
+    const utxosResp = await chainProviders.utxo(asset).listOutputs(legacy.address);
+    if (utxosResp.error || !utxosResp.data) {
+      return { status: 'skipped', reason: utxosResp.error ?? 'utxo fetch failed' };
+    }
+    const utxos = utxosResp.data.utxos.filter((u) => u.height > 0);
+    if (utxos.length === 0) {
+      return { status: 'skipped', reason: 'no confirmed legacy funds' };
+    }
 
-  // 5. Scan UTXOs AT the legacy address. Confirmed-only: a one-shot fund move
-  //    must not chase an unconfirmed (reorg/RBF-able) legacy deposit; the
-  //    convergent design sweeps it on a later unlock once it confirms.
-  const utxosResp = await chainProviders.utxo(asset).listOutputs(legacy.address);
-  if (utxosResp.error || !utxosResp.data) {
-    return { status: 'skipped', reason: utxosResp.error ?? 'utxo fetch failed' };
-  }
-  const utxos = utxosResp.data.utxos.filter((u) => u.height > 0);
-  if (utxos.length === 0) {
-    return { status: 'skipped', reason: 'no confirmed legacy funds' };
-  }
+    // 6. Fee rate, clamped to the relay floor. applyRelayFloor is MANDATORY: an
+    //    at-floor Electrum estimate (1.0 sat/vB) broadcasts as "rejected by
+    //    network rules" and Smirk has no own BTC/LTC node to fall back on.
+    const feeRates = await chainProviders.utxo(asset).estimateFee();
+    const tiers =
+      feeRates.data?.model === 'rate-estimate' ? feeRates.data : undefined;
+    const feeRate = resolveFeeRateOrFallback(tiers?.normal);
 
-  // 6. Fee rate, clamped to the relay floor. applyRelayFloor is MANDATORY: an
-  //    at-floor Electrum estimate (1.0 sat/vB) broadcasts as "rejected by
-  //    network rules" and Smirk has no own BTC/LTC node to fall back on.
-  const feeRates = await chainProviders.utxo(asset).estimateFee();
-  const tiers =
-    feeRates.data?.model === 'rate-estimate' ? feeRates.data : undefined;
-  const feeRate = resolveFeeRateOrFallback(tiers?.normal);
+    // 7. Size for ALL inputs -> one output. Fee scales with input count; never
+    //    hardcode a 1-in vsize. 68 vB/P2WPKH input, 31 vB/output, ~11 vB header.
+    const estimatedVsize = 11 + 68 * utxos.length + 31;
+    const feeSat = Math.max(
+      Math.ceil(estimatedVsize * feeRate) + 1, // +1 clears minrelaytxfee rounding
+      estimatedVsize, // floor of 1 sat/vB
+    );
 
-  // 7. Size for ALL inputs -> one output. Fee scales with input count; never
-  //    hardcode a 1-in vsize. 68 vB/P2WPKH input, 31 vB/output, ~11 vB header.
-  const estimatedVsize = 11 + 68 * utxos.length + 31;
-  const feeSat = Math.max(
-    Math.ceil(estimatedVsize * feeRate) + 1, // +1 clears minrelaytxfee rounding
-    estimatedVsize, // floor of 1 sat/vB
-  );
+    // 8. Sweep amount + the two sanity gates.
+    const totalSat = utxos.reduce((s, u) => s + u.value, 0);
+    const sweepSat = totalSat - feeSat;
+    if (sweepSat <= 0) {
+      return {
+        status: 'skipped',
+        reason: `total ${totalSat} <= fee ${feeSat} at ${feeRate} sat/vB`,
+      };
+    }
+    if (sweepSat < DUST_SAT) {
+      return {
+        status: 'skipped',
+        reason: `swept ${sweepSat} below dust ${DUST_SAT}`,
+      };
+    }
 
-  // 8. Sweep amount + the two sanity gates.
-  const totalSat = utxos.reduce((s, u) => s + u.value, 0);
-  const sweepSat = totalSat - feeSat;
-  if (sweepSat <= 0) {
-    return {
-      status: 'skipped',
-      reason: `total ${totalSat} <= fee ${feeSat} at ${feeRate} sat/vB`,
-    };
-  }
-  if (sweepSat < DUST_SAT) {
-    return {
-      status: 'skipped',
-      reason: `swept ${sweepSat} below dust ${DUST_SAT}`,
-    };
-  }
+    await authorization.authorize();
+    authorization.assertActive();
 
-  // 9. Build the 1-output P2WPKH sweep with the raw m/44' key.
-  const pubKey = secp256k1.getPublicKey(legacy.privateKey, true);
-  const network = asset === 'btc' ? NETWORK : LTC_NETWORK;
-  const payment = p2wpkh(pubKey, network);
+    // 9. Build the 1-output P2WPKH sweep with the raw m/44' key.
+    const pubKey = secp256k1.getPublicKey(legacy.privateKey, true);
+    const network = asset === 'btc' ? NETWORK : LTC_NETWORK;
+    const payment = p2wpkh(pubKey, network);
 
-  const tx = new Transaction();
-  for (const utxo of utxos) {
-    tx.addInput({
-      txid: utxo.txid,
-      index: utxo.vout,
-      witnessUtxo: { script: payment.script, amount: BigInt(utxo.value) },
+    const tx = new Transaction();
+    for (const utxo of utxos) {
+      tx.addInput({
+        txid: utxo.txid,
+        index: utxo.vout,
+        witnessUtxo: { script: payment.script, amount: BigInt(utxo.value) },
+      });
+    }
+    tx.addOutputAddress(recipientAddress, BigInt(sweepSat), network);
+    tx.sign(legacy.privateKey);
+    tx.finalize();
+    const txHex = hex.encode(tx.extract());
+
+    // 10. Broadcast, then PERSIST-FIRST: record the txid durably BEFORE returning
+    //     success so any crash-retry hits the step-1 guard. On broadcast failure
+    //     leave NO record, so a later unlock retries cleanly.
+    authorization.assertActive();
+    const broadcast = await chainProviders.utxo(asset).broadcast(txHex);
+    if (broadcast.error || !broadcast.data) {
+      return {
+        status: 'skipped',
+        reason: `broadcast failed: ${broadcast.error ?? 'unknown'}`,
+      };
+    }
+    await storage.set(legacySweepKey(asset), {
+      txid: broadcast.data.txid,
+      at: Date.now(),
     });
+    return { status: 'swept', txid: broadcast.data.txid };
+  } finally {
+    legacy.privateKey.fill(0);
   }
-  tx.addOutputAddress(recipientAddress, BigInt(sweepSat), network);
-  tx.sign(legacy.privateKey);
-  tx.finalize();
-  const txHex = hex.encode(tx.extract());
-
-  // 10. Broadcast, then PERSIST-FIRST: record the txid durably BEFORE returning
-  //     success so any crash-retry hits the step-1 guard. On broadcast failure
-  //     leave NO record, so a later unlock retries cleanly.
-  const broadcast = await chainProviders.utxo(asset).broadcast(txHex);
-  if (broadcast.error || !broadcast.data) {
-    return {
-      status: 'skipped',
-      reason: `broadcast failed: ${broadcast.error ?? 'unknown'}`,
-    };
-  }
-  await storage.set(legacySweepKey(asset), {
-    txid: broadcast.data.txid,
-    at: Date.now(),
-  });
-  return { status: 'swept', txid: broadcast.data.txid };
 }

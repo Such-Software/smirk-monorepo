@@ -9,26 +9,16 @@
  *    unserializable (circular) storage read into an unhandled rejection.
  */
 
+import { sessionCacheFixture } from './session-fixture';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSessionCache } from '../keystore';
 import { SessionStateStore } from '../state/session-state';
 import type { PlatformStorage } from '../state/platform';
 
-const validCache = () => ({
-  version: 2,
-  _noMnemonic: true,
-  fingerprint: 'fp',
-  // nostr rides in `keys` (no address entry); parseSessionCache validates its
-  // presence separately, so a well-formed payload must carry it.
-  // btc/ltc carry `accountXpub` (money gate G10): parseSessionCache rejects a
-  // pre-xpub cache so it self-heals to a single re-unlock.
-  keys: { btc: { accountXpub: 'x' }, ltc: { accountXpub: 'x' }, xmr: {}, wow: {}, grin: {}, nostr: {} },
-  addresses: { btc: 'a', ltc: 'a', xmr: 'a', wow: 'a', grin: 'a' },
-  expiresAtMs: 1_700_000_000_000,
-});
+const validCache = () => sessionCacheFixture();
 
-test('parseSessionCache accepts a well-formed v2 payload', () => {
+test('parseSessionCache accepts a well-formed v3 payload', () => {
   assert.notEqual(parseSessionCache(validCache()), null);
 });
 

@@ -15,6 +15,7 @@
  * real restore) need testnet and are out of scope for these unit tests.
  */
 
+import { sessionCacheFixture } from './session-fixture';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -311,27 +312,13 @@ test('buildUtxoScanRefs pairs each address with its BIP84 master path', async ()
 // Session-cache self-heal (G10)
 // ============================================================================
 
-function u8obj(): unknown {
-  // A minimal valid key object placeholder (parseSessionCache only checks it is
-  // an object per asset, not the byte shape).
-  return { privateKey: { __u8: '00' }, publicKey: { __u8: '00' } };
-}
-
 function baseCache(withXpub: boolean): unknown {
-  const btc: Record<string, unknown> = { ...(u8obj() as object) };
-  const ltc: Record<string, unknown> = { ...(u8obj() as object) };
-  if (withXpub) {
-    btc.accountXpub = 'xpub-btc';
-    ltc.accountXpub = 'xpub-ltc';
+  const cache = sessionCacheFixture();
+  if (!withXpub) {
+    delete cache.keys.btc.accountXpub;
+    delete cache.keys.ltc.accountXpub;
   }
-  return {
-    version: 2,
-    _noMnemonic: true,
-    fingerprint: 'fp',
-    expiresAtMs: Date.now() + 60_000,
-    keys: { btc, ltc, xmr: u8obj(), wow: u8obj(), grin: u8obj(), nostr: u8obj() },
-    addresses: { btc: 'a', ltc: 'a', xmr: 'a', wow: 'a', grin: 'a' },
-  };
+  return cache;
 }
 
 test('parseSessionCache accepts a cache carrying the account xpub', () => {
@@ -350,14 +337,7 @@ test('a v3-derived-keys session cache passes parseSessionCache after serialize',
   const keys = deriveAllKeys(ABANDON, '', 3);
   // accountXpub is a plain string, so it survives the session-cache serializer
   // untouched (only Uint8Arrays are transformed).
-  const cache = {
-    version: 2,
-    _noMnemonic: true,
-    fingerprint: 'fp',
-    expiresAtMs: Date.now() + 60_000,
-    keys,
-    addresses: { btc: 'a', ltc: 'a', xmr: 'a', wow: 'a', grin: 'a' },
-  };
+  const cache = { ...sessionCacheFixture(), keys };
   const parsed = parseSessionCache(cache);
   assert.notEqual(parsed, null);
 });

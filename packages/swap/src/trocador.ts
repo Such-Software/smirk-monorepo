@@ -3,8 +3,7 @@
  *
  * Client-direct (the wallet talks straight to `api.trocador.app`) per
  * the v0.3 architecture decision: Smirk's backend does **not** proxy
- * swap traffic, so we never end up as the money-transmitter in the
- * flow. The backend hosts only a webhook receiver for status pings
+ * swap traffic. The backend hosts a webhook receiver for status pings
  * (`POST /api/v1/webhook/trocador`) plus a `swaps` table the
  * extension can read through `GET /api/v1/swaps/:tradeId`. Trocador
  * itself custodies funds during the swap; Smirk just builds the
@@ -12,10 +11,9 @@
  *
  * The affiliate API key ships in the extension bundle. This is an
  * explicit risk-accepted tradeoff: a leaked affiliate key affects
- * rev-share, not custody (Trocador's classification is "affiliate" not
- * "bearer credential"), and a server-side proxy would push Smirk into a
- * money-transmitter posture the team has chosen to avoid. See
- * `docs/V0_3_PLAN.md` Decision 2 in the backend repo.
+ * affiliate attribution. It is bundled client configuration, so it cannot be
+ * treated as confidential once shipped. Values remain outside source and logs.
+ * A build using it requires the release configuration admitted by the operator.
  *
  * Reference: Cake Wallet's `trocador_exchange_provider.dart` for
  * field-name parity; endpoints validated against `api.trocador.app`
@@ -51,8 +49,8 @@ import type {
  * Surfacing either in the picker just funnels users into "no
  * provider available" errors and erodes trust in the swap surface.
  * Re-enable when Trocador's coverage actually catches up; until
- * then native atomic swaps (Grin↔BTC v0.4, WOW↔XMR v0.6) are the
- * real path for these assets.
+ * then these assets remain unavailable in the aggregator picker. Native atomic
+ * swaps are future work, without a committed release version.
  */
 const TROCADOR_COIN: Record<string, { ticker: string; network: string; decimals: number }> = {
   btc: { ticker: 'btc', network: 'Mainnet', decimals: 8 },

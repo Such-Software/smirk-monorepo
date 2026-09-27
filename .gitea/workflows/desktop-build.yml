@@ -1,52 +1,41 @@
 name: Release build (Gitea)
 
-# Builds + signs the Tauri desktop app on the Builds Gitea runners and uploads
-# the bundles as workflow artifacts. This is the Gitea counterpart to
-# .github/workflows/desktop-release.yml: GitHub Actions is disabled on the
-# primary repo, so the cross-platform build happens here and the signed
-# artifacts are attached to the GitHub release by hand (or a later step).
-#
-# It deliberately does NOT create a release: tauri-action's release step targets
-# the GitHub API, so here we just build, sign, and upload artifacts.
-#
-# ── SETUP (one-time) ──────────────────────────────────────────────────────────
-# 1. Runner labels: `runs-on` resolves from the matrix; `ubuntu-latest` and
-#    `macos-latest` are the labels this instance's Linux and macOS runners
-#    advertise. The Windows leg is stubbed under `include:` and only builds
-#    when a runner claims the `windows` label.
-# 2. Action fetching: the runner must resolve `uses:` actions from GitHub, i.e.
-#    act_runner config `[default_actions_url] = https://github.com` (the default).
-# 3. Secrets: set the APPLE_* repository secrets listed below. Without them the
-#    Linux job still ships (no signing needed); the macOS job ships UNSIGNED/ad-hoc.
-#    macOS codesign (Developer ID Application cert):
-#      APPLE_CERTIFICATE            base64 of developer_id.p12
-#      APPLE_CERTIFICATE_PASSWORD
-#      APPLE_SIGNING_IDENTITY       "Developer ID Application: Such Software LLC (D8PL9F7X33)"
-#      APPLE_TEAM_ID                D8PL9F7X33
-#    macOS notarization (App Store Connect API key — notarytool):
-#      APPLE_API_ISSUER             issuer UUID
-#      APPLE_API_KEY                key id (e.g. CHK6B69G58)
-#      APPLE_API_KEY_P8_BASE64      base64 of AuthKey_<id>.p8 (decoded to a file below)
-# NOTE: the Tauri auto-updater is ON. tauri.conf.json holds the minisign PUBLIC
-#   key and points at the `latest.json` published as a GitHub Release asset, so
-#   there is no separate update host to run (releases.smirk.cash was never stood
-#   up). The build needs TAURI_SIGNING_PRIVATE_KEY as a repository secret to
-#   emit the .sig files that manifest refers to. The key is
-#   PASSWORDLESS, so there is deliberately no _PASSWORD secret: a stale wrong
-#   one is what broke the first build that actually exercised signing, and an
-#   absent secret expands to empty, which is what the bundler wants. Artifact authenticity is provided by a detached PGP signature
-#   applied to the collected bundles out-of-band, with the Smirk Releases key
-#   <jw@such.software> (signing subkey 96F6836D5110C2CB). See KEYS.asc.
-# ──────────────────────────────────────────────────────────────────────────────
+# Build and sign candidates on the Gitea runners. Each artifact is tied to
+# its exact source commit. Public release uploads are a separate reviewed step
+# after all platforms, signatures, provenance, and product checks pass.
+# Signing values arrive through the enrolled CI secret interface.
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+    inputs:
+      expected_sha:
+        description: 'Exact protected Builds commit admitted by Fleet'
+        required: true
+        type: string
 
 jobs:
+  admission:
+    name: Admit exact candidate source
+    runs-on: ubuntu-latest
+    outputs:
+      build_commit: ${{ steps.admit.outputs.build_commit }}
+      approved_source_commit: ${{ steps.admit.outputs.approved_source_commit }}
+      ingress_base_commit: ${{ steps.admit.outputs.ingress_base_commit }}
+      source_tree: ${{ steps.admit.outputs.source_tree }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify dispatch and tree-identical ingress wrapper
+        id: admit
+        env:
+          EXPECTED_SHA: ${{ github.event.inputs.expected_sha }}
+        run: node scripts/release-admission.mjs
+
   build:
+    needs: admission
     # Isolated toolchain homes, one per job. These runners execute several jobs
     # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
     # job's toolchain install rewrites binaries another job is mid-way through
@@ -56,17 +45,10 @@ jobs:
     env:
       RUSTUP_HOME: ${{ runner.temp }}/rustup
       CARGO_HOME: ${{ runner.temp }}/cargo
-      # Swap is gated on this at BUILD time. Unset, the Swap tab renders a
-      # "disabled in this build" notice, which is what every build shipped until
-      # now, because nothing ever injected it.
-      #
-      # Vite substitutes VITE_* statically, so this value is readable in the
-      # shipped bundle by anyone who unpacks it. It is a client-side identifier
-      # for a service the wallet calls directly, not a bearer credential for our
-      # backend. Consequence worth knowing: an outside party rebuilding from the
-      # published source zip without this key gets different bytes.
-      # pack-release.sh's reproducibility check still passes, because it builds
-      # twice inside this same environment.
+      # Release candidates require the configured affiliate input. Vite embeds
+      # it in the client bundle, where it is readable; it is not backend authority.
+      # Values stay in build custody and must never enter source or logs. A
+      # reproduction without the same build input produces different bytes.
       VITE_TROCADOR_API_KEY: ${{ secrets.TROCADOR_API_KEY }}
     strategy:
       fail-fast: false
@@ -105,6 +87,18 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.admission.outputs.build_commit }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Require release swap configuration
+        run: |
+          set +x
+          if [ -z "${VITE_TROCADOR_API_KEY:-}" ]; then
+            echo 'TROCADOR_API_KEY is missing from release build custody; refusing a candidate with swaps disabled.' >&2
+            exit 1
+          fi
 
       # Version comes from the manifest, never a literal. Every path and artifact
       # name below used to hardcode 0.3.0, so the first build of 0.3.1 would have
@@ -118,102 +112,32 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "building desktop artifacts for v$V"
 
-      # Cheap guard, and it belongs here rather than next to the signing step.
-      # A dead signing token is invisible until the bundler calls the broker, which
-      # on this runner is roughly 25 minutes of Rust and NSIS work later. That is
-      # exactly what happened on 2026-09-07: a full compile spent to discover a
-      # token that was present but not logged in.
-      #
-      # Two distinct faults, reported separately because they need different
-      # people to fix them:
-      #   - a tripped breaker needs an operator to clear a latch
-      #   - a live breaker with a logged-out token needs someone at the console
-      #
-      # This never supplies a password, so it cannot consume one of the token's
-      # three attempts. A logged-out token makes signtool sit on a prompt nobody
-      # answers, so the timeout IS the signal.
-      - name: Preflight the Windows signing token
-        if: matrix.os_label == 'windows'
-        shell: powershell
+      - name: Preflight macOS release signing
+        if: matrix.os_label == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         run: |
-          if (Test-Path 'C:\signing\SIGNING_LOCKED') {
-              Write-Host '--- breaker contents ---'
-              Get-Content 'C:\signing\SIGNING_LOCKED'
-              throw 'preflight: the signing broker''s circuit breaker is tripped. An operator must clear it before this build is worth running.'
-          }
-          if (-not (Test-Path 'C:\signing\in')) {
-              throw 'preflight: C:\signing\in is missing, so the broker is not serving this host.'
-          }
-          Write-Host 'preflight: breaker clear and broker queue present.'
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_TEAM_ID APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8_BASE64; do
+            [ -n "${!name:-}" ] || {
+              echo "Release signing input $name is missing; refusing an unsigned candidate." >&2
+              exit 1
+            }
+          done
 
-          # The broker must also be alive, not merely configured. It is a
-          # scheduled task with an at-logon trigger, so it dies with its session
-          # and nothing re-launches it: on 2026-09-12 it had been dead long enough
-          # to cost three builds, each discovering it only after a full compile and
-          # then waiting the broker's ten minute timeout per artifact.
-          #
-          # Liveness is read from the keepalive's heartbeat rather than from the
-          # task list. Asking the task list does not work from here: this job runs
-          # as NT SERVICE\act_runner in session 0, the tasks are registered to run
-          # as the interactive user that owns the token, and a task registered to
-          # another principal is not enumerable by an unrelated service account. So
-          # Get-ScheduledTask returns nothing on a host where schtasks /query plainly
-          # shows the task Running, and with -ErrorAction SilentlyContinue that
-          # permission failure was indistinguishable from an absent task. It blocked
-          # every Windows release while the signing chain was perfectly healthy,
-          # which is the same false-negative trap the removed signtool probe fell
-          # into, one comment below.
-          #
-          # token-state.txt is what the keepalive stamps each time it exercises the
-          # private key, and the runner can read it. Warm and recent proves the
-          # interactive session is alive, that its scheduled tasks are firing, and
-          # that the token login is still open, which is the whole precondition for
-          # signing. The broker shares that session and trigger, so it stands or
-          # falls with the evidence here.
-          $state = 'C:\signing\token-state.txt'
-          if (-not (Test-Path $state)) {
-              throw 'preflight: no token-state.txt, so the keepalive has never run on this host.'
-          }
-          $stamp = (Get-Content $state -Raw).Trim()
-          if ($stamp -notmatch '^warm\s+(\S+)') {
-              Write-Host "preflight: token state is '$stamp'."
-              Write-Host 'Cold means the hardware token is logged out. Someone at the console'
-              Write-Host 'must log it in; no password is ever supplied from here, so the'
-              Write-Host "token's three-attempt lockout is not at risk."
-              throw 'preflight: the signing token is not logged in.'
-          }
-          # The keepalive fires every four hours, and SafeNet drops an idle login at
-          # roughly fourteen. Nine hours is two missed cycles of slack while still
-          # failing well before the login would lapse mid-build.
-          $age = (Get-Date) - [datetime]::Parse($Matches[1])
-          if ($age.TotalHours -gt 9) {
-              Write-Host "preflight: last keepalive was $([int]$age.TotalHours)h ago ($stamp)."
-              Write-Host 'The interactive session is gone or its tasks stopped firing, so'
-              Write-Host 'nothing is consuming C:\signing\in and every signature would queue'
-              Write-Host 'and then time out after ten minutes.'
-              Write-Host 'An operator logs in at the console; the at-logon triggers do the rest.'
-              throw 'preflight: the signing session looks dead.'
-          }
-          Write-Host "preflight: token warm, last keepalive $([int]$age.TotalMinutes)m ago."
-
-          # Best effort, and deliberately not fatal: when this job CAN see the task
-          # list, a stopped broker is worth saying out loud. When it cannot, that is
-          # the permission case above and not evidence of anything.
-          $broker = Get-ScheduledTask -TaskName 'SuchSoftwareSigningBroker' -ErrorAction SilentlyContinue
-          if ($broker -and $broker.State -ne 'Running') {
-              Write-Host "preflight: WARNING broker task state is $($broker.State), expected Running."
-              Write-Host 'Start it with: schtasks /run /tn SuchSoftwareSigningBroker'
-          }
-
-          # A live-token probe was tried here and removed. It signed a throwaway
-          # copy of where.exe, which Windows already ships signed by Microsoft, so
-          # sign-windows.ps1's signer check correctly rejected it and the preflight
-          # failed a build whose token was fine. A guard that reports a healthy
-          # system as broken is worse than no guard: it costs a cycle AND sends the
-          # operator to the wrong machine. Proving the token is live needs an
-          # unsigned PE built on the spot, which is more machinery than this is
-          # worth; the breaker check above already catches the case that actually
-          # recurs, an operator who has not cleared the latch.
+      # Read-only, cheap admission before toolchain installation or compilation.
+      # A recent keepalive is historical evidence. Broker liveness requires a
+      # readable Running task observation; denied or absent metadata refuses.
+      - name: Preflight the Windows signing broker
+        if: matrix.os_label == 'windows'
+        run: node scripts/ci/windows-signing-preflight.mjs
 
       - name: Install Linux dependencies
         if: matrix.os_label == 'linux'
@@ -304,7 +228,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # The Windows runner ALREADY has a rustup home (C:\Users\ssh\.rustup) but
       # rustup is not on the PATH this job sees. dtolnay/rust-toolchain probes with
@@ -341,6 +265,12 @@ jobs:
             printf 'CARGO_HOME=%s\\cargo\n'  "$wtmp" >> "$GITHUB_ENV"
             echo "no usable rustup; using a job-scoped RUSTUP_HOME/CARGO_HOME under $wtmp"
           fi
+
+      - name: Install rustup without editing shell profiles
+        # The action below would install rustup with profile edits that point at
+        # this job's temporary CARGO_HOME; see the script for the host-mode cost.
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-rustup-job-scoped.sh
 
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
@@ -415,11 +345,12 @@ jobs:
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
-          if [ -z "${APPLE_API_KEY_P8_BASE64:-}" ]; then
-            echo "APPLE_API_KEY_P8_BASE64 not set — macOS build will be signed but NOT notarized."
-            exit 0
-          fi
-          key_path="$RUNNER_TEMP/apple_api_key_${APPLE_API_KEY:-key}.p8"
+          set -euo pipefail
+          [ -n "${APPLE_API_KEY_P8_BASE64:-}" ] || {
+            echo 'Notarization key is missing; refusing a release candidate.' >&2; exit 1;
+          }
+          umask 077
+          key_path="$RUNNER_TEMP/smirk-notarization-${{ github.run_id }}.p8"
           printf '%s' "$APPLE_API_KEY_P8_BASE64" | openssl base64 -d -A > "$key_path"
           echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
 
@@ -448,7 +379,7 @@ jobs:
           # root package. The signed pass goes through tauri-action, which resolves
           # that itself, which is why only this hand-written pass needed telling.
           npm run tauri -w @smirk/desktop -- build --target ${{ matrix.target }} --no-sign
-          dest="$HOME/smirk-unsigned-v${{ steps.ver.outputs.version }}"
+          dest="$RUNNER_TEMP/smirk-unsigned-v${{ steps.ver.outputs.version }}"
           rm -rf "$dest"; mkdir -p "$dest"
           base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
           # Renamed here rather than at publish time: two installers with the same
@@ -479,10 +410,10 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
-          # Updater signing. tauri.conf.json carries the PUBLIC half and sets
-          # updater.active = true, so every shipped build checks for updates.
-          # Without these the bundler emits no .sig, and an update the app finds
-          # can never be verified, stranding users on the version they installed.
+          # Payload signing is configured in tauri.conf.json and requires this
+          # private key to match its pinned public key. The current client does
+          # not invoke update checks or installation; users download and reinstall.
+          # Retain verified .sig files for the configured updater payloads.
           # minisign, from `tauri signer generate`. NOT the PGP release key: that
           # signs artifacts for humans, this signs update payloads for the app.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -501,6 +432,19 @@ jobs:
           echo "tauri build failed on ${{ matrix.os_label }} (outcome=${{ steps.tauri.outcome }})"
           exit 1
 
+      - name: Verify macOS signature and notarization
+        if: matrix.os_label == 'macos'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
+          [ "${#apps[@]}" -eq 1 ] || {
+            echo 'Expected one built macOS app for release validation.' >&2; exit 1;
+          }
+          bash scripts/verify-macos-release.sh "${apps[0]}"
+
       # Collect the installers into a SINGLE space-free tar.gz, then upload that.
       # Why: the Tauri bundles are named "Smirk Wallet_0.3.0_amd64.AppImage" (with
       # a space). actions/upload-artifact@v3 aborts the chunk PUT on a filename
@@ -510,10 +454,10 @@ jobs:
       # space-named files inside the tarball are fine). Also stage a copy to a
       # persistent runner dir as a belt-and-suspenders fallback.
       - name: Archive bundles (space-free) + stage to runner
-        if: always()
         shell: bash
         run: |
-          dest="$HOME/smirk-desktop-v${{ steps.ver.outputs.version }}/${{ matrix.os_label }}"
+          set -euo pipefail
+          dest="$RUNNER_TEMP/smirk-desktop-v${{ steps.ver.outputs.version }}/${{ matrix.os_label }}"
           rm -rf "$dest"; mkdir -p "$dest"
           base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
           find "$base" -type f \( \
@@ -572,12 +516,13 @@ jobs:
           # It deliberately gets NO updater signature. latest.json must point at the
           # signed installer, or the updater would hand every existing user an
           # unsigned binary and re-raise the SmartScreen warning on each update.
-          if [ -d "$HOME/smirk-unsigned-v${{ steps.ver.outputs.version }}" ]; then
-            cp -v "$HOME/smirk-unsigned-v${{ steps.ver.outputs.version }}"/*.exe "$dest/" 2>/dev/null || true
+          if [ -d "$RUNNER_TEMP/smirk-unsigned-v${{ steps.ver.outputs.version }}" ]; then
+            cp -v "$RUNNER_TEMP/smirk-unsigned-v${{ steps.ver.outputs.version }}"/*.exe "$dest/"
           fi
           mkdir -p artifacts-out
-          tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz" -C "$dest" . \
-            && echo "archived $(ls -la artifacts-out/*.tar.gz)" || echo "nothing to archive"
+          node scripts/release-artifacts.mjs record --dir "$dest" \
+            --platform "${{ matrix.os_label }}" --version "${{ steps.ver.outputs.version }}"
+          tar -czf "artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}-${{ github.sha }}.tar.gz" -C "$dest" .
 
       # A green Windows job must not be able to ship an unsigned installer.
       #
@@ -600,7 +545,7 @@ jobs:
           # what failed for the bundler.
           powershell.exe -NoProfile -ExecutionPolicy Bypass \
             -File packages/desktop/src-tauri/scripts/verify-windows-signature.ps1 \
-            -Dest "$HOME/smirk-desktop-v${{ steps.ver.outputs.version }}/windows"
+            -Dest "$RUNNER_TEMP/smirk-desktop-v${{ steps.ver.outputs.version }}/windows"
 
       - name: Upload bundle archive
         # NOT continue-on-error: this is the release path, and a swallowed upload
@@ -608,147 +553,18 @@ jobs:
         # indistinguishable from success until someone goes looking for the
         # bundle. Fail loudly instead.
         uses: actions/upload-artifact@v3
-        env:
-          # The runner uploads artifacts to https://git.such.software, which serves
-          # a self-signed cert, and upload-artifact's Node rejects it
-          # (DEPTH_ZERO_SELF_SIGNED_CERT). Trust it for this internal-only upload.
-          NODE_TLS_REJECT_UNAUTHORIZED: '0'
         with:
-          name: smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}
-          if-no-files-found: warn
-          path: artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz
+          name: smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}-${{ github.sha }}
+          if-no-files-found: error
+          path: artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}-${{ github.sha }}.tar.gz
 
-      # Attach the archive to a Gitea release, so collection never depends on the
-      # artifacts API.
-      #
-      # That API reports total_count 0 on this instance even for runs that plainly
-      # uploaded (confirmed on completed runs 6394 and 6086). The only routes left
-      # were a browser download or a shell on the Gitea box, and the second means
-      # handing out an interactive account to work around a bug. The releases API
-      # on the same host, with the same token, works, so every leg publishes to
-      # one place a script can fetch.
-      #
-      # Tag builds only: a release keyed on a branch is meaningless, and this must
-      # never invent one for an ordinary push.
-      # Also push straight to the GitHub release, which is where these artifacts
-      # are actually consumed.
-      #
-      # The Gitea hop has failed twice: its Actions artifacts API reports
-      # total_count 0 for runs that plainly uploaded, and release attachments 404
-      # through every API auth form even though the metadata reports a correct
-      # size. Only a browser session can retrieve them, so every release needed a
-      # human with a browser in the middle of an otherwise automated pipeline.
-      #
-      # Uploading here removes that middleman rather than working around it. The
-      # Gitea release upload above stays as the local copy.
-      #
-      # Skipped quietly when the token is absent, so a fork or a local runner does
-      # not fail a build over a credential it was never given.
-      - name: Publish archive to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "GH_RELEASE_TOKEN not set; skipping the GitHub upload"
-            exit 0
-          fi
-          TAG="${GITHUB_REF#refs/tags/}"
-          REPO="Such-Software/smirk-monorepo"
-          API="https://api.github.com/repos/$REPO"
-          AUTH="Authorization: Bearer $GH_TOKEN"
-          shopt -s nullglob
-          FILES=(artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz)
-          [ ${#FILES[@]} -gt 0 ] || { echo "nothing to upload"; exit 1; }
-          # Resolve the release id. The release must already exist: creating one
-          # here could publish a half-populated release while other legs build.
-          code=$(curl -sS -o rel-gh.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
-          if [ "$code" != "200" ]; then
-            echo "no GitHub release for $TAG (HTTP $code); skipping"
-            exit 0
-          fi
-          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel-gh.json","utf8")).id)')
-          for FILE in "${FILES[@]}"; do
-            NAME="$(basename "$FILE")"
-            # Replace a same-named asset from an earlier attempt, so a re-run does
-            # not leave two that differ only by which build produced them.
-            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel-gh.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
-            for oid in $OLD; do
-              curl -sS -o /dev/null -X DELETE -H "$AUTH" "$API/releases/assets/$oid" || true
-            done
-            curl -sS --fail-with-body -o /dev/null -X POST -H "$AUTH" \
-              -H "Content-Type: application/octet-stream" \
-              --data-binary "@$FILE" \
-              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$NAME"
-            echo "uploaded $NAME to the GitHub release $TAG"
-          done
+      - name: Remove temporary notarization key
+        if: always() && matrix.os_label == 'macos'
+        run: rm -f -- "$RUNNER_TEMP/smirk-notarization-${{ github.run_id }}.p8"
 
-      - name: Publish archive to the Builds release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        env:
-          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # rel.json is workspace-relative on purpose. git-bash translates an
-          # absolute /tmp path to its own root, while node is a native Windows
-          # binary and reads the same string as C:\tmp, so the two disagree about
-          # which file they are using and the Windows leg died on ENOENT after a
-          # fully signed build. A relative path resolves identically for both.
-          TAG="${GITHUB_REF#refs/tags/}"
-          API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
-          AUTH="Authorization: token $GITEA_TOKEN"
-          shopt -s nullglob
-          FILES=(artifacts-out/smirk-desktop-${{ matrix.os_label }}-v${{ steps.ver.outputs.version }}.tar.gz)
-          if [ ${#FILES[@]} -eq 0 ]; then
-            echo "no archives to publish; the upload step above should have caught this"
-            exit 1
-          fi
-          # Reuse a release a sibling leg already created: four legs share one tag,
-          # so each creating its own would race.
-          code=$(curl -sk -o rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
-          if [ "$code" != "200" ]; then
-            # Draft, so a half-populated release is never mistaken for a shipped one
-            # while other legs are still building.
-            # Not a draft: Gitea does not associate a draft with its tag, so
-            # `releases/tags/$TAG` 404s and the assets are unreachable, which is the
-            # whole point of publishing here. prerelease marks it as CI output on an
-            # internal ingress repo, not something shipped to users.
-            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":true}"
-            curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
-            # A concurrent leg may have won the create, so re-read rather than fail.
-            curl -sk -o rel.json -H "$AUTH" "$API/releases/tags/$TAG"
-          fi
-          # node, not python3: the Windows runner's git-bash has no python3, and
-          # this step died with exit 127 after a full signed build had succeeded.
-          # node is guaranteed here because the build just used it.
-          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel.json","utf8")).id)')
-          for FILE in "${FILES[@]}"; do
-            NAME="$(basename "$FILE")"
-            # Drop a same-named asset from an earlier attempt, so a re-run does not
-            # leave two assets differing only by which build produced them.
-            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
-            for oid in $OLD; do
-              curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
-            done
-            curl -sk --fail-with-body -o /dev/null -X POST -H "$AUTH" -F "attachment=@$FILE" "$API/releases/$ID/assets?name=$NAME"
-            echo "published $NAME to release $TAG"
-          done
 
-  # ── Extension artifacts ──────────────────────────────────────────────────────
-  # Added 2026-08-18. Before this, the three extension zips were built by hand on
-  # a workstation into a gitignored directory while the desktop bundles came from
-  # CI, so the ten release artifacts shipped with two different provenance
-  # stories. The weaker half is the one that goes to the Chrome Web Store and
-  # AMO. Worse, it had already bitten us: when the working checkout disappeared
-  # from jw-laptop the zips existed nowhere and the checksums recorded at the tag
-  # described files that could not be regenerated.
-  #
-  # Runs in this workflow rather than ci.yml on purpose: artifacts must descend
-  # from the tagged commit, and ci.yml runs on every push.
   extension:
+    needs: admission
     # Isolated toolchain homes, one per job. These runners execute several jobs
     # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
     # job's toolchain install rewrites binaries another job is mid-way through
@@ -758,22 +574,27 @@ jobs:
     env:
       RUSTUP_HOME: ${{ runner.temp }}/rustup
       CARGO_HOME: ${{ runner.temp }}/cargo
-      # Swap is gated on this at BUILD time. Unset, the Swap tab renders a
-      # "disabled in this build" notice, which is what every build shipped until
-      # now, because nothing ever injected it.
-      #
-      # Vite substitutes VITE_* statically, so this value is readable in the
-      # shipped bundle by anyone who unpacks it. It is a client-side identifier
-      # for a service the wallet calls directly, not a bearer credential for our
-      # backend. Consequence worth knowing: an outside party rebuilding from the
-      # published source zip without this key gets different bytes.
-      # pack-release.sh's reproducibility check still passes, because it builds
-      # twice inside this same environment.
+      # Release candidates require the configured affiliate input. Vite embeds
+      # it in the client bundle, where it is readable; it is not backend authority.
+      # Values stay in build custody and must never enter source or logs. A
+      # reproduction without the same build input produces different bytes.
       VITE_TROCADOR_API_KEY: ${{ secrets.TROCADOR_API_KEY }}
     name: extension build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.admission.outputs.build_commit }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Require release swap configuration
+        run: |
+          set +x
+          if [ -z "${VITE_TROCADOR_API_KEY:-}" ]; then
+            echo 'TROCADOR_API_KEY is missing from release build custody; refusing a candidate with swaps disabled.' >&2
+            exit 1
+          fi
 
       - name: Install clang (wasm C target)
         run: |
@@ -791,6 +612,12 @@ jobs:
           }
           apt_retry update
           apt_retry install -y clang
+
+      - name: Install rustup without editing shell profiles
+        # The action below would install rustup with profile edits that point at
+        # this job's temporary CARGO_HOME; see the script for the host-mode cost.
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-rustup-job-scoped.sh
 
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
@@ -847,6 +674,8 @@ jobs:
 
       - name: Stage artifacts
         run: |
+          node scripts/release-artifacts.mjs record --dir packages/extension/releases \
+            --platform extension --version "${{ steps.ver.outputs.version }}"
           mkdir -p artifacts-out
           cp -v packages/extension/releases/* artifacts-out/
           ls -la artifacts-out
@@ -855,129 +684,7 @@ jobs:
         # See the note on the desktop upload: a release upload must not fail
         # quietly.
         uses: actions/upload-artifact@v3
-        env:
-          # Same self-signed cert as the desktop upload above.
-          NODE_TLS_REJECT_UNAUTHORIZED: '0'
         with:
-          name: smirk-extension-v${{ steps.ver.outputs.version }}
+          name: smirk-extension-v${{ steps.ver.outputs.version }}-${{ github.sha }}
           if-no-files-found: error
           path: artifacts-out/
-
-      # Attach the archive to a Gitea release, so collection never depends on the
-      # artifacts API.
-      #
-      # That API reports total_count 0 on this instance even for runs that plainly
-      # uploaded (confirmed on completed runs 6394 and 6086). The only routes left
-      # were a browser download or a shell on the Gitea box, and the second means
-      # handing out an interactive account to work around a bug. The releases API
-      # on the same host, with the same token, works, so every leg publishes to
-      # one place a script can fetch.
-      #
-      # Tag builds only: a release keyed on a branch is meaningless, and this must
-      # never invent one for an ordinary push.
-      # Also push straight to the GitHub release, which is where these artifacts
-      # are actually consumed.
-      #
-      # The Gitea hop has failed twice: its Actions artifacts API reports
-      # total_count 0 for runs that plainly uploaded, and release attachments 404
-      # through every API auth form even though the metadata reports a correct
-      # size. Only a browser session can retrieve them, so every release needed a
-      # human with a browser in the middle of an otherwise automated pipeline.
-      #
-      # Uploading here removes that middleman rather than working around it. The
-      # Gitea release upload above stays as the local copy.
-      #
-      # Skipped quietly when the token is absent, so a fork or a local runner does
-      # not fail a build over a credential it was never given.
-      - name: Publish archive to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "GH_RELEASE_TOKEN not set; skipping the GitHub upload"
-            exit 0
-          fi
-          TAG="${GITHUB_REF#refs/tags/}"
-          REPO="Such-Software/smirk-monorepo"
-          API="https://api.github.com/repos/$REPO"
-          AUTH="Authorization: Bearer $GH_TOKEN"
-          shopt -s nullglob
-          FILES=(artifacts-out/*)
-          [ ${#FILES[@]} -gt 0 ] || { echo "nothing to upload"; exit 1; }
-          # Resolve the release id. The release must already exist: creating one
-          # here could publish a half-populated release while other legs build.
-          code=$(curl -sS -o rel-gh.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
-          if [ "$code" != "200" ]; then
-            echo "no GitHub release for $TAG (HTTP $code); skipping"
-            exit 0
-          fi
-          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel-gh.json","utf8")).id)')
-          for FILE in "${FILES[@]}"; do
-            NAME="$(basename "$FILE")"
-            # Replace a same-named asset from an earlier attempt, so a re-run does
-            # not leave two that differ only by which build produced them.
-            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel-gh.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
-            for oid in $OLD; do
-              curl -sS -o /dev/null -X DELETE -H "$AUTH" "$API/releases/assets/$oid" || true
-            done
-            curl -sS --fail-with-body -o /dev/null -X POST -H "$AUTH" \
-              -H "Content-Type: application/octet-stream" \
-              --data-binary "@$FILE" \
-              "https://uploads.github.com/repos/$REPO/releases/$ID/assets?name=$NAME"
-            echo "uploaded $NAME to the GitHub release $TAG"
-          done
-
-      - name: Publish archive to the Builds release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        env:
-          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # rel.json is workspace-relative on purpose. git-bash translates an
-          # absolute /tmp path to its own root, while node is a native Windows
-          # binary and reads the same string as C:\tmp, so the two disagree about
-          # which file they are using and the Windows leg died on ENOENT after a
-          # fully signed build. A relative path resolves identically for both.
-          TAG="${GITHUB_REF#refs/tags/}"
-          API="${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}"
-          AUTH="Authorization: token $GITEA_TOKEN"
-          shopt -s nullglob
-          FILES=(artifacts-out/*)
-          if [ ${#FILES[@]} -eq 0 ]; then
-            echo "no archives to publish; the upload step above should have caught this"
-            exit 1
-          fi
-          # Reuse a release a sibling leg already created: four legs share one tag,
-          # so each creating its own would race.
-          code=$(curl -sk -o rel.json -w '%{http_code}' -H "$AUTH" "$API/releases/tags/$TAG" || true)
-          if [ "$code" != "200" ]; then
-            # Draft, so a half-populated release is never mistaken for a shipped one
-            # while other legs are still building.
-            # Not a draft: Gitea does not associate a draft with its tag, so
-            # `releases/tags/$TAG` 404s and the assets are unreachable, which is the
-            # whole point of publishing here. prerelease marks it as CI output on an
-            # internal ingress repo, not something shipped to users.
-            BODY="{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false,\"prerelease\":true}"
-            curl -sk -o /dev/null -X POST -H "$AUTH" -H 'Content-Type: application/json' -d "$BODY" "$API/releases" || true
-            # A concurrent leg may have won the create, so re-read rather than fail.
-            curl -sk -o rel.json -H "$AUTH" "$API/releases/tags/$TAG"
-          fi
-          # node, not python3: the Windows runner's git-bash has no python3, and
-          # this step died with exit 127 after a full signed build had succeeded.
-          # node is guaranteed here because the build just used it.
-          ID=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("rel.json","utf8")).id)')
-          for FILE in "${FILES[@]}"; do
-            NAME="$(basename "$FILE")"
-            # Drop a same-named asset from an earlier attempt, so a re-run does not
-            # leave two assets differing only by which build produced them.
-            OLD=$(node -e 'const d=JSON.parse(require("fs").readFileSync("rel.json","utf8"));console.log((d.assets||[]).filter(a=>a.name===process.argv[1]).map(a=>a.id).join(" "))' "$NAME")
-            for oid in $OLD; do
-              curl -sk -o /dev/null -X DELETE -H "$AUTH" "$API/releases/$ID/assets/$oid" || true
-            done
-            curl -sk --fail-with-body -o /dev/null -X POST -H "$AUTH" -F "attachment=@$FILE" "$API/releases/$ID/assets?name=$NAME"
-            echo "published $NAME to release $TAG"
-          done

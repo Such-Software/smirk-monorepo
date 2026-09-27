@@ -2,15 +2,13 @@
 /**
  * seed-to-keys.mjs: standalone recovery tool for legacy Smirk wallets.
  *
- * Runs via `tsx` so it can import from `@smirk/core` source directly
- * without a build step. Run as `node --import tsx scripts/seed-to-keys/seed-to-keys.mjs`
- * or simply `./scripts/seed-to-keys/seed-to-keys.mjs` if tsx is on PATH.
+ * Imports the built `@smirk/core` package. Read README.md before use.
  *
  * Takes a 12-word BIP39 mnemonic and prints addresses + private keys for
  * every supported asset, at every derivation generation Smirk has ever
  * shipped (v1, v2, v3). Lets users on pre-v3 derivations import their
- * funds into any compatible wallet (Cake for XMR/WOW, grin-wallet for
- * Grin, anything BIP39-aware for BTC/LTC).
+ * inspect the derivation holding their funds. An external wallet must support
+ * the exact coin, derivation and private-key format.
  *
  * Why this exists: the v0.3 monorepo extension only supports v3
  * (Cake/grin-wallet compatible) derivation. Users on v1/v2 from the
@@ -19,17 +17,14 @@
  * recover their funds from the seed alone: no Smirk infrastructure
  * needed.
  *
- * Usage:
- *   node scripts/seed-to-keys/seed-to-keys.mjs           # prompts for seed via stdin
- *   echo "twelve word phrase ..." | node scripts/seed-to-keys/seed-to-keys.mjs
- *
  * Security:
  * - Never accept the seed as a command-line argument (it would land in
  *   shell history). Use stdin only.
  * - Run on a trusted, offline machine if you can; this script does
  *   not phone home, but a compromised machine sees the seed regardless.
- * - The output contains private keys. Clear scrollback / close the
- *   terminal after you've recorded what you need.
+ * - Input is visible and output contains private keys. Do not run this in
+ *   agent sessions, CI, support logs or recorded terminals. Clearing
+ *   scrollback does not remove external copies.
  */
 
 import readline from 'node:readline';
@@ -53,10 +48,9 @@ async function readSeedFromStdin() {
     for await (const chunk of process.stdin) chunks.push(chunk);
     return Buffer.concat(chunks).toString('utf8').trim();
   }
-  // Interactive mode: prompt with hidden echo (best-effort: not all
-  // terminals support this; the user is warned).
+  // Interactive input is visible. See README.md for the execution boundary.
   console.error(
-    'Enter your 12-word recovery phrase (input is visible — clear scrollback after):',
+    'Enter your 12-word recovery phrase (input is visible; use only an unrecorded private terminal):',
   );
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   return new Promise((resolve) => {
@@ -82,7 +76,7 @@ function renderVersion(version, keys) {
 
   // BTC + LTC: v1 and v2 share the legacy Smirk-specific path (BIP44 +
   // P2WPKH encoding, unique to Smirk pre-2026-05-11); v3 is standard BIP84
-  // that any wallet's seed import reproduces. Print both per version so
+  // that a matching BIP39/BIP84 import reproduces. Print both per version so
   // users on legacy wallets see where their funds actually are.
   console.log(`BTC address:        ${btcAddress(keys.btc.publicKey)}`);
   console.log(`BTC private key:    ${hex(keys.btc.privateKey)}`);
@@ -134,11 +128,10 @@ console.log('\n=================================================================
 console.log('To recover funds:');
 console.log('  XMR / WOW → import the v3 (or v1/v2 if that\'s where your funds are)');
 console.log('             spend + view keys into Cake Wallet ("Restore from keys").');
-console.log('  GRIN     → import the slatepack private key into grin-wallet or Grim.');
+console.log('  GRIN     → the slatepack key alone is not a complete spend-wallet export.');
 console.log('  BTC / LTC → For pre-v0.3 Smirk wallets, funds are at the v1/v2 address');
-console.log('             above (Smirk-specific path). Import the hex private key');
-console.log('             (NOT the seed phrase) into Sparrow / Bitcoin Core /');
-console.log('             Electrum to spend them.');
-console.log('             For v0.3+ Smirk wallets, funds are at the v3 address — any');
-console.log('             standard wallet\'s seed-phrase import will find them.');
+console.log('             above (Smirk-specific path). The target wallet must support');
+console.log('             the key format and matching P2WPKH address type.');
+console.log('             For v0.3+ primary addresses, select the matching coin and');
+console.log('             account in a BIP39/BIP84-compatible wallet.');
 console.log('=================================================================');

@@ -10,9 +10,11 @@
 import './_chrome-stub'; // MUST be first: installs chrome.storage before singletons.ts loads.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GrinPendingOverlay, createMemoryGrinPendingStore } from '@smirk/core';
-import { freeInboxReservedInputs } from '../inbox-actions';
+import { GrinPendingOverlay, createMemoryGrinPendingStore, generateMnemonicPhrase, NostrGiftwrapChannel } from '@smirk/core';
+import { freeInboxReservedInputs, cancelInboxItem, respondToInboxItem } from '../inbox-actions';
 import { encodeNostrRelayRef } from '../relay-ref';
+import { storage } from '../singletons';
+import { grinOverlay } from '../grin-flows';
 
 const INPUT_COMMIT = '07'.repeat(33);
 const SLATE_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -65,3 +67,42 @@ test('Inbox cancel is a harmless no-op when the row has no reserved entry', asyn
   // Unrelated entry untouched.
   assert.ok((await overlay.selectablePendingSpent()).has(INPUT_COMMIT));
 });
+
+test('declined signing authorization releases local inputs without signing a cancellation', async (t) => {
+  const slateId = crypto.randomUUID();
+  const relayId = encodeNostrRelayRef(slateId, 'deadbeef'.repeat(8));
+  await grinOverlay.addPending(slateId, { spentCommits: [INPUT_COMMIT] });
+  let canceled = false;
+  t.mock.method(NostrGiftwrapChannel.prototype, 'cancel', async () => { canceled = true; });
+  const result = await cancelInboxItem({
+    relayId, userId: 'test-user', mnemonic: generateMnemonicPhrase(),
+    beforeSign: async () => { throw new Error('Password confirmation canceled'); },
+  });
+  assert.ok(result.error);
+  assert.equal(canceled, false);
+  assert.ok(!(await grinOverlay.selectablePendingSpent()).has(INPUT_COMMIT));
+});
+
+for (const action of ['cancel', 'respond'] as const) {
+  test(`lock during inbox ${action} identity lookup prevents the signed transport call`, async (t) => {
+    const relayId = encodeNostrRelayRef(crypto.randomUUID(), 'deadbeef'.repeat(8));
+    let locked = false;
+    let signed = false;
+    const get = storage.get.bind(storage);
+    t.mock.method(storage, 'get', async (key: string) => {
+      const value = await get(key);
+      if (key.startsWith('smirk_nostr_vault_v1_')) locked = true;
+      return value;
+    });
+    t.mock.method(NostrGiftwrapChannel.prototype, action, async () => { signed = true; });
+    const params = {
+      relayId, userId: 'test-user', mnemonic: generateMnemonicPhrase(),
+      assertSession: () => { if (locked) throw new Error('Wallet locked during identity lookup'); },
+    };
+    const result = action === 'cancel'
+      ? await cancelInboxItem(params)
+      : await respondToInboxItem({ ...params, s2Armored: 'test-response' });
+    assert.match(result.error ?? '', /locked during identity lookup/);
+    assert.equal(signed, false);
+  });
+}

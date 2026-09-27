@@ -21,10 +21,8 @@ import type { Reporter, TestCase, TestResult, FullResult } from '@playwright/tes
  * These are environment-conditional by design, not by neglect.
  */
 /**
- * NOTE: this reporter only runs when it is REGISTERED. Passing `--reporter=line`
- * replaces the config's reporter list and disables the guard entirely, so the
- * run reports skips and exits 0. Prefer `npm test`; if you override the
- * reporter, include `./skip-guard-reporter.ts` explicitly.
+ * NOTE: this reporter only runs when it is REGISTERED. Passing `--reporter` overrides are refused by preflight. The private reporter and
+ * this skip guard are both required; generic reporters can disclose secrets.
  */
 const EXPECTED_SKIPS: { match: string; reason: string }[] = [
   {
@@ -49,7 +47,7 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
   },
   {
     match: 'marketing-shots.spec',
-    reason: 'produces store deliverables, not assertions; opt in with MARKETING_SHOTS=1',
+    reason: 'legacy capture is closed; wallet secret flows must not produce store artifacts',
   },
 ];
 

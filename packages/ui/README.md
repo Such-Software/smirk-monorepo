@@ -1,12 +1,11 @@
 # @smirk/ui
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Shared Preact components for the Smirk Wallet UI.
 
-This package answers one question:
-
-> What Preact components render the wallet's chrome and
-> happy-path flows, identically across browser extension, desktop
-> (Tauri), and mobile (Capacitor)?
+The extension and desktop share wallet components and themes. Mobile is a
+future consumer of the same interfaces.
 
 Screen components are presentational: they take props and emit
 callbacks. The shell components (`AppShell`, `BottomNav`) read routing
@@ -91,3 +90,10 @@ npm test --workspace @smirk/ui
 ## License
 
 MIT OR Apache-2.0.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

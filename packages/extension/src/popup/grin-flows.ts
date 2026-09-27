@@ -33,6 +33,7 @@
  * fund loss). Every flow that mints a new output advances the counter.
  */
 
+import { grinExtendedKey, grinLegacyExtendedKey, grinSlatepackSecret, grinSlatepackAddress, type GrinKeySource } from './session-signing';
 import {
   chainProviders,
   GrinPendingOverlay,
@@ -117,8 +118,8 @@ function parseGrinCanonicalKeyId(
  * Requires wasm to already be initialized (call `ensureWasmInit()`
  * upstream).
  */
-export function canonicalGrinSlatepackAddress(mnemonic: string): string {
-  return wasmGrin.slatepackAddress(mnemonic, 0, 'mainnet');
+export function canonicalGrinSlatepackAddress(mnemonic: GrinKeySource): string {
+  return grinSlatepackAddress(mnemonic);
 }
 
 /**
@@ -127,9 +128,9 @@ export function canonicalGrinSlatepackAddress(mnemonic: string): string {
  * the backend recognize this wallet's outputs without spend authority. Requires
  * wasm to be initialized.
  */
-export function grinRewindHashFromMnemonic(mnemonic: string): string {
+export function grinRewindHashFromMnemonic(mnemonic: GrinKeySource): string {
   const extKeyHex = (
-    JSON.parse(wasmGrin.deriveExtendedKey(mnemonic)) as { extended_private_key_hex: string }
+    JSON.parse(grinExtendedKey(mnemonic)) as { extended_private_key_hex: string }
   ).extended_private_key_hex;
   return wasmGrin.rewindHash(extKeyHex);
 }
@@ -178,7 +179,7 @@ function augmentDearmorError(e: unknown, armored: string): Error {
 /** Dependencies for a scan-based spendable resolution. */
 export interface GrinScanDeps {
   /** Mnemonic: derives ext keys for `identifyOutput`. Never logged. */
-  mnemonic: string;
+  mnemonic: GrinKeySource;
   /** View-only credential for the scan (see {@link grinRewindHashFromMnemonic}). */
   rewindHash: string;
   /** Client pending overlay: excludes just-spent inputs + owns the child index. */
@@ -254,9 +255,9 @@ export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpen
   });
 
   const extKeyHex = (
-    JSON.parse(wasmGrin.deriveExtendedKey(deps.mnemonic)) as { extended_private_key_hex: string }
+    JSON.parse(grinExtendedKey(deps.mnemonic)) as { extended_private_key_hex: string }
   ).extended_private_key_hex;
-  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(deps.mnemonic);
+  const legacyExtKeyHex = grinLegacyExtendedKey(deps.mnemonic);
 
   const persisted = await deps.overlay.nextChildIndex();
   const maxN = persisted + GRIN_IDENTIFY_SEARCH_SPAN;
@@ -599,7 +600,9 @@ export interface GrinSendInitResult {
  * build the tx.
  */
 export async function startGrinSend(args: {
-  mnemonic: string;
+  /** Bound by production callers to the exact unlocked session. */
+  assertSession?: () => void;
+  mnemonic: GrinKeySource;
   senderSlatepackAddress: string;
   /** Recipient slatepack address (encrypts the S1 to them). Omit for manual
    *  plain-armored delivery to a recipient whose address isn't known up front. */
@@ -619,10 +622,10 @@ export async function startGrinSend(args: {
   //    orchestrator tries v3 first per input, falls back to legacy on
   //    commitment mismatch; lets v0.3 spend outputs created by pre-2026-05
   //    v0.2.x wallets. Sunset 2026-11-15.
-  const extKeyJson = wasmGrin.deriveExtendedKey(args.mnemonic);
+  const extKeyJson = grinExtendedKey(args.mnemonic);
   const extKey = JSON.parse(extKeyJson) as { extended_private_key_hex: string };
   const extKeyHex = extKey.extended_private_key_hex;
-  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(args.mnemonic);
+  const legacyExtKeyHex = grinLegacyExtendedKey(args.mnemonic);
 
   // 2. Pick inputs via greedy + fee iteration. Grin fee depends on input
   //    count, so loop until stable.
@@ -683,6 +686,7 @@ export async function startGrinSend(args: {
   const changeIndex = await args.overlay.reserveNextChildIndex();
 
   // 4. Build S1 slate via wasm orchestrator.
+  args.assertSession?.();
   const sendResult: GrinCreateSendTxResult = wasmGrin.createSendTransaction({
     extended_private_key_hex: extKeyHex,
     legacy_extended_private_key_hex: legacyExtKeyHex,
@@ -743,6 +747,7 @@ export async function startGrinSend(args: {
   };
   if (recipient.pubkeyHex || recipient.userId) {
     const channel = selectSendChannel(recipient, args.channels);
+    args.assertSession?.();
     await channel.deliver({
       slateId: sendResult.slate_id,
       slatepack: armored,
@@ -799,9 +804,11 @@ export interface GrinSendBroadcastResult {
  * `s2` is either an armored slatepack (clipboard/relay) or raw slate JSON.
  */
 export async function processGrinS2(args: {
+  /** Bound by production callers to the exact unlocked session. */
+  assertSession?: () => void;
   /** Sender's mnemonic: derives the slatepack secret for decrypting an
    *  S2 the receiver encrypted to us. */
-  mnemonic: string;
+  mnemonic: GrinKeySource;
   s2: string;
   sender_context_json: string;
   sender_inputs: GrinUnspentOutput[];
@@ -811,11 +818,12 @@ export async function processGrinS2(args: {
   channels: SlatepackChannels;
   overlay: GrinPendingOverlay;
 }): Promise<GrinSendBroadcastResult> {
-  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  const secretKeyHex = grinSlatepackSecret(args.mnemonic);
   const s2_slate_json = looksArmored(args.s2)
     ? dearmorSlate(args.s2, secretKeyHex)
     : args.s2;
 
+  args.assertSession?.();
   const finalize: GrinFinalizeSendResult = wasmGrin.finalizeSendSlate({
     s2_slate_json,
     sender_context_json: args.sender_context_json,
@@ -827,6 +835,7 @@ export async function processGrinS2(args: {
   // /v2/foreign push_transaction expects a JSON Transaction object, NOT the
   // binary wire-format hex; tx_json matches grin_core's Transaction serde shape.
   const slateId = JSON.parse(finalize.slate_json).id as string;
+  args.assertSession?.();
   const broadcastRes = await chainProviders.grin().broadcast({
     tx: finalize.tx_json as object,
   });
@@ -871,7 +880,12 @@ export async function processGrinS2(args: {
       // Pass the finalized kernel excess as the tx reference: the backend relay's
       // relay/finalize rejects an empty tx_hash (400), so an empty string here
       // silently failed every same-instance Grin settle. The Nostr channel ignores it.
-      await channel.settle(slateId, cp.ref, finalize.kernel_excess_hex).catch(() => undefined);
+      try {
+        args.assertSession?.();
+        await channel.settle(slateId, cp.ref, finalize.kernel_excess_hex);
+      } catch {
+        // The transaction is already broadcast; a locked session must not sign a notice.
+      }
     }
   }
 
@@ -884,6 +898,7 @@ export async function cancelGrinSend(args: {
   relay_id?: string;
   channels: SlatepackChannels;
   overlay: GrinPendingOverlay;
+  beforeCancel?: () => Promise<void>;
 }): Promise<void> {
   // Guard: once the tx has broadcast, its inputs are genuinely spent in-flight;
   // freeing them here would let a later send re-select them and build a
@@ -911,6 +926,7 @@ export async function cancelGrinSend(args: {
     const cp = decodeCounterparty(args.relay_id);
     if (cp) {
       const channel = cp.kind === 'nostr' ? args.channels.nostr : args.channels.backend;
+      await args.beforeCancel?.();
       await channel.cancel(args.slate_id, cp.ref).catch(() => undefined);
     }
   }
@@ -931,7 +947,9 @@ export interface GrinInvoiceInitResult {
 }
 
 export async function startGrinInvoice(args: {
-  mnemonic: string;
+  /** Bound by production callers to the exact unlocked session. */
+  assertSession?: () => void;
+  mnemonic: GrinKeySource;
   receiverSlatepackAddress: string;
   amount: number;
   /** Receiver picks the fee in the invoice; sender accepts or rejects. */
@@ -939,7 +957,7 @@ export async function startGrinInvoice(args: {
   resolver: GrinSendInputResolver;
   overlay: GrinPendingOverlay;
 }): Promise<GrinInvoiceInitResult> {
-  const extKey = JSON.parse(wasmGrin.deriveExtendedKey(args.mnemonic)) as {
+  const extKey = JSON.parse(grinExtendedKey(args.mnemonic)) as {
     extended_private_key_hex: string;
   };
   await args.resolver.fetchSpendable();
@@ -954,6 +972,7 @@ export async function startGrinInvoice(args: {
   // payer returns I2 and we finalize + broadcast (processGrinI2).
   const outputIndex = await args.overlay.reserveNextChildIndex();
 
+  args.assertSession?.();
   const invoice: GrinCreateInvoiceResult = wasmGrin.createInvoice({
     extended_private_key_hex: extKey.extended_private_key_hex,
     amount: args.amount,
@@ -988,13 +1007,15 @@ export interface GrinInvoiceSignedResult {
 
 /** Payer signs an invoice (I1 → I2). */
 export async function signGrinInvoice(args: {
-  mnemonic: string;
+  /** Bound by production callers to the exact unlocked session. */
+  assertSession?: () => void;
+  mnemonic: GrinKeySource;
   payerSlatepackAddress: string;
   i1Armored: string;
   resolver: GrinSendInputResolver;
   overlay: GrinPendingOverlay;
 }): Promise<GrinInvoiceSignedResult> {
-  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  const secretKeyHex = grinSlatepackSecret(args.mnemonic);
   // Pull the invoice originator's address out of the envelope so we can encrypt
   // I2 back to them.
   const { slate_json: i1_slate_json, sender: i1Sender } = dearmorSlateAndSender(
@@ -1011,10 +1032,10 @@ export async function signGrinInvoice(args: {
     throw new Error(`expected I1 slate, got ${parsed.sta}`);
   }
 
-  const extKey = JSON.parse(wasmGrin.deriveExtendedKey(args.mnemonic)) as {
+  const extKey = JSON.parse(grinExtendedKey(args.mnemonic)) as {
     extended_private_key_hex: string;
   };
-  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(args.mnemonic);
+  const legacyExtKeyHex = grinLegacyExtendedKey(args.mnemonic);
   const spendable = await args.resolver.fetchSpendable();
 
   // Pick inputs covering amount + fee declared in the invoice.
@@ -1039,6 +1060,7 @@ export async function signGrinInvoice(args: {
   // A no-change invoice payment simply skips the reserved index (harmless).
   const changeIndex = await args.overlay.reserveNextChildIndex();
 
+  args.assertSession?.();
   const signed: GrinSignInvoiceResult = wasmGrin.signInvoice({
     extended_private_key_hex: extKey.extended_private_key_hex,
     legacy_extended_private_key_hex: legacyExtKeyHex,
@@ -1103,15 +1125,17 @@ export async function signGrinInvoice(args: {
  * receiver context we created at invoice time.
  */
 export async function processGrinI2(args: {
+  /** Bound by production callers to the exact unlocked session. */
+  assertSession?: () => void;
   /** Receiver's mnemonic: derives the slatepack secret for
    *  decrypting an I2 the payer encrypted to us. */
-  mnemonic: string;
+  mnemonic: GrinKeySource;
   i2: string;
   receiver_context_json: string;
   /** Client pending overlay: records the incoming after broadcast. */
   overlay: GrinPendingOverlay;
 }): Promise<GrinSendBroadcastResult> {
-  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  const secretKeyHex = grinSlatepackSecret(args.mnemonic);
   const i2_slate_json = looksArmored(args.i2)
     ? dearmorSlate(args.i2, secretKeyHex)
     : args.i2;
@@ -1126,12 +1150,14 @@ export async function processGrinI2(args: {
       commitment_hex: c.c,
       is_coinbase: (c.f ?? 0) === 1,
     }));
+  args.assertSession?.();
   const finalize: GrinFinalizeInvoiceResult = wasmGrin.finalizeInvoice({
     i2_slate_json,
     receiver_context_json: args.receiver_context_json,
     sender_inputs,
   });
   const slateId = JSON.parse(finalize.slate_json).id as string;
+  args.assertSession?.();
   const broadcastRes = await chainProviders.grin().broadcast({
     tx: finalize.tx_json as object,
   });
@@ -1197,7 +1223,9 @@ export interface GrinSignS1Result {
  * index and show it as pending until scan confirms it on chain.
  */
 export async function signIncomingGrinSlate(args: {
-  mnemonic: string;
+  /** Bound by production callers to the exact unlocked session. */
+  assertSession?: () => void;
+  mnemonic: GrinKeySource;
   receiverSlatepackAddress: string;
   s1Armored: string;
   resolver: GrinSendInputResolver;
@@ -1206,7 +1234,7 @@ export async function signIncomingGrinSlate(args: {
   // Sanity-check that the current mnemonic actually derives the slatepack
   // address the wallet claims: a mismatch means the wallet was recreated since
   // this slatepack was sent (age decrypt would fail with "No matching keys").
-  const derivedAddress = wasmGrin.slatepackAddress(args.mnemonic, 0, 'mainnet');
+  const derivedAddress = grinSlatepackAddress(args.mnemonic);
   if (derivedAddress !== args.receiverSlatepackAddress) {
     throw new Error(
       `wallet/address mismatch — your current mnemonic derives ${derivedAddress.slice(0, 24)}… ` +
@@ -1215,7 +1243,7 @@ export async function signIncomingGrinSlate(args: {
         `Cancel this row and ask the sender to re-send to your current address.`,
     );
   }
-  const secretKeyHex = wasmGrin.slatepackAddressSecret(args.mnemonic, 0);
+  const secretKeyHex = grinSlatepackSecret(args.mnemonic);
   const { slate_json: s1_slate_json, sender: s1Sender } = dearmorSlateAndSender(
     args.s1Armored,
     secretKeyHex,
@@ -1225,7 +1253,7 @@ export async function signIncomingGrinSlate(args: {
     throw new Error(`expected S1 slate, got ${parsed.sta}`);
   }
 
-  const extKey = JSON.parse(wasmGrin.deriveExtendedKey(args.mnemonic)) as {
+  const extKey = JSON.parse(grinExtendedKey(args.mnemonic)) as {
     extended_private_key_hex: string;
   };
   await args.resolver.fetchSpendable();
@@ -1235,6 +1263,7 @@ export async function signIncomingGrinSlate(args: {
   // commitment → fund loss).
   const outputIndex = await args.overlay.reserveNextChildIndex();
 
+  args.assertSession?.();
   const signed: GrinSignIncomingSendResult = wasmGrin.signIncomingSendSlate({
     extended_private_key_hex: extKey.extended_private_key_hex,
     s1_slate_json,

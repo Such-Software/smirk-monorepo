@@ -79,7 +79,7 @@ function nextFreeAccount(vault: IdentityVault): number {
 
 /** A fresh vault seeded with the wallet's default (account-0) derived identity,
  *  set active. Idempotent entry point for a wallet that has none yet. */
-export function initIdentityVault(mnemonic: string): IdentityVault {
+export function initIdentityVault(mnemonic: NostrKeySource): IdentityVault {
   const main = deriveNostrIdentity(mnemonic, 0);
   return {
     version: 1,
@@ -105,7 +105,7 @@ export function activeStored(vault: IdentityVault): StoredIdentity | undefined {
 export function resolveIdentity(
   vault: IdentityVault,
   pubkeyHex: string,
-  mnemonic: string,
+  mnemonic: NostrKeySource,
   decrypt: DecryptSecret,
 ): NostrIdentity {
   const stored = vault.identities.find((i) => i.pubkeyHex === pubkeyHex);
@@ -121,7 +121,7 @@ export function resolveIdentity(
 /** Resolve the ACTIVE identity: the one posting/DM/login should use. */
 export function resolveActiveIdentity(
   vault: IdentityVault,
-  mnemonic: string,
+  mnemonic: NostrKeySource,
   decrypt: DecryptSecret,
 ): NostrIdentity {
   return resolveIdentity(vault, vault.active, mnemonic, decrypt);
@@ -130,7 +130,7 @@ export function resolveActiveIdentity(
 /** Add the next seed-derived identity (recoverable from the mnemonic). */
 export function addDerivedIdentity(
   vault: IdentityVault,
-  mnemonic: string,
+  mnemonic: NostrKeySource,
   label?: string,
 ): { vault: IdentityVault; identity: StoredIdentity } {
   const id = deriveNostrIdentity(mnemonic, nextFreeAccount(vault));
@@ -309,3 +309,4 @@ export function mergeVault(base: IdentityVault, incoming: IdentityVault): Identi
     : base.active;
   return { version: 1, active, identities, secrets };
 }
+import type { NostrKeySource } from './session-roots';

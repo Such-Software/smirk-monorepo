@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# make-updater-manifest.sh: build the `latest.json` the desktop auto-updater reads.
+# make-updater-manifest.sh: prepare a signed-payload manifest for the desktop updater.
 #
 # tauri.conf.json sets `updater.active` and pins a minisign public key, and points
 # every shipped desktop build at:
 #
 #   https://github.com/Such-Software/smirk-monorepo/releases/latest/download/latest.json
 #
-# Nothing produced that file. An updater that is active but has no manifest is not
-# a dormant feature: every client checks on launch, gets a 404, and the release
-# looks like it shipped an updater when it shipped a broken one. This script
-# closes that gap, and refuses to emit a manifest it cannot stand behind.
+# The plugin and its public key are configured, but the current client has no
+# automatic check or install call. Users update by downloading and reinstalling.
+# Preparing a manifest does not activate automatic updates or publish a release.
 #
 # The signatures are minisign, made by the Tauri bundler from
 # TAURI_SIGNING_PRIVATE_KEY, and are what the client verifies before installing.
 # They are a separate mechanism from the detached PGP signatures sign-release.sh
-# makes: PGP proves who published a download, minisign is what lets the running
-# app trust an update it fetched on its own. A release needs both.
+# makes: PGP authenticates the public release artifacts; minisign authenticates
+# updater payloads when a client requests them.
 #
 # Usage:
 #   scripts/make-updater-manifest.sh 0.3.0 --bundle-dir ~/smirk-desktop-v0.3.0

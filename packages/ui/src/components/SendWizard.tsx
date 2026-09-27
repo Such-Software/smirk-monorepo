@@ -35,6 +35,8 @@ import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
 import { formatAmount, formatAmountWithAsset } from '../format';
 import { copyText } from '../clipboard';
+import { prepareSendDraft } from './send-draft';
+import { UsdEstimate } from './UsdEstimate';
 
 export type FeeTier = 'fast' | 'normal' | 'slow' | 'custom';
 
@@ -43,6 +45,8 @@ export interface SendFields extends Record<string, unknown> {
   toAddress?: string;
   /** Amount as user-entered string (decimal). Empty when in sweep mode. */
   amountText?: string;
+  /** Recipient amount estimated at Compose, including the fee deduction for Max. */
+  previewAmountAtomic?: string;
   /** Selected fee tier (radio selection on Compose). */
   feeTier?: FeeTier;
   /**
@@ -180,6 +184,9 @@ export interface SendWizardProps {
    * units. Synchronous: popup-side pulls from session state.
    */
   resolveBalance: (assetId: string) => bigint;
+
+  /** Latest available USD price. Missing prices remain unavailable, never zero. */
+  resolveUsdPrice?: (assetId: string) => number | null;
 
   /**
    * Fetch live fee tiers (sat/vB) for `assetId`. Called by Compose on
@@ -324,45 +331,24 @@ export function SendWizard(props: SendWizardProps) {
   const wizard = useWizard<SendFields>(WIZARD_ID, {});
   const fields = wizard.fields;
 
-  // The mount effect below must read the wizard's CURRENT state, not the
-  // first-render snapshot. `fields` and `step` come from session state that is
-  // still hydrating on the first render, so a closure over them reports an
-  // empty, step-0 wizard even when a real draft is persisted. This ref always
-  // holds the latest.
-  const liveRef = useRef<{ step: number; fields: Partial<SendFields>; active: boolean }>({
-    step: 0,
-    fields: {},
-    active: false,
-  });
-  liveRef.current = { step: wizard.step, fields, active: wizard.active };
+  const [ready, setReady] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
 
-  // Start the wizard once on mount. eslint-disable-next-line react-hooks/exhaustive-deps
+  // Initialize from persisted state in one serialized write. Awaiting a store
+  // write does not guarantee that Preact has rerendered a snapshot ref.
   useEffect(() => {
-    void (async () => {
-      // A completed send parks the wizard past the last step, and that state is
-      // PERSISTED. Opening Send again therefore replayed the previous
-      // transaction's receipt and silently ignored the coin just chosen, which
-      // is why preselect looked broken even once it worked. A finished wizard
-      // is finished business: clear it before starting the next send.
-      if (liveRef.current.active && liveRef.current.step >= TOTAL_STEPS) {
-        await wizard.cancel();
-      }
-      if (!liveRef.current.active) await wizard.start();
-
-      // Preselect the coin when we arrived from its detail screen, and move
-      // PAST the chooser. Seeding the field alone still left you staring at the
-      // asset list being asked which coin you meant, having just said.
-      //
-      // A draft already in progress keeps its own target: arriving from some
-      // other coin's screen must not silently retarget a half-written send.
-      if (props.initialAssetId && !liveRef.current.fields.fromAssetId) {
-        await wizard.setField('fromAssetId', props.initialAssetId);
-        await wizard.goToStep(1);
-      }
-    })();
+    let alive = true;
+    const selected = props.initialAssetId && props.assetIds.includes(props.initialAssetId)
+      ? props.initialAssetId : undefined;
+    void wizard.start((current) => prepareSendDraft(current, selected)).then(
+      () => { if (alive) setReady(true); },
+      () => { if (alive) setOpenError('Could not open the saved send. Close this screen and try again.'); },
+    );
+    return () => { alive = false; };
   }, []);
 
-  if (!wizard.active) {
+  if (openError) return <div><FieldError>{openError}</FieldError><Button onClick={props.onExit}>Close</Button></div>;
+  if (!ready || !wizard.active) {
     return <FullPageStatus>Loading…</FullPageStatus>;
   }
 
@@ -384,7 +370,10 @@ export function SendWizard(props: SendWizardProps) {
         step={step}
         totalSteps={TOTAL_STEPS}
         onCancel={() => void exit(wizard, props.onExit)}
-        {...(step > 0 ? { onBack: () => void wizard.back() } : {})}
+        {...(step > 0 ? { onBack: () => {
+          if (step === 1 && props.initialAssetId === fields.fromAssetId) void exit(wizard, props.onExit);
+          else void wizard.back();
+        } } : {})}
       />
 
       {step === 0 && (
@@ -422,6 +411,7 @@ export function SendWizard(props: SendWizardProps) {
           parseAmount={props.parseAmount}
           resolveBalance={props.resolveBalance}
           resolveFeeRates={props.resolveFeeRates}
+          {...(props.resolveUsdPrice ? { resolveUsdPrice: props.resolveUsdPrice } : {})}
           {...(props.resolveSendFeeEstimate
             ? { resolveSendFeeEstimate: props.resolveSendFeeEstimate }
             : {})}
@@ -442,6 +432,7 @@ export function SendWizard(props: SendWizardProps) {
           onContinue={async (state) => {
             await wizard.patchFields({
               amountText: state.amountText,
+              ...(state.previewAmountAtomic !== null ? { previewAmountAtomic: state.previewAmountAtomic.toString() } : {}),
               feeTier: state.tier,
               ...(state.customRate !== undefined ? { customFeeRate: state.customRate } : {}),
               sweep: state.sweep,
@@ -464,8 +455,10 @@ export function SendWizard(props: SendWizardProps) {
             feeTier={fields.feeTier}
             customFeeRate={fields.customFeeRate}
             sweep={fields.sweep ?? false}
+            {...(fields.previewAmountAtomic ? { previewAmountAtomic: fields.previewAmountAtomic } : {})}
             parseAmount={props.parseAmount}
             resolveFeeRates={props.resolveFeeRates}
+            {...(props.resolveUsdPrice ? { resolveUsdPrice: props.resolveUsdPrice } : {})}
             {...(props.resolveSendFeeEstimate
               ? { resolveSendFeeEstimate: props.resolveSendFeeEstimate }
               : {})}
@@ -501,6 +494,7 @@ export function SendWizard(props: SendWizardProps) {
             toAddress={fields.toAddress}
             amountText={fields.amountText}
             parseAmount={props.parseAmount}
+            {...(props.resolveUsdPrice ? { resolveUsdPrice: props.resolveUsdPrice } : {})}
             {...(fields.grinArmoredOutgoing ? { armoredOutgoing: fields.grinArmoredOutgoing } : {})}
             {...(fields.grinSenderContextJson ? { senderContextJson: fields.grinSenderContextJson } : {})}
             {...(fields.grinSlateId ? { slateId: fields.grinSlateId } : {})}
@@ -842,6 +836,7 @@ function Compose({
   initialSweep,
   parseAmount,
   resolveBalance,
+  resolveUsdPrice,
   resolveFeeRates,
   resolveSendFeeEstimate,
   resolveSweepInputCount,
@@ -856,6 +851,7 @@ function Compose({
   initialSweep: boolean;
   parseAmount: (assetId: string, text: string) => bigint | null;
   resolveBalance: (assetId: string) => bigint;
+  resolveUsdPrice?: (assetId: string) => number | null;
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
   resolveSendFeeEstimate?: (
     assetId: string,
@@ -876,6 +872,7 @@ function Compose({
   }) => void;
   onContinue: (state: {
     amountText: string;
+    previewAmountAtomic: bigint | null;
     tier: FeeTier;
     customRate: number | undefined;
     sweep: boolean;
@@ -1174,6 +1171,7 @@ function Compose({
         )}
       </div>
 
+      <UsdEstimate amount={effectiveAtomic} assetId={assetId} price={resolveUsdPrice?.(assetId)} testid="send-amount-usd" />
       {validationError && <FieldError>{validationError}</FieldError>}
 
       {/* Sweep with an unknown input count: the number above is priced for a
@@ -1355,6 +1353,7 @@ function Compose({
           onClick={() =>
             onContinue({
               amountText,
+              previewAmountAtomic: effectiveAtomic,
               tier,
               // Floored, so Review and the signer agree with what was shown here.
               customRate:
@@ -1426,8 +1425,10 @@ function Review({
   feeTier,
   customFeeRate,
   sweep,
+  previewAmountAtomic,
   parseAmount,
   resolveFeeRates,
+  resolveUsdPrice,
   resolveSendFeeEstimate,
   onSubmit,
 }: {
@@ -1437,8 +1438,10 @@ function Review({
   feeTier: FeeTier;
   customFeeRate: number | undefined;
   sweep: boolean;
+  previewAmountAtomic?: string;
   parseAmount: (assetId: string, text: string) => bigint | null;
   resolveFeeRates: (assetId: string) => Promise<FeeTiers>;
+  resolveUsdPrice?: (assetId: string) => number | null;
   resolveSendFeeEstimate?: (
     assetId: string,
     options?: { sweep?: boolean },
@@ -1531,6 +1534,9 @@ function Review({
   // In sweep mode the send-handler computes it from balance − fee on
   // its side; here we just pass 0 since it's ignored. (Caller knows.)
   const amountAtomic = sweep ? 0n : parseAmount(assetId, amountText);
+  const displayedAmount = sweep
+    ? previewAmountAtomic && /^\d+$/.test(previewAmountAtomic) ? BigInt(previewAmountAtomic) : null
+    : amountAtomic;
 
   const canSend =
     rate !== null &&
@@ -1570,6 +1576,8 @@ function Review({
         value={toAddress || '— slatepack only —'}
         mono
       />
+      <UsdEstimate amount={displayedAmount} assetId={assetId} price={resolveUsdPrice?.(assetId)} testid="send-review-usd" />
+      {sweep && displayedAmount !== null && <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)' }}>Max estimate; the final network fee may change.</div>}
       {usesFeePicker ? (
         <ReviewRow
           label="Fee tier"
@@ -1618,6 +1626,7 @@ interface GrinExchangeProps {
   toAddress: string;
   amountText: string;
   parseAmount: (assetId: string, text: string) => bigint | null;
+  resolveUsdPrice?: (assetId: string) => number | null;
 
   armoredOutgoing?: string;
   senderContextJson?: string;
@@ -1766,6 +1775,7 @@ function GrinExchange(props: GrinExchangeProps) {
   return (
     <div>
       <StepTitle>Share slatepack</StepTitle>
+      <UsdEstimate amount={parsedAmount} assetId={props.assetId} price={props.resolveUsdPrice?.(props.assetId)} testid="send-review-usd" />
 
       {/* Fee/total summary: read-only confirmation that the built
           S1 matches what the user intended. Renders only once we

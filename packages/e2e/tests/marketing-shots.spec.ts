@@ -1,40 +1,14 @@
-/**
- * Marketing screenshots: capture the REAL wallet, at store resolution.
- *
- * Store listings are the first thing anyone sees, and mocked-up wallet UI ages
- * badly and lies. These drive the actual extension against a real backend with a
- * funded wallet, so what ships in the listing is what the product does. The
- * balances are genuine (small test funds on the smoke wallet), which is a
- * deliberate choice: nothing here is fabricated.
- *
- * Raw output only. This writes unadorned PNGs; `scripts/make-store-shots.mjs`
- * composites them into the per-store canvases with headlines. Keeping capture
- * and composition separate means re-wording a caption never means re-driving the
- * browser, and the raw frames stay reusable for docs and the site.
- *
- * Run it TWICE, once per surface shape. A 380x600 popup is aspect 0.63 and an
- * iPhone 6.7" canvas is 0.46, so a popup frame cannot fill a mobile listing at
- * any scale; it leaves a dead band that no captioning hides. So the mobile
- * stores get a phone-shaped pass:
- *
- *   MARKETING_SHOTS=1 npx playwright test tests/marketing-shots.spec.ts
- *   MARKETING_SHOTS=1 MARKETING_VARIANT=phone npx playwright test tests/marketing-shots.spec.ts
- *
- * Captured at deviceScaleFactor 3, so every target downscales rather than
- * upscaling into softness.
- *
- * Gated so it never runs in the normal suite: it is slow, it needs a funded
- * wallet, and its output is a deliverable rather than an assertion.
- */
+/** Historical funded-wallet capture remains closed. A new demo fixture must
+ * use disposable data and exclude every secret surface before capture is reviewed. */
 
-import { test, expect, MARKETING_VARIANT } from '../fixtures/extension.js';
+import { test, expect, MARKETING_VARIANT, MARKETING_SHOTS } from '../fixtures/extension.js';
 import type { Page } from '@playwright/test';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
-const ENABLED = process.env.MARKETING_SHOTS === '1';
+const ENABLED = MARKETING_SHOTS;
 
 /**
  * `MARKETING_CLAIM_HANDLE=<name>` claims a Smirk handle on the capture wallet
@@ -57,7 +31,7 @@ const OUT =
   process.env.MARKETING_OUT ??
   join(process.env.HOME ?? '/tmp', 'Build', 'smirk-marketing', 'raw', MARKETING_VARIANT);
 
-test.skip(!ENABLED, 'marketing capture: set MARKETING_SHOTS=1 (produces deliverables, not assertions)');
+test.skip(!ENABLED, 'wallet capture is closed pending a separate secret-free demo fixture');
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
 
 test.setTimeout(10 * 60_000);
