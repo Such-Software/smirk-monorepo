@@ -190,7 +190,9 @@ artifacts are failures, even when the workflow says it succeeded. Collection
 reads the exact wrapper and source-parent trees from Gitea and compares every
 artifact receipt to that binding. `source_commit` in the receipt names the
 actual checked-out build commit; `approved_source_commit` names canonical source.
-Do not substitute one identity for the other. No release-tag
+The matching Fleet dispatch receipt establishes canonical landing: the source
+parent must equal its reviewed GitHub main pin. A tree-identical wrapper alone
+does not prove that landing. Do not substitute one identity for the other. No release-tag
 fallback substitutes another run's output.
 
 The signer requires all platforms from the expected commit and source tree. It
