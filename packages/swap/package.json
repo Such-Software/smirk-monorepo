@@ -1,7 +1,7 @@
 {
   "name": "@smirk/swap",
   "version": "0.3.0",
-  "description": "Swap orchestration — common Swap interface plus THORChain (v0.3) and native adaptor-sig (v0.4+) implementations. UI talks to a Swap; the Swap decides whether to drive an aggregator or a peer-to-peer flow.",
+  "description": "Swap orchestration with a Trocador quote, trade and status implementation. THORChain and native atomic swaps remain unimplemented.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

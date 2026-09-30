@@ -18,6 +18,7 @@ import { bech32 } from '@scure/base';
 import { HDKey } from '@scure/bip32';
 import { generateSecretKey } from 'nostr-tools/pure';
 import { deriveNostrKeyFromSeed, mnemonicToSeed } from '../hd';
+import { deriveScopedNostrNode, type NostrKeySource } from './session-roots';
 
 /** Sentinel `account` for a NON-seed-derived identity (imported nsec or a random
  *  burner). The identity store tracks the real source; this just flags "not
@@ -60,7 +61,19 @@ export function decodeNpub(npub: string): Uint8Array {
  * Derive the Nostr identity at a hardened account (default 0). Rotation is just
  * `deriveNostrIdentity(mnemonic, account + 1)`.
  */
-export function deriveNostrIdentity(mnemonic: string, account = 0, passphrase = ''): NostrIdentity {
+export function deriveNostrIdentity(mnemonic: NostrKeySource, account = 0, passphrase = ''): NostrIdentity {
+  if (typeof mnemonic !== 'string') {
+    if (!Number.isInteger(account) || account < 0 || account >= 0x80000000) {
+      throw new Error('Nostr account must be a non-negative hardened child index.');
+    }
+    const node = deriveScopedNostrNode(mnemonic.identityRoot, 1237, `m/${account}'/0/0`);
+    try {
+      const identity = nostrIdentityFromPrivkey(node.privateKey!.slice());
+      return { ...identity, account };
+    } finally {
+      node.wipePrivateData();
+    }
+  }
   // Single derivation path: `deriveNostrKeyFromSeed` (in ../hd) validates the
   // account index and derives m/44'/1237'/<account>'/0/0. Keeping it there
   // avoids an import cycle (hd.ts must not import identity.ts) and guarantees
@@ -143,16 +156,21 @@ export function nostrOriginPath(origin: string): string {
  * {@link NON_DERIVED_ACCOUNT} (it is not a NIP-06 rotation account).
  */
 export function deriveNostrIdentityForOrigin(
-  mnemonic: string,
+  mnemonic: NostrKeySource,
   origin: string,
   passphrase = '',
 ): NostrIdentity {
   if (!origin) throw new Error('nostr-origin: origin is required');
-  const node = HDKey.fromMasterSeed(mnemonicToSeed(mnemonic, passphrase)).derive(
-    nostrOriginPath(origin),
-  );
+  const path = nostrOriginPath(origin);
+  const node = typeof mnemonic === 'string'
+    ? HDKey.fromMasterSeed(mnemonicToSeed(mnemonic, passphrase)).derive(path)
+    : deriveScopedNostrNode(mnemonic.originRoot, NOSTR_ORIGIN_SEGMENT, 'm/' + path.split('/').slice(3).join('/'));
   if (!node.privateKey) throw new Error('nostr-origin: failed to derive key');
-  return nostrIdentityFromPrivkey(node.privateKey.slice(0, 32));
+  try {
+    return nostrIdentityFromPrivkey(node.privateKey.slice(0, 32));
+  } finally {
+    node.wipePrivateData();
+  }
 }
 
 /**

@@ -35,6 +35,7 @@ import {
   type Route,
   type RouteController,
   type Tab,
+  type WizardState,
   Wizard,
   tabOf,
 } from '@smirk/core';
@@ -175,7 +176,7 @@ export interface UseWizardApi<TFields extends Record<string, unknown>> {
   /** Collected fields so far. Empty object if inactive. */
   fields: Partial<TFields>;
 
-  start: () => Promise<void>;
+  start: (prepare?: (current: WizardState) => WizardState) => Promise<void>;
   cancel: () => Promise<void>;
   next: () => Promise<void>;
   back: () => Promise<void>;
@@ -213,7 +214,7 @@ export function useWizard<TFields extends Record<string, unknown>>(
       active: w !== undefined,
       step: w?.step ?? 0,
       fields: (w?.fields as Partial<TFields>) ?? {},
-      start: () => wizard.start().then(() => undefined),
+      start: (prepare) => wizard.start(prepare).then(() => undefined),
       cancel: () => wizard.cancel(),
       next: () => wizard.next().then(() => undefined),
       back: () => wizard.back().then(() => undefined),

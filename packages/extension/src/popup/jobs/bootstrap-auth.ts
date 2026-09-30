@@ -33,6 +33,7 @@ export interface BootstrapJobResult {
     userId: string;
     username?: string;
     isNew: boolean;
+    restoreState?: 'new' | 'existing';
     xmrStartHeight?: number;
     wowStartHeight?: number;
   };
@@ -92,7 +93,10 @@ export async function runBootstrapInBackground(
       (a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0),
     )[0];
   if (reusableDone?.result) {
-    return reusableDone.result;
+    // Reuse authentication, but a completed job cannot create a later scan at tip.
+    const bootstrap = { ...reusableDone.result.bootstrap };
+    if (bootstrap.restoreState === 'new') delete bootstrap.restoreState;
+    return { ...reusableDone.result, bootstrap };
   }
 
   // 1b. Still-running job. Attach to it via awaitJob: the SW's

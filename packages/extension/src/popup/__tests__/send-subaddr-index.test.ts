@@ -16,13 +16,17 @@
  */
 
 import './_chrome-stub';
-import { test, beforeEach } from 'node:test';
+import { test, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { chainProviders, type UnlockedWallet } from '@smirk/core';
 import { monero as wasmMonero } from '@smirk/wasm';
 
 import { send } from '../send-handler';
+import { walletKeystore } from '../singletons';
+
+// This suite isolates ring construction; session authorization has its own tests.
+beforeEach(() => { mock.method(walletKeystore, 'assertUnlockedWallet', () => {}); });
 
 type AnyFn = (...args: unknown[]) => unknown;
 

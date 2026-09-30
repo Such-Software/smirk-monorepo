@@ -144,6 +144,16 @@ test('runtime.connect throws loudly instead of returning a port that never answe
   assert.throws(() => runtime.connect({ name: 'jobs' }), /unavailable on desktop/);
 });
 
+test('opening an extension wallet tab rejects with a desktop-specific cause', async () => {
+  installChromeShim();
+  const chromeGlobal = (globalThis as { chrome?: Record<string, unknown> }).chrome!;
+  const tabs = chromeGlobal['tabs'] as { create: (options: unknown) => Promise<unknown> };
+  await assert.rejects(
+    tabs.create({ url: '/popup.html' }),
+    /browser tab.+unavailable on desktop/i,
+  );
+});
+
 test('installing over a host-provided chrome global keeps the host keys', () => {
   // WebView2 (Windows) defines `chrome.webview` for its own IPC. Clobbering it
   // takes Tauri's channel with it; merging is what keeps Windows booting.

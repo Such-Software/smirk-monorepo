@@ -24,13 +24,12 @@ export const router = new RouteController(store);
  * Persistent encrypted-keystore storage in `chrome.storage.local`: survives
  * browser restart, NEVER holds plaintext seed material (the seed is
  * XChaCha20-Poly1305 encrypted under a PBKDF2-stretched password before write).
- * On MV3 service-worker restart the in-memory unlocked state is lost and the user
- * re-enters their password: persisting the decrypted seed so it survived the
- * restart would put plaintext key material on disk, which no amount of saved
- * typing justifies.
+ * Each wallet window owns its live keystore. Reopening restores complete scoped
+ * keys from the optional grace-period cache until its original deadline. A
+ * background-worker restart does not change an open window's unlock state.
  */
 export const walletKeystore = new WalletKeystore(new ChromeLocalStorage());
 
 /** Ephemeral `chrome.storage.session` cache (cleared on browser close): the
- *  balance snapshot + unlocked-mnemonic opt-in cache live here. */
+ *  balance snapshots and complete scoped-key grace-period caches live here. */
 export const sessionStorage = new ChromeSessionStorage();

@@ -10,7 +10,8 @@
  *     `globalThis.__smirk_browser__`. The popup's BottomNav surfaces
  *     a Browse tab only when this global is present, which keeps
  *     the extension build's UI untouched.
- *  3. Dynamic-import the popup. This runs the popup's mount logic
+ *  3. Install native HTTP for swaps, then dynamic-import the popup.
+ *     This runs the popup's mount logic
  *     against our shimmed globals; the wallet UI takes over from
  *     there.
  *
@@ -25,6 +26,8 @@ import {
 } from '@smirk/dapp-browser';
 
 import { installChromeShim } from './chrome-shim';
+import { installDesktopHttp } from './native-http';
+import { showStartupError, type StartupStage } from './startup-error';
 import {
   TauriBrowserController,
   TAURI_DAPP_RPC_EVENT,
@@ -58,8 +61,8 @@ async function installTauriController(): Promise<TauriBrowserController> {
       transport: { kind: 'tauri', event: TAURI_DAPP_RPC_EVENT },
     });
     await controller.setInitScripts([script]);
-  } catch (e) {
-    console.warn('[smirk-desktop] setInitScripts failed:', e);
+  } catch {
+    console.warn('[smirk-desktop] Browser wallet provider could not be installed.');
   }
   return controller;
 }
@@ -85,33 +88,17 @@ async function installBrowserController(): Promise<void> {
 // `render(<App />, root)` at module evaluation. Catch any throw so
 // we can show a recovery hint instead of a blank window.
 async function boot(): Promise<void> {
+  let stage: StartupStage = 'native HTTP';
   try {
+    installDesktopHttp();
+    stage = 'browser services';
     await installBrowserController();
+    stage = 'wallet interface';
     await import('@smirk/extension/popup');
-  } catch (e) {
-    console.error('[smirk-desktop] Failed to boot wallet UI:', e);
+  } catch {
+    console.error(`[smirk-desktop] Startup failed at ${stage}.`);
     const root = document.getElementById('root');
-    if (root) {
-      root.innerHTML = `
-        <div style="
-          padding: 32px;
-          font-family: -apple-system, system-ui, sans-serif;
-          color: #f5f5f5;
-          background: #0e0e10;
-          height: 100vh;
-        ">
-          <h1 style="margin-top: 0;">Smirk Wallet — startup error</h1>
-          <p>The wallet UI failed to load. Details in the developer console.</p>
-          <pre style="
-            background: rgba(255,255,255,0.05);
-            padding: 12px;
-            border-radius: 6px;
-            overflow: auto;
-            font-size: 12px;
-          ">${e instanceof Error ? e.stack ?? e.message : String(e)}</pre>
-        </div>
-      `;
-    }
+    if (root) showStartupError(root, stage);
   }
 }
 

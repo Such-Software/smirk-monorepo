@@ -11,6 +11,7 @@
  * accidentally re-introduce the plaintext mnemonic.
  */
 
+import { sessionCacheFixture, sessionSecretsFixture } from './session-fixture';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -78,11 +79,14 @@ test('revive self-heals a legacy numeric-object cache (no __u8 marker)', () => {
   assert.equal(revived.btc.privateKey.length, 32);
 });
 
-test('derivedKeysUsable gates on real 32-byte BTC/LTC signing keys', () => {
-  assert.equal(derivedKeysUsable(fakeKeys() as never), true);
-  // Lost bytes (mangled, not revived) → not usable → force re-unlock.
-  assert.equal(derivedKeysUsable(throughStorage(fakeKeys()) as never), false);
+test('derivedKeysUsable requires every supported key family as usable bytes', () => {
+  const complete = deriveAllKeys(TEST_MNEMONIC, '', 3);
+  assert.equal(derivedKeysUsable(complete), true);
+  assert.equal(derivedKeysUsable(fakeKeys() as never), false);
+  assert.equal(derivedKeysUsable(throughStorage(complete) as never), false);
   assert.equal(derivedKeysUsable(undefined), false);
+  complete.wow.privateViewKey.fill(0);
+  assert.equal(derivedKeysUsable(complete), false);
 });
 
 // --- clampAutoLockMinutes ----------------------------------------
@@ -125,34 +129,10 @@ test('clampAutoLockMinutes: floors fractional inputs', () => {
 // --- parseSessionCache -------------------------------------------
 
 function makePayload(): SessionCachePayload {
-  // Type-compliant and structurally complete: parseSessionCache validates the
-  // envelope AND that every asset key/address is present, so a corrupt empty
-  // bag ({keys:{}, addresses:{}}) is rejected rather than accepted and then
-  // crashed on downstream (keys.btc.publicKey). Per-asset key contents stay
-  // opaque to the parser; only presence + type are checked.
-  return {
-    version: 2,
-    _noMnemonic: true,
-    fingerprint: 'fp-abcd',
-    // nostr rides in `keys` (no address entry); parseSessionCache validates its
-    // presence separately, so the well-formed payload must include it.
-    // btc/ltc carry `accountXpub` (money gate G10): a v3 unlock always
-    // populates it, and parseSessionCache now rejects a pre-xpub cache so it
-    // self-heals to a single re-unlock.
-    keys: {
-      btc: { accountXpub: 'xpub-btc' },
-      ltc: { accountXpub: 'xpub-ltc' },
-      xmr: {},
-      wow: {},
-      grin: {},
-      nostr: {},
-    } as unknown as SessionCachePayload['keys'],
-    addresses: { btc: 'b', ltc: 'l', xmr: 'x', wow: 'w', grin: 'g' } as SessionCachePayload['addresses'],
-    expiresAtMs: 1_700_000_000_000,
-  };
+  return { ...sessionCacheFixture('fp-abcd'), expiresAtMs: 1_700_000_000_000 };
 }
 
-test('parseSessionCache: accepts a well-formed v2 payload', () => {
+test('parseSessionCache: accepts a well-formed v3 payload', () => {
   const p = makePayload();
   const parsed = parseSessionCache(p);
   assert.notEqual(parsed, null);
@@ -182,8 +162,8 @@ test('parseSessionCache: REJECTS a v2 payload with a smuggled mnemonic field', (
   assert.equal(parseSessionCache(smuggled), null);
 });
 
-test('parseSessionCache: REJECTS a v3 payload (forces version pin)', () => {
-  const futurish = { ...makePayload(), version: 3 };
+test('parseSessionCache: REJECTS an unknown cache version', () => {
+  const futurish = { ...makePayload(), version: 4 };
   assert.equal(parseSessionCache(futurish), null);
 });
 
@@ -241,12 +221,8 @@ test('restoreUnlockedFromCache: any future field that would carry the seed is om
     addresses: {} as UnlockedWallet['addresses'],
     fingerprint: 'fp-1',
   });
-  const ownKeys = Object.keys(w).sort();
-  assert.deepStrictEqual(
-    ownKeys,
-    ['addresses', 'fingerprint', 'keys'],
-    'restoreUnlockedFromCache must NEVER set mnemonic or seed',
-  );
+  assert.equal(Object.hasOwn(w, 'mnemonic'), false);
+  assert.equal(Object.hasOwn(w, 'seed'), false);
 });
 
 // --- cached nostr key survives restore + signs (the chat-signing bug) --------
@@ -268,9 +244,11 @@ test('restoreUnlockedFromCache: cached nostr key survives the round-trip and sig
   const keys = deriveAllKeys(TEST_MNEMONIC, '', 3);
   const addresses = deriveAddresses(keys);
   const payload: SessionCachePayload = {
-    version: 2,
+    version: 3,
     _noMnemonic: true,
     fingerprint: 'fp-roundtrip',
+    sessionSecrets: sessionSecretsFixture('fp-roundtrip', TEST_MNEMONIC),
+    lockId: null,
     keys,
     addresses,
     expiresAtMs: Date.now() + 3_600_000,

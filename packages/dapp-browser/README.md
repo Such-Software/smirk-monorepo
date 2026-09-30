@@ -1,5 +1,7 @@
 # @smirk/dapp-browser
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Embedded-browser shell abstraction for Smirk Wallet's desktop (Tauri)
 and mobile (Capacitor) builds.
 
@@ -117,3 +119,10 @@ the test boundary.
 ## License
 
 MIT OR Apache-2.0: matches the rest of the monorepo.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

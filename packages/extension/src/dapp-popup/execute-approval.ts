@@ -22,6 +22,7 @@ import {
   recentlySpentInputs,
   resolveFeeRateOrFallback,
   deriveNostrIdentityForOrigin,
+  nostrKeySource,
   type SessionState,
   type UnlockedWallet,
 } from '@smirk/core';
@@ -48,6 +49,8 @@ import { resolveNostrIdentityForOrigin } from '../popup/nostr-vault';
  */
 export interface ExecuteApprovalDeps {
   wallet: UnlockedWallet;
+  authorizeOperation(kind: 'send' | 'sign', wallet: UnlockedWallet, description: string): Promise<void>;
+  assertOperationSession(wallet: UnlockedWallet): void;
   /** Idempotent WASM init. The approval window doesn't always go
    * through the unlock path (which does it eagerly), so we call
    * this on every approval to be sure. */
@@ -109,7 +112,16 @@ export async function executeApproval(
   approval: ApprovalApproval,
   deps: ExecuteApprovalDeps,
 ): Promise<DappApprovalResult> {
+  // Payments and tip claims reach the same authorized handlers as the wallet.
+  // Public connection/identity grants do not perform a private-key operation.
+  if (approval.kind === 'signNostrEvent' && request.kind === 'signNostrEvent' && request.tier === 'money') {
+    await deps.authorizeOperation('send', deps.wallet, `Approve ${request.origin.origin}'s payment signature`);
+
+  } else if (['signMessage', 'signNostrEvent', 'appEncKey', 'appSealOpen', 'nostrCrypt'].includes(approval.kind)) {
+    await deps.authorizeOperation('sign', deps.wallet, `Approve ${request.origin.origin}'s private-key request`);
+  }
   await deps.ensureWasmInit();
+  deps.assertOperationSession(deps.wallet);
 
   switch (approval.kind) {
     case 'connect': {
@@ -251,6 +263,7 @@ export async function executeApproval(
         };
       }
       deps.api.setAccessToken(cached.accessToken);
+      deps.assertOperationSession(deps.wallet);
       const outcome = await deps.claimPublicTip(
         deps.wallet,
         cached.bootstrap.userId,
@@ -276,18 +289,16 @@ export async function executeApproval(
       // signing then all act as this same identity.
       let nostrPubkey: string | undefined;
       if (approval.perOrigin) {
-        // A per-origin (compartmentalized) identity is HD-derived from the seed, so
-        // it needs a full unlock. On a warm resume the mnemonic is intentionally
-        // absent; falling back to the active identity here would silently persist
-        // the user's MAIN npub onto the very site they asked to compartmentalize away
-        // from (an irreversible deanonymization). Refuse instead of leaking.
-        if (!deps.wallet.mnemonic) {
+        // Derive from the scoped per-origin root during the unlock period.
+        // Missing authority must never fall back to the user's main identity.
+        const source = nostrKeySource(deps.wallet);
+        if (!source) {
           throw new Error(
-            'Connecting with a separate per-site identity needs a full unlock. Lock the wallet, reopen and enter your password, then connect again.',
+            'The wallet session has no key for this site. Unlock the wallet to continue.',
           );
         }
         nostrPubkey = deriveNostrIdentityForOrigin(
-          deps.wallet.mnemonic,
+          source,
           request.origin.origin,
         ).pubkeyHex;
       } else {
@@ -308,6 +319,7 @@ export async function executeApproval(
         request.origin.origin,
         request.identityPubkey,
       );
+      deps.assertOperationSession(deps.wallet);
       const result = signNostrEventWith(identity, request.event);
       // Forward a "remember for this session" grant (money-tier kinds are filtered
       // out downstream by the wallet-handler's mergeNostrSession).
@@ -353,6 +365,7 @@ export async function executeApproval(
         request.origin.origin,
         request.identityPubkey,
       );
+      deps.assertOperationSession(deps.wallet);
       const data = nostrCryptWith(
         cryptIdentity,
         request.op,

@@ -1,13 +1,11 @@
 # @smirk/wasm
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 TypeScript bindings for the `smirk-wasm` WASM crypto bundle.
 
-This package answers one question:
-
-> How does TypeScript code in any Smirk shell (extension, desktop,
-> mobile) call into the Rust crypto for chain-specific signing
-> and key derivation, without re-implementing wasm-bindgen
-> ergonomics at every call site?
+TypeScript callers use this package for Rust transaction signing, key
+derivation and chain cryptography through the generated WASM bindings.
 
 The underlying WASM is built from `crates/smirk-wasm/` and exposes
 per-chain functions (`grin.*`, `monero.*`, etc.). This package
@@ -74,3 +72,10 @@ without coordinating with the others.
 ## License
 
 MIT OR Apache-2.0.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

@@ -1,12 +1,14 @@
 # Monorepo Developer Guide
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Where things live, how they fit together, and how to make changes without breaking the build.
 
 ## Why a monorepo?
 
 Smirk's client code is split across two languages (Rust + TypeScript) and several Rust crates that need to evolve together. Shipping the chain-specific cryptography and the consumers in separate repos made cross-cutting changes painful and gave external reviewers (Mozilla AMO, App Store, security audits) opaque WASM blobs with no clear provenance.
 
-The monorepo solves both. One `git clone`, one `make build`, byte-reproducible output, every byte of crypto code in `crates/`.
+The monorepo solves both. One source revision binds the Rust and TypeScript implementation. Exact toolchain and build inputs must be recorded before claiming byte reproducibility.
 
 ## Crates (Rust)
 
@@ -51,7 +53,7 @@ Currently shipped: seed → extended key, BIP32 child derivation, slatepack addr
 
 ### `crates/btc-ext/`
 
-Smirk's BTC and LTC support, built on [rust-bitcoin](https://github.com/rust-bitcoin/rust-bitcoin) v0.32. One crate covers both chains because Litecoin is byte-compatible with Bitcoin at the consensus and transaction layer; the only differences that matter to a wallet are address-encoding parameters, which we model in [`network.rs`](../crates/btc-ext/src/network.rs).
+Smirk's BTC and LTC support, built on [rust-bitcoin](https://github.com/rust-bitcoin/rust-bitcoin) v0.32. One crate covers both chains because Litecoin is byte-compatible with Bitcoin at the consensus and transaction layer; the only differences that matter to a wallet are address-encoding parameters, which we model in [`network.rs`](crates/btc-ext/src/network.rs).
 
 Currently shipped:
 - **BIP32 / BIP39 derivation**: mnemonic → master xprv → child xprv along an arbitrary BIP32 path. Test-vectorized against the Trezor canonical all-abandon mnemonic.
@@ -140,7 +142,7 @@ Transport-agnostic dapp injection layer. Wire protocol (JSON-RPC-shaped envelope
 
 ### `packages/desktop/`: `@smirk/desktop`
 
-Tauri 2.x desktop wallet shell (Windows/macOS/Linux, shipped v0.3.0) with an embedded dapp browser. Wraps the extension popup via a `chrome.*` shim (storage backed by `tauri-plugin-store`); each browser tab is a borderless `WebviewWindow` positioned over the wallet UI's frame slot.
+Tauri 2.x desktop wallet shell (Windows/macOS/Linux, v0.3.0 release target) with an embedded dapp browser. Wraps the extension popup via a `chrome.*` shim (storage backed by `tauri-plugin-store`); each browser tab is a borderless `WebviewWindow` positioned over the wallet UI's frame slot.
 
 ### `packages/ui/`: `@smirk/ui`
 
@@ -148,7 +150,7 @@ Shared Preact components plus the theme registry, so every shell (extension, des
 
 ### `packages/swap/`: `@smirk/swap`
 
-Swap orchestration behind one `Swap` interface. Ships `ThorchainSwap` and `TrocadorSwap`; the UI talks to a `Swap` and never to a specific aggregator.
+Swap orchestration behind one `Swap` interface. `TrocadorSwap` implements quotes, trade creation and status. `ThorchainSwap` is a stub; native atomic swaps are future work.
 
 ### `packages/dapp-browser/`: `@smirk/dapp-browser`
 
@@ -250,3 +252,10 @@ make build
 ```
 
 Every byte of crypto code is in `crates/`. No precompiled blobs sourced from npm. No build-time downloads beyond the locked dependency manifests (`Cargo.lock`).
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

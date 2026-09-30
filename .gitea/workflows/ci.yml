@@ -1,17 +1,9 @@
 name: CI (Gitea)
 
-# The real CI gate for this repo.
-#
-# GitHub Actions is disabled at the org level, deliberately: code lives on
-# GitHub but builds run here (see .gitea/workflows/desktop-build.yml). So this
-# file, not `.github/workflows/ci.yml`, is where the correctness gates execute:
-# rust check / test / clippy, the wasm build, the topological TS build,
-# typecheck, unit tests, the API check, the secret scan, and the dependency
-# audit.
-#
-# Keep this in sync with .github/workflows/ci.yml, or delete that one. Two
-# copies of a gate, one of which cannot run, produces a green-looking release
-# gated on nothing.
+# Gitea owns source checks and candidate builds. GitHub is a publication target;
+# this source tree contains no executable GitHub Actions workflows.
+# This gate checks Rust, WASM, TypeScript, API agreement, secret shapes and
+# dependencies. Candidate builds use .gitea/workflows/desktop-build.yml.
 #
 # `runs-on: ubuntu-latest` is the label this instance's Linux runner advertises
 # (see the matrix in desktop-build.yml). A label no runner claims queues forever
@@ -28,6 +20,21 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  source-gate:
+    name: Source gate
+    if: ${{ always() }}
+    needs: [rust, typescript, openapi-drift, secret-scan, supply-chain]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require every source check to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node scripts/ci/source-gate.mjs
+
   rust:
     # Isolated toolchain homes, one per job. These runners execute several jobs
     # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
@@ -42,6 +49,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install rustup without editing shell profiles
+        # The action below would install rustup with profile edits that point at
+        # this job's temporary CARGO_HOME; see the script for the host-mode cost.
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-rustup-job-scoped.sh
 
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
@@ -123,6 +136,12 @@ jobs:
       - name: Install clang (wasm C target)
         run: sudo apt-get update && sudo apt-get install -y clang
 
+      - name: Install rustup without editing shell profiles
+        # The action below would install rustup with profile edits that point at
+        # this job's temporary CARGO_HOME; see the script for the host-mode cost.
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-rustup-job-scoped.sh
+
       - name: Install Rust toolchain
         # @stable here installs a working rustup/cargo on the runner; it does NOT
         # decide which compiler builds our code. rust-toolchain.toml pins that, and
@@ -185,10 +204,11 @@ jobs:
         run: |
           for pkg in @smirk/assets @smirk/core @such-software/smirk-dapp-api \
                      @smirk/dapp-browser @smirk/extension @smirk/keymap \
-                     @smirk/swap @smirk/ui; do
+                     @smirk/swap @smirk/ui @smirk/desktop; do
             echo "── $pkg ──"
             npm test -w "$pkg"
           done
+          node --test scripts/__tests__/*.test.mjs
 
   openapi-drift:
     name: API client is current
@@ -249,6 +269,13 @@ jobs:
       # INFORMATIONAL: dev tooling + moderate advisories, non-blocking.
       - name: npm audit (full, advisory)
         run: npm audit || true
+
+      - name: Install rustup without editing shell profiles
+        # The action below would install rustup with profile edits that point at
+        # this job's temporary CARGO_HOME; see the script for the host-mode cost.
+        if: runner.os != 'Windows'
+        run: bash scripts/ci/install-rustup-job-scoped.sh
+
       # @stable here installs a working rustup/cargo on the runner; it does NOT
       # decide which compiler builds our code. rust-toolchain.toml pins that, and
       # rustup honours it for every cargo call inside the checkout, installing the

@@ -100,12 +100,6 @@ test('public BTC tip → success screen surfaces the shareable claim URL', async
   });
 
   const page = await context.newPage();
-  page.on('console', (m) => {
-    const t = m.text();
-    if (/tip|auth|bootstrap|error|fail|401/i.test(t)) {
-      console.log('CONSOLE', m.type(), t.slice(0, 200));
-    }
-  });
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
   // --- Onboarding: import alice (proven sequence from onboarding-import.spec) ---

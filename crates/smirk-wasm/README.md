@@ -1,5 +1,7 @@
 # smirk-wasm
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Monero/Wownero, Grin, and Bitcoin/Litecoin cryptographic operations for browser extensions, compiled to WebAssembly.
 
 ## Overview
@@ -336,3 +338,10 @@ smirk-wasm/
 ## License
 
 MIT
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

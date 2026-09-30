@@ -147,6 +147,7 @@ test('migrateLegacyWallet — reseal a REAL v0.2.4 blob into a v0.3 keystore', a
 
 // ===========================================================================
 // sweepLegacyBtcLtc: m/44' -> m/84' fund sweep (FUND-CRITICAL)
+const SWEEP_AUTH = { authorize: async () => {}, assertActive: () => {} };
 // ===========================================================================
 
 /** A real unlocked v0.3 wallet (m/84' addresses) sealed from MNEMONIC. Built
@@ -236,7 +237,7 @@ test('sweepLegacyBtcLtc — happy path: scans m/44, pays m/84, subtracts fee, pe
   });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'swept');
@@ -263,7 +264,7 @@ test('sweepLegacyBtcLtc — already-swept: durable txid short-circuits, never br
   const { provider, calls } = fakeUtxo({ asset: 'btc', utxos: [utxo('a'.repeat(64), 0, 100_000, 100)], feeNormal: 5 });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'already-swept');
@@ -281,7 +282,7 @@ test('sweepLegacyBtcLtc — confirmed-only: unconfirmed (height 0) UTXOs are ski
   });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'skipped');
@@ -300,7 +301,7 @@ test('sweepLegacyBtcLtc — dust gate: swept amount below 546 sat is skipped, no
   });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'skipped');
@@ -319,7 +320,7 @@ test('sweepLegacyBtcLtc — fee-coverage gate: total <= fee is skipped', async (
   });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'skipped');
@@ -332,7 +333,7 @@ test('sweepLegacyBtcLtc — no legacy funds: empty UTXO set short-circuits', asy
   const { provider, calls } = fakeUtxo({ asset: 'btc', utxos: [], feeNormal: 5 });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'skipped');
@@ -346,7 +347,7 @@ test('sweepLegacyBtcLtc — locked wallet (no mnemonic) skips before any scan', 
   const locked: UnlockedWallet = { ...WALLET, mnemonic: undefined };
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', locked, storage),
+    sweepLegacyBtcLtc('btc', locked, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'skipped');
@@ -367,7 +368,7 @@ test('sweepLegacyBtcLtc — relay floor is applied (1.0 estimate clamps to 1.1)'
   });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'swept');
@@ -384,7 +385,7 @@ test('sweepLegacyBtcLtc — broadcast failure leaves no durable record (retryabl
   });
 
   const res = await withFakeUtxo('btc', provider, () =>
-    sweepLegacyBtcLtc('btc', WALLET, storage),
+    sweepLegacyBtcLtc('btc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'skipped');
@@ -403,7 +404,7 @@ test('sweepLegacyBtcLtc — LTC path pays the wallet LTC (ltc1q) address', async
   });
 
   const res = await withFakeUtxo('ltc', provider, () =>
-    sweepLegacyBtcLtc('ltc', WALLET, storage),
+    sweepLegacyBtcLtc('ltc', WALLET, storage, SWEEP_AUTH),
   );
 
   assert.equal(res.status, 'swept');

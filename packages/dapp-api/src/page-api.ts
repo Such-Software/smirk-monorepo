@@ -67,8 +67,9 @@ export interface SmirkPageApi {
   /** The user's Nostr public key (x-only hex). Prompts a one-time grant the
    *  first time an origin asks (npub disclosure is opt-in per origin). */
   getNostrPublicKey(): Promise<string | null>;
-  /** Ask the wallet to schnorr-sign a Nostr event (NIP-98 login, a note, …).
-   *  Requires the Nostr scope; prompts per signature. */
+  /** Ask the wallet to schnorr-sign a Nostr event. Requires the Nostr scope;
+   *  supported social kinds may use a user-granted time-limited scope.
+   *  Money-tier and unknown kinds require approval for each event. */
   signNostrEvent(event: SmirkNostrUnsignedEvent): Promise<SmirkNostrSignedEvent>;
   /** The origin's app-scoped e2ee sealing key (x25519). Seal to `publicKey` with
    *  libsodium `crypto_box_seal` for storage only the user can read. Prompts a

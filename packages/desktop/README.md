@@ -1,124 +1,120 @@
-# @smirk/desktop: Tauri desktop shell
+# Smirk desktop shell
 
-Smirk Wallet packaged as a native desktop app for macOS, Windows, and Linux.
+> Status: stable · Updated 2026-09-27 · Applies to: the Tauri desktop client and its release inputs
 
-## Architecture
+The desktop app packages the shared wallet UI for macOS, Windows, and Linux.
+The app repository owns client behavior and build inputs. Fleet owns production
+release activation and credential custody.
 
-The desktop shell is intentionally thin. We wrap the same Preact wallet UI
-that the browser extension ships ([`packages/extension/src/popup`](../extension/src/popup))
-in a Tauri 2.x webview, with a small `chrome.*` compatibility shim
-([`src/chrome-shim.ts`](src/chrome-shim.ts)) that polyfills the
-extension-API surfaces the popup uses:
+## Runtime
 
-| Extension API              | Desktop polyfill                            |
-| -------------------------- | ------------------------------------------- |
-| `chrome.storage.local`     | `@tauri-apps/plugin-store` (filesystem)     |
-| `chrome.storage.session`   | In-memory `Map` (cleared on window close)   |
-| `chrome.storage.onChanged` | Custom EventTarget around the two backends  |
-| `chrome.runtime.getURL`    | Identity transform: Tauri serves from `/`  |
-| `chrome.windows.create`    | No-op: extension "pop out" only; not used by browser tabs |
+The entry point installs host services before importing the
+[shared popup](../extension/src/popup). The desktop shell provides these
+extension API equivalents:
 
-## Known limitations (v0.3.0)
+| Extension API | Desktop behavior |
+| --- | --- |
+| `chrome.storage.local` | Tauri filesystem store; writes flush before returning |
+| `chrome.storage.session` | Process memory; cleared when the window closes |
+| `chrome.storage.onChanged` | Change events from both storage adapters |
+| `chrome.runtime.getURL` | Paths served from the packaged frontend |
+| `chrome.runtime.sendMessage` | Background hints resolve without a background worker |
+| `chrome.runtime.connect` | Rejects because the extension jobs worker is unavailable |
+| `chrome.windows.create` | The wallet already has its own window; no additional window |
+| `chrome.tabs.create` | Rejects extension-only wallet-tab requests |
 
-- **Background auto-lock is degraded.** The extension uses
-  `chrome.alarms` to fire auto-lock even when the popup is closed.
-  Tauri has no equivalent yet, and `chrome-shim.ts` does not polyfill
-  `chrome.alarms`. Auto-lock fires correctly while the wallet window
-  is open; it does not fire if you minimise / hide the window. A
-  `WalletTimers` abstraction in `@smirk/core` is the planned fix.
-- **Tip-arrival notifications are silent.** Same shape: the shim
-  does not polyfill `chrome.notifications`. Inbox still updates on
-  open; only the OS-level notification doesn't fire.
-- **`chrome.windows.create`** ("pop out the wallet to its own
-  window") is a no-op. The desktop is already a single first-class
-  window, so the action-popup "pop out" button does nothing here.
-- **Network egress is not enforced by CSP.** `connect-src` is
-  `'self' https: wss:`. It previously listed specific Smirk hosts,
-  which silently broke self-hosting: the backend URL is chosen by the
-  user at RUNTIME, CSP is static at BUILD time, so a federated backend
-  at `https://backend.example.org` was blocked by the webview before
-  the request ever left. A wallet that cannot talk to the user's own
-  server is not federated, so the allowlist had to go.
-  This brings desktop to parity with the extension, whose manifest has
-  no `connect-src` restriction at all. `script-src` / `object-src` stay
-  tight, and those are the ones that matter for XSS.
-  Real enforcement returns with the transport work: once egress runs
-  through Rust (`tauri-plugin-websocket` and an HTTP counterpart), the
-  allowlist lives there, where it can be checked against the user's
-  configured backend instead of a compile-time constant.
+Trocador requests use the bundled HTTP plugin, installed before the popup mounts.
+The first quote therefore uses native HTTP. Its capability scope permits only
+`https://api.trocador.app/*`. A missing transport reports a connection failure;
+webview fetch cannot replace it because Trocador's CORS policy blocks that path.
 
-## Development
+Desktop Vite reads its own environment, including values supplied by CI. It does
+not read `packages/extension/.env`. The reviewed Trocador affiliate configuration
+uses `VITE_TROCADOR_API_KEY`; an absent value keeps swaps disabled. A missing
+setting and a failed transport are separate failures.
 
-Prerequisites: Rust toolchain, Node 20+, `cargo install tauri-cli --version "^2"`.
+The embedded browser uses native webviews on macOS and Windows and an iframe
+controller on Linux. See [embedded browser design](../../docs/EMBEDDED_BROWSER.md).
 
-Linux also needs the WebKitGTK + soup development headers:
-`libwebkit2gtk-4.1-dev`, `libjavascriptcoregtk-4.1-dev`,
-`libsoup-3.0-dev`, `libxdo-dev`, `libayatana-appindicator3-dev`,
-`librsvg2-dev`, and `clang`. The clang requirement is ours, not
-Tauri's: the vendored secp256k1zkp compiles C to wasm32 via cc-rs,
-which needs a clang carrying the WebAssembly LLVM target.
+## Development and checks
+
+Use Node.js 22 or later, the repository's pinned Rust toolchain, and the
+[platform prerequisites](../../docs/BUILD.md). Build shared libraries before the
+frontend because workspace imports resolve to their generated `dist` directories.
 
 ```sh
-# From the monorepo root:
-npm install                              # workspace install
-make libs                                # smirk-wasm pkg/ + every @smirk/* lib
-cd packages/desktop
-npm run tauri:dev                        # launches dev window
+npm install
+make libs
+npm run tauri:dev -w @smirk/desktop
 ```
 
-`make libs` is not optional. The `@smirk/*` manifests resolve to
-`dist/`, which is git-ignored, so on a fresh clone Vite cannot resolve
-the workspace imports until the libraries are built.
-
-The Vite dev server runs on port 1420; Tauri picks it up from
-`tauri.conf.json::build.devUrl`.
-
-## Build
+The Vite development server uses port 1420. To check the shell without starting
+it or signing an artifact:
 
 ```sh
-npm run tauri:build
+npm run typecheck -w @smirk/desktop
+npm test -w @smirk/desktop
+node --test scripts/__tests__/*.test.mjs
 ```
 
-Outputs bundle artifacts to `src-tauri/target/release/bundle/`. Targets are
-read from `tauri.conf.json::bundle.targets` (currently
-`["appimage", "app", "nsis"]`: a `.app` on macOS, an NSIS setup `.exe` on
-Windows, an `.AppImage` on Linux). `.deb` and `.rpm` are
-intentionally omitted; AppImage is the agreed Linux delivery format.
-`dmg` is omitted because Tauri's dmg bundler drives AppleScript /
-WindowServer, which a headless release runner does not have; the release
-workflow wraps the signed `.app` with `hdiutil` after the build instead.
+The desktop regression suite bundles the swap transport and executes a quote
+through simulated native IPC. This proves transport selection without spending
+funds or contacting a swap provider. It does not replace a packaged-app quote
+check on each operating system.
 
-## Signing & notarization
+## Packaging and release evidence
 
-- **macOS:** Apple Developer signing identity goes in
-  `tauri.conf.json::bundle.macOS.signingIdentity`. Notarization needs
-  `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` env vars. Both null in
-  the committed config; the maintainer wires them per-environment.
-- **Windows:** unsigned for v0.3.0 (SmartScreen will warn on first launch).
-- **Linux:** unsigned `.AppImage`; users verify against the repository's
-  SHA256SUMS file.
+```sh
+npm run tauri:build -w @smirk/desktop
+```
 
-## Updater
+Tauri writes to `src-tauri/target/release/bundle`, or the corresponding target
+triple directory when `--target` is supplied. The configured targets are macOS
+`.app`, Linux AppImage and Debian packages, and Windows NSIS installers. CI wraps
+the macOS app in a disk image and stages Windows portable executables separately.
+A local development package is not proof that a release is signed or notarized.
 
-`tauri.conf.json::plugins.updater.active` is `false` and the `pubkey` field
-is a placeholder. To activate:
+The [release workflow](../../.gitea/workflows/desktop-build.yml) builds candidates
+and uploads internal workflow artifacts named by source commit. It does not
+replace public release assets. Each platform carries generated
+`RELEASE-PROVENANCE-<platform>-v<version>.json` evidence tying its artifact digests
+to the exact source commit and tree.
 
-1. Generate a keypair: `cargo tauri signer generate -w ~/.tauri/smirk.key`
-2. Paste the public key into `tauri.conf.json::plugins.updater.pubkey`.
-3. Set `active: true`.
-4. Keep the private key offline; load it as `TAURI_PRIVATE_KEY` env at
-   release time.
+- macOS requires Developer ID signing, the expected Apple team, hardened runtime,
+  a valid notarization staple, and Gatekeeper acceptance before staging.
+- Windows uses the signing broker and verifies Authenticode, publisher, and
+  timestamp on both installer and portable executable. Unsigned comparison
+  artifacts stay separately named.
+- Linux and the extension receive detached release signatures when the complete
+  candidate set is assembled.
 
-The update server endpoint pattern follows Tauri's default; the actual
-release backend lives at `releases.smirk.cash/desktop/...`.
+Use the [shared release candidate procedure](../../docs/BUILD.md#release-candidates-and-signatures)
+to collect one successful run, verify its exact source provenance, and sign the
+complete set. Reports and release decisions belong in `~/journal`.
 
-## Tracked for v0.4
+## Updates and limitations
 
-- No deep links (`smirk://` URL handler): tip-claim URLs work via
-  clipboard only.
-- No system tray.
-- No autostart-on-login option.
-- In-app browser polish. The Rust plugin and the `BrowserShell` UI
-  already support multiple tabs and per-tab `window.smirk`
-  injection; what defers to v0.4 is the visual tab-strip surface,
-  bookmarks persistence, and history-backed URL-bar autocomplete.
+Users currently update by downloading and reinstalling the verified release.
+The Tauri updater plugin, public key, endpoint, and payload-signing configuration
+exist, but no client code invokes an update check or installation. These settings
+alone do not establish automatic updates.
+
+The desktop has no extension background worker, alarm service, or notification
+service. Auto-lock uses a foreground timer and checks the original expiry when
+the wallet reopens; reopening does not extend it. Background hints and native
+notifications therefore have less coverage than the extension. There is no
+system tray, autostart option, or `smirk://` deep-link handler.
+
+Webview network policy accepts runtime-selected backends. The native HTTP
+allowlist currently governs Trocador only. Do not describe that provider scope
+as a general network restriction for the wallet.
+
+## Release checklist
+
+- [ ] All platform candidates identify the same reviewed source commit and tree.
+- [ ] Packaged wallet unlock, send, and quote checks pass on each supported OS.
+- [ ] macOS signature, notarization, staple, and Gatekeeper checks pass.
+- [ ] Windows executable signatures, publisher, and timestamps pass.
+- [ ] Artifact provenance, checksums, and detached signatures verify.
+- [ ] Update and support copy states the behavior this release actually provides.
+- [ ] Publication and store submission use their separately reviewed release lane.

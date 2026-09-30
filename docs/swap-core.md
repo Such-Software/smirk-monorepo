@@ -1,5 +1,7 @@
 # swap-core
 
+> Status: draft · Updated 2026-09-27 · Applies to: Smirk client source
+
 Adaptor-signature primitives and atomic swap state machine. Stub crate today; implementation lands when the underlying chain crates (`grin-ext`, the Monero/Wownero stack in `monero-oxide`, and Bitcoin/Litecoin support) provide enough surface for cross-chain swaps to compose cleanly.
 
 ## Goal
@@ -20,7 +22,7 @@ The two main dependencies the swap engine will need are now both available in th
 - **`crates/grin-ext/`**: Schnorr sign/verify over secp256k1, BLAKE2b challenge hash, slate v4 parse/serialize. Adaptor-signature variants of Schnorr signing are a clean extension on top of what's there.
 - **`crates/secp256k1zkp/`**: Bulletproofs, Pedersen commitments, and aggsig from Grin's libsecp256k1-zkp. Provides the byte-equivalent-to-grin-wallet primitives needed for swap-side commitments and proofs.
 
-## v0.4 prerequisites (do first)
+## Prerequisites for future implementation
 
 Ordered TODO; item 1 is a hard security gate before ANY multiparty signing runs.
 
@@ -44,3 +46,10 @@ Compiles to both native (for tests + tooling) and WASM (consumed via `crates/smi
 - BIP-340 + adaptor-signature literature
 - [Comit Network's `xmr-btc-swap`](https://github.com/comit-network/xmr-btc-swap): production Rust XMR↔BTC adaptor-signature implementation, useful reference for the ed25519/ringct side
 - [grin-wallet "simple contracts"](https://github.com/cekickafa/grin-wallet/tree/simple_contracts_restructured_v3): reference for Grin's interactive multi-party transaction state machine
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

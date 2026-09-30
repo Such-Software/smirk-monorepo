@@ -1,5 +1,7 @@
 # Grin
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Smirk's Grin / Mimblewimble support is implemented from primitives in `crates/grin-ext/` so we own the protocol layer end-to-end and can extend it with features (atomic-swap adaptor signatures, NRD-kernel time-locks, custom slate workflows) that don't exist in upstream `grin-wallet`.
 
 The legacy [smirk-extension](https://github.com/Such-Software/smirk-extension) v0.2.x ships Grin support via vendored MWC-Wallet WebAssembly, which has been validated against the official `grin-wallet` GUI (a Smirk seed restored in `grin-wallet` recovers the same funds). `crates/grin-ext/` is the production Grin implementation: the v0.3 extension routes every slate ceremony through it, and byte-level parity is held by the cross-validation suite against `grin_wallet_libwallet` (see `crates/grin-ext/tests/README.md`). The v0.3 monorepo (`packages/extension`) is the canonical client going forward; `smirk-extension` is kept frozen as the migration source.
@@ -488,3 +490,10 @@ the binding is right there.
 - `crates/grin-ext/src/kernel.rs`: Plain / Coinbase / HeightLocked / NRD kernels
 - `crates/grin-ext/src/slatepack.rs`: armor + binary mode + age encryption
 - `crates/grin-ext/tests/grin_wallet_compat.rs`: Layer-2 cross-validation against `grin_wallet_libwallet` 5.4.0 (see `docs/TESTING.md`)
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

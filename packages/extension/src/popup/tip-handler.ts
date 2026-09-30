@@ -26,6 +26,7 @@
  * address to pay.
  */
 
+import { grinKeySource, grinExtendedKey, grinLegacyExtendedKey } from './session-signing';
 import { sha256 } from '@noble/hashes/sha256';
 import { ed25519 } from '@noble/curves/ed25519';
 import type { UnlockedWallet, GrinPendingOverlay } from '@smirk/core';
@@ -62,6 +63,7 @@ import { resolveGrinSpendable } from './grin-flows';
 import { recordGrinTx } from './grin-tx-journal';
 import { storeTipKeyBackup } from './tip-key-backup';
 import { wasmAgeSealer } from './tip-age-sealer';
+import { authorizeOperation, assertOperationSession } from './operation-auth';
 
 /**
  * Retry `api.attachSocialTipFunding` with exponential backoff.
@@ -183,6 +185,7 @@ export async function dispatchSocialTip(args: {
       return await createXmrWowTip(wallet, args.senderUserId, fields, onBroadcast);
     }
     if (fields.assetId === 'grin') {
+      await authorizeOperation('send', wallet, 'Send a Grin tip');
       // Grin tracks in-flight balance via the client pending overlay (recorded
       // inside createGrinTip after broadcast), not via pendingOutgoing. No
       // onBroadcast wiring needed.
@@ -686,7 +689,7 @@ async function createGrinTip(
   fields: TipSubmitFields,
   deps: { overlay: GrinPendingOverlay; rewindHash: string },
 ): Promise<TipSubmitOutcome> {
-  if (!wallet.mnemonic) {
+  if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
     return { ok: false, error: 'Wallet not unlocked' };
   }
   void senderUserId; // v3 is non-custodial: scan (rewindHash) identifies outputs.
@@ -706,7 +709,7 @@ async function createGrinTip(
   let spendableSet;
   try {
     spendableSet = await resolveGrinSpendable({
-      mnemonic: wallet.mnemonic,
+      mnemonic: grinKeySource(wallet),
       rewindHash: deps.rewindHash,
       overlay: deps.overlay,
     });
@@ -777,12 +780,13 @@ async function createGrinTip(
 
   // 4. Derive extended private key from mnemonic (v3 + legacy fallback so a
   //    recovered legacy/Grim depth-3 input can be tipped).
-  const extKey = JSON.parse(wasmGrin.deriveExtendedKey(wallet.mnemonic)) as {
+  const extKey = JSON.parse(grinExtendedKey(grinKeySource(wallet))) as {
     extended_private_key_hex: string;
   };
-  const legacyExtKeyHex = wasmGrin.deriveExtendedKeyLegacyBip39(wallet.mnemonic);
+  const legacyExtKeyHex = grinLegacyExtendedKey(grinKeySource(wallet));
 
   // 5. Build the single-party voucher transaction.
+  assertOperationSession(wallet);
   const voucherResult = wasmGrin.createGrinVoucher({
     extended_private_key_hex: extKey.extended_private_key_hex,
     legacy_extended_private_key_hex: legacyExtKeyHex,
@@ -872,6 +876,7 @@ async function createGrinTip(
   // (offset + body{inputs, outputs, kernels}), NOT a hex-encoded wire blob.
   // `voucherResult.tx_json` is the canonical shape, emitted by
   // `crates/grin-ext/src/voucher.rs::serialize_voucher_tx_json`.
+  assertOperationSession(wallet);
   const broadcast = await chainProviders.grin().broadcast({
     tx: voucherResult.tx_json as object,
   });

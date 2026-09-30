@@ -13,36 +13,12 @@
  *   under a PBKDF2-stretched password using XChaCha20-Poly1305 before
  *   being written to `storage.local`. No exceptions, no fallback,
  *   no plaintext on-disk path.
- * - **Auto-unlock cache (opt-in).** When the user picks an
- *   `autoLockMinutes > 0` setting, the derived leaf keys, addresses
- *   and fingerprint (never the mnemonic, never the seed) are cached
- *   in `chrome.storage.session` so popup reopens and SW restarts
- *   inside the window skip the password prompt. See
- *   `SESSION_CACHE_KEY` / `SessionCachePayload` /
- *   `restoreUnlockedFromCache` below.
- *   - `chrome.storage.session` is **in-memory only** (never written
- *     to disk by Chrome) and is cleared automatically on browser
- *     close.
- *   - It is partitioned per extension ID by Chrome: another
- *     co-resident extension cannot read this extension's
- *     `storage.session`.
- *   - The cache TTL is capped at `AUTO_LOCK_MAX_MINUTES` (24 hours).
- *     Any stored preference above the cap, and any legacy negative
- *     value, clamps to the cap on read.
- *   - When the user picks `autoLockMinutes === 0` ("require password
- *     every time"), the cache is **not** written and the legacy
- *     re-prompt-on-SW-restart behaviour applies.
- * - **Threat model for the auto-unlock cache.** The remaining
- *   exposure is process-memory disclosure: a debugger attached to the
- *   browser, OS-level malware with the right privileges, or a heap
- *   snapshot taken mid-flight can read the cached derived keys: spend
- *   authority for the cache window, not the recovery phrase. This is
- *   the same level of exposure as the popup's own in-memory unlocked
- *   state, i.e., we are not making the threat model worse than
- *   "the wallet is currently unlocked," we are *extending the
- *   duration* of that exposure window for the user's convenience.
- *   A co-resident malicious extension is **not** in scope for this
- *   cache (Chrome's per-extension partition blocks it).
+ * - **Grace-period sessions use scoped signing keys.** No mnemonic, BIP39 seed
+ *   or BIP32 master root is cached. BTC/LTC account nodes, Grin spend keys and
+ *   Nostr/app-specific roots preserve normal operations during the chosen TTL.
+ *   These are spend authority in memory-backed session storage, cleared by
+ *   explicit lock, expiry or browser shutdown. Incomplete older caches require
+ *   one password unlock before the new format can be written.
  * - PBKDF2 iterations default to `PBKDF2_ITERATIONS` (600_000).
  * - Decrypted secret buffers (seed bytes) are zeroed on `lock()` /
  *   `destroy()` before being released for GC. JS strings (the
@@ -90,6 +66,8 @@ import {
   wowAddress,
   xmrAddress,
 } from './address';
+import { HDKey } from '@scure/bip32';
+import type { NostrSessionRoots } from './nostr/session-roots';
 import type { PlatformStorage } from './state/platform';
 
 const KEYSTORE_KEY = 'smirk_keystore_v1';
@@ -130,29 +108,38 @@ export interface WalletAddresses {
   grin: string;
 }
 
-/**
- * In-memory unlocked wallet state. Holds the seed and per-asset key
- * material: must not be serialized to any persistent storage.
- *
- * Held by reference inside `WalletKeystore` after a successful
- * `unlock()`; released when `lock()` or `destroy()` is called.
- */
+/** BTC or LTC signing authority restricted to the BIP84 account subtree. */
+export interface UtxoSessionAccount {
+  privateKey: Uint8Array;
+  chainCode: Uint8Array;
+}
+
+export interface GrinSessionKeys {
+  extendedPrivateKey: Uint8Array;
+  legacyExtendedPrivateKey: Uint8Array;
+  slatepackSecret: Uint8Array;
+  slatepackAddress: string;
+  rewindHash: string;
+}
+
+/** Scoped operation authority; never a recovery phrase, seed or master root. */
+export interface SessionSecrets {
+  btc: UtxoSessionAccount;
+  ltc: UtxoSessionAccount;
+  grin: GrinSessionKeys;
+  nostr: NostrSessionRoots;
+}
+
+/** Live wallet material. Only scoped session secrets may enter ephemeral storage. */
 export interface UnlockedWallet {
-  /**
-   * BIP39 phrase. Present after a fresh `unlock()` /
-   * `createWallet()`, but **undefined** when the wallet was restored
-   * from the session cache (2026-06-13 hardening: session cache no
-   * longer persists the mnemonic). Call sites that need the phrase
-   * (BTC/LTC PSBT signing, every Grin surface, "show seed" /
-   * "export seed") must early-return with a "please re-unlock" UX
-   * when this is undefined.
-   */
+  /** BIP39 phrase, present after a fresh password unlock. Removed on lock. */
   mnemonic?: string;
-  /**
-   * BIP39 seed bytes (64). Derived from mnemonic + empty passphrase.
-   * Undefined on a session-cache restore (no mnemonic → no seed).
-   */
+  /** BIP39 seed bytes, present after a fresh password unlock. Zeroed on lock. */
   seed?: Uint8Array;
+  /** Present on complete grace-period sessions, derived once at password unlock. */
+  sessionSecrets?: SessionSecrets;
+  /** Absolute expiry of a grace-period session, never extended by restore. */
+  sessionExpiresAtMs?: number;
   /** Per-asset derived keys (see `DerivedKeys` in `./hd`). */
   keys: DerivedKeys;
   /** Per-asset receive addresses. */
@@ -284,35 +271,28 @@ export function deriveAddresses(keys: DerivedKeys): WalletAddresses {
 }
 
 /**
- * Reconstruct an `UnlockedWallet` from cached leaf-key material, NO
- * mnemonic involved. Used by the session-cache flow: when the user
- * opts into "stay unlocked for N minutes," we stash the derived keys
- * + addresses + fingerprint in `chrome.storage.session` and rebuild
- * the wallet from them on popup reopen without re-prompting the
- * password.
- *
- * The returned `UnlockedWallet` has `mnemonic === undefined` and
- * `seed === undefined`. Surfaces that need either (BTC/LTC PSBT
- * signing, every Grin surface, Show Seed / Export Seed) must
- * gate-check and force a fresh password unlock.
- *
- * No mnemonic is ever cached, so a cache restore cannot produce one.
+ * Reconstruct session material without ever recovering a phrase or seed.
+ * Incomplete snapshots cannot establish WalletKeystore's unlocked state.
  */
 export function restoreUnlockedFromCache(args: {
   keys: DerivedKeys;
   addresses: WalletAddresses;
   fingerprint: string;
+  sessionSecrets?: SessionSecrets;
+  sessionExpiresAtMs?: number;
 }): UnlockedWallet {
   return {
     keys: args.keys,
     addresses: args.addresses,
     fingerprint: args.fingerprint,
-    // mnemonic + seed deliberately omitted; gate-check at the call site.
+    ...(args.sessionSecrets ? { sessionSecrets: args.sessionSecrets } : {}),
+    ...(args.sessionExpiresAtMs !== undefined ? { sessionExpiresAtMs: args.sessionExpiresAtMs } : {}),
+    // A session restores only scoped keys, never mnemonic or seed.
   };
 }
 
 /**
- * Hard upper bound on the auto-unlock TTL. Twenty-four hours. The
+ * Hard upper bound on the grace-period duration. Twenty-four hours. The
  * pre-2026-06-13 "Never" sentinel (`MAX_SAFE_INTEGER`) and the
  * negative-int "Never" convention are gone; any stored preference
  * that exceeds the cap clamps to the cap on read, so legacy v0.2.4
@@ -324,8 +304,7 @@ export const AUTO_LOCK_MAX_MINUTES = 24 * 60;
  * Normalise an arbitrary stored `autoLockMinutes` value into the
  * `[0, AUTO_LOCK_MAX_MINUTES]` band. Negative values (the legacy
  * "Never" convention) clamp to the cap; `MAX_SAFE_INTEGER` clamps
- * to the cap; non-finite or NaN values fall back to 0 (no cache).
- * Storing 0 still means "do not cache"; that path is preserved.
+ * to the cap; non-finite or NaN values fall back to 0 (lock on window close).
  */
 export function clampAutoLockMinutes(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
@@ -334,35 +313,26 @@ export function clampAutoLockMinutes(raw: unknown): number {
   return Math.floor(raw);
 }
 
-/**
- * Storage key for the optional session-cache (used by the "auto-lock
- * after N minutes" UX). Held in a separate, ephemeral storage
- * (`chrome.storage.session` on extension, in-memory elsewhere),
- * NEVER the persistent storage that holds the encrypted keystore.
- *
- * v0.3.0 (2026-06-13) bumped the on-disk version from `v1` (which
- * stored `{ mnemonic, fingerprint, expiresAtMs }`) to `v2` (which
- * stores `{ keys, addresses, fingerprint, expiresAtMs }`). The
- * parser rejects any payload missing `version: 2`, missing the
- * `_noMnemonic: true` brand, or containing a `mnemonic` field; on
- * rejection the cache is dropped and the user re-enters their
- * password once. No migration / dual-parse / shim: the user
- * decision was to break v0.2.4 cache compat for honest security.
- */
+/** In-memory grace-period cache. Version 3 requires complete scoped keys. */
 export const SESSION_CACHE_KEY = 'smirk_unlocked_session_cache';
 
 /**
- * On-the-wire shape of a v2 session-cache payload. The brand field
+ * On-the-wire shape of a complete v3 session-cache payload. The brand field
  * `_noMnemonic` is a compile-time + runtime safeguard: any future
  * commit that accidentally adds a `mnemonic` field would need to
  * remove the brand, which would surface in code review.
  */
 export interface SessionCachePayload {
-  readonly version: 2;
+  readonly version: 3;
   readonly _noMnemonic: true;
   readonly fingerprint: string;
   readonly keys: DerivedKeys;
   readonly addresses: WalletAddresses;
+  readonly sessionSecrets: SessionSecrets;
+  /** Lock event current when this cache was admitted. */
+  readonly lockId: string | null;
+  /** A handoff retains the original grace-period expiry; null means window-only. */
+  readonly sessionExpiresAtMs?: number | null;
   /** Unix ms when this cache becomes invalid. Finite: no Infinity / "never". */
   readonly expiresAtMs: number;
 }
@@ -370,10 +340,11 @@ export interface SessionCachePayload {
 /**
  * Parse a raw payload from `chrome.storage.session` into a
  * `SessionCachePayload`. Returns `null` for any of:
- *   - v0.2.x / pre-2026-06-13 v1 shape (mnemonic present, no version)
+ *   - v1 phrase caches or incomplete v2 leaf-key caches
  *   - missing or wrong `version`
  *   - missing `_noMnemonic` brand
- *   - any `mnemonic` field at all (defence-in-depth regression guard)
+ *   - any top-level mnemonic or BIP39 seed field
+ *   - missing, malformed or foreign scoped signing roots
  *   - structural mismatch
  * Callers should drop the stored entry on `null` so the user
  * re-enters the password once.
@@ -381,10 +352,14 @@ export interface SessionCachePayload {
 export function parseSessionCache(raw: unknown): SessionCachePayload | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  if ('mnemonic' in r) return null;
-  if (r.version !== 2) return null;
+  if ('mnemonic' in r || 'seed' in r) return null;
+  if (r.version !== 3) return null;
   if (r._noMnemonic !== true) return null;
   if (typeof r.fingerprint !== 'string') return null;
+  if (r.lockId !== null && typeof r.lockId !== 'string') return null;
+  if (!sessionSecretsUsable(r.sessionSecrets, r.fingerprint)) return null;
+  if (r.sessionExpiresAtMs !== undefined && r.sessionExpiresAtMs !== null
+    && (typeof r.sessionExpiresAtMs !== 'number' || !Number.isFinite(r.sessionExpiresAtMs))) return null;
   if (typeof r.expiresAtMs !== 'number' || !Number.isFinite(r.expiresAtMs)) {
     return null;
   }
@@ -470,15 +445,24 @@ export function reviveForSessionCache(value: unknown): unknown {
   return value;
 }
 
-/**
- * Cheap sanity check that a restored `DerivedKeys` still carries real byte
- * material (the BTC/LTC signing keys the auth bootstrap needs). Guards the
- * lost-bytes case where storage dropped the arrays entirely; the restore then
- * falls back to a password unlock instead of throwing mid-sign-in.
- */
+/** Require usable byte material for every supported signing and encryption key. */
 export function derivedKeysUsable(keys: DerivedKeys | undefined): boolean {
-  const ok = (u: unknown): boolean => u instanceof Uint8Array && u.length === 32;
-  return !!keys && ok(keys.btc?.privateKey) && ok(keys.ltc?.privateKey);
+  const bytes = (u: unknown, length: number): boolean =>
+    u instanceof Uint8Array && u.length === length && u.some((byte) => byte !== 0);
+  if (!keys) return false;
+  for (const asset of ['btc', 'ltc'] as const) {
+    if (!bytes(keys[asset]?.privateKey, 32) || !bytes(keys[asset]?.publicKey, 33)) return false;
+  }
+  for (const asset of ['xmr', 'wow'] as const) {
+    const key = keys[asset];
+    if (!key || !bytes(key.privateSpendKey, 32) || !bytes(key.privateViewKey, 32)
+      || !bytes(key.publicSpendKey, 32) || !bytes(key.publicViewKey, 32)) return false;
+  }
+  for (const asset of ['grin', 'nostr'] as const) {
+    if (!bytes(keys[asset]?.privateKey, 32) || !bytes(keys[asset]?.publicKey, 32)) return false;
+  }
+  return bytes(keys.enc?.xmr.seed, 32) && bytes(keys.enc?.xmr.publicKey, 32)
+    && bytes(keys.enc?.wow.seed, 32) && bytes(keys.enc?.wow.publicKey, 32);
 }
 
 // ============================================================================
@@ -499,23 +483,46 @@ export function derivedKeysUsable(keys: DerivedKeys | undefined): boolean {
  * - `lock`         :  unlocked → locked  (keys zeroed, dropped from memory)
  * - `destroy`      :  any → empty  (also zeroes in-memory state)
  *
- * On MV3 service-worker restart, the in-memory cached state is lost
- * and `getState()` re-reads from storage, which means a previously
- * `unlocked` wallet shows up as `locked` until the user re-enters
- * their password. That's intentional (see file header).
+ * A new wallet-window instance starts locked. Restarting a background worker
+ * does not affect an existing window's in-memory keystore.
  */
 export class WalletKeystore {
   private cached: UnlockedWallet | null = null;
+  private lockGeneration = 0;
 
   constructor(private storage: PlatformStorage) {}
+
+  /** Capture before asynchronous session reads so a later lock invalidates them. */
+  captureSessionGeneration(): number {
+    return this.lockGeneration;
+  }
+
+  /** Admit detached scoped material without any await between validation and use. */
+  admitRestoredSession(wallet: UnlockedWallet, generation: number, fingerprint: string, epochCurrent: boolean): UnlockedWallet | null {
+    if (!epochCurrent || this.cached || generation !== this.lockGeneration || wallet.fingerprint !== fingerprint
+      || wallet.mnemonic !== undefined || wallet.seed !== undefined
+      || !hasCompleteSigningMaterial(wallet)
+      || (wallet.sessionExpiresAtMs !== undefined
+        && (!Number.isFinite(wallet.sessionExpiresAtMs) || Date.now() >= wallet.sessionExpiresAtMs))) {
+      if (wallet !== this.cached) clearUnlockedWallet(wallet);
+      return null;
+    }
+    this.cached = wallet;
+    return wallet;
+  }
 
   /** Read the keystore from storage and combine with in-memory state. */
   async getState(): Promise<WalletState> {
     const keystore = await this.loadKeystore();
-    if (!keystore) return { kind: 'empty' };
-    if (this.cached) {
-      return { kind: 'unlocked', keystore, wallet: this.cached };
+    if (!keystore) {
+      await this.lock();
+      return { kind: 'empty' };
     }
+    if (this.cached && (
+      !hasCompleteSigningMaterial(this.cached) || this.cached.fingerprint !== keystore.fingerprint
+      || (this.cached.sessionExpiresAtMs !== undefined && Date.now() >= this.cached.sessionExpiresAtMs)
+    )) await this.lock();
+    if (this.cached) return { kind: 'unlocked', keystore, wallet: this.cached };
     return { kind: 'locked', keystore };
   }
 
@@ -531,6 +538,7 @@ export class WalletKeystore {
     password: string;
     iterations?: number;
   }): Promise<UnlockedWallet> {
+    const generation = this.lockGeneration;
     const existing = await this.loadKeystore();
     if (existing) {
       throw new Error(
@@ -544,19 +552,65 @@ export class WalletKeystore {
     );
     await this.storage.set(KEYSTORE_KEY, keystore);
     const wallet = await unlockKeystore(keystore, args.password);
+    if (generation !== this.lockGeneration) {
+      clearUnlockedWallet(wallet);
+      throw new WalletLockedError();
+    }
     this.cached = wallet;
     return wallet;
   }
 
   /** Decrypt the on-disk keystore and cache the result in memory. */
   async unlock(password: string): Promise<UnlockedWallet> {
+    const generation = this.lockGeneration;
     const keystore = await this.loadKeystore();
     if (!keystore) {
       throw new Error('No wallet to unlock — create one first.');
     }
     const wallet = await unlockKeystore(keystore, password);
+    if (generation !== this.lockGeneration) {
+      clearUnlockedWallet(wallet);
+      throw new WalletLockedError();
+    }
     this.cached = wallet;
     return wallet;
+  }
+
+  /** Verify an operation password without changing the live wallet or deadline. */
+  async verifyPassword(password: string, expectedWallet: UnlockedWallet = this.getUnlocked()): Promise<void> {
+    this.assertUnlockedWallet(expectedWallet);
+    const generation = this.lockGeneration;
+    const keystore = await this.loadKeystore();
+    if (!keystore || keystore.fingerprint !== expectedWallet.fingerprint) throw new WalletLockedError();
+    const temporary = await unlockKeystore(keystore, password);
+    try {
+      if (generation !== this.lockGeneration) throw new WalletLockedError();
+      this.assertUnlockedWallet(expectedWallet);
+    } finally {
+      clearUnlockedWallet(temporary);
+    }
+  }
+
+  /** Reveal only to the current session, without replacing it or renewing its expiry. */
+  async readRecoveryPhrase(password: string, expectedWallet: UnlockedWallet = this.getUnlocked()): Promise<string> {
+    this.assertUnlockedWallet(expectedWallet);
+    const generation = this.lockGeneration;
+    const keystore = await this.loadKeystore();
+    if (!keystore || keystore.fingerprint !== expectedWallet.fingerprint) throw new WalletLockedError();
+    const temporary = await unlockKeystore(keystore, password);
+    try {
+      if (generation !== this.lockGeneration) throw new WalletLockedError();
+      this.assertUnlockedWallet(expectedWallet);
+      if (!temporary.mnemonic) throw new Error('The encrypted wallet did not contain a recovery phrase.');
+      return temporary.mnemonic;
+    } finally {
+      clearUnlockedWallet(temporary);
+    }
+  }
+
+  /** An approval belongs to this exact live session, never a later unlock. */
+  assertUnlockedWallet(expectedWallet: UnlockedWallet): void {
+    if (this.getUnlocked() !== expectedWallet) throw new WalletLockedError();
   }
 
   /**
@@ -564,15 +618,9 @@ export class WalletKeystore {
    * Zeroes the seed buffer before releasing.
    */
   async lock(): Promise<void> {
-    if (this.cached) {
-      // `seed` is optional after the 2026-06-13 session-cache change:
-      // a wallet restored from cache has no seed bytes to zero.
-      this.cached.seed?.fill(0);
-      // Best-effort key zeroization. Some private-key fields are
-      // immutable typed arrays from `@noble/curves`; we zero what we can.
-      zeroKeysIfPossible(this.cached.keys);
-      this.cached = null;
-    }
+    this.lockGeneration += 1;
+    if (this.cached) clearUnlockedWallet(this.cached);
+    this.cached = null;
   }
 
   /** Wipe the keystore entirely. Use for "forget wallet" / re-import. */
@@ -661,7 +709,12 @@ export class WalletKeystore {
 
   /** Get the cached unlocked wallet, or throw `WalletLockedError`. */
   getUnlocked(): UnlockedWallet {
-    if (!this.cached) throw new WalletLockedError();
+    if (!this.cached || !hasCompleteSigningMaterial(this.cached)
+      || (this.cached.sessionExpiresAtMs !== undefined && Date.now() >= this.cached.sessionExpiresAtMs)) {
+      if (this.cached) clearUnlockedWallet(this.cached);
+      this.cached = null;
+      throw new WalletLockedError();
+    }
     return this.cached;
   }
 
@@ -679,6 +732,66 @@ export class WalletKeystore {
   }
 }
 
+/** Complete authority for advertised operations, fresh or restored. */
+export function hasCompleteSigningMaterial(wallet: UnlockedWallet): boolean {
+  if (!derivedKeysUsable(wallet.keys)) return false;
+  if (typeof wallet.mnemonic === 'string' && isValidMnemonic(wallet.mnemonic)
+    && wallet.seed instanceof Uint8Array && wallet.seed.length === 64
+    && wallet.seed.some((byte) => byte !== 0)) return true;
+  return sessionSecretsUsable(wallet.sessionSecrets, wallet.fingerprint);
+}
+
+/** Reject truncated roots and any BIP32 root outside its intended subtree. */
+export function sessionSecretsUsable(raw: unknown, fingerprint: string): raw is SessionSecrets {
+  if (!raw || typeof raw !== 'object') return false;
+  const s = raw as SessionSecrets;
+  const bytes = (v: unknown, length: number): boolean =>
+    v instanceof Uint8Array && v.length === length && v.some((byte) => byte !== 0);
+  for (const asset of ['btc', 'ltc'] as const) {
+    if (!bytes(s[asset]?.privateKey, 32) || !bytes(s[asset]?.chainCode, 32)) return false;
+  }
+  if (!bytes(s.grin?.extendedPrivateKey, 64) || !bytes(s.grin?.legacyExtendedPrivateKey, 64)
+    || !bytes(s.grin?.slatepackSecret, 32) || typeof s.grin?.slatepackAddress !== 'string'
+    || !s.grin.slatepackAddress.startsWith('grin1') || !/^[0-9a-f]{64}$/.test(s.grin.rewindHash)) return false;
+  if (!s.nostr || s.nostr.fingerprint !== fingerprint || !bytes(s.nostr.vaultKey, 32)) return false;
+  try {
+    for (const [root, index] of [
+      [s.nostr.identityRoot, 1237], [s.nostr.originRoot, 4], [s.nostr.appEncryptionRoot, 3],
+    ] as const) {
+      const node = HDKey.fromExtendedKey(root);
+      if (!node.privateKey || node.depth !== 2 || node.index !== 0x80000000 + index) return false;
+      node.wipePrivateData();
+    }
+  } catch { return false; }
+  return true;
+}
+
+/** Revoke shared wallet references as well as the keystore's own reference. */
+function clearUnlockedWallet(wallet: UnlockedWallet): void {
+  wallet.seed?.fill(0);
+  delete wallet.seed;
+  delete wallet.mnemonic;
+  zeroKeysIfPossible(wallet.keys);
+  if (wallet.sessionSecrets) {
+    const secrets = wallet.sessionSecrets;
+    for (const bytes of [
+      secrets.btc?.privateKey, secrets.btc?.chainCode,
+      secrets.ltc?.privateKey, secrets.ltc?.chainCode,
+      secrets.grin?.extendedPrivateKey, secrets.grin?.legacyExtendedPrivateKey,
+      secrets.grin?.slatepackSecret, secrets.nostr?.vaultKey,
+    ]) {
+      if (bytes instanceof Uint8Array) bytes.fill(0);
+    }
+    if (secrets.nostr) {
+      secrets.nostr.identityRoot = '';
+      secrets.nostr.originRoot = '';
+      secrets.nostr.appEncryptionRoot = '';
+    }
+    delete wallet.sessionSecrets;
+  }
+  delete wallet.sessionExpiresAtMs;
+}
+
 function zeroKeysIfPossible(keys: DerivedKeys): void {
   const tryFill = (b: Uint8Array | undefined): void => {
     if (b) {
@@ -689,13 +802,15 @@ function zeroKeysIfPossible(keys: DerivedKeys): void {
       }
     }
   };
-  tryFill(keys.btc.privateKey);
-  tryFill(keys.ltc.privateKey);
-  tryFill(keys.xmr.privateSpendKey);
-  tryFill(keys.xmr.privateViewKey);
-  tryFill(keys.wow.privateSpendKey);
-  tryFill(keys.wow.privateViewKey);
-  tryFill(keys.grin.privateKey);
-  tryFill(keys.nostr.privateKey);
-  tryFill(keys.nostr.publicKey);
+  tryFill(keys.btc?.privateKey);
+  tryFill(keys.ltc?.privateKey);
+  tryFill(keys.xmr?.privateSpendKey);
+  tryFill(keys.xmr?.privateViewKey);
+  tryFill(keys.wow?.privateSpendKey);
+  tryFill(keys.wow?.privateViewKey);
+  tryFill(keys.grin?.privateKey);
+  tryFill(keys.nostr?.privateKey);
+  tryFill(keys.nostr?.publicKey);
+  tryFill(keys.enc?.xmr.seed);
+  tryFill(keys.enc?.wow.seed);
 }

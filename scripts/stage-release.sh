@@ -84,7 +84,7 @@ for z in ${zips[@]+"${zips[@]}"}; do
 
   # Extension artifact: zips + checksums land at the top level, where
   # sign-release.sh looks for them.
-  for f in "$ex"/*.zip "$ex"/SHA256SUMS-*.txt "$ex"/TOOLCHAIN-*.txt; do
+  for f in "$ex"/*.zip "$ex"/SHA256SUMS-*.txt "$ex"/TOOLCHAIN-*.txt "$ex"/RELEASE-PROVENANCE-*.json; do
     [ -e "$f" ] || continue
     cp -f "$f" "$DEST/"
     echo "    -> $(basename "$f")"
@@ -104,4 +104,4 @@ echo
 echo "next, in this order (Authenticode rewrote the Windows exe, so any earlier"
 echo "signature over it is stale):"
 echo "  scripts/make-updater-manifest.sh $VERSION --bundle-dir $DEST"
-echo "  SMIRK_SIGNING_KEY='<key id>' scripts/sign-release.sh $VERSION --bundle-dir $DEST"
+echo "  SMIRK_SIGNING_KEY='<full signing subkey fingerprint>!' scripts/sign-release.sh $VERSION --bundle-dir $DEST --expect-commit '<reviewed source commit>'"

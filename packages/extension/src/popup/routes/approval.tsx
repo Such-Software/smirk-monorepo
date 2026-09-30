@@ -164,6 +164,8 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
     // SW via `approvalPopupBridge.writeResult`.
     const result = await executeApproval(request, approval, {
       wallet,
+      authorizeOperation,
+      assertOperationSession,
       ensureWasmInit,
       send,
       claimPublicTip,
@@ -172,6 +174,7 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
       loadState: () => store.load(),
       updateState: (m) => store.update(m),
     });
+    if (approval.kind !== 'requestPayment' && approval.kind !== 'claimPublicTip') assertOperationSession(wallet);
     await finish(result);
   };
 
@@ -189,3 +192,4 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
     />
   );
 }
+import { authorizeOperation, assertOperationSession } from '../operation-auth';

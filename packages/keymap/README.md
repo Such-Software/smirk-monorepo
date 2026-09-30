@@ -1,5 +1,7 @@
 # @smirk/keymap
 
+> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+
 Cross-platform keyboard-shortcut registry for Smirk Wallet.
 
 This package answers a narrow question:
@@ -54,3 +56,10 @@ first for context.
 ## License
 
 MIT OR Apache-2.0.
+
+## Maintenance checklist
+
+- [ ] Behavior and commands match the current source.
+- [ ] Verification and failure conditions are described.
+- [ ] Planned work is distinguished from available features.
+- [ ] No private operational evidence or credential values are included.

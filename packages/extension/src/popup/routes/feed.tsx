@@ -14,6 +14,7 @@ import {
 import { IdentityPicker, type PickerIdentity } from '@smirk/ui';
 import { feedTimeAgo } from '../format';
 import { PremiumPurchase } from './premium-purchase';
+import { authorizeOperation, assertOperationSession } from '../operation-auth';
 import {
   getActiveNostrIdentityFromWallet,
   resolveNostrIdentityForOrigin,
@@ -183,6 +184,8 @@ export function FeedRoute({
     setSending(true);
     setError(undefined);
     try {
+      await authorizeOperation('sign', wallet, 'Sign and publish this post');
+      assertOperationSession(wallet);
       const relays = [feed.relay_url, ...feed.extra_relays];
       const note = await notesApiRef.current!.publishNote(body, identity, relays);
       setNotes((prev) => [note, ...prev.filter((n) => n.id !== note.id)]);

@@ -26,8 +26,10 @@ import {
   bytesToHex,
   signBitcoinMessage,
   deriveNostrIdentity,
+  requireNostrKeySource,
   solvePowChallenge,
   bootstrapAuth,
+  requireRestoreState,
 } from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
@@ -121,16 +123,9 @@ export async function bootstrapAuthInExtension(
   const nostrNative = caps.data.features?.nostr_native_auth === true;
 
   if (nostrNative) {
-    // npub-native backend, but no mnemonic in hand: the v2 session cache
-    // deliberately drops it (keystore.ts `mnemonic?: string`), which is the
-    // NORMAL state after a warm restore. Signing the NIP-98 register event
-    // needs it, and falling through to the BTC path is precisely what mints the
-    // duplicate account, so ask for the one thing that fixes it.
-    if (!wallet.mnemonic) {
-      throw new Error(
-        'Signing in needs the unlocked mnemonic: re-unlock the wallet',
-      );
-    }
+    // Restore signs with the same scoped Nostr root as a fresh unlock.
+    // Missing material must never switch this wallet to another auth identity.
+    requireNostrKeySource(wallet);
     try {
       const bootstrap = await bootstrapViaNostr(api, wallet, keys, effectiveGate);
       await clearPendingRegistrationInvoice(wallet.fingerprint);
@@ -177,10 +172,9 @@ export async function bootstrapAuthInExtension(
 }
 
 /**
- * npub-native bootstrap (NIP-98). Popup-resident: signing the register event and
- * solving PoW both need the seed, which never leaves the popup (unlike the BTC
- * path, this does not use the offscreen job. A heavy-PoW nostr backend requires
- * the popup to stay open, matching the pay-to-register UX). `checkRestore`
+ * npub-native bootstrap (NIP-98). Signing uses the primary Nostr key source.
+ * This path stays in the popup, including proof-of-work, so a backend requiring
+ * expensive proof-of-work needs the popup to remain open. `checkRestore`
  * resumes heights + detects a returning wallet (so PoW is skipped, exactly like
  * the BTC handler). A not-yet-settled pay-to-register invoice throws the shared
  * PAYMENT_PENDING_SENTINEL so the onboarding router's poll keeps waiting.
@@ -191,25 +185,15 @@ async function bootstrapViaNostr(
   keys: ReadonlyArray<{ asset: string; publicKey: string }>,
   gate?: { inviteCode?: string; paymentInvoiceId?: string },
 ): Promise<BootstrapJobResult['bootstrap']> {
-  const identity = deriveNostrIdentity(wallet.mnemonic!, 0);
+  const identity = deriveNostrIdentity(requireNostrKeySource(wallet), 0);
 
-  // Resume heights + returning detection (fingerprint is derivation-independent).
-  let xmrStartHeight: number | undefined;
-  let wowStartHeight: number | undefined;
-  let isKnown = false;
-  try {
-    const rc = await api.checkRestore({
-      fingerprint: wallet.fingerprint,
-      keys: keys.map((k) => ({ asset: k.asset, publicKey: k.publicKey })),
-    });
-    if (rc.data?.exists) {
-      isKnown = true;
-      if (typeof rc.data.xmrStartHeight === 'number') xmrStartHeight = rc.data.xmrStartHeight;
-      if (typeof rc.data.wowStartHeight === 'number') wowStartHeight = rc.data.wowStartHeight;
-    }
-  } catch (e) {
-    console.warn('[bootstrap-nostr] checkRestore failed, treating as new:', e);
-  }
+  const restore = await requireRestoreState(api, {
+    fingerprint: wallet.fingerprint,
+    keys: keys.map((key) => ({ asset: key.asset, publicKey: key.publicKey })),
+  });
+  const isKnown = restore.exists;
+  const xmrStartHeight = isKnown ? restore.xmrStartHeight ?? undefined : undefined;
+  const wowStartHeight = isKnown ? restore.wowStartHeight ?? undefined : undefined;
 
   const walletBirthday = isKnown ? undefined : Math.floor(Date.now() / 1000);
 
@@ -251,8 +235,7 @@ async function bootstrapViaNostr(
     }
     // The wallet's seed is already registered on this backend but its npub isn't
     // linked, so npub-register is refused. A 409 is the DEFINITIVE "already has an
-    // account" signal (independent of checkRestore, which may have been rate-limited
-    // to a false `isKnown=false`); `isKnown` covers the 400-PoW-required variant.
+    // account" signal; `isKnown` covers the 400-PoW-required variant.
     // Either way, fall back to BTC auth, which signs the existing account in.
     if (res.status === 409 || isKnown) {
       throw new Error(NOSTR_FALLBACK_TO_BTC);
@@ -267,6 +250,7 @@ async function bootstrapViaNostr(
     // Namespaced backend puts is_new at the top level (data.isNew); a flat
     // backend may nest it under user. Read both so onboarding branches correctly.
     isNew: res.data.isNew ?? res.data.user.isNew ?? false,
+    restoreState: isKnown ? 'existing' : 'new',
     ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
     ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
   };

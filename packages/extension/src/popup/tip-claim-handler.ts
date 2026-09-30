@@ -1,3 +1,4 @@
+import { authorizeOperation, assertOperationSession } from './operation-auth';
 /**
  * Receiver-side tip claim handler.
  *
@@ -31,6 +32,7 @@
  * collision-avoidance is why envelope versions 0x02 and 0x03 can never be used.
  */
 
+import { grinKeySource, grinExtendedKey, grinSlatepackSecret } from './session-signing';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { Transaction, p2wpkh, NETWORK } from '@scure/btc-signer';
@@ -128,6 +130,11 @@ export async function claimSocialTip(
   tipId: string,
   asset: ClaimAsset,
 ): Promise<ClaimOutcome> {
+  try {
+    await authorizeOperation('send', wallet, 'Claim this tip into your wallet');
+  } catch (failure) {
+    return { ok: false, error: failure instanceof Error ? failure.message : 'Password confirmation failed.' };
+  }
   // Step 1: backend claim returns encrypted_key + tip_address.
   const claim = await api.claimSocialTip(tipId);
   if (claim.error || !claim.data) {
@@ -145,6 +152,7 @@ export async function claimSocialTip(
   // suite calls for.
   let decrypted: Uint8Array;
   try {
+    assertOperationSession(wallet);
     decrypted = decryptTargetedPayload(encrypted_key, asset, wallet);
   } catch (e) {
     return {
@@ -302,12 +310,12 @@ function decryptTargetedPayload(
     case TipSuite.AgeSlatepack: {
       // Sealed to the grin1 address, so only the seed behind that address
       // opens it. A session-cache restore drops the mnemonic by design.
-      if (!wallet.mnemonic) {
+      if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
         throw new Error(
           'Claiming a Grin tip needs the unlocked wallet. Unlock Smirk and try again.',
         );
       }
-      const secretHex = wasmGrin.slatepackAddressSecret(wallet.mnemonic, 0);
+      const secretHex = grinSlatepackSecret(grinKeySource(wallet));
       return openAge(envelope, hexToBytes(secretHex), wasmAgeSealer);
     }
 
@@ -367,6 +375,11 @@ export async function clawbackSocialTip(
   userId: string,
   tipId: string,
 ): Promise<ClaimOutcome> {
+  try {
+    await authorizeOperation('send', wallet, 'Recover this tip into your wallet');
+  } catch (failure) {
+    return { ok: false, error: failure instanceof Error ? failure.message : 'Password confirmation failed.' };
+  }
   // 1. Look up the local backup. Without it we can't sweep: the
   //    backend never stored the per-tip private key.
   const backup = await getTipKeyBackup(tipId);
@@ -382,6 +395,7 @@ export async function clawbackSocialTip(
   //    (symmetric: see `tip-key-backup.ts::deriveStorageKey`).
   let keyMaterial: Uint8Array;
   try {
+    assertOperationSession(wallet);
     keyMaterial = decryptTipKeyBackup(backup, wallet.keys.btc.privateKey);
   } catch (e) {
     return {
@@ -472,6 +486,11 @@ export async function claimPublicTip(
   tipId: string,
   fragmentKeyEncoded: string,
 ): Promise<ClaimOutcome> {
+  try {
+    await authorizeOperation('send', wallet, 'Claim this tip into your wallet');
+  } catch (failure) {
+    return { ok: false, error: failure instanceof Error ? failure.message : 'Password confirmation failed.' };
+  }
   // Step 1: fetch tip info (unauthenticated). Confirms the tip
   // exists, exposes asset + tip_address + ciphertext + claimability.
   const info = await api.getPublicSocialTip(tipId);
@@ -729,10 +748,12 @@ async function sweepUtxo(
     });
   }
   tx.addOutputAddress(recipientAddress, BigInt(sweepSat), network);
+  assertOperationSession(wallet);
   tx.sign(tipPrivateKey);
   tx.finalize();
 
   const txHex = hex.encode(tx.extract());
+  assertOperationSession(wallet);
   const broadcast = await chainProviders.utxo(asset).broadcast(txHex);
   if (broadcast.error || !broadcast.data) {
     return {
@@ -928,6 +949,7 @@ async function sweepXmrWow(
 
   let signed: { tx_hex: string; tx_hash: string; fee: number };
   try {
+    assertOperationSession(wallet);
     const signedJson = wasmMonero.signTransaction(JSON.stringify(params));
     signed = parseWasmResult<{ tx_hex: string; tx_hash: string; fee: number }>(signedJson);
   } catch (e) {
@@ -937,6 +959,7 @@ async function sweepXmrWow(
     };
   }
 
+  assertOperationSession(wallet);
   const submit = await chainProviders.lws(asset).broadcast(signed.tx_hex);
   if (submit.error || !submit.data) {
     return {
@@ -1035,10 +1058,10 @@ async function sweepGrin(
     };
   }
 
-  if (!wallet.mnemonic) {
+  if (!wallet.mnemonic && !wallet.sessionSecrets?.grin) {
     return { ok: false, error: 'Mnemonic unavailable — cannot derive Grin key' };
   }
-  const extKey = JSON.parse(wasmGrin.deriveExtendedKey(wallet.mnemonic)) as {
+  const extKey = JSON.parse(grinExtendedKey(grinKeySource(wallet))) as {
     extended_private_key_hex: string;
   };
 
@@ -1056,8 +1079,8 @@ async function sweepGrin(
   const overlay = grinOverlay;
   try {
     await resolveGrinSpendable({
-      mnemonic: wallet.mnemonic,
-      rewindHash: grinRewindHashFromMnemonic(wallet.mnemonic),
+      mnemonic: grinKeySource(wallet),
+      rewindHash: grinRewindHashFromMnemonic(grinKeySource(wallet)),
       overlay,
     });
   } catch (e) {
@@ -1114,6 +1137,7 @@ async function sweepGrin(
 
   let result;
   try {
+    assertOperationSession(wallet);
     result = wasmGrin.sweepGrinVoucher(sweepParams);
   } catch (e) {
     return {
@@ -1128,6 +1152,7 @@ async function sweepGrin(
   // (Transaction body); see serialize_voucher_tx_json in
   // crates/grin-ext/src/voucher.rs.
   const sweepSlateId = uuidV4();
+  assertOperationSession(wallet);
   const broadcast = await chainProviders.grin().broadcast({
     tx: result.tx_json as object,
   });

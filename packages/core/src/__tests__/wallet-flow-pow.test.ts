@@ -69,6 +69,7 @@ function withMockBackend<T>(
       return new Response(
         JSON.stringify({
           exists: script.checkRestoreExists,
+          keys_valid: script.checkRestoreExists ? true : null,
           xmr_start_height: script.checkRestoreExists ? 3_400_000 : undefined,
           wow_start_height: script.checkRestoreExists ? 700_000 : undefined,
         }),
@@ -156,6 +157,19 @@ function makeUnlockedWallet(): UnlockedWallet {
   } as unknown as UnlockedWallet;
 }
 
+test('bootstrapAuth refuses unavailable restore evidence before PoW or registration', async (t) => {
+  const api = new SmirkApi();
+  t.mock.method(api, 'checkRestore', async () => ({ error: 'restore service unavailable', status: 503 }));
+  let registered = false;
+  let solved = false;
+  t.mock.method(api, 'extensionRegister', async () => { registered = true; return { error: 'unexpected registration' }; });
+  await assert.rejects(bootstrapAuth(api, makeUnlockedWallet(), {
+    powSolver: async () => { solved = true; return null; },
+  }), /restore service unavailable/);
+  assert.equal(registered, false);
+  assert.equal(solved, false);
+});
+
 test('bootstrapAuth: NEW wallet → powSolver IS called and altcha_solution rides in the request', async () => {
   const script: ServerScript = {
     checkRestoreExists: false,
@@ -167,12 +181,13 @@ test('bootstrapAuth: NEW wallet → powSolver IS called and altcha_solution ride
   let solverCalls = 0;
 
   await withMockBackend(script, async () => {
-    await bootstrapAuth(api, wallet, {
+    const result = await bootstrapAuth(api, wallet, {
       powSolver: async () => {
         solverCalls++;
         return FAKE_PAYLOAD;
       },
     });
+    assert.equal(result.restoreState, 'new');
   });
 
   assert.equal(solverCalls, 1, 'new-wallet path MUST invoke the PoW solver');
@@ -197,12 +212,13 @@ test('bootstrapAuth: RETURNING wallet → powSolver is NOT called (mirrors backe
   let solverCalls = 0;
 
   await withMockBackend(script, async () => {
-    await bootstrapAuth(api, wallet, {
+    const result = await bootstrapAuth(api, wallet, {
       powSolver: async () => {
         solverCalls++;
         return FAKE_PAYLOAD;
       },
     });
+    assert.equal(result.restoreState, 'existing');
   });
 
   assert.equal(

@@ -1,5 +1,5 @@
 import { nativeFetch } from '../native-fetch';
-import { useMemo, useState, useEffect } from 'preact/hooks';
+import { useMemo } from 'preact/hooks';
 import { TrocadorSwap } from '@smirk/swap';
 import { api, type UnlockedWallet } from '@smirk/core';
 import {
@@ -51,44 +51,36 @@ export function SwapRouter({
   const webhookBase = backendBase.replace(/\/api\/v1\/?$/, '');
   const webhookUrl = `${webhookBase}/api/v1/webhook/trocador`;
 
-  // Instantiate TrocadorSwap once per mount: build-time API key plus the
-  // webhook pointed at whichever backend this wallet is configured for.
-  // passthrough is set on a per-trade basis (random token), not here.
-  // Desktop needs a fetch that leaves the webview: Trocador sends no CORS header
-  // for a tauri:// origin, so quotes failed with "Load failed" there while the
-  // extension worked. Resolved async, so the client is rebuilt once it arrives.
-  const [nativeFetchImpl, setNativeFetchImpl] = useState<typeof fetch | undefined>(
-    undefined,
-  );
-  useEffect(() => {
-    let alive = true;
-    void nativeFetch().then((f) => {
-      if (alive && f) setNativeFetchImpl(() => f);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const trocador = useMemo(
-    () =>
-      apiKey
-        ? new TrocadorSwap({
-            apiKey,
-            webhookUrl,
-            ...(nativeFetchImpl ? { fetch: nativeFetchImpl } : {}),
-          })
-        : null,
-    [apiKey, webhookUrl, nativeFetchImpl],
-  );
+  // Desktop installs its native transport before the popup mounts. Never
+  // offer a quote through browser fetch while that transport is unavailable.
+  const { trocador, connectionError } = useMemo(() => {
+    if (!apiKey) return { trocador: null, connectionError: null };
+    try {
+      const transport = nativeFetch();
+      return {
+        trocador: new TrocadorSwap({
+          apiKey,
+          webhookUrl,
+          ...(transport ? { fetch: transport } : {}),
+        }),
+        connectionError: null,
+      };
+    } catch (error) {
+      return {
+        trocador: null,
+        connectionError: error instanceof Error
+          ? error.message
+          : 'The swap connection is unavailable. Restart Smirk and try again.',
+      };
+    }
+  }, [apiKey, webhookUrl]);
 
   if (!trocador) {
     return (
       <div>
         <h2 style={{ fontSize: 16, marginTop: 0 }}>Swap</h2>
         <p class="muted" style={{ fontSize: 12 }}>
-          Swap is disabled in this build (VITE_TROCADOR_API_KEY unset).
-          Set it at build time to enable Trocador.
+          {connectionError ?? 'Swaps are currently unavailable in this app.'}
         </p>
       </div>
     );

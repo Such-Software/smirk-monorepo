@@ -143,3 +143,13 @@ test('a recipient with a published inbox is delivered there too', async () => {
     assert.ok(sent[0]?.includes('wss://relay.ours.example/'), 'our copy still lands where we read');
   });
 });
+
+test('a session revoked during recipient lookup cannot sign or deliver the message', async () => {
+  initSmirkMessaging({ relayUrl: 'wss://relay.ours.example/' });
+  await withProvider(['wss://relay.theirs.example/'], async (sent) => {
+    await assert.rejects(sendDm(alice(), bob().npub, 'hi', 0, () => {
+      throw new Error('Wallet is locked');
+    }), /locked/);
+    assert.deepEqual(sent, []);
+  });
+});
