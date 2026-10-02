@@ -326,7 +326,7 @@ jobs:
         run: make wasm
 
       - name: Install workspace deps
-        run: npm install
+        run: npm ci
 
       - name: Build TypeScript workspace
         shell: bash
@@ -648,7 +648,7 @@ jobs:
           node-version: '22'
 
       - name: Install TS deps
-        run: npm install
+        run: npm ci
 
       # Version comes from the manifest, which is the source of truth. The desktop
       # legs above now resolve it the same way, so every leg of a release names
