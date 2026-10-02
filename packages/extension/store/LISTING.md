@@ -1,6 +1,6 @@
 # Store listings: Smirk Wallet v0.3.0
 
-> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+> Status: stable · Updated 2026-10-02 · Applies to: Smirk client source
 
 Source of truth for what goes in the Chrome Web Store and addons.mozilla.org
 listings. Edit here, paste from here, so the two stores cannot drift apart.
@@ -41,40 +41,38 @@ longer the whole of it.
 
 ## Detailed description
 
-    Smirk is a non-custodial wallet for five chains, with a Nostr identity built
-    in.
+    Smirk: Non-Custodial Tipping Wallet
 
-    Bitcoin, Litecoin, Monero, Wownero and Grin, in one extension, with a live
-    fiat total across all of them.
+    Smirk is a private, non-custodial wallet for Bitcoin, Litecoin, Monero, Wownero and Grin, with a Nostr identity built in. One extension, five chains, one backup.
 
-    YOUR KEYS, YOUR COINS
-    Your seed is generated on your device, encrypted with your password, and
-    never sent to a backend. Backend registration policy depends on the
-    operator. A server can restrict its services, but it does not hold the
-    spending keys needed to move your wallet funds.
+    YOUR KEYS NEVER LEAVE YOUR DEVICE
+    Your seed is created on your device and encrypted with your password. It is never sent to any server. Smirk's server shows balances and broadcasts transactions; it cannot move your coins. For Monero, Wownero and Grin it receives a view-only key so it can see incoming payments. It can never spend them.
+
+    PRIVACY COINS, DONE PROPERLY
+    Full Monero and Wownero light-wallet support, with history built only from your own outputs. Grin also uses our new open-source light-wallet system backend to offer seamless usage without having to wait on long wallet syncs.
+
+    SWAP BETWEEN CHAINS
+    Swap between supported coins inside the wallet. You see the quote and the fee before you confirm.
 
     A NOSTR IDENTITY FROM THE SAME SEED
-    Your Nostr key is derived from your wallet seed, so your identity travels
-    with your backup. Keep separate burner identities for things you do not want
-    linked, or import an nsec you already have. Send and receive end-to-end
-    encrypted messages, and get paid over Nostr.
+    Your Nostr key comes from your wallet seed, so your identity is restored with your backup. Use it on Nostr sites through the built-in NIP-07 signer, claim a readable name@domain handle, keep separate burner identities, or import an nsec you already have.
 
-    WORKS WITH WEB APPS
-    Smirk exposes a wallet API to sites that ask for it, so a web app can request
-    a payment or a signature. The approval screen shows what you are
-    approving when a request needs confirmation. Optional scoped permissions
-    can cover later requests; revoke them in Settings. You can also require a
-    password for each send or signing request while keeping the wallet unlocked.
+    MESSAGES AND TIPS IN ONE INBOX
+    Send end-to-end encrypted messages, and send or receive tips over Nostr.
 
-    RUN YOUR OWN SERVER
-    Smirk talks to a backend for chain data. The default is ours; the wallet
-    lets you point it at your own, and the server is open source so you can run
-    it yourself. To show a Monero, Wownero or Grin balance without downloading
-    the whole chain, the wallet hands that server a view-only key: it can see
-    payments coming in, it can never spend. Your seed and your spend keys stay
-    on your device either way, so no server can move your money.
+    WORKS WITH WEB APPS, ON YOUR TERMS
+    Sites can request a payment or a signature. You see exactly what you are approving. Grant scoped permissions if you want them, see every connected site, and revoke any of them in Settings. Optionally require your password for every send or signature, even while the wallet is unlocked.
 
-    OPEN SOURCE
+    FAST AND PREDICTABLE
+    Balances appear instantly from the last known state, then refresh. Fiat estimates are shown before you send, and the fee you see is the fee you sign.
+
+    RUN IT YOURSELF
+    Smirk uses our server by default. You can point it at your own, and the server is open source.
+
+    ALSO ON DESKTOP AND FIREFOX
+    The same wallet is available for Firefox and as a desktop app for Windows, macOS and Linux.
+
+    OPEN SOURCE, MIT LICENSED
     https://github.com/Such-Software/smirk-monorepo
 
 Keep the CAPS headers. Neither store renders markdown, and they are the only
