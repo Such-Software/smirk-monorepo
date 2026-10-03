@@ -212,15 +212,16 @@ publisher and timestamp checks. See the [desktop owner](../packages/desktop/READ
 for platform behavior and the [extension release process](../packages/extension/RELEASE.md)
 for reproduction and store submission.
 
-Before Windows compilation, `scripts/ci/windows-signing-preflight.mjs` reads the
-breaker, queue, keepalive history and named broker task metadata. Missing,
-malformed, future or older-than-nine-hour warm evidence refuses. A stopped
-broker also refuses. If the runner cannot read its task metadata, liveness is
-unknown and the build refuses; the operator must resolve observation access
-through the Fleet-owned signing setup. A warm timestamp records an earlier
-successful operation, not current token login. This preflight never signs,
-starts a task or supplies a PIN. Present token usability remains unknown until
-the actual candidate is signed and its signature verified.
+Before Windows compilation, `scripts/ci/windows-signing-preflight.mjs` applies
+the broker contract shared with every app that signs on this host: the
+`SIGNING_LOCKED` breaker must be absent and the `in` and `out` queues must be
+real directories, not links. Any other state refuses and names its cause. The
+preflight never signs, starts a task or supplies a PIN, and it claims nothing
+about broker or token liveness. The runner account cannot read the broker's
+scheduled task, which belongs to the interactive token owner, so task metadata
+is not evidence here. Liveness is proven when `sign-windows.ps1` receives the
+signed file within its ten-minute bound and verifies its Authenticode status,
+RFC 3161 timestamp and publisher; a timeout refuses and is never retried.
 
 Credential enrollment belongs to the reviewed custody procedure. Routine builds
 consume enrolled credentials. Store submissions and public uploads remain

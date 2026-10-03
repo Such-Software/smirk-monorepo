@@ -132,9 +132,9 @@ jobs:
             }
           done
 
-      # Read-only, cheap admission before toolchain installation or compilation.
-      # A recent keepalive is historical evidence. Broker liveness requires a
-      # readable Running task observation; denied or absent metadata refuses.
+      # Read-only, cheap admission before toolchain installation or compilation:
+      # the shared broker contract (breaker clear, real in/out queues). Broker and
+      # token liveness are proven only by the signed, verified artifact.
       - name: Preflight the Windows signing broker
         if: matrix.os_label == 'windows'
         run: node scripts/ci/windows-signing-preflight.mjs

@@ -28,6 +28,15 @@ if (Test-Path 'C:\signing\SIGNING_LOCKED') {
     throw "sign-windows: the broker's circuit breaker is tripped; an operator must clear it."
 }
 
+# Same contract as every other app on this host: both queues must be real
+# directories, never links that could redirect a payload.
+foreach ($queue in 'C:\signing\in', 'C:\signing\out') {
+    $item = Get-Item -LiteralPath $queue -Force -ErrorAction SilentlyContinue
+    if (-not $item -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "sign-windows: broker queue $queue is missing or is not a real directory."
+    }
+}
+
 # The queue is shared with every other app on this host, so the name has to be
 # unique. Collide and two builds race over one output file.
 $runId  = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { [guid]::NewGuid().ToString('N') }
