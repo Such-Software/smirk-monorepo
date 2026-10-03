@@ -25,3 +25,10 @@ test('every workspace in the lockfile exists in the tree', () => {
     assert.ok(existsSync(join(root, path, 'package.json')), `lockfile names a workspace absent from the tree: ${path}`);
   }
 });
+
+test('every desktop release build resolves dependencies from the committed lockfile', () => {
+  const workflow = readFileSync(join(root, '.gitea/workflows/desktop-build.yml'), 'utf8');
+  const builds = workflow.split('\n').filter((line) => /args: '--target |tauri -w @smirk\/desktop -- build/.test(line));
+  assert.ok(builds.length >= 4, 'expected the signed matrix builds and the unsigned build');
+  for (const line of builds) assert.match(line, /-- --locked/, `desktop build may rewrite Cargo.lock: ${line.trim()}`);
+});

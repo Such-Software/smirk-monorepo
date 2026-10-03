@@ -55,7 +55,7 @@ jobs:
       matrix:
         include:
           - runner: macos-latest
-            args: '--target universal-apple-darwin'
+            args: '--target universal-apple-darwin -- --locked'
             # `target` is only the Tauri bundle OUTPUT dir. `universal-apple-darwin`
             # is NOT a real rustup target (no rust-std for it) — a universal binary
             # is aarch64 + x86_64 lipo'd, so install BOTH real arches instead.
@@ -65,14 +65,14 @@ jobs:
           - runner: ubuntu-latest
             # Explicit --target so the bundle lands in target/<target>/release,
             # matching the macOS path (an empty target builds to target/release).
-            args: '--target x86_64-unknown-linux-gnu'
+            args: '--target x86_64-unknown-linux-gnu -- --locked'
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
             os_label: linux
           - runner: windows
             # Explicit --target so the output lands in target/<triple>/release
             # (matching the staging path); an empty target builds to target/release.
-            args: '--target x86_64-pc-windows-msvc'
+            args: '--target x86_64-pc-windows-msvc -- --locked'
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
             os_label: windows
@@ -378,7 +378,7 @@ jobs:
           # -w: the tauri script lives in the @smirk/desktop workspace, not the
           # root package. The signed pass goes through tauri-action, which resolves
           # that itself, which is why only this hand-written pass needed telling.
-          npm run tauri -w @smirk/desktop -- build --target ${{ matrix.target }} --no-sign
+          npm run tauri -w @smirk/desktop -- build --target ${{ matrix.target }} --no-sign -- --locked
           dest="$RUNNER_TEMP/smirk-unsigned-v${{ steps.ver.outputs.version }}"
           rm -rf "$dest"; mkdir -p "$dest"
           base="packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
