@@ -445,6 +445,31 @@ jobs:
           }
           bash scripts/verify-macos-release.sh "${apps[0]}"
 
+      # The app inside is notarized, but the disk image around it must be signed,
+      # notarized and stapled too, or Gatekeeper rejects the image itself. This
+      # runs before staging so provenance records only the finished image, and it
+      # refuses rather than ship an unsigned container.
+      - name: Build, sign and notarize macOS disk image
+        if: matrix.os_label == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
+          [ "${#apps[@]}" -eq 1 ] || {
+            echo 'Expected one built macOS app for the disk image.' >&2; exit 1;
+          }
+          out="$RUNNER_TEMP/smirk-dmg-v${{ steps.ver.outputs.version }}"
+          mkdir -p "$out"
+          bash scripts/ci/sign-macos-dmg.sh "${apps[0]}" "$out/Smirk-Wallet-${{ steps.ver.outputs.version }}.dmg"
+
       # Collect the installers into a SINGLE space-free tar.gz, then upload that.
       # Why: the Tauri bundles are named "Smirk Wallet_0.3.0_amd64.AppImage" (with
       # a space). actions/upload-artifact@v3 aborts the chunk PUT on a filename
@@ -471,20 +496,14 @@ jobs:
           # the manifest does not error, it just never updates.
           # macOS: the notarized + stapled .app is a DIRECTORY, not a file.
           find "$base" -maxdepth 3 -type d -name '*.app' -exec cp -R {} "$dest/" \; 2>/dev/null || true
-          # macOS: build the .dmg from the notarized .app with hdiutil (pure CLI,
-          # no AppleScript/WindowServer — that's why Tauri's bundle_dmg.sh fails on
-          # the daemon runner). The .app is already signed+notarized+stapled, so it
-          # passes Gatekeeper; the DMG is just a drag-to-Applications container.
+          # macOS: ship the disk image the previous step built, signed, notarized
+          # and stapled. The bare .app directory is not a release deliverable; a
+          # missing image refuses instead of shipping it.
           if [ "${{ matrix.os_label }}" = "macos" ]; then
-            app="$(ls -d "$dest"/*.app 2>/dev/null | head -1)"
-            if [ -n "$app" ]; then
-              dmgsrc="$(mktemp -d)"
-              cp -R "$app" "$dmgsrc/"
-              ln -s /Applications "$dmgsrc/Applications"
-              hdiutil create -volname "Smirk Wallet" -srcfolder "$dmgsrc" -ov -format UDZO \
-                "$dest/Smirk-Wallet-${{ steps.ver.outputs.version }}.dmg" && rm -rf "$app" || echo "hdiutil dmg failed; keeping .app"
-              rm -rf "$dmgsrc"
-            fi
+            signed="$RUNNER_TEMP/smirk-dmg-v${{ steps.ver.outputs.version }}/Smirk-Wallet-${{ steps.ver.outputs.version }}.dmg"
+            [ -f "$signed" ] || { echo 'The signed and notarized disk image is missing; refusing to stage macOS.' >&2; exit 1; }
+            cp -v "$signed" "$dest/"
+            rm -rf "$dest"/*.app
           fi
           # Windows: also stage the raw portable exe (target/<triple>/release) so a
           # shippable artifact exists even when NSIS bundling fails on this runner.
