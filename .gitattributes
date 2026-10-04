@@ -29,3 +29,11 @@ packages/smoke-tests export-ignore
 # detection regexes, so shipping it would leak them into the public source zip.
 # It is a CI / pre-commit tool, not a build input for `make ext-firefox`.
 scripts/secret-scan.sh export-ignore
+
+# Line endings: every platform checks out LF. The Windows runner sets
+# core.autocrlf=true, and Tauri rewrites a CRLF Cargo.toml to LF during the
+# build, so release provenance saw the source as dirty. PowerShell scripts keep
+# CRLF, as they ran before; one licence file is stored with CRLF and stays as is.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+packages/extension/assets/fonts/LilitaOne-LICENSE.txt -text
