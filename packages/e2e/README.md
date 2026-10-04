@@ -59,9 +59,13 @@ separately authorized credential injection procedure; this README supplies no
 funded-wallet enrollment or secret-export recipe. Do not inspect funded secret
 files to make a skipped scenario pass.
 
-A future demo-capture lane needs separately reviewed fixtures with disposable
-data and no secret-generation, import, unlock or recovery surfaces. Re-enabling
-full-suite capture or cropping a completed recording does not meet that requirement.
+Demo capture lives in its own lane, `demo/capture-demo.mjs`, outside this suite.
+It records an unpacked release artifact with a disposable demo wallet: import and
+unlock happen before any capture, Settings' root is never recorded, and a guard
+(`demo/guard.mjs`, tested by `node --test demo/guard.test.mjs`) refuses any frame
+showing a password, phrase, recovery, export or nsec surface. Output stays in
+`~/Build/smirk-marketing`; nothing is promoted automatically. Re-enabling
+full-suite capture or cropping a completed recording is still not admitted.
 
 The capture regression deliberately fails a browser assertion with a generated
 sentinel in the input and page. It checks output and files without printing that
