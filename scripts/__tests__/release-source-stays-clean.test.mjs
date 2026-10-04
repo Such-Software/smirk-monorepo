@@ -32,3 +32,8 @@ test('every desktop release build resolves dependencies from the committed lockf
   assert.ok(builds.length >= 4, 'expected the signed matrix builds and the unsigned build');
   for (const line of builds) assert.match(line, /-- --locked/, `desktop build may rewrite Cargo.lock: ${line.trim()}`);
 });
+
+test('every platform checks out LF, so builds do not rewrite line endings', () => {
+  const attributes = readFileSync(join(root, '.gitattributes'), 'utf8').split('\n').map((line) => line.trim());
+  assert.ok(attributes.includes('* text=auto eol=lf'), 'Windows (core.autocrlf=true) would check out CRLF and Tauri rewrites Cargo.toml to LF');
+});

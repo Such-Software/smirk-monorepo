@@ -166,7 +166,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const git = (...argv) => execFileSync('git', ['-C', root, ...argv], { encoding: 'utf8' }).trim();
       // Name what changed: a refusal reports its cause, not a category.
       const dirty = git('status', '--porcelain', '--', ':!packages/extension/releases');
-      if (dirty) fail(`release source is dirty: ${dirty.split('\n').slice(0, 8).map((line) => line.slice(3)).join(', ')}`);
+      if (dirty) fail(`release source is dirty: ${dirty.split('\n').slice(0, 8).map((line) => line.replace(/^\s*\S+\s+/, '')).join(', ')}`);
       const binding = inspectBuildIdentity(root, git('rev-parse', 'HEAD'));
       const receipt = recordArtifacts(directory, options['--platform'], version, binding.sourceCommit, binding.sourceTree, binding);
       console.log(`Recorded ${receipt.platform} artifact evidence at source ${receipt.source_commit}`);
