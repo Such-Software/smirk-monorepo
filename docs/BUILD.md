@@ -207,7 +207,10 @@ never borrows an archive from the working checkout. Verification requires GPG's
 machine-readable valid signature from that exact subkey, including refusal of
 expired, revoked or ambiguous evidence. macOS candidates must pass
 Developer ID, expected team, hardened runtime, notarization staple and Gatekeeper
-checks. Windows candidates must pass the signing broker's Authenticode,
+checks. The disk image around the app is then built by `scripts/ci/sign-macos-dmg.sh`,
+signed with the same Developer ID identity from a temporary keychain, notarized,
+stapled and assessed by Gatekeeper before provenance records it; a missing or
+rejected image refuses rather than shipping an unsigned container. Windows candidates must pass the signing broker's Authenticode,
 publisher and timestamp checks. See the [desktop owner](../packages/desktop/README.md)
 for platform behavior and the [extension release process](../packages/extension/RELEASE.md)
 for reproduction and store submission.
