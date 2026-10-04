@@ -160,10 +160,16 @@ function buildStamp(): { commit: string; date: string; version: string } {
     // into packages/extension/releases DURING the release, so an unscoped probe
     // sees the release's own output and stamps the verify rebuild '-dirty',
     // changing bytes that were just checksummed.
+    // ':(top,exclude)' anchors the exclusion at the repository root. vite runs
+    // from packages/extension, where a plain ':!packages/extension/releases'
+    // excludes nothing, so the release's own checksum rewrite made every
+    // verify rebuild '-dirty'.
     const dirty = execSync(
-      "git status --porcelain -- ':!packages/extension/releases'",
+      "git status --porcelain -- ':(top,exclude)packages/extension/releases'",
       { encoding: 'utf8' },
     ).trim();
+    // Name what made it dirty (paths only), so a release log shows the cause.
+    if (dirty) console.warn(`[build-stamp] source is dirty: ${dirty.split('\n').map((line) => line.replace(/^\s*\S+\s+/, '')).join(', ')}`);
     // A dirty tree is a different artefact from the commit it claims. Say so,
     // because "it reproduces at that sha" is exactly what a reader will assume.
     if (dirty) commit += '-dirty';

@@ -58,6 +58,12 @@ rust-clean:
 # PATH when a system cargo (e.g. /usr/bin/cargo) shadows the rustup one. Resolve
 # it explicitly so `make wasm` works from a bare shell and on the CI runners.
 WASM_BINDGEN ?= $(shell command -v wasm-bindgen 2>/dev/null || echo $(HOME)/.cargo/bin/wasm-bindgen)
+# The cargo and rustup homes actually in use. CI sets job-scoped homes under the
+# runner's temp dir, whose path changes every run; remapping only ~/.cargo left
+# those paths in panic-location strings, so the same source gave a different
+# .wasm on every CI run. Locally both resolve to the defaults, as before.
+WASM_CARGO_HOME := $(or $(CARGO_HOME),$(HOME)/.cargo)
+WASM_RUSTUP_HOME := $(or $(RUSTUP_HOME),$(HOME)/.rustup)
 
 wasm:
 	@# Reproducible wasm: --remap-path-prefix normalizes the build directory and the
@@ -66,7 +72,7 @@ wasm:
 	@# .wasm (verified: an AMO-reviewer-style build in /tmp differed until remapped).
 	@# With this, any checkout on the same rustc produces byte-identical output, so
 	@# reviewers can content-match the wasm. Existing $$RUSTFLAGS are preserved.
-	RUSTFLAGS="--remap-path-prefix=$(CURDIR)=/smirk --remap-path-prefix=$(HOME)/.cargo=/cargo $${RUSTFLAGS:-}" \
+	RUSTFLAGS="--remap-path-prefix=$(CURDIR)=/smirk --remap-path-prefix=$(WASM_CARGO_HOME)=/cargo --remap-path-prefix=$(WASM_RUSTUP_HOME)=/rustup $${RUSTFLAGS:-}" \
 	  cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
 	$(WASM_BINDGEN) --target no-modules \
 	  --out-dir crates/smirk-wasm/pkg \

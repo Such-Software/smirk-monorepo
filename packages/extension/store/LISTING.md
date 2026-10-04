@@ -284,16 +284,16 @@ the root of the source archive:
       1. make wasm, because crates/smirk-wasm/pkg/ is gitignored and is
          therefore NOT in this archive. It is exactly:
 
-           RUSTFLAGS="--remap-path-prefix=$PWD=/smirk --remap-path-prefix=$HOME/.cargo=/cargo" \
+           RUSTFLAGS="--remap-path-prefix=$PWD=/smirk --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup" \
              cargo build -p smirk-wasm --target wasm32-unknown-unknown --release
            wasm-bindgen --target no-modules \
              --out-dir crates/smirk-wasm/pkg \
              target/wasm32-unknown-unknown/release/smirk_wasm.wasm
            node crates/smirk-wasm/postprocess.mjs
 
-         The --remap-path-prefix flags keep the build directory and cargo home
-         out of the binary, which is what makes the .wasm byte-identical no
-         matter where it is built. The postprocess step replaces the
+         The --remap-path-prefix flags keep the build directory and the cargo
+         and rustup homes out of the binary, which is what makes the .wasm
+         byte-identical no matter where it is built. The postprocess step replaces the
          require("env") C-import placeholders with no-ops and appends the ESM
          export, so it cannot be skipped.
 
