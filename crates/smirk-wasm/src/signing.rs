@@ -466,8 +466,35 @@ impl Coin {
 /// the transaction signs and broadcasts on the source chain, but the output is
 /// owned by keys on a chain that never sees it, and the funds are gone. No
 /// caller validates the destination against the asset before us, so this is
-/// the gate.
+/// the gate. It also refuses keys no wallet could hold; see
+/// [`check_recipient_keys`].
 fn parse_address(address: &str, network: Network, coin: Coin) -> Result<MoneroAddress, String> {
+    let addr = parse_address_encoding(address, network, coin)?;
+    check_recipient_keys(&addr)?;
+    Ok(addr)
+}
+
+/// Refuse an address whose public spend or view key is not a usable key.
+///
+/// Decoding only proves each key is a canonical point on the curve. A point
+/// can still be the identity, or carry a small-order (torsion) component, and
+/// no honest wallet produces either: a real key is `x·G` for a secret `x`,
+/// which lies in the prime-order subgroup and is never the identity. Paying
+/// such an address builds an output the recipient's wallet derives
+/// differently from the sender, so we refuse it before signing.
+fn check_recipient_keys(addr: &MoneroAddress) -> Result<(), String> {
+    use curve25519_dalek::traits::IsIdentity;
+    for key in [addr.spend(), addr.view()] {
+        let point = key.into();
+        if point.is_identity() || !point.is_torsion_free() {
+            return Err("recipient address has an invalid public key".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Decode an address string for `coin`, without judging its keys.
+fn parse_address_encoding(address: &str, network: Network, coin: Coin) -> Result<MoneroAddress, String> {
     match coin {
         Coin::Xmr => MoneroAddress::from_str(network, address).map_err(|e| {
             if parse_wownero_address(address, network).is_ok() {
@@ -1258,5 +1285,100 @@ mod key_image_guard_tests {
         )
         .expect_err("a wrong spend key must be refused");
         assert!(err.contains("one-time key mismatch"), "got {err}");
+    }
+}
+
+#[cfg(test)]
+mod recipient_key_tests {
+    use super::*;
+    use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
+    use curve25519_dalek::traits::Identity;
+    use curve25519_dalek::{EdwardsPoint, Scalar as DScalar};
+
+    /// A key a real wallet could hold: `x·G` for a secret `x`.
+    fn honest_key(seed: u8) -> EdwardsPoint {
+        ED25519_BASEPOINT_POINT * DScalar::from_bytes_mod_order([seed; 32])
+    }
+
+    /// The point types an honest wallet never produces.
+    fn bad_keys() -> Vec<(&'static str, EdwardsPoint)> {
+        vec![
+            ("identity", EdwardsPoint::identity()),
+            ("small-order point", EIGHT_TORSION[1]),
+            ("key with a torsion component", honest_key(5) + EIGHT_TORSION[3]),
+        ]
+    }
+
+    /// Encode a Monero address with monero-oxide, as any sender would.
+    fn xmr_address(kind: AddressType, spend: EdwardsPoint, view: EdwardsPoint) -> String {
+        MoneroAddress::new(Network::Mainnet, kind, Point::from(spend), Point::from(view)).to_string()
+    }
+
+    /// Encode a Wownero address with its varint prefix.
+    fn wow_address(prefix: &[u8], spend: EdwardsPoint, view: EdwardsPoint, payment_id: Option<[u8; 8]>) -> String {
+        let mut raw = prefix.to_vec();
+        raw.extend_from_slice(&spend.compress().to_bytes());
+        raw.extend_from_slice(&view.compress().to_bytes());
+        if let Some(id) = payment_id {
+            raw.extend_from_slice(&id);
+        }
+        monero_base58::encode_check(raw)
+    }
+
+    const WOW_STANDARD: &[u8] = &[0xB2, 0x20];
+    const WOW_INTEGRATED: &[u8] = &[0xB4, 0x20];
+    const WOW_SUBADDRESS: &[u8] = &[0xB0, 0x5F];
+
+    fn every_address(spend: EdwardsPoint, view: EdwardsPoint) -> Vec<(&'static str, String, Coin)> {
+        vec![
+            ("xmr standard", xmr_address(AddressType::Legacy, spend, view), Coin::Xmr),
+            ("xmr integrated", xmr_address(AddressType::LegacyIntegrated([9; 8]), spend, view), Coin::Xmr),
+            ("xmr subaddress", xmr_address(AddressType::Subaddress, spend, view), Coin::Xmr),
+            ("wow standard", wow_address(WOW_STANDARD, spend, view, None), Coin::Wow),
+            ("wow integrated", wow_address(WOW_INTEGRATED, spend, view, Some([9; 8])), Coin::Wow),
+            ("wow subaddress", wow_address(WOW_SUBADDRESS, spend, view, None), Coin::Wow),
+        ]
+    }
+
+    #[test]
+    fn honest_keys_parse_for_every_address_kind() {
+        for (label, address, coin) in every_address(honest_key(3), honest_key(4)) {
+            assert!(
+                parse_address(&address, Network::Mainnet, coin).is_ok(),
+                "{label} with honest keys was refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bad_spend_key_is_refused() {
+        for (key_label, bad) in bad_keys() {
+            for (label, address, coin) in every_address(bad, honest_key(4)) {
+                let err = parse_address(&address, Network::Mainnet, coin)
+                    .expect_err(&format!("{label} with a {key_label} spend key was accepted"));
+                assert!(err.contains("invalid public key"), "{label}: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_bad_view_key_is_refused() {
+        for (key_label, bad) in bad_keys() {
+            for (label, address, coin) in every_address(honest_key(3), bad) {
+                let err = parse_address(&address, Network::Mainnet, coin)
+                    .expect_err(&format!("{label} with a {key_label} view key was accepted"));
+                assert!(err.contains("invalid public key"), "{label}: {err}");
+            }
+        }
+    }
+
+    /// The refusal stays inside the coin gate: a key check never turns a
+    /// cross-chain address into an accepted one.
+    #[test]
+    fn coin_gate_still_refuses_cross_chain_addresses() {
+        let xmr = xmr_address(AddressType::Legacy, honest_key(3), honest_key(4));
+        let wow = wow_address(WOW_STANDARD, honest_key(3), honest_key(4), None);
+        assert!(parse_address(&xmr, Network::Mainnet, Coin::Wow).is_err());
+        assert!(parse_address(&wow, Network::Mainnet, Coin::Xmr).is_err());
     }
 }
