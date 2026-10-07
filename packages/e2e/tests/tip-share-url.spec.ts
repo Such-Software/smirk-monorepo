@@ -9,9 +9,9 @@ import { test, expect } from '../fixtures/extension.js';
  * claim URL and a working "Copy link" affordance.
  *
  * Why BTC + public:
- *   - "Public" (the `tip-public-toggle`) is what makes the flow mint a share
- *     URL at all; targeted tips notify the recipient via the bot and never
- *     surface a link (dispatchSocialTip → shareUrl:null for !isPublic).
+ *   - Leaving the recipient empty makes a link tip, the kind that surfaces its
+ *     share URL. A person tip delivers the same claim key to an npub in a gift
+ *     wrap instead, and shows the link only as a fallback.
  *   - BTC/LTC are 0-conf, so `dispatchSocialTip` (extension/src/popup/tip-handler.ts)
  *     returns `shareUrlPending:false` and the URL is live immediately. XMR/WOW/
  *     Grin return `shareUrlPending:true` and would only render the

@@ -8,17 +8,23 @@
  *   2. Compute the tip address from the fresh keypair.
  *   3. Build + sign + broadcast a tx funding that address with the
  *      tip amount. Sender's wallet pays the network fee.
- *   4. Encrypt the tip's private key:
- *        - Targeted: ECDH(ephemeral_priv, recipient.btc.pubkey) +
- *          XChaCha20-Poly1305. v0.2.4 wire format: ephemeralPubkey
- *          (33 bytes hex) || ciphertext (hex).
- *        - Public: random 32-byte URL fragment key + XChaCha20-Poly1305.
- *          claim_key_hash = sha256(fragment_key) so backend can
- *          authenticate claimers without seeing the key.
+ *   4. Encrypt the tip's private key with a random 32-byte claim key
+ *      (XChaCha20-Poly1305). claim_key_hash = sha256(claim_key) lets
+ *      the backend authenticate claimers without seeing the key.
  *   5. POST /api/v1/social/tip with funding_txid + encrypted_key +
- *      tip_address + metadata. Backend bot DMs the recipient via
- *      Telegram / Discord once funding confirms (per asset's
- *      confirmation requirement).
+ *      tip_address + metadata.
+ *   6. Hand over the claim key:
+ *        - Link tip: in the share URL's fragment. Whoever holds the
+ *          link can claim.
+ *        - Person tip (v0.3.1): inside a NIP-17 gift wrap addressed to
+ *          the recipient's npub (see `@smirk/core` npub-tips). Only
+ *          that npub can read the key. The backend sees an ordinary
+ *          link tip and never learns the recipient.
+ *
+ * The v0.2.4 targeted path (ECDH to the recipient's BTC pubkey, then a
+ * bot notification) is retired from the composer; the code below still
+ * honours `isPublic: false` so a caller that sets it keeps working, and
+ * tips already sent that way stay claimable (tip-claim-handler.ts).
  *
  * All five assets are wired. BTC/LTC and XMR/WOW fund a freshly
  * generated single-use keypair and derive the tip address from it;
@@ -30,6 +36,7 @@ import { grinKeySource, grinExtendedKey, grinLegacyExtendedKey } from './session
 import { sha256 } from '@noble/hashes/sha256';
 import { ed25519 } from '@noble/curves/ed25519';
 import type { UnlockedWallet, GrinPendingOverlay } from '@smirk/core';
+import { deliverPersonTipOutcome, type DeliverPersonTip } from './tip-person';
 import {
   api,
   chainProviders,
@@ -61,7 +68,7 @@ import {
 import { send } from './send-handler';
 import { resolveGrinSpendable } from './grin-flows';
 import { recordGrinTx } from './grin-tx-journal';
-import { storeTipKeyBackup } from './tip-key-backup';
+import { annotateTipKeyBackup, storeTipKeyBackup } from './tip-key-backup';
 import { wasmAgeSealer } from './tip-age-sealer';
 import { authorizeOperation, assertOperationSession } from './operation-auth';
 
@@ -151,6 +158,27 @@ export async function dispatchSocialTip(args: {
    *  scan-based input selection + child-index reservation. */
   grinPending?: GrinPendingOverlay;
   /** Grin view-only rewind hash: required for a Grin tip's scan. */
+  grinRewindHash?: string;
+  /** Deliver a person tip's claim key in a gift wrap. Required when
+   *  `fields.recipient` is set; the shell owns the active Nostr identity. */
+  deliverPersonTip?: DeliverPersonTip;
+}): Promise<TipSubmitOutcome> {
+  const outcome = await fundSocialTip(args);
+  if (!outcome.ok) return outcome;
+  await annotateTipKeyBackup(outcome.tipId, {
+    ...(args.fields.expiresAt ? { expiresAt: args.fields.expiresAt } : {}),
+    ...(args.fields.recipient ? { recipientDisplay: args.fields.recipient.display } : {}),
+  });
+  if (!args.fields.recipient) return outcome;
+  return deliverPersonTipOutcome(outcome, args.fields, args.deliverPersonTip);
+}
+
+async function fundSocialTip(args: {
+  wallet: UnlockedWallet;
+  senderUserId: string;
+  fields: TipSubmitFields;
+  onBroadcast?: (e: TipBroadcastEvent) => void | Promise<void>;
+  grinPending?: GrinPendingOverlay;
   grinRewindHash?: string;
 }): Promise<TipSubmitOutcome> {
   const { wallet, fields, onBroadcast } = args;

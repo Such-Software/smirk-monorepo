@@ -47,7 +47,15 @@ export interface GrinSlatepackPayload {
 /** A tip: value pushed to an npub. Shape spans interactive + non-interactive
  *  assets: `slatepack` carries an interactive Grin tip; `txid` settles a
  *  non-interactive one (XMR/BTC/…); `address` lets it double as a pay-me
- *  request. Only `asset` + `amount` are required. */
+ *  request. Only `asset` + `amount` are required.
+ *
+ *  A claimable Smirk tip also carries `tipId` and `claimKey`: the backend tip
+ *  id and the symmetric key that a public share link would hold in its URL
+ *  fragment. Inside the seal only the recipient can read the key, so the tip
+ *  is claimable by that npub alone. `expiresAt` (unix seconds) is the date
+ *  after which the sender may reclaim; the backend enforces nothing until a
+ *  reclaim actually runs. `to` is set only on the sender's own self-addressed
+ *  copy, so the sender's history knows who the tip went to. */
 export interface TipPayload {
   type: 'tip';
   v: 1;
@@ -57,6 +65,10 @@ export interface TipPayload {
   slatepack?: string;
   txid?: string;
   address?: string;
+  tipId?: string;
+  claimKey?: string;
+  expiresAt?: number;
+  to?: string;
 }
 
 export type PaymentPayload = GrinSlatepackPayload | TipPayload;
@@ -87,6 +99,12 @@ export function buildPaymentRumor(
     ],
   };
 }
+
+/** Backend tip ids are UUIDs. */
+const TIP_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+/** The share-link fragment key: base64url, as `generateUrlFragmentKey` encodes it. */
+const CLAIM_KEY_RE = /^[A-Za-z0-9_-]{20,128}$/;
+const PUBKEY_HEX_RE = /^[0-9a-fA-F]{64}$/;
 
 const GRIN_ROLES: ReadonlySet<string> = new Set<GrinSlatepackRole>([
   'offer',
@@ -146,6 +164,16 @@ export function parsePaymentPayload(content: string): PaymentPayload {
       ...(typeof p.slatepack === 'string' ? { slatepack: p.slatepack } : {}),
       ...(typeof p.txid === 'string' ? { txid: p.txid } : {}),
       ...(typeof p.address === 'string' ? { address: p.address } : {}),
+      // Claim fields are accepted only in their exact shapes. A malformed one
+      // is dropped, not trusted: the tip then reads as informational only.
+      ...(typeof p.tipId === 'string' && TIP_ID_RE.test(p.tipId) ? { tipId: p.tipId } : {}),
+      ...(typeof p.claimKey === 'string' && CLAIM_KEY_RE.test(p.claimKey)
+        ? { claimKey: p.claimKey }
+        : {}),
+      ...(typeof p.expiresAt === 'number' && Number.isSafeInteger(p.expiresAt) && p.expiresAt > 0
+        ? { expiresAt: p.expiresAt }
+        : {}),
+      ...(typeof p.to === 'string' && PUBKEY_HEX_RE.test(p.to) ? { to: p.to.toLowerCase() } : {}),
     };
   }
 

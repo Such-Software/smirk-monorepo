@@ -85,9 +85,12 @@ import {
   invalidateCapabilities,
   capAllowsPrices,
   capHasTips,
-  capHasTargetedTips,
   capAllowsGrin,
   capHasFeed,
+  createNostrChannelIO,
+  deliverNpubTip,
+  readNpubTips,
+  verifyNpubTipKey,
   type BackendCapabilities,
 } from '@smirk/core';
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
@@ -141,10 +144,10 @@ import {
   type InboxItem,
   type InboxTipItem,
   type OnboardingRegistration,
-  type RecentRecipient,
   copyText,
 } from '@smirk/ui';
-import { listAssets } from '@smirk/assets';
+import { listAssets, mustGetAsset } from '@smirk/assets';
+import { resolveTipRecipient, shortNpubFromHex } from './tip-recipient';
 import { send } from './send-handler';
 import { authorizeOperation, assertOperationSession } from './operation-auth';
 import { bootstrapAuthInExtension } from './jobs/bootstrap-in-extension';
@@ -241,18 +244,6 @@ async function sweepStaleGrinWizards(): Promise<void> {
 }
 
 /**
- * Recent tip recipients for TipMaker's chip row. Always empty: there is no
- * per-session sent-tips cache to read from, and TipMaker renders without the
- * "Recent" row.
- */
-function recentTipRecipients(
-  session: WalletSession | null,
-): RecentRecipient[] {
-  void session;
-  return [];
-}
-
-/**
  * Pull incoming social tips for the current user. Bucketed and
  * passed straight to InboxTab as `tips`.
  *
@@ -264,7 +255,68 @@ function recentTipRecipients(
  * Anything in 'claimed' / 'cancelled' / 'clawed_back' is already
  * settled and doesn't belong in the Inbox.
  */
-async function fetchTipInbox(): Promise<{
+async function fetchTipInbox(wallet?: UnlockedWallet | null): Promise<{
+  tips: InboxTipItem[];
+  error: string | null;
+}> {
+  const [legacy, person] = await Promise.all([
+    fetchLegacyTipInbox(),
+    wallet ? fetchPersonTipInbox(wallet).catch(() => [] as InboxTipItem[]) : Promise.resolve([] as InboxTipItem[]),
+  ]);
+  const seen = new Set(person.map((t) => t.tipId));
+  const tips = [...person, ...legacy.tips.filter((t) => !seen.has(t.tipId))].sort(
+    (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+  );
+  // A legacy-list failure must not hide gift-wrapped tips, and vice versa.
+  return { tips, error: tips.length > 0 ? null : legacy.error };
+}
+
+/** Tip statuses a recipient can still act on. */
+const ACTIONABLE_TIP_STATUSES = new Set(['pending', 'pending_confirmation', 'claiming']);
+/** Bound the per-poll backend lookups; older gift wraps are almost always settled. */
+const MAX_PERSON_TIPS = 50;
+
+/**
+ * Tips delivered to our npub in gift wraps. Gift-wrap content is attacker-
+ * controlled, so every row is rebuilt from the backend's public record of the
+ * tip, and a candidate is kept only when its claim key opens that record's
+ * sealed key (`verifyNpubTipKey`). A forged wrap, a made-up amount, or a tip
+ * the backend does not know never reaches the Inbox.
+ */
+async function fetchPersonTipInbox(wallet: UnlockedWallet): Promise<InboxTipItem[]> {
+  const resolved = await getActiveNostrIdentityFromWallet(wallet);
+  if (!resolved.identity) return [];
+  const { received } = await readNpubTips(createNostrChannelIO(resolved.identity));
+  const byTip = new Map<string, typeof received>();
+  for (const t of received.slice(0, MAX_PERSON_TIPS)) {
+    byTip.set(t.tipId, [...(byTip.get(t.tipId) ?? []), t]);
+  }
+  const rows = await Promise.all(
+    [...byTip.entries()].map(async ([tipId, candidates]): Promise<InboxTipItem | null> => {
+      const info = await api.getPublicSocialTip(tipId);
+      const t = info.data;
+      if (info.error || !t || !ACTIONABLE_TIP_STATUSES.has(t.status)) return null;
+      const genuine = candidates.find((c) => verifyNpubTipKey(t.encrypted_key, c.claimKey));
+      if (!genuine) return null;
+      return {
+        tipId,
+        assetId: t.asset as InboxTipItem['assetId'],
+        amountAtomic: BigInt(t.amount),
+        senderDisplay: shortNpubFromHex(genuine.counterpartyHex),
+        fundingConfirmations: t.funding_confirmations ?? 0,
+        confirmationsRequired: t.confirmations_required ?? 1,
+        createdAt: new Date(genuine.createdAt * 1000).toISOString(),
+        claimKey: genuine.claimKey,
+        ...(genuine.memo ? { memo: genuine.memo } : {}),
+        ...(genuine.expiresAt ? { expiresAt: new Date(genuine.expiresAt * 1000).toISOString() } : {}),
+      };
+    }),
+  );
+  return rows.filter((r): r is InboxTipItem => r !== null);
+}
+
+/** Received tips from the backend list: the retired v0.2.4 targeted tips. */
+async function fetchLegacyTipInbox(): Promise<{
   tips: InboxTipItem[];
   error: string | null;
 }> {
@@ -1370,7 +1422,7 @@ function App() {
           : fetchGrinInbox(userId, walletState.wallet),
         tipsOff
           ? Promise.resolve({ tips: [], error: null })
-          : fetchTipInbox().catch((e) => ({
+          : fetchTipInbox(walletState.wallet).catch((e) => ({
               tips: [],
               error: e instanceof Error ? e.message : 'Tip fetch failed',
             })),
@@ -1903,7 +1955,7 @@ function App() {
       grinHidden
         ? Promise.resolve({ items: [], loading: false, error: null })
         : fetchGrinInbox(userId, walletState.wallet),
-      fetchTipInbox().catch((e) => ({
+      fetchTipInbox(walletState.wallet).catch((e) => ({
         tips: [],
         error: e instanceof Error ? e.message : 'Tip fetch failed',
       })),
@@ -1918,12 +1970,11 @@ function App() {
     }
     const userId = session?.bootstrap?.userId;
     if (!userId) throw new Error('No active session — wallet not bootstrapped');
-    const outcome = await claimSocialTip(
-      walletState.wallet,
-      userId,
-      item.tipId,
-      item.assetId,
-    );
+    // A gift-wrapped tip carries its claim key and claims exactly like a link
+    // tip. A legacy targeted tip decrypts with the wallet's BTC key instead.
+    const outcome = item.claimKey
+      ? await claimPublicTip(walletState.wallet, userId, item.tipId, item.claimKey)
+      : await claimSocialTip(walletState.wallet, userId, item.tipId, item.assetId);
     if (!outcome.ok) throw new Error(outcome.error);
     // Optimistically drop the row from the local cache so the user
     // gets immediate feedback that the tip is gone. Next 30s tick
@@ -3151,11 +3202,6 @@ function HomeRouter({
         assetIds={visibleAssetIds(sessionState, listAssets(), caps)
           .filter((a) => a.socialTipping)
           .map((a) => a.id)}
-        // Strictly capability-driven, never hardcoded: an instance that does not
-        // serve targeted tips refuses the create with a 400, and offering the
-        // recipient composer there walks the user through choosing a person and
-        // an amount before failing at submit.
-        allowTargeted={capHasTargetedTips(caps)}
         {...(tipPrefilledAsset ? { prefilledAssetId: tipPrefilledAsset } : {})}
         // All 5 assets wired: BTC/LTC fresh-keypair, XMR/WOW
         // fresh-primary-keypair + LWS registration, Grin
@@ -3170,23 +3216,14 @@ function HomeRouter({
           return b?.confirmed ?? 0n;
         }}
         parseAmount={parseAmount}
-        recentRecipients={recentTipRecipients(session)}
-        lookupRecipient={async (platform, username) => {
-          // Smirk usernames → lookupSmirkName; external platforms →
-          // lookupSocial with the platform tag. Backend returns
-          // `registered` + per-asset public_keys map.
-          const r =
-            platform === 'smirk'
-              ? await api.lookupSmirkName(username)
-              : await api.lookupSocial(platform, username);
-          if (r.error || !r.data) return { registered: false, hasAssetWallet: false };
-          return {
-            registered: r.data.registered,
-            // We can refine "hasAssetWallet" per current asset later;
-            // for now any registered user is presumed to have a wallet
-            // for any asset since all v0.3 wallets register all 5.
-            hasAssetWallet: r.data.registered,
-          };
+        // A person tip is a link tip whose claim key rides a gift wrap to the
+        // recipient's npub, so it needs no backend capability beyond tips.
+        resolveRecipient={(text) => resolveTipRecipient(text)}
+        formatUsd={(assetId, amountAtomic) => {
+          const price = (session?.prices as Record<string, number | null> | null | undefined)?.[assetId];
+          if (!price) return null;
+          const decimals = mustGetAsset(assetId).decimals;
+          return formatUsd((Number(amountAtomic) / 10 ** decimals) * price);
         }}
         onSubmit={async (fields) => {
           await ensureWasmInit();
@@ -3202,6 +3239,13 @@ function HomeRouter({
             fields,
             grinPending: grinOverlay,
             ...(grinRewindHash ? { grinRewindHash } : {}),
+            // Gift-wrap the claim key from the ACTIVE identity, so a burner or
+            // imported identity sends as itself, and its own history copy lands
+            // in its own inbox.
+            deliverPersonTip: async (recipientPubkeyHex, tip) => {
+              const identity = await getActiveNostrIdentity(requireNostrKeySource(wallet));
+              return deliverNpubTip(createNostrChannelIO(identity), recipientPubkeyHex, tip);
+            },
             // Record pendingOutgoing on tip broadcast so the sender's
             // balance reflects the deduction immediately; matches the
             // SendWizard onSubmit flow above. Without this, XMR/WOW
