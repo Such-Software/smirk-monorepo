@@ -18,7 +18,7 @@ import { resolveIcon } from '../icons';
 import { store } from '../singletons';
 import type { WalletSession } from '../types';
 import { thorchainSwap } from '../thorchain';
-import { findSwapDeposit, recordSend } from '../send-journal';
+import { findSwapDeposit, journalKeyFor, recordSend } from '../send-journal';
 
 /**
  * SwapRouter: wires the @smirk/ui SwapTab to the TrocadorSwap library
@@ -186,7 +186,8 @@ export function SwapRouter({
                   provider: 'thorchain',
                   state: { state: 'pending', reason: 'awaiting_deposit' },
                 };
-          const journal = await findSwapDeposit(id);
+          const journalKey = journalKeyFor(wallet);
+          const journal = journalKey ? await findSwapDeposit(id, journalKey) : null;
           const txid = base.depositTxid ?? journal?.txid;
           if (!txid) {
             if (base.depositBeforeMs !== undefined && Date.now() > base.depositBeforeMs) {
@@ -195,7 +196,7 @@ export function SwapRouter({
             return base;
           }
           const state = await thor.swap!.status(txid);
-          if (journal?.swap) {
+          if (journal?.swap && journalKey) {
             void recordSend({
               ...journal,
               swap: {
@@ -203,7 +204,7 @@ export function SwapRouter({
                 state: state.state,
                 ...(state.state === 'completed' ? { outboundTxid: state.outboundTxId } : {}),
               },
-            });
+            }, journalKey);
           }
           return { ...base, depositTxid: txid, state };
         },

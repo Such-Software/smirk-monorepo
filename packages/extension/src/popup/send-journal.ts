@@ -104,13 +104,18 @@ export interface SwapJournalFields {
 }
 
 /** The recorded swap deposit for a wallet swap id, if any. */
-export async function findSwapDeposit(tradeId: string): Promise<SendJournalEntry | null> {
-  try {
-    const all = Object.values((await load()).entries);
-    return all.find((e) => e.swap?.tradeId === tradeId) ?? null;
-  } catch {
-    return null;
-  }
+export async function findSwapDeposit(
+  tradeId: string,
+  key: Uint8Array,
+): Promise<SendJournalEntry | null> {
+  const all = await readSendJournal(key);
+  return all.find((e) => e.swap?.tradeId === tradeId) ?? null;
+}
+
+/** This wallet's journal key, or `null` for a wallet with no BTC key. */
+export function journalKeyFor(wallet: { keys: { btc?: { privateKey?: Uint8Array } } }): Uint8Array | null {
+  const k = wallet.keys.btc?.privateKey;
+  return k ? sendJournalKey(k) : null;
 }
 
 interface JournalPlain {
