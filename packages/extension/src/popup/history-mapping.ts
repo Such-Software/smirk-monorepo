@@ -7,6 +7,7 @@
  */
 
 import type { AssetDetailTxRow } from '@smirk/ui';
+import type { SendJournalEntry } from './send-journal';
 
 /**
  * Decide what a Cryptonote history row represents, given what we received in it
@@ -74,6 +75,9 @@ export function utxoTxToRow(t: {
   fee?: number;
   total_received?: number;
   total_sent?: number;
+  /** Block time, unix seconds or ISO, when the backend reports one. Electrum's
+   *  `get_history` does not; a backend that resolves block headers can. */
+  timestamp?: number | string;
 }): AssetDetailTxRow {
   // BOTH sides are required to net, and netting is the only way to tell a
   // receive from a send whose change came back to us. Electrum only reports the
@@ -90,5 +94,59 @@ export function utxoTxToRow(t: {
     txid: t.txid,
     heightOrPending: t.height > 0 ? t.height : 'pending',
     ...(t.fee !== undefined ? { feeAtomic: BigInt(t.fee) } : {}),
+    ...(blockTimeIso(t.timestamp) ? { timestamp: blockTimeIso(t.timestamp) as string } : {}),
   };
+}
+
+/** A backend block time as ISO, or null when absent or unparseable. Numbers are
+ *  unix SECONDS (what nodes report), not milliseconds. */
+export function blockTimeIso(v: number | string | undefined): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v) || v <= 0) return null;
+    return new Date(v * 1000).toISOString();
+  }
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
+}
+
+/**
+ * Lay what the wallet recorded at send time onto the chain's rows, by txid.
+ *
+ * The chain row stays authoritative for what it knows (height, netted amount);
+ * the record adds what only the sender knew: who was paid, the fee, and when it
+ * was signed. A BTC/LTC row the backend could not net (no amount) is one of our
+ * own sends when the journal has it, so it takes the recorded direction and
+ * amount instead of showing nothing. The transaction key is NOT copied onto the
+ * row; the row only learns that one exists.
+ */
+export function mergeSendJournal(
+  rows: AssetDetailTxRow[],
+  entries: SendJournalEntry[],
+): AssetDetailTxRow[] {
+  if (entries.length === 0) return rows;
+  const byTxid = new Map(entries.map((e) => [e.txid.toLowerCase(), e]));
+  return rows.map((row) => {
+    if (row.kind !== 'utxo' && row.kind !== 'cryptonote') return row;
+    const e = byTxid.get(row.txid.toLowerCase());
+    if (!e) return row;
+    const recordedAt = new Date(e.createdAt).toISOString();
+    const sent = {
+      destination: e.destination,
+      ...(e.feeAtomic !== undefined ? { feeAtomic: BigInt(e.feeAtomic) } : {}),
+      recordedAt,
+      hasTxKey: !!e.txKeyHex,
+    };
+    if (row.kind === 'cryptonote') return { ...row, sent };
+    const unknownAmount = row.amountAtomic === undefined;
+    return {
+      ...row,
+      sent,
+      ...(unknownAmount ? { direction: 'out' as const, amountAtomic: BigInt(e.amountAtomic) } : {}),
+      ...(row.timestamp ? {} : { timestamp: recordedAt }),
+      ...(row.feeAtomic === undefined && e.feeAtomic !== undefined
+        ? { feeAtomic: BigInt(e.feeAtomic) }
+        : {}),
+    };
+  });
 }

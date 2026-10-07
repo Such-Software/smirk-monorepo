@@ -13,6 +13,7 @@
  * simply not yet redeemable and stays so, so retrying is always safe.
  */
 
+import { openExternal } from '../open-external';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   api,
@@ -121,7 +122,7 @@ export function PremiumPurchase({
       // Remember it BEFORE opening the checkout: opening a tab closes this popup.
       await savePendingPremium(fingerprint, p);
       setPending(p);
-      if (isCheckoutUrl(p.payTo)) window.open(p.payTo, '_blank', 'noopener,noreferrer');
+      if (isCheckoutUrl(p.payTo)) void openExternal(p.payTo);
     } catch {
       setMessage({ tone: 'error', text: 'Could not reach the server. Try again.' });
     } finally {

@@ -39,7 +39,7 @@ import {
   type BtcNetwork,
 } from '@smirk/wasm';
 import type { SendSubmitResult } from '@smirk/ui';
-import { recordSend } from './send-journal';
+import { recordSend, sendJournalKey } from './send-journal';
 
 function bytesToHex(b: Uint8Array): string {
   return Array.from(b)
@@ -504,14 +504,14 @@ async function sendBtcLtc(
   // Record the destination. It is recoverable from the chain for a UTXO send,
   // but only by someone who already knows which output was the recipient's and
   // which was change, so the wallet keeps its own answer.
-  void recordSend({
+  recordSendFor(wallet, {
     txid: broadcast.data.txid,
     asset,
     destination: toAddress,
     amountAtomic: String(selection.recipientSat),
     feeAtomic: String(selection.feeSat),
     createdAt: Date.now(),
-  }).catch(() => undefined);
+  });
 
   return {
     ok: true,
@@ -835,6 +835,7 @@ async function sendXmrWow(
     tx_hash: string;
     fee: number;
     outgoing_view_key?: string;
+    tx_key?: string;
   };
   try {
     assertOperationSession(wallet);
@@ -844,6 +845,7 @@ async function sendXmrWow(
       tx_hash: string;
       fee: number;
       outgoing_view_key?: string;
+      tx_key?: string;
     }>(signedJson);
   } catch (e) {
     return { ok: false, error: `Sign tx failed: ${e instanceof Error ? e.message : String(e)}` };
@@ -873,15 +875,16 @@ async function sendXmrWow(
   // paid nor the key a payment proof is built from, and the signing step is the
   // only moment either exists. Best-effort and deliberately after the broadcast
   // succeeded: a receipt must never fail a payment that already went out.
-  void recordSend({
+  recordSendFor(wallet, {
     txid: signed.tx_hash,
     asset,
     destination: toAddress,
     amountAtomic: effectiveAmount.toString(),
     feeAtomic: String(signed.fee),
+    ...(signed.tx_key ? { txKeyHex: signed.tx_key } : {}),
     ...(signed.outgoing_view_key ? { outgoingViewKeyHex: signed.outgoing_view_key } : {}),
     createdAt: Date.now(),
-  }).catch(() => undefined);
+  });
 
   return {
     ok: true,
@@ -891,6 +894,17 @@ async function sendXmrWow(
     inputs: selected.map((s) => s.keyImage),
     inputsTotalAtomic: selected.reduce((acc, s) => acc + BigInt(s.amount), 0n),
   };
+}
+
+/**
+ * Write a send receipt under this wallet's journal key. Fire-and-forget: the
+ * journal never rejects, and a wallet without a BTC key (none today) simply
+ * records nothing rather than recording in clear.
+ */
+function recordSendFor(wallet: UnlockedWallet, entry: Parameters<typeof recordSend>[0]): void {
+  const btcPrivateKey = wallet.keys.btc?.privateKey;
+  if (!btcPrivateKey) return;
+  void recordSend(entry, sendJournalKey(btcPrivateKey)).catch(() => undefined);
 }
 
 /**

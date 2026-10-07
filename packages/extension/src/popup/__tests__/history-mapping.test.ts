@@ -18,7 +18,10 @@ import {
   dedupeByTxid,
   sortUtxoTxs,
   utxoTxToRow,
+  mergeSendJournal,
+  blockTimeIso,
 } from '../history-mapping';
+import type { SendJournalEntry } from '../send-journal';
 
 // ── Cryptonote ───────────────────────────────────────────────────────────────
 
@@ -120,4 +123,69 @@ test('a UTXO receive is a receive when both sides are known', () => {
 
 test('an unconfirmed UTXO row is marked pending', () => {
   assert.equal(utxoTxToRow({ txid: 'aa', height: 0 }).heightOrPending, 'pending');
+});
+
+// ── Send journal merge ───────────────────────────────────────────────────────
+
+const journalEntry = (txid: string, extra: Partial<SendJournalEntry> = {}): SendJournalEntry => ({
+  txid,
+  asset: 'xmr',
+  destination: '4DEST',
+  amountAtomic: '700',
+  feeAtomic: '9',
+  createdAt: Date.UTC(2026, 9, 7),
+  ...extra,
+});
+
+test('a recorded send is merged onto its chain row by txid, case-insensitively', () => {
+  const rows = mergeSendJournal(
+    [
+      { kind: 'cryptonote', direction: 'out', amountAtomic: 709n, txid: 'ABCD', heightOrPending: 5, timestamp: '2026-10-07T00:00:00Z' },
+      { kind: 'cryptonote', direction: 'in', amountAtomic: 1n, txid: 'ffff', heightOrPending: 6, timestamp: '2026-10-07T00:00:00Z' },
+    ],
+    [journalEntry('abcd', { txKeyHex: 'k'.repeat(64) })],
+  );
+  const [sent, other] = rows;
+  assert.ok(sent && sent.kind === 'cryptonote' && sent.sent);
+  assert.equal(sent.sent.destination, '4DEST');
+  assert.equal(sent.sent.hasTxKey, true);
+  // The chain's netted amount stays authoritative.
+  assert.equal(sent.amountAtomic, 709n);
+  assert.ok(other && other.kind === 'cryptonote' && other.sent === undefined);
+});
+
+test('the transaction key never lands on a history row', () => {
+  const rows = mergeSendJournal(
+    [{ kind: 'cryptonote', direction: 'out', amountAtomic: 1n, txid: 'aa', heightOrPending: 1, timestamp: '2026-10-07T00:00:00Z' }],
+    [journalEntry('aa', { txKeyHex: 'secretkey'.repeat(7) })],
+  );
+  assert.ok(!JSON.stringify(rows, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)).includes('secretkey'));
+});
+
+test('a UTXO send the backend could not net takes the recorded amount and time', () => {
+  const [row] = mergeSendJournal(
+    [utxoTxToRow({ txid: 'bb', height: 10 })],
+    [journalEntry('bb', { asset: 'btc' })],
+  );
+  assert.ok(row && row.kind === 'utxo');
+  assert.equal(row.direction, 'out');
+  assert.equal(row.amountAtomic, 700n);
+  assert.ok(row.timestamp);
+  assert.equal(row.feeAtomic, 9n);
+});
+
+test('a UTXO row with a backend block time keeps it', () => {
+  const [row] = mergeSendJournal(
+    [utxoTxToRow({ txid: 'cc', height: 10, timestamp: 1_700_000_000 })],
+    [journalEntry('cc', { asset: 'btc', createdAt: Date.UTC(2030, 0, 1) })],
+  );
+  assert.ok(row && row.kind === 'utxo');
+  assert.equal(row.timestamp, new Date(1_700_000_000 * 1000).toISOString());
+});
+
+test('backend block times are unix seconds; junk yields none', () => {
+  assert.equal(blockTimeIso(1_700_000_000), new Date(1_700_000_000_000).toISOString());
+  assert.equal(blockTimeIso(0), null);
+  assert.equal(blockTimeIso('not a date'), null);
+  assert.equal(blockTimeIso(undefined), null);
 });

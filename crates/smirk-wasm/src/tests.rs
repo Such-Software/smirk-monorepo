@@ -156,4 +156,50 @@ mod tests {
             );
         }
     }
+
+    /// An `extra` holding exactly one primary tx public key (tag 0x01).
+    fn extra_with_key(point: curve25519_dalek::EdwardsPoint) -> Vec<u8> {
+        let mut out = vec![0x01u8];
+        out.extend_from_slice(point.compress().as_bytes());
+        out
+    }
+
+    fn sample_tx_key() -> zeroize::Zeroizing<monero_oxide::ed25519::Scalar> {
+        let ovk = zeroize::Zeroizing::new([7u8; 32]);
+        let g = monero_oxide::ed25519::Point::from(curve25519_dalek::constants::ED25519_BASEPOINT_POINT);
+        crate::signing::derive_tx_key(&ovk, vec![(g, g)])
+    }
+
+    /// The tx key is reported only when it matches the key the transaction
+    /// published, so a payment proof built from it can be trusted.
+    #[test]
+    fn test_tx_key_returned_when_it_matches_the_published_key() {
+        let key = sample_tx_key();
+        let scalar: curve25519_dalek::Scalar = (*key).into();
+        let extra = extra_with_key(curve25519_dalek::constants::ED25519_BASEPOINT_POINT * scalar);
+        let hex = crate::signing::verified_tx_key_hex(&key, &extra).expect("matching key");
+        let bytes = <[u8; 32]>::from(*key);
+        assert_eq!(hex, hex::encode(bytes));
+    }
+
+    /// A subaddress send publishes `r·D`, not `r·G`; any mismatch must yield no
+    /// key rather than one that produces a false proof.
+    #[test]
+    fn test_tx_key_withheld_on_mismatch_or_missing_key() {
+        let key = sample_tx_key();
+        let other = curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+            * curve25519_dalek::Scalar::from(42u64);
+        assert!(crate::signing::verified_tx_key_hex(&key, &extra_with_key(other)).is_none());
+        assert!(crate::signing::verified_tx_key_hex(&key, &[]).is_none());
+        assert!(crate::signing::verified_tx_key_hex(&key, &[0xff, 0x00, 0x13]).is_none());
+    }
+
+    /// Same seed, same inputs: same key. The derivation must be the library's,
+    /// not a fresh random draw.
+    #[test]
+    fn test_derive_tx_key_is_deterministic_for_its_inputs() {
+        let a = <[u8; 32]>::from(*sample_tx_key());
+        let b = <[u8; 32]>::from(*sample_tx_key());
+        assert_eq!(a, b);
+    }
 }

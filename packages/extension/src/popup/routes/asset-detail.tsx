@@ -31,7 +31,10 @@ import {
   dedupeByTxid,
   sortUtxoTxs,
   utxoTxToRow,
+  mergeSendJournal,
 } from '../history-mapping';
+import { readSendJournal, sendJournalKey, type SendJournalEntry } from '../send-journal';
+import { openExternal } from '../open-external';
 import { readGrinJournal, type GrinTxJournalEntry } from '../grin-tx-journal';
 import type { WalletSession } from '../types';
 
@@ -80,6 +83,13 @@ export function AssetDetailRoute({
   );
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
+  const [tipHeight, setTipHeight] = useState<number | undefined>(undefined);
+  // The journal key is derived from the unlocked wallet on demand and never
+  // stored; a wallet without a BTC key has no journal.
+  const journalKey = useMemo(() => {
+    const k = wallet.keys.btc?.privateKey;
+    return k ? sendJournalKey(k) : null;
+  }, [wallet]);
   // assetId arrives as a freeform string from the `home/asset/<id>`
   // route segment. The router only ever navigates here with a valid
   // SmirkAsset id (see `home/asset/${a.id}` in the asset list), but
@@ -117,13 +127,18 @@ export function AssetDetailRoute({
     setHistory([]);
     setSparkline(undefined);
     void (async () => {
-      const [chainRows, tipRows, spark] = await Promise.all([
-        loadAssetHistory(assetId, wallet, session?.bootstrap?.userId).catch(
+      const [rawChainRows, journal, tipRows, spark] = await Promise.all([
+        loadAssetHistory(assetId, wallet, session?.bootstrap?.userId, (h) => {
+          if (alive) setTipHeight(h);
+        }).catch(
           (e) => {
             console.warn('[asset-detail] history failed:', e);
             return [] as AssetDetailTxRow[];
           },
         ),
+        journalKey
+          ? readSendJournal(journalKey).then((all) => all.filter((e) => e.asset === assetId))
+          : Promise.resolve([] as SendJournalEntry[]),
         // Opt-in: only load the tip history when the backend runs social tips.
         capHasTips(peekCapabilities())
           ? loadAssetTipRows(assetId).catch((e) => {
@@ -150,6 +165,7 @@ export function AssetDetailRoute({
           : Promise.resolve(undefined),
       ]);
       if (!alive) return;
+      const chainRows = mergeSendJournal(rawChainRows, journal);
       // Merge + sort newest-first. Tips and chain rows both carry an
       // ISO timestamp (Grin / cryptonote / utxo-with-timestamp /
       // tip-{sent,received}). Rows without a timestamp (UTXO with
@@ -208,27 +224,24 @@ export function AssetDetailRoute({
       onSend={onSend}
       onReceive={onReceive}
       onTip={onTip}
+      {...(tipHeight !== undefined ? { tipHeight } : {})}
+      hasExplorer={(row) => explorerUrlFor(assetId, row) !== null}
       onOpenExplorer={(row) => {
-        // Tip rows are tracked by tip_id, not chain-level; no
-        // explorer URL applies. Skip silently for those.
-        if (row.kind === 'tip-sent' || row.kind === 'tip-received') return;
-        // Pending-outgoing rows route by context: swap-deposit jumps
-        // straight to the Swap tab so the user lands on the Trocador
-        // status page they were probably trying to find. tip-fund
-        // falls through to the chain explorer (the broadcast tx
-        // exists on-chain even though the tip-detail surface doesn't
-        // exist as a route yet). Plain sends → chain explorer.
-        if (row.kind === 'pending-outgoing') {
-          if (row.context?.kind === 'swap-deposit') {
-            void navigate('swap');
-            return;
-          }
-          const url = explorerUrlForPendingOutgoing(assetId, row.txid);
-          if (url) window.open(url, '_blank', 'noopener,noreferrer');
+        // A swap deposit routes to the Swap tab, where the provider's status
+        // page lives; everything else opens its chain explorer, through the
+        // shell plugin on desktop (a plain window.open is dropped there).
+        if (row.kind === 'pending-outgoing' && row.context?.kind === 'swap-deposit') {
+          void navigate('swap');
           return;
         }
-        const url = explorerUrlForRow(assetId, row);
-        if (url) window.open(url, '_blank', 'noopener,noreferrer');
+        const url = explorerUrlFor(assetId, row);
+        if (url) void openExternal(url);
+      }}
+      onRevealTxKey={async (row) => {
+        if (!journalKey || !('txid' in row)) return null;
+        const entries = await readSendJournal(journalKey);
+        const hit = entries.find((e) => e.txid.toLowerCase() === row.txid.toLowerCase());
+        return hit?.txKeyHex ?? null;
       }}
       onTipClawback={async (tipId) => {
         // Full on-chain clawback: decrypt local backup → sweep tip
@@ -297,6 +310,9 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
         fundingConfirmations: t.funding_confirmations,
         confirmationsRequired: t.confirmations_required,
         ...(backupIds.has(t.id) ? { hasLocalBackup: true } : {}),
+        ...(t.claimed_at ? { claimedAt: t.claimed_at } : {}),
+        ...(t.clawed_back_at ? { clawedBackAt: t.clawed_back_at } : {}),
+        isPublic: t.is_public,
       };
       out.push(row);
     }
@@ -364,6 +380,9 @@ async function loadAssetTipRows(assetId: string): Promise<AssetDetailTxRow[]> {
         status: t.status,
         fundingConfirmations: t.funding_confirmations ?? 0,
         confirmationsRequired: t.confirmations_required ?? 1,
+        ...(t.claimed_at ? { claimedAt: t.claimed_at } : {}),
+        ...(t.clawed_back_at ? { clawedBackAt: t.clawed_back_at } : {}),
+        isPublic: t.is_public,
       };
       out.push(row);
     }
@@ -381,6 +400,7 @@ async function loadAssetHistory(
   assetId: string,
   wallet: UnlockedWallet,
   userId: string | undefined,
+  onTipHeight?: (height: number) => void,
 ): Promise<AssetDetailTxRow[]> {
   // Grin (the only consumer of userId) is now scan-based with no server history;
   // kept in the signature for call-site stability.
@@ -412,6 +432,8 @@ async function loadAssetHistory(
     if (!addr) return [];
     const r = await chainProviders.lws(assetId).getHistory(addr, viewKeyHex);
     if (r.error || !r.data) return [];
+    // `blockchain_height` is a block COUNT; the newest block is one below it.
+    if (r.data.blockchain_height > 0) onTipHeight?.(r.data.blockchain_height - 1);
     const spendKeyHex = bytesToHex(wallet.keys[assetId].privateSpendKey);
     const rows: AssetDetailTxRow[] = [];
     for (const t of r.data.transactions) {
@@ -496,4 +518,14 @@ function grinJournalEntryToRow(e: GrinTxJournalEntry): AssetDetailTxRow {
     ...(e.counterparty ? { counterpartyUsername: e.counterparty } : {}),
     timestamp: new Date(e.createdAt).toISOString(),
   };
+}
+
+/** Explorer URL for any row, or null when the chain or row has none. */
+function explorerUrlFor(assetId: string, row: AssetDetailTxRow): string | null {
+  if (row.kind === 'tip-sent' || row.kind === 'tip-received') return null;
+  if (row.kind === 'pending-outgoing') {
+    if (row.context?.kind === 'swap-deposit') return null;
+    return explorerUrlForPendingOutgoing(assetId, row.txid);
+  }
+  return explorerUrlForRow(assetId, row);
 }

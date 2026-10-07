@@ -53,8 +53,11 @@ export { AssetDetailScreen } from './components/AssetDetailScreen';
 export type {
   AssetDetailScreenProps,
   AssetDetailTxRow,
+  SentRecordSummary,
   SparklinePoint,
 } from './components/AssetDetailScreen';
+export { TxDetailSheet, buildTxDetail } from './components/TxDetailSheet';
+export type { TxDetailModel, TxDetailField, TxDetailAction } from './components/TxDetailSheet';
 export { SentTipsScreen } from './components/SentTipsScreen';
 export type { SentTipRow, SentTipsScreenProps } from './components/SentTipsScreen';
 

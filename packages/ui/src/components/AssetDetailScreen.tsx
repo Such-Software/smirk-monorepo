@@ -16,6 +16,7 @@ import { mustGetAsset } from '@smirk/assets';
 import { formatAmount, formatAmountWithAsset } from '../format';
 import { AssetIcon } from './AssetIcon';
 import { CopyableNpub } from './CopyableNpub';
+import { TxDetailSheet, buildTxDetail } from './TxDetailSheet';
 
 /**
  * Single transaction row, agnostic of chain. The shell normalizes
@@ -23,6 +24,22 @@ import { CopyableNpub } from './CopyableNpub';
  * passing it in. Direction + amount + timestamp are required; the
  * rest is rendered as a subline when present.
  */
+/**
+ * What the wallet itself recorded at send time, merged onto a chain row by
+ * txid. The transaction key is deliberately NOT here: a history row is display
+ * state, and the key is fetched only when the user asks to see it.
+ */
+export interface SentRecordSummary {
+  /** Address the user paid, exactly as entered. */
+  destination: string;
+  /** Network fee, when recorded. */
+  feeAtomic?: bigint;
+  /** ISO time the payment was signed. */
+  recordedAt: string;
+  /** A verified tx key is on file (XMR/WOW, non-subaddress sends). */
+  hasTxKey: boolean;
+}
+
 export type AssetDetailTxRow =
   | {
       kind: 'utxo';
@@ -39,6 +56,8 @@ export type AssetDetailTxRow =
       heightOrPending: number | 'pending';
       timestamp?: string;
       feeAtomic?: bigint;
+      /** What this wallet recorded when it made the payment, if it did. */
+      sent?: SentRecordSummary;
     }
   | {
       kind: 'cryptonote';
@@ -47,6 +66,8 @@ export type AssetDetailTxRow =
       txid: string;
       heightOrPending: number | 'pending';
       timestamp: string;
+      /** What this wallet recorded when it made the payment, if it did. */
+      sent?: SentRecordSummary;
     }
   | {
       kind: 'grin';
@@ -87,6 +108,12 @@ export type AssetDetailTxRow =
        *  tip, tagged with 🔐 so the user knows the recovery surface
        *  works even if the backend has lost the row. */
       hasLocalBackup?: boolean;
+      /** ISO time the recipient claimed it, when they have. */
+      claimedAt?: string;
+      /** ISO time the funds came back to the sender (clawback), when they did. */
+      clawedBackAt?: string;
+      /** Public link tip (anyone holding the URL can claim). */
+      isPublic?: boolean;
     }
   | {
       kind: 'tip-received';
@@ -108,6 +135,12 @@ export type AssetDetailTxRow =
        *  on pending tips. */
       fundingConfirmations?: number;
       confirmationsRequired?: number;
+      /** ISO time this wallet claimed it, when it has. */
+      claimedAt?: string;
+      /** ISO time the sender took it back before it was claimed. */
+      clawedBackAt?: string;
+      /** Public link tip. */
+      isPublic?: boolean;
     }
   | {
       /**
@@ -157,8 +190,15 @@ export interface AssetDetailScreenProps {
   hidden?: boolean;
   /** True while either history or sparkline is in-flight. */
   loading?: boolean;
-  /** Tap a tx row → open the chain-appropriate explorer URL. */
+  /** Open the chain-appropriate explorer (or, for a swap deposit, the swap
+   *  status). Offered from the detail sheet, no longer on the row tap. */
   onOpenExplorer?: (row: AssetDetailTxRow) => void;
+  /** Whether the shell has an explorer URL for this row. */
+  hasExplorer?: (row: AssetDetailTxRow) => boolean;
+  /** Fetch the transaction key for one of this wallet's sends, or null. */
+  onRevealTxKey?: (row: AssetDetailTxRow) => Promise<string | null>;
+  /** Current chain height, when known: turns block heights into confirmations. */
+  tipHeight?: number;
   /** Clawback an unclaimed sent tip: recovers funds to the sender.
    *  Surfaced as the per-row "↩ Clawback" button on tip-sent rows
    *  in pending / pending_confirmation / claiming status. */
@@ -197,6 +237,9 @@ export function AssetDetailScreen({
   hidden,
   loading,
   onOpenExplorer,
+  hasExplorer,
+  onRevealTxKey,
+  tipHeight,
   onTipClawback,
   onTipDiscard,
   onTipClaim,
@@ -208,6 +251,7 @@ export function AssetDetailScreen({
   resolveIcon,
 }: AssetDetailScreenProps) {
   const asset = mustGetAsset(assetId);
+  const [selected, setSelected] = useState<AssetDetailTxRow | null>(null);
 
   return (
     <div
@@ -334,9 +378,7 @@ export function AssetDetailScreen({
                 row={row}
                 assetId={assetId}
                 {...(hidden ? { hidden } : {})}
-                {...(onOpenExplorer
-                  ? { onClick: () => onOpenExplorer(row) }
-                  : {})}
+                onClick={() => setSelected(row)}
                 {...(onTipClawback ? { onTipClawback } : {})}
                 {...(onTipDiscard ? { onTipDiscard } : {})}
                 {...(onTipClaim ? { onTipClaim } : {})}
@@ -346,6 +388,22 @@ export function AssetDetailScreen({
           </div>
         )}
       </div>
+      {selected && (
+        <TxDetailSheet
+          model={buildTxDetail(selected, assetId, {
+            explorerAvailable: hasExplorer ? hasExplorer(selected) : !!onOpenExplorer,
+            ...(tipHeight !== undefined ? { tipHeight } : {}),
+          })}
+          onClose={() => setSelected(null)}
+          {...(onOpenExplorer
+            ? {
+                onOpenExplorer: () => onOpenExplorer(selected),
+                onOpenSwap: () => onOpenExplorer(selected),
+              }
+            : {})}
+          {...(onRevealTxKey ? { onRevealTxKey: () => onRevealTxKey(selected) } : {})}
+        />
+      )}
     </div>
   );
 }
@@ -993,6 +1051,11 @@ function TxRow({
             alignItems: 'center',
           }}
         >
+          {onClick && (
+            <button onClick={onClick} disabled={busy} style={tipActionBtn}>
+              Details
+            </button>
+          )}
           {row.kind === 'tip-sent' && row.status === 'draft' && onTipDiscard && (
             <button
               onClick={handleDiscard}

@@ -235,6 +235,45 @@ pub struct SignedTx {
     /// Treat it as key material: never log it, and store it where the wallet
     /// stores secrets.
     pub outgoing_view_key: String,
+    /// SECRET. The transaction private key `r`, hex, as `get_tx_key` reports it.
+    ///
+    /// Reproducing it later from `outgoing_view_key` also needs the spent
+    /// outputs' keys and commitments, which the wallet does not keep, so it is
+    /// derived here while those are in hand. It is returned ONLY when `r·G`
+    /// equals the public key the signed transaction actually published; any
+    /// other case (a subaddress destination, where the published key is `r·D`
+    /// and per-output keys apply, or an internal ordering change in the
+    /// library) yields `None` rather than a key that would produce a false
+    /// payment proof. Same handling as `outgoing_view_key`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_key: Option<String>,
+}
+
+/// The transaction private key the library derives for these inputs: the first
+/// draw of `TransactionKeys`, seeded exactly as `SignableTransaction` seeds it.
+pub(crate) fn derive_tx_key(
+    outgoing_view_key: &Zeroizing<[u8; 32]>,
+    input_keys_and_commitments: Vec<(Point, Point)>,
+) -> Zeroizing<Scalar> {
+    monero_wallet::send::TransactionKeys::new(outgoing_view_key, input_keys_and_commitments)
+        .next()
+        .expect("TransactionKeys is a never-ending iterator")
+}
+
+/// `tx_key` as hex if, and only if, `tx_key·G` is the primary public key in the
+/// transaction's `extra`. Fails closed: an unparseable extra, a missing key or a
+/// mismatch all return `None`.
+pub(crate) fn verified_tx_key_hex(tx_key: &Zeroizing<Scalar>, extra: &[u8]) -> Option<String> {
+    let parsed = monero_wallet::extra::Extra::read(&mut &extra[..]).ok()?;
+    let (keys, _additional) = parsed.keys()?;
+    let published: curve25519_dalek::EdwardsPoint = (*keys.first()?).into();
+    let scalar: curve25519_dalek::Scalar = (**tx_key).into();
+    let derived = curve25519_dalek::constants::ED25519_BASEPOINT_POINT * scalar;
+    if derived != published {
+        return None;
+    }
+    let bytes = <[u8; 32]>::from(**tx_key);
+    Some(hex::encode(bytes))
 }
 
 // ============================================================================
@@ -707,6 +746,13 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
     // Capture it before the builder consumes it: this is the only moment the
     // value exists, and it is what makes a later payment proof possible.
     let outgoing_view_key_hex = hex::encode(*outgoing_view_key);
+    // The tx key is seeded from the outgoing view key AND the spent outputs, in
+    // the order the builder receives them; capture both before it consumes them.
+    let tx_key_seed = outgoing_view_key.clone();
+    let input_keys_and_commitments: Vec<(Point, Point)> = inputs_with_decoys
+        .iter()
+        .map(|o| (o.key(), o.commitment().commit()))
+        .collect();
 
     // Build SignableTransaction
     // Note: Change::fingerprintable is used as we don't have the full view pair
@@ -747,6 +793,10 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
 
     let tx_hex = hex::encode(&tx_bytes);
     let tx_hash = hex::encode(tx.hash());
+    let tx_key = verified_tx_key_hex(
+        &derive_tx_key(&tx_key_seed, input_keys_and_commitments),
+        &tx.prefix().extra,
+    );
 
     Ok(SignedTx {
         tx_hex,
@@ -756,6 +806,7 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         // Dropping it here is irreversible: it is fresh OS randomness, so no
         // amount of seed knowledge reconstructs it afterwards.
         outgoing_view_key: outgoing_view_key_hex,
+        tx_key,
     })
 }
 
