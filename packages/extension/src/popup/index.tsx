@@ -134,6 +134,7 @@ import {
   SendWizard,
   StateProvider,
   THORCHAIN_WIZARD_ID,
+  NONLOGS_WIZARD_ID,
   type SwapInFlight,
   TipMaker,
   applyTheme,
@@ -2468,6 +2469,38 @@ function HomeRouter({
                 tradeId: memoCtx.tradeId,
                 toAsset: memoCtx.toAsset,
                 memo: memoCheck.memo,
+                state: 'pending',
+              },
+            }, journalKey);
+          }
+          if (
+            result.ok &&
+            memoCtx?.kind === 'swap-deposit' &&
+            memoCtx.provider === 'nonlogs' &&
+            fields.toAddress === preSend?.pendingContextSeed?.toAddress
+          ) {
+            // A NonLogs deposit is an ordinary send to the address NonLogs
+            // returned. Record it as the swap's deposit, so the swap shows
+            // in history and its status poll can name the deposit txid.
+            const txid = result.txid;
+            await store.update((s) => {
+              const f = s.wizards[NONLOGS_WIZARD_ID]?.fields as { inFlight?: SwapInFlight } | undefined;
+              if (f?.inFlight && f.inFlight.id === memoCtx.tradeId) {
+                f.inFlight = { ...f.inFlight, depositTxid: txid };
+              }
+            });
+            const journalKey = journalKeyFor(wallet);
+            if (journalKey) void recordSend({
+              txid,
+              asset: fields.fromAssetId,
+              destination: fields.toAddress,
+              amountAtomic: String(result.amountAtomic ?? fields.amountAtomic),
+              ...(result.feeAtomic !== undefined ? { feeAtomic: String(result.feeAtomic) } : {}),
+              createdAt: Date.now(),
+              swap: {
+                provider: 'nonlogs',
+                tradeId: memoCtx.tradeId,
+                toAsset: memoCtx.toAsset,
                 state: 'pending',
               },
             }, journalKey);

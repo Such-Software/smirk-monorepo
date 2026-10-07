@@ -84,7 +84,13 @@ export type { ClaimableTipsBannerProps } from './components/ClaimableTipsBanner'
 export { ReadyToShareTipsBanner } from './components/ReadyToShareTipsBanner';
 export type { ReadyToShareTipsBannerProps } from './components/ReadyToShareTipsBanner';
 
-export { SwapTab, TROCADOR_WIZARD_ID, THORCHAIN_WIZARD_ID } from './components/SwapTab';
+export {
+  SwapTab,
+  BookAnalysisPanel,
+  TROCADOR_WIZARD_ID,
+  THORCHAIN_WIZARD_ID,
+  NONLOGS_WIZARD_ID,
+} from './components/SwapTab';
 export { WhereToTrade, TRADE_VENUES } from './components/WhereToTrade';
 export type { TradePairPrice, TradeVenue, WhereToTradeProps } from './components/WhereToTrade';
 export type {
@@ -94,6 +100,8 @@ export type {
   SwapKindBadge,
   SwapProviderStatus,
   ThorchainHandlers,
+  ProviderHandlers,
+  BookAnalysisView,
 } from './components/SwapTab';
 
 export { SendWizard } from './components/SendWizard';

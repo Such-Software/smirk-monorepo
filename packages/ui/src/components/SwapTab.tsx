@@ -63,6 +63,30 @@ export interface SwapQuoteSummary {
   /** Provider-specific, JSON-safe data the confirm step hands back
    *  (THORChain: vault address, memo, limits). Absent for Trocador. */
   providerData?: unknown;
+  /** Order-book reading for venues that fill against a public book
+   *  (NonLogs). Shown beside the quote: expected receipt, price impact,
+   *  depth, and both estimates when they disagree. */
+  bookAnalysis?: BookAnalysisView;
+  /** Notes the user must read before confirming, in plain words. */
+  notices?: ReadonlyArray<string>;
+}
+
+/** JSON-safe order-book reading for the quote step. Amounts are decimal
+ *  strings in the named coin, not atomic units. */
+export interface BookAnalysisView {
+  /** Markets walked, e.g. `["GRIN-BTC", "WOW-BTC"]`. */
+  route: ReadonlyArray<string>;
+  expectedReceive: string;
+  /** Price impact against the mid price, as a fraction; null without one. */
+  priceImpact: number | null;
+  /** Largest input the visible books fill completely, in the input coin. */
+  maxInput: string;
+  exceedsDepth: boolean;
+  warning: 'none' | 'notice' | 'strong' | 'exceeds_depth' | 'no_market';
+  /** The venue's own estimate, when it differs materially from the books. */
+  venueEstimate: string | null;
+  estimatesDiffer: boolean;
+  feesModelled: string;
 }
 
 /** A started swap. Persisted so popup-close mid-deposit recovers and
@@ -88,6 +112,9 @@ export interface SwapInFlight {
   /** Txid of the deposit once the wallet broadcast it (THORChain tracks
    *  swaps by the inbound txid). */
   depositTxid?: string;
+  /** The provider's private status page for this swap (NonLogs). A bearer
+   *  link: shown to the user only, never shared or logged. */
+  statusUrl?: string;
   state:
     | { state: 'pending'; reason: 'awaiting_deposit' | 'awaiting_confirmations' | 'in_progress' }
     | { state: 'completed'; outboundTxId: string; toAmount: string }
@@ -197,10 +224,18 @@ export interface SwapTabProps {
    * policy), so an empty pair list shows `unavailableReason` instead.
    */
   thorchain?: ThorchainHandlers;
+  /**
+   * NonLogs (order-book exchange, brokered by the wallet server). Omit to
+   * leave it listed as unavailable. Its quotes carry `bookAnalysis`.
+   */
+  nonlogs?: ProviderHandlers;
   /** Live DEX prices for the WOW/GRIN "where to trade" panel. Optional;
    *  the panel renders its venue list without them. */
   loadTradePrices?: () => Promise<TradePairPrice[]>;
 }
+
+/** Everything a live-provider wizard needs from the consumer. */
+export type ProviderHandlers = ThorchainHandlers;
 
 /** Everything the THORChain wizard needs from the consumer. */
 export interface ThorchainHandlers {
@@ -309,10 +344,25 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     ],
     publicTradeUrl: 'https://thorchain.net/tx/{ID}',
   },
+  {
+    id: 'nonlogs',
+    kind: 'CEX',
+    name: 'NonLogs',
+    blurb: 'Order-book exchange. WOW with BTC and XMR, plus BTC, LTC and XMR. Pays your own addresses.',
+    status: 'paused',
+    statusNote: 'Checking NonLogs…',
+    support: [
+      { label: 'info@nonlogs.io', href: 'mailto:info@nonlogs.io' },
+      { label: 'NonLogs support', href: 'https://nonlogs.io' },
+    ],
+  },
 ];
 
 /** Stable wizard id for the THORChain flow. */
 export const THORCHAIN_WIZARD_ID = 'swap-thorchain';
+
+/** Stable wizard id for the NonLogs flow. */
+export const NONLOGS_WIZARD_ID = 'swap-nonlogs';
 
 // ============================================================================
 // Trocador wizard fields (persisted via useWizard)
@@ -367,20 +417,35 @@ export function SwapTab(props: SwapTabProps) {
   const thorchain = useWizard<TrocadorFields>(THORCHAIN_WIZARD_ID, {
     step: 0,
   });
+  const nonlogsWizard = useWizard<TrocadorFields>(NONLOGS_WIZARD_ID, {
+    step: 0,
+  });
   const thor = props.thorchain;
-  const thorLive = !!thor && thor.fromAssets.length > 0 && thor.toAssets.length > 0;
-  const liveTickers = thor
-    ? [...new Set([...thor.fromAssets, ...thor.toAssets])].map((a) => a.toUpperCase()).join(', ')
-    : '';
+  const nl = props.nonlogs;
+  const live = (h: ProviderHandlers | undefined) => !!h && h.fromAssets.length > 0 && h.toAssets.length > 0;
+  const tickers = (h: ProviderHandlers) =>
+    [...new Set([...h.fromAssets, ...h.toAssets])].map((a) => a.toUpperCase()).join(', ');
   const cards: ReadonlyArray<ProviderCard> = PROVIDERS.map((p) => {
-    if (p.id !== 'thorchain') return p;
-    if (thorLive) return { ...p, status: 'active' as const, blurb: `Cross-chain pools. Live now: ${liveTickers}.` };
-    return { ...p, statusNote: thor?.unavailableReason ?? 'Not available in this app.' };
+    if (p.id === 'thorchain') {
+      if (live(thor)) return { ...p, status: 'active' as const, blurb: `Cross-chain pools. Live now: ${tickers(thor!)}.` };
+      return { ...p, statusNote: thor?.unavailableReason ?? 'Not available in this app.' };
+    }
+    if (p.id === 'nonlogs') {
+      if (live(nl)) {
+        return {
+          ...p,
+          status: 'active' as const,
+          blurb: `Order-book exchange. Live now: ${tickers(nl!)}. Pays your own addresses.`,
+        };
+      }
+      return { ...p, statusNote: nl?.unavailableReason ?? 'Not offered by this wallet server.' };
+    }
+    return p;
   });
 
   // Provider list when no active wizard; otherwise the active
   // provider's wizard takes the whole tab.
-  if (!trocador.active && !thorchain.active) {
+  if (!trocador.active && !thorchain.active && !nonlogsWizard.active) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <SwapHeader />
@@ -406,7 +471,9 @@ export function SwapTab(props: SwapTabProps) {
                   ? () => void trocador.start()
                   : p.id === 'thorchain'
                     ? () => void thorchain.start()
-                    : null;
+                    : p.id === 'nonlogs'
+                      ? () => void nonlogsWizard.start()
+                      : null;
             return (
               <ProviderRow
                 key={p.id}
@@ -422,8 +489,9 @@ export function SwapTab(props: SwapTabProps) {
   }
 
   const usingThor = thorchain.active && !!thor;
-  const wizard = usingThor ? thorchain : trocador;
-  const card = cards.find((p) => p.id === (usingThor ? 'thorchain' : 'trocador'))!;
+  const usingNonlogs = !usingThor && nonlogsWizard.active && !!nl;
+  const wizard = usingThor ? thorchain : usingNonlogs ? nonlogsWizard : trocador;
+  const card = cards.find((p) => p.id === (usingThor ? 'thorchain' : usingNonlogs ? 'nonlogs' : 'trocador'))!;
   // Step-aware cancel. When the wizard already holds a real Trocador
   // trade (step ≥ 2 and a non-terminal inFlight), destroying the
   // wizard state strands the user: no recovery surface for the
@@ -445,19 +513,22 @@ export function SwapTab(props: SwapTabProps) {
       const ok = window.confirm(
         usingThor
           ? 'Close this view? If you already sent the deposit, THORChain still completes the swap. Follow it from the Activity row.'
-          : `Close this view? Your swap (${inFlight.id}) continues at the provider — recover it from "Recent swaps" or the Activity row.`,
+          : usingNonlogs
+            ? 'Close this view? If you already sent the deposit, NonLogs still completes the swap. Follow it from the Activity row.'
+            : `Close this view? Your swap (${inFlight.id}) continues at the provider — recover it from "Recent swaps" or the Activity row.`,
       );
       if (!ok) return;
     }
     void wizard.cancel();
   };
-  const handlers = usingThor
+  const live2 = usingThor ? thor : usingNonlogs ? nl : undefined;
+  const handlers = live2
     ? {
-        fromAssets: thor!.fromAssets,
-        toAssets: thor!.toAssets,
-        onQuote: thor!.onQuote,
-        onConfirm: thor!.onConfirm,
-        onFetchStatus: thor!.onFetchStatus,
+        fromAssets: live2.fromAssets,
+        toAssets: live2.toAssets,
+        onQuote: live2.onQuote,
+        onConfirm: live2.onConfirm,
+        onFetchStatus: live2.onFetchStatus,
       }
     : {
         fromAssets: props.fromAssets,
@@ -1259,6 +1330,17 @@ function QuoteStep({
         </Row>
       </div>
 
+      {quote.bookAnalysis && (
+        <BookAnalysisPanel analysis={quote.bookAnalysis} fromTicker={from.ticker} toTicker={to.ticker} />
+      )}
+      {quote.notices && quote.notices.length > 0 && (
+        <ul data-testid="swap-quote-notices" style={{ margin: 0, paddingLeft: 16, fontSize: 11, color: 'var(--smirk-fg-muted)', lineHeight: 1.5 }}>
+          {quote.notices.map((n, i) => (
+            <li key={i}>{n}</li>
+          ))}
+        </ul>
+      )}
+
       <div>
         <div style={addrLabelRowStyle()}>
           <label style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
@@ -1355,6 +1437,83 @@ function QuoteStep({
       >
         {busy ? 'Creating trade…' : expired ? 'Quote expired — re-quote' : 'Confirm swap'}
       </button>
+    </div>
+  );
+}
+
+/** Percent with one decimal, e.g. 0.0312 -> "3.1%". */
+function pct(x: number): string {
+  return `${(x * 100).toFixed(1)}%`;
+}
+
+/**
+ * What the order books say about this fill: the expected receipt after
+ * fees, the price impact against the mid, how much the visible books can
+ * take, and the venue's own estimate when it disagrees materially.
+ */
+export function BookAnalysisPanel({
+  analysis,
+  fromTicker,
+  toTicker,
+}: {
+  analysis: BookAnalysisView;
+  fromTicker: string;
+  toTicker: string;
+}) {
+  const a = analysis;
+  const tone =
+    a.warning === 'exceeds_depth' || a.warning === 'strong' || a.warning === 'no_market'
+      ? 'var(--smirk-negative, #ff6b6b)'
+      : a.warning === 'notice'
+        ? 'var(--smirk-warning, #f0b429)'
+        : 'var(--smirk-border)';
+  const headline =
+    a.warning === 'exceeds_depth'
+      ? `This order is larger than the visible order book. At most ${a.maxInput} ${fromTicker} fills at the posted prices; the rest would wait for new orders or be refunded.`
+      : a.warning === 'no_market'
+        ? 'No order book could be read for this pair.'
+        : a.warning === 'strong'
+          ? `High price impact (${a.priceImpact === null ? 'unknown' : pct(a.priceImpact)}): this order moves the price a lot. Consider a smaller amount.`
+          : a.warning === 'notice'
+            ? `Noticeable price impact (${a.priceImpact === null ? 'no mid price' : pct(a.priceImpact)}).`
+            : null;
+  return (
+    <div
+      data-testid="swap-book-analysis"
+      style={{
+        padding: 12,
+        border: `1px solid ${tone}`,
+        borderRadius: 'var(--smirk-radius, 8px)',
+        fontSize: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
+      <div style={{ fontWeight: 600, fontSize: 12 }}>From the live order book</div>
+      <Row label="Expected to receive">
+        <span data-testid="swap-book-expected">
+          {a.expectedReceive} {toTicker}
+        </span>
+      </Row>
+      {a.estimatesDiffer && a.venueEstimate !== null && (
+        <Row label="Venue's own estimate">
+          {a.venueEstimate} {toTicker}
+        </Row>
+      )}
+      <Row label="Price impact">{a.priceImpact === null ? '—' : pct(a.priceImpact)}</Row>
+      <Row label="Book depth">
+        up to {a.maxInput} {fromTicker}
+      </Row>
+      <Row label="Route">{a.route.join(' → ')}</Row>
+      {headline && <div style={{ color: tone, lineHeight: 1.5, marginTop: 4 }}>{headline}</div>}
+      {a.estimatesDiffer && (
+        <div style={{ color: 'var(--smirk-fg-muted)', lineHeight: 1.5 }}>
+          The two estimates differ: the venue's is its own projection, the book figure walks the orders posted
+          right now. Neither is guaranteed.
+        </div>
+      )}
+      <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)', lineHeight: 1.5 }}>Fees included: {a.feesModelled}.</div>
     </div>
   );
 }
@@ -1577,7 +1736,25 @@ function StatusStep({
             swap.id
           )}
         </Row>
+        {swap.statusUrl && (
+          <Row label="Swap page">
+            <a
+              href={swap.statusUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="swap-status-private-link"
+              style={{ color: 'var(--smirk-accent)', textDecoration: 'none' }}
+            >
+              Open on {provider.name} ↗
+            </a>
+          </Row>
+        )}
       </div>
+      {swap.statusUrl && (
+        <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)', lineHeight: 1.5, marginTop: -6 }}>
+          That page is private to this swap: anyone with the link can see it, so do not share it.
+        </div>
+      )}
 
       {/* Provider support panel: shown prominently on failed/refunded
           states, and as a compact footer otherwise. Reaching the

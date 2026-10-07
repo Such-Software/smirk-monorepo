@@ -1,9 +1,10 @@
 /**
- * WhereToTrade: WOW and GRIN have no swap route a non-custodial wallet can
- * integrate (no instant-swap provider lists them; the venues that do are
- * custodial exchanges or a self-hosted DEX). So instead of brokering, the
- * wallet links out and labels each venue's trust model, with live DEX prices
- * from our own Neroswap aggregator when they load.
+ * WhereToTrade: venues for WOW and GRIN outside the wallet. WOW swaps run
+ * in-app through NonLogs when the wallet server offers it (the provider list
+ * above); GRIN has no route a wallet can complete on its own, since a Grin
+ * deposit to an exchange is an interactive slatepack exchange. So the panel
+ * links out and labels each venue's trust model, with live DEX prices from
+ * our own Neroswap aggregator when they load.
  *
  * Strictly presentational: the consumer supplies prices (best-effort; the
  * panel renders without them) and nothing here moves funds.
@@ -32,7 +33,7 @@ export const TRADE_VENUES: ReadonlyArray<TradeVenue> = [
   {
     name: 'NonLogs',
     kind: 'CEX',
-    note: 'Order-book exchange. Custodial: you deposit to an account.',
+    note: 'Order-book exchange. On its site you deposit to an account; WOW swaps also run in this wallet when offered.',
     href: 'https://nonlogs.io',
     assets: ['wow', 'grin'],
   },

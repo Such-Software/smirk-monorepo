@@ -111,6 +111,38 @@
         }
       }
     },
+    "/auth/legacy-merge": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Merge a pre-v0.3 (`migrate-legacy`) identity into the signed-in identity.",
+        "description": "For wallets that sign in by npub, which never reach the rotation path of\n[`extension_register`]. Requires the session JWT AND a proof from the previous\nBTC key, bound to this identity's current BTC key and this instance.",
+        "operationId": "legacy_merge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Merge outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyMergeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/logout": {
       "post": {
         "tags": [
@@ -707,6 +739,244 @@
             "description": "Price feed disabled on this server"
           }
         }
+      }
+    },
+    "/swaps/nonlogs": {
+      "post": {
+        "tags": [
+          "swaps"
+        ],
+        "summary": "Create a swap paying the user's own addresses. Safe to retry with the same\n`client_request_id`: the same deposit address comes back.",
+        "operationId": "nonlogs_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NonlogsCreateReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Swap created, or the same swap on a retry. Contains `swap_url`, a bearer link the wallet may show its user and must not log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonlogsBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "NonLogs swaps are not offered on this instance"
+          },
+          "409": {
+            "description": "This request id was used with different inputs"
+          },
+          "422": {
+            "description": "NonLogs rejected the pair, amount or an address"
+          },
+          "429": {
+            "description": "Rate limited; see Retry-After"
+          },
+          "503": {
+            "description": "Paused, or outcome uncertain (code SWAP_UNCERTAIN): retry with the same request id"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/swaps/nonlogs/assets": {
+      "get": {
+        "tags": [
+          "swaps"
+        ],
+        "summary": "Swappable coins and networks right now (cached for five minutes).",
+        "operationId": "nonlogs_assets",
+        "responses": {
+          "200": {
+            "description": "NonLogs' swap catalogue, as NonLogs sent it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonlogsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "NonLogs swaps are not offered on this instance"
+          },
+          "502": {
+            "description": "NonLogs unreachable or refused this instance's key"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/swaps/nonlogs/orderbook/{pair}": {
+      "get": {
+        "tags": [
+          "swaps"
+        ],
+        "summary": "A public NonLogs order book at depth 100, cached for a few seconds and\nfetched by this backend so the user's IP never reaches NonLogs. The wallet\nwalks it to show the expected receipt and price impact.",
+        "operationId": "nonlogs_orderbook",
+        "parameters": [
+          {
+            "name": "pair",
+            "in": "path",
+            "description": "Market, e.g. `WOW-BTC`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bids and asks as [price, quantity] string pairs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonlogsBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed pair"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "NonLogs swaps are not offered on this instance"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/swaps/nonlogs/quote": {
+      "post": {
+        "tags": [
+          "swaps"
+        ],
+        "summary": "Estimate a swap. Reserves no address, price or liquidity.",
+        "operationId": "nonlogs_quote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NonlogsQuoteReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "NonLogs' estimate: receipt, itemized fees, limits, route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonlogsBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid symbols, networks or amount"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "NonLogs swaps are not offered on this instance"
+          },
+          "422": {
+            "description": "NonLogs cannot route this pair or amount"
+          },
+          "429": {
+            "description": "Rate limited; see Retry-After"
+          },
+          "503": {
+            "description": "NonLogs has paused swaps"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/swaps/nonlogs/{id}": {
+      "get": {
+        "tags": [
+          "swaps"
+        ],
+        "summary": "Current state of one of the caller's swaps: confirmations, conversion,\npayouts and refunds. Poll about every 10 s while it is open.",
+        "operationId": "nonlogs_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "NonLogs swap id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The swap, as NonLogs reports it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonlogsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "No such swap for this user"
+          },
+          "429": {
+            "description": "Rate limited; see Retry-After"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
       }
     },
     "/tips/social": {
@@ -2823,7 +3093,8 @@
           "chains",
           "features",
           "restore",
-          "registration"
+          "registration",
+          "swaps"
         ],
         "properties": {
           "chains": {
@@ -2885,6 +3156,10 @@
           "restore": {
             "$ref": "#/components/schemas/RestoreCapability",
             "description": "Wallet restore (import) policy for this instance."
+          },
+          "swaps": {
+            "$ref": "#/components/schemas/SwapsCapability",
+            "description": "Operator policy for in-wallet swap providers, and brokered venues."
           },
           "version": {
             "type": "string",
@@ -3006,7 +3281,7 @@
               "string",
               "null"
             ],
-            "description": "Hex-encoded AES-GCM ciphertext of the claim secret; `null` if the tip\nstored none. Useless without the URL-fragment key."
+            "description": "Hex-encoded XChaCha20-Poly1305 ciphertext of the claim secret; `null`\nif the tip stored none. Useless without the claim key."
           },
           "success": {
             "type": "boolean"
@@ -3157,7 +3432,7 @@
               "string",
               "null"
             ],
-            "description": "Hex-encoded AES-GCM ciphertext of the claim secret; the backend cannot\ndecrypt it."
+            "description": "Hex-encoded XChaCha20-Poly1305 ciphertext of the claim secret; the\nbackend cannot decrypt it."
           },
           "funding_txid": {
             "type": [
@@ -3259,6 +3534,13 @@
               "null"
             ],
             "description": "Settled payment-invoice id from `/auth/payment-invoice`. Required when the\ninstance enables the pay-to-register gate (see `/capabilities` →\n`registration.payment_required`); ignored otherwise and for returning\nwallets. Its settlement is verified against the processor and the invoice\natomically consumed (single-use) before the wallet is granted."
+          },
+          "rotation_public_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The PREVIOUS BTC public key (compressed SEC1 hex) that `rotation_signature`\nwas made with, for a row that has no BTC key row on file. Rows imported by\n`migrate-legacy` carry only `pubkey_hash`, the hash of the pre-v0.3\n`m/44'` BTC key, so the server cannot know the key itself. It is accepted\nonly when its hash IS that row's `pubkey_hash`, so it proves control of\nthe identity already on file, exactly like a stored key would. Ignored when\nthe row has a BTC key row (that stored key is used instead)."
           },
           "rotation_signature": {
             "type": [
@@ -3835,6 +4117,13 @@
           "plan": {
             "type": "string",
             "description": "Plan id (see `/capabilities` → `premium.plans`), e.g. `quarter`."
+          },
+          "rail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Payment rail (see `/capabilities` → `premium.rails[].id`). Omitted means\nthe primary rail, which is how clients before rails behaved."
           }
         }
       },
@@ -3845,7 +4134,8 @@
           "pay_to",
           "plan",
           "amount",
-          "currency"
+          "currency",
+          "rail"
         ],
         "properties": {
           "amount": {
@@ -3863,6 +4153,59 @@
           },
           "plan": {
             "type": "string"
+          },
+          "rail": {
+            "type": "string",
+            "description": "The rail the invoice was minted on."
+          }
+        }
+      },
+      "LegacyMergeRequest": {
+        "type": "object",
+        "description": "Prove a previous BTC key and merge its legacy identity into the signed-in one.",
+        "required": [
+          "btc_public_key",
+          "previous_public_key",
+          "signed_timestamp",
+          "rotation_signature"
+        ],
+        "properties": {
+          "btc_public_key": {
+            "type": "string",
+            "description": "The signed-in wallet's CURRENT BTC public key (compressed SEC1 hex). It\nmust be this identity's key on file."
+          },
+          "previous_public_key": {
+            "type": "string",
+            "description": "The PREVIOUS BTC public key (compressed SEC1 hex) the legacy row answers to."
+          },
+          "rotation_signature": {
+            "type": "string",
+            "description": "BIP-137 signature under `previous_public_key` over\n`smirk-rotate-v1|{public_api_url}|{hex(SHA256(btc_public_key))}|{signed_timestamp}`."
+          },
+          "signed_timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds bound into the proof."
+          }
+        }
+      },
+      "LegacyMergeResponse": {
+        "type": "object",
+        "description": "Outcome of a legacy merge request.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "conflict": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On `conflict`: the field both identities hold differently\n(`username`, `nostr_pubkey` or `seed_fingerprint`)."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`merged`, `nothing_to_merge` or `conflict`."
           }
         }
       },
@@ -4153,6 +4496,114 @@
           }
         }
       },
+      "NonlogsBody": {
+        "type": "object",
+        "description": "A NonLogs response passed to the wallet as NonLogs sent it."
+      },
+      "NonlogsCreateReq": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "amount",
+          "payout_address",
+          "refund_address",
+          "client_request_id"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "client_request_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Generated and persisted by the wallet BEFORE the first attempt, and\nreused for every retry of the same swap."
+          },
+          "from": {
+            "type": "string"
+          },
+          "from_network": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payout_address": {
+            "type": "string",
+            "description": "Where the destination coin is paid: the wallet's own address."
+          },
+          "refund_address": {
+            "type": "string",
+            "description": "Where the source coin returns if it cannot be swapped: the wallet's own\naddress on the source chain."
+          },
+          "to": {
+            "type": "string"
+          },
+          "to_network": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NonlogsQuoteReq": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string",
+            "description": "Amount of `from`, as a decimal string (never a JSON number)."
+          },
+          "from": {
+            "type": "string",
+            "description": "Source symbol, e.g. `BTC`."
+          },
+          "from_network": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Exact source network, e.g. `bitcoin`. Optional when the symbol has one."
+          },
+          "to": {
+            "type": "string",
+            "description": "Destination symbol, e.g. `WOW`."
+          },
+          "to_network": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Exact destination network, e.g. `wownero`."
+          }
+        }
+      },
+      "NonlogsSwapCapability": {
+        "type": "object",
+        "description": "NonLogs external-wallet swaps brokered by this instance.",
+        "required": [
+          "enabled",
+          "assets"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Symbols NonLogs currently lists as swappable, from a cache this backend\nrefreshes (empty until the first refresh, or when NonLogs pauses\ncreation). Advisory: the wallet re-checks with a quote before offering."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "The `/swaps/nonlogs/*` routes are served: the operator configured a\nNonLogs key. Off means those routes answer 404."
+          }
+        }
+      },
       "NostrLinkChallengeResponse": {
         "type": "object",
         "required": [
@@ -4342,7 +4793,8 @@
         "required": [
           "currency",
           "plans",
-          "relay_url"
+          "relay_url",
+          "rails"
         ],
         "properties": {
           "currency": {
@@ -4353,6 +4805,13 @@
             "items": {
               "$ref": "#/components/schemas/PremiumPlanInfo"
             }
+          },
+          "rails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PremiumRailInfo"
+            },
+            "description": "Ways to pay, primary first. Pass `id` as `rail` to `/premium/invoice`."
           },
           "relay_url": {
             "type": "string",
@@ -4378,6 +4837,27 @@
           },
           "id": {
             "type": "string"
+          }
+        }
+      },
+      "PremiumRailInfo": {
+        "type": "object",
+        "description": "One way to pay for premium.",
+        "required": [
+          "id",
+          "assets"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Assets this rail takes, e.g. `[\"BTC\",\"LTC\"]`. Empty means the operator\ndid not declare them; the wallet should then show the rail unlabelled\nrather than guess."
+          },
+          "id": {
+            "type": "string",
+            "description": "Rail id, e.g. `btcpay`, `xmrcheckout`, `wowcheckout`."
           }
         }
       },
@@ -4531,7 +5011,7 @@
               "string",
               "null"
             ],
-            "description": "Hex-encoded AES-GCM ciphertext; useless without the URL-fragment key."
+            "description": "Hex-encoded XChaCha20-Poly1305 ciphertext; useless without the claim key."
           },
           "funding_confirmations": {
             "type": "integer",
@@ -5104,6 +5584,22 @@
           }
         }
       },
+      "SwapsCapability": {
+        "type": "object",
+        "description": "Swap providers: operator policy for THORChain, and the venues this\ninstance brokers (NonLogs).",
+        "required": [
+          "thorchain",
+          "nonlogs"
+        ],
+        "properties": {
+          "nonlogs": {
+            "$ref": "#/components/schemas/NonlogsSwapCapability"
+          },
+          "thorchain": {
+            "$ref": "#/components/schemas/ThorchainSwapCapability"
+          }
+        }
+      },
       "TaggedHistoryEntry": {
         "type": "object",
         "description": "A transaction-history entry TAGGED with its owning address.",
@@ -5185,6 +5681,25 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "ThorchainSwapCapability": {
+        "type": "object",
+        "description": "THORChain swap policy the wallet follows. `enabled: false` turns THORChain\noff; an asset set to `off` hides that asset; anything absent means `auto`:\nTHORChain's own pools and halt flags decide.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "assets": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Per-asset overrides (`btc`, `ltc`, `xmr` to `off` or `auto`). Omitted\nwhen no asset is overridden."
+          },
+          "enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -5631,6 +6146,10 @@
     {
       "name": "premium",
       "description": "Premium subscription: mint a tier invoice, activate on settlement, read status (feature-flagged)."
+    },
+    {
+      "name": "swaps",
+      "description": "Brokered external-wallet swaps (NonLogs): quotes, creation to the user's own addresses, status, public order books. Off unless the operator configures a key."
     },
     {
       "name": "tips",

@@ -106,6 +106,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/legacy-merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge a pre-v0.3 (`migrate-legacy`) identity into the signed-in identity.
+         * @description For wallets that sign in by npub, which never reach the rotation path of
+         *     [`extension_register`]. Requires the session JWT AND a proof from the previous
+         *     BTC key, bound to this identity's current BTC key and this instance.
+         */
+        post: operations["legacy_merge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/logout": {
         parameters: {
             query?: never;
@@ -521,6 +543,101 @@ export interface paths {
         };
         /** Current fiat prices for the enabled feeds. */
         get: operations["prices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/swaps/nonlogs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a swap paying the user's own addresses. Safe to retry with the same
+         *     `client_request_id`: the same deposit address comes back.
+         */
+        post: operations["nonlogs_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/swaps/nonlogs/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Swappable coins and networks right now (cached for five minutes). */
+        get: operations["nonlogs_assets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/swaps/nonlogs/orderbook/{pair}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A public NonLogs order book at depth 100, cached for a few seconds and
+         *     fetched by this backend so the user's IP never reaches NonLogs. The wallet
+         *     walks it to show the expected receipt and price impact.
+         */
+        get: operations["nonlogs_orderbook"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/swaps/nonlogs/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Estimate a swap. Reserves no address, price or liquidity. */
+        post: operations["nonlogs_quote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/swaps/nonlogs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current state of one of the caller's swaps: confirmations, conversion,
+         *     payouts and refunds. Poll about every 10 s while it is open.
+         */
+        get: operations["nonlogs_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1459,6 +1576,8 @@ export interface components {
             registration: components["schemas"]["RegistrationCapability"];
             /** @description Wallet restore (import) policy for this instance. */
             restore: components["schemas"]["RestoreCapability"];
+            /** @description Operator policy for in-wallet swap providers, and brokered venues. */
+            swaps: components["schemas"]["SwapsCapability"];
             /** @description Backend version (Cargo package version). */
             version: string;
         };
@@ -1524,8 +1643,8 @@ export interface components {
          */
         ClaimTipResponse: {
             /**
-             * @description Hex-encoded AES-GCM ciphertext of the claim secret; `null` if the tip
-             *     stored none. Useless without the URL-fragment key.
+             * @description Hex-encoded XChaCha20-Poly1305 ciphertext of the claim secret; `null`
+             *     if the tip stored none. Useless without the claim key.
              */
             encrypted_key?: string | null;
             success: boolean;
@@ -1588,8 +1707,8 @@ export interface components {
             /** @description SHA256 of the claim key (hex); the key itself never touches the server. */
             claim_key_hash?: string | null;
             /**
-             * @description Hex-encoded AES-GCM ciphertext of the claim secret; the backend cannot
-             *     decrypt it.
+             * @description Hex-encoded XChaCha20-Poly1305 ciphertext of the claim secret; the
+             *     backend cannot decrypt it.
              */
             encrypted_key?: string | null;
             funding_txid?: string | null;
@@ -1637,6 +1756,16 @@ export interface components {
              *     atomically consumed (single-use) before the wallet is granted.
              */
             payment_invoice_id?: string | null;
+            /**
+             * @description The PREVIOUS BTC public key (compressed SEC1 hex) that `rotation_signature`
+             *     was made with, for a row that has no BTC key row on file. Rows imported by
+             *     `migrate-legacy` carry only `pubkey_hash`, the hash of the pre-v0.3
+             *     `m/44'` BTC key, so the server cannot know the key itself. It is accepted
+             *     only when its hash IS that row's `pubkey_hash`, so it proves control of
+             *     the identity already on file, exactly like a stored key would. Ignored when
+             *     the row has a BTC key row (that stored key is used instead).
+             */
+            rotation_public_key?: string | null;
             /**
              * @description Derivation-rotation proof: BIP-137 base64 signature under the BTC key
              *     ALREADY ON FILE for the user identified by `seed_fingerprint`, over the
@@ -1944,6 +2073,11 @@ export interface components {
         InvoiceReq: {
             /** @description Plan id (see `/capabilities` → `premium.plans`), e.g. `quarter`. */
             plan: string;
+            /**
+             * @description Payment rail (see `/capabilities` → `premium.rails[].id`). Omitted means
+             *     the primary rail, which is how clients before rails behaved.
+             */
+            rail?: string | null;
         };
         InvoiceResp: {
             amount: string;
@@ -1952,6 +2086,38 @@ export interface components {
             /** @description Where to pay (a checkout URL or address). */
             pay_to: string;
             plan: string;
+            /** @description The rail the invoice was minted on. */
+            rail: string;
+        };
+        /** @description Prove a previous BTC key and merge its legacy identity into the signed-in one. */
+        LegacyMergeRequest: {
+            /**
+             * @description The signed-in wallet's CURRENT BTC public key (compressed SEC1 hex). It
+             *     must be this identity's key on file.
+             */
+            btc_public_key: string;
+            /** @description The PREVIOUS BTC public key (compressed SEC1 hex) the legacy row answers to. */
+            previous_public_key: string;
+            /**
+             * @description BIP-137 signature under `previous_public_key` over
+             *     `smirk-rotate-v1|{public_api_url}|{hex(SHA256(btc_public_key))}|{signed_timestamp}`.
+             */
+            rotation_signature: string;
+            /**
+             * Format: int64
+             * @description Unix seconds bound into the proof.
+             */
+            signed_timestamp: number;
+        };
+        /** @description Outcome of a legacy merge request. */
+        LegacyMergeResponse: {
+            /**
+             * @description On `conflict`: the field both identities hold differently
+             *     (`username`, `nostr_pubkey` or `seed_fingerprint`).
+             */
+            conflict?: string | null;
+            /** @description `merged`, `nothing_to_merge` or `conflict`. */
+            outcome: string;
         };
         LogoutRequest: {
             refresh_token: string;
@@ -2066,6 +2232,54 @@ export interface components {
             /** @description The caller's username, or `null` if they have not claimed one. */
             username?: string | null;
         };
+        /** @description A NonLogs response passed to the wallet as NonLogs sent it. */
+        NonlogsBody: Record<string, never>;
+        NonlogsCreateReq: {
+            amount: string;
+            /**
+             * Format: uuid
+             * @description Generated and persisted by the wallet BEFORE the first attempt, and
+             *     reused for every retry of the same swap.
+             */
+            client_request_id: string;
+            from: string;
+            from_network?: string | null;
+            /** @description Where the destination coin is paid: the wallet's own address. */
+            payout_address: string;
+            /**
+             * @description Where the source coin returns if it cannot be swapped: the wallet's own
+             *     address on the source chain.
+             */
+            refund_address: string;
+            to: string;
+            to_network?: string | null;
+        };
+        NonlogsQuoteReq: {
+            /** @description Amount of `from`, as a decimal string (never a JSON number). */
+            amount: string;
+            /** @description Source symbol, e.g. `BTC`. */
+            from: string;
+            /** @description Exact source network, e.g. `bitcoin`. Optional when the symbol has one. */
+            from_network?: string | null;
+            /** @description Destination symbol, e.g. `WOW`. */
+            to: string;
+            /** @description Exact destination network, e.g. `wownero`. */
+            to_network?: string | null;
+        };
+        /** @description NonLogs external-wallet swaps brokered by this instance. */
+        NonlogsSwapCapability: {
+            /**
+             * @description Symbols NonLogs currently lists as swappable, from a cache this backend
+             *     refreshes (empty until the first refresh, or when NonLogs pauses
+             *     creation). Advisory: the wallet re-checks with a quote before offering.
+             */
+            assets: string[];
+            /**
+             * @description The `/swaps/nonlogs/*` routes are served: the operator configured a
+             *     NonLogs key. Off means those routes answer 404.
+             */
+            enabled: boolean;
+        };
         NostrLinkChallengeResponse: {
             /**
              * @description Server-issued single-use nonce (hex). The wallet embeds it as the signed
@@ -2163,6 +2377,8 @@ export interface components {
         PremiumCapability: {
             currency: string;
             plans: components["schemas"]["PremiumPlanInfo"][];
+            /** @description Ways to pay, primary first. Pass `id` as `rail` to `/premium/invoice`. */
+            rails: components["schemas"]["PremiumRailInfo"][];
             /** @description The relay premium posting targets (mirrors `messaging.relay_url`). */
             relay_url: string;
         };
@@ -2174,6 +2390,17 @@ export interface components {
             amount: string;
             /** Format: int32 */
             days: number;
+            id: string;
+        };
+        /** @description One way to pay for premium. */
+        PremiumRailInfo: {
+            /**
+             * @description Assets this rail takes, e.g. `["BTC","LTC"]`. Empty means the operator
+             *     did not declare them; the wallet should then show the rail unlabelled
+             *     rather than guess.
+             */
+            assets: string[];
+            /** @description Rail id, e.g. `btcpay`, `xmrcheckout`, `wowcheckout`. */
             id: string;
         };
         PricesResponse: {
@@ -2231,7 +2458,7 @@ export interface components {
             /** Format: int32 */
             confirmations_required: number;
             created_at: string;
-            /** @description Hex-encoded AES-GCM ciphertext; useless without the URL-fragment key. */
+            /** @description Hex-encoded XChaCha20-Poly1305 ciphertext; useless without the claim key. */
             encrypted_key?: string | null;
             /** Format: int32 */
             funding_confirmations: number;
@@ -2490,6 +2717,14 @@ export interface components {
             /** @description Hex-encoded signed transaction blob. */
             tx_hex: string;
         };
+        /**
+         * @description Swap providers: operator policy for THORChain, and the venues this
+         *     instance brokers (NonLogs).
+         */
+        SwapsCapability: {
+            nonlogs: components["schemas"]["NonlogsSwapCapability"];
+            thorchain: components["schemas"]["ThorchainSwapCapability"];
+        };
         /** @description A transaction-history entry TAGGED with its owning address. */
         TaggedHistoryEntry: {
             address: string;
@@ -2531,6 +2766,19 @@ export interface components {
             value: number;
             /** Format: int64 */
             vout: number;
+        };
+        /**
+         * @description THORChain swap policy the wallet follows. `enabled: false` turns THORChain
+         *     off; an asset set to `off` hides that asset; anything absent means `auto`:
+         *     THORChain's own pools and halt flags decide.
+         */
+        ThorchainSwapCapability: {
+            /**
+             * @description Per-asset overrides (`btc`, `ltc`, `xmr` to `off` or `auto`). Omitted
+             *     when no asset is overridden.
+             */
+            assets?: Record<string, never> | null;
+            enabled: boolean;
         };
         TipResponse: {
             asset: string;
@@ -2750,6 +2998,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthResponse"];
+                };
+            };
+        };
+    };
+    legacy_merge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LegacyMergeRequest"];
+            };
+        };
+        responses: {
+            /** @description Merge outcome */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyMergeResponse"];
                 };
             };
         };
@@ -3305,6 +3577,274 @@ export interface operations {
             };
             /** @description Price feed disabled on this server */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nonlogs_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NonlogsCreateReq"];
+            };
+        };
+        responses: {
+            /** @description Swap created, or the same swap on a retry. Contains `swap_url`, a bearer link the wallet may show its user and must not log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NonlogsBody"];
+                };
+            };
+            /** @description Invalid input */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs swaps are not offered on this instance */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description This request id was used with different inputs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs rejected the pair, amount or an address */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rate limited; see Retry-After */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Paused, or outcome uncertain (code SWAP_UNCERTAIN): retry with the same request id */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nonlogs_assets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description NonLogs' swap catalogue, as NonLogs sent it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NonlogsBody"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs swaps are not offered on this instance */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs unreachable or refused this instance's key */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nonlogs_orderbook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Market, e.g. `WOW-BTC` */
+                pair: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bids and asks as [price, quantity] string pairs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NonlogsBody"];
+                };
+            };
+            /** @description Malformed pair */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs swaps are not offered on this instance */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nonlogs_quote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NonlogsQuoteReq"];
+            };
+        };
+        responses: {
+            /** @description NonLogs' estimate: receipt, itemized fees, limits, route */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NonlogsBody"];
+                };
+            };
+            /** @description Invalid symbols, networks or amount */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs swaps are not offered on this instance */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs cannot route this pair or amount */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rate limited; see Retry-After */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NonLogs has paused swaps */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    nonlogs_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description NonLogs swap id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The swap, as NonLogs reports it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NonlogsBody"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such swap for this user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Rate limited; see Retry-After */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
