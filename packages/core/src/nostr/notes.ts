@@ -53,6 +53,15 @@ export interface FeedSources {
    * client cannot have.
    */
   includeRelayGeneral?: boolean;
+  /**
+   * Hex pubkeys whose notes never reach the feed, whatever their source.
+   * From the operator's configured mute list; the owner's NIP-51 mute list is
+   * applied on top at fetch time (see {@link NostrNotes.fetchFeed}).
+   */
+  mutedAuthors?: string[];
+  /** Hex pubkey whose NIP-51 mute list (kind 10000) curates the feed: the
+   *  operator announcements account. */
+  moderator?: string;
 }
 
 /** Structural shape of the backend `feed` capability, kept local so this Nostr
@@ -66,6 +75,8 @@ export interface FeedCapabilityLike {
   owner_npub: string | null;
   allowlist_npubs: string[];
   extra_relays: string[];
+  /** Operator-configured authors to hide. Optional: older backends omit it. */
+  muted_npubs?: string[];
 }
 
 /**
@@ -78,22 +89,30 @@ export function feedSourcesFromCapability(feed: FeedCapabilityLike): {
   sources: FeedSources;
   relayUrl: string;
 } {
-  const authors: string[] = [];
-  const add = (npub: string): void => {
+  const toHex = (npub: string): string | null => {
     try {
       const d = decodeNip19(npub);
-      if (d.type === 'npub' && typeof d.data === 'string') authors.push(d.data);
+      return d.type === 'npub' && typeof d.data === 'string' ? d.data : null;
     } catch {
-      /* skip a malformed npub */
+      return null; // skip a malformed npub
     }
   };
-  if (feed.show_owner && feed.owner_npub) add(feed.owner_npub);
-  for (const n of feed.allowlist_npubs ?? []) add(n);
+  const hexes = (list: string[] | undefined): string[] =>
+    (list ?? []).map(toHex).filter((h): h is string => h !== null);
+
+  const owner = feed.owner_npub ? toHex(feed.owner_npub) : null;
+  const muted = new Set(hexes(feed.muted_npubs));
+  const authors: string[] = [];
+  if (feed.show_owner && owner) authors.push(owner);
+  authors.push(...hexes(feed.allowlist_npubs));
   return {
     sources: {
-      authors,
+      // Muting wins over listing, so one config cannot both show and hide.
+      authors: authors.filter((a) => !muted.has(a)),
       relays: feed.extra_relays ?? [],
       includeRelayGeneral: feed.show_premium === true,
+      ...(muted.size ? { mutedAuthors: [...muted] } : {}),
+      ...(owner ? { moderator: owner } : {}),
     },
     relayUrl: feed.relay_url,
   };
@@ -261,6 +280,62 @@ export function operatorFeedFilters(sources: FeedSources, limit = 100): NostrFil
   return sources.includeRelayGeneral ? [{ kinds: [NOTE_KIND], limit }] : [];
 }
 
+/** NIP-51 mute list. */
+export const MUTE_LIST_KIND = 10000;
+
+/** What a moderator's mute list hides: authors (`p`) and single notes (`e`). */
+export interface FeedMutes {
+  authors: Set<string>;
+  notes: Set<string>;
+}
+
+/**
+ * Read a NIP-51 mute list's PUBLIC entries. Only a validly-signed event by the
+ * expected moderator counts; the newest one wins, as kind 10000 is replaceable.
+ * Encrypted (private) entries in `content` are not readable by other users and
+ * are ignored.
+ */
+export function muteListFrom(events: NostrWireEvent[], moderatorHex: string): FeedMutes {
+  const mutes: FeedMutes = { authors: new Set(), notes: new Set() };
+  const latest = events
+    .filter((e) => e.kind === MUTE_LIST_KIND && e.pubkey === moderatorHex)
+    .filter((e) => {
+      // Verify a fresh copy: nostr-tools caches a verdict on the event object
+      // under a symbol, and a copy of a verified event made by spreading
+      // carries that verdict even after its tags are changed.
+      const { id, pubkey, created_at, kind, tags, content, sig } = e;
+      try {
+        return verifyEvent({ id, pubkey, created_at, kind, tags, content, sig });
+      } catch {
+        return false;
+      }
+    })
+    .sort((a, b) => b.created_at - a.created_at)[0];
+  for (const tag of latest?.tags ?? []) {
+    const [name, value] = tag;
+    if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) continue;
+    if (name === 'p') mutes.authors.add(value);
+    else if (name === 'e') mutes.notes.add(value);
+  }
+  return mutes;
+}
+
+/**
+ * Drop muted notes. The moderator's own notes are never dropped, so a mistaken
+ * entry cannot silence the announcements account.
+ */
+export function applyFeedMutes(
+  notes: DisplayNote[],
+  mutes: FeedMutes,
+  moderatorHex?: string,
+): DisplayNote[] {
+  return notes.filter(
+    (n) =>
+      n.pubkeyHex === moderatorHex ||
+      (!mutes.authors.has(n.pubkeyHex) && !mutes.notes.has(n.id)),
+  );
+}
+
 /** The notes/feed API over a shared {@link NostrClient}. */
 export class NostrNotes {
   constructor(private readonly client: NostrClient) {}
@@ -298,18 +373,28 @@ export class NostrNotes {
     const general = operatorRelay ? operatorFeedFilters(sources, opts?.limit) : [];
     if (!curated.length && !general.length) return [];
 
-    const batches = await Promise.all([
+    // The moderator's mute list lives on the operator relay beside the feed.
+    const moderator = sources.moderator;
+    const [curatedEvents, generalEvents, muteEvents] = await Promise.all([
       curated.length ? this.client.querySync(relays, curated) : Promise.resolve([]),
       general.length ? this.client.querySync([operatorRelay!], general) : Promise.resolve([]),
+      moderator && operatorRelay
+        ? this.client
+            .querySync([operatorRelay], [{ kinds: [MUTE_LIST_KIND], authors: [moderator], limit: 1 }])
+            .catch(() => [] as NostrWireEvent[])
+        : Promise.resolve([] as NostrWireEvent[]),
     ]);
+
+    const mutes = moderator ? muteListFrom(muteEvents, moderator) : { authors: new Set<string>(), notes: new Set<string>() };
+    for (const a of sources.mutedAuthors ?? []) mutes.authors.add(a);
 
     // An author listed AND present on the operator relay arrives twice.
     const seen = new Set<string>();
-    return batches
-      .flat()
+    const notes = [...curatedEvents, ...generalEvents]
       .map(toDisplayNote)
       .filter((n): n is DisplayNote => n !== null)
       .filter((n) => !seen.has(n.id) && seen.add(n.id))
       .sort((a, b) => b.createdAt - a.createdAt);
+    return applyFeedMutes(notes, mutes, moderator);
   }
 }

@@ -17,9 +17,34 @@ export function planPeriodLabel(days: number): string {
   return days === 1 ? '1 day' : `${days} days`;
 }
 
-/** "1 year for 5 USD". */
+/**
+ * Names for the plan ids operators use. Two plans can share a period (a launch
+ * promo beside the standing price), so the period alone does not tell them
+ * apart; the name does.
+ */
+const PLAN_NAMES: Record<string, string> = {
+  founding: 'Founding member',
+  year: 'Standard',
+  standard: 'Standard',
+};
+
+/**
+ * The plan's name: the backend's own label when it sends one, else the known
+ * name for its id, else the id itself in sentence case. Never empty.
+ */
+export function planName(plan: PremiumPlanInfo): string {
+  const fromBackend = plan.label?.trim();
+  if (fromBackend) return fromBackend;
+  const id = plan.id.trim();
+  const known = PLAN_NAMES[id.toLowerCase()];
+  if (known) return known;
+  const words = id.replace(/[-_]+/g, ' ').trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : 'Plan';
+}
+
+/** "Founding member, 1 year, 5 USD". */
 export function planLabel(plan: PremiumPlanInfo, currency: string): string {
-  return `${planPeriodLabel(plan.days)} for ${plan.amount} ${currency}`.trim();
+  return `${planName(plan)}, ${planPeriodLabel(plan.days)}, ${plan.amount} ${currency}`.trim();
 }
 
 /**
@@ -75,6 +100,48 @@ export function isPendingRedeemable(
   if (pending.apiBase !== apiBase) return false;
   const age = nowMs - pending.createdAt;
   return age >= 0 && age <= PENDING_PREMIUM_MAX_AGE_MS;
+}
+
+/**
+ * Automatic checking for a paid invoice while the purchase screen is open.
+ *
+ * Each check asks the backend, which asks the processor, so the schedule backs
+ * off: often at first, while the user is likely still at the checkout, then
+ * slower for on-chain confirmations, and it stops after an hour. The manual
+ * "check now" button stays available throughout and after.
+ */
+export const PREMIUM_POLL_FAST_MS = 15_000;
+export const PREMIUM_POLL_SLOW_MS = 60_000;
+/** Checks run fast for this long after the invoice was minted. */
+export const PREMIUM_POLL_FAST_WINDOW_MS = 10 * 60 * 1000;
+/** No automatic check is scheduled this long after the invoice was minted. */
+export const PREMIUM_POLL_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * Delay before the next automatic check, or `null` when automatic checking is
+ * over for this invoice. Measured from the invoice's mint time, so reopening
+ * the popup does not restart the hour.
+ */
+export function nextPremiumPollDelayMs(createdAt: number, nowMs: number): number | null {
+  const age = nowMs - createdAt;
+  if (age < 0 || age >= PREMIUM_POLL_MAX_MS) return null;
+  const delay = age < PREMIUM_POLL_FAST_WINDOW_MS ? PREMIUM_POLL_FAST_MS : PREMIUM_POLL_SLOW_MS;
+  // Never schedule past the cap.
+  return Math.min(delay, PREMIUM_POLL_MAX_MS - age);
+}
+
+/**
+ * What an unsuccessful activation means for automatic checking.
+ *
+ * `waiting`: not settled yet, or the payment method is briefly unavailable;
+ * keep checking. `final`: the invoice can never activate here (unknown, bound
+ * to someone else, already used); stop checking and say so. Decided on the
+ * backend's words because its 400s share one status code.
+ */
+export function premiumActivationOutcome(error: string | undefined): 'waiting' | 'final' {
+  const e = (error ?? '').toLowerCase();
+  if (e.includes('already been used') || e.includes('unknown or invalid')) return 'final';
+  return 'waiting';
 }
 
 /**
