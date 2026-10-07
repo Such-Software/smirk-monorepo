@@ -1,0 +1,202 @@
+{
+ "_meta": {
+  "captured_at": "2026-10-07T14:44:06Z",
+  "note": "Real mainnet swaps picked from Midgard actions; status responses recorded verbatim.",
+  "source": "https://gateway.liquify.com/chain/thorchain_api"
+ },
+ "tx_status_completed": {
+  "response": {
+   "out_txs": [
+    {
+     "chain": "THOR",
+     "coins": [
+      {
+       "amount": "2827769",
+       "asset": "THOR.RUNE"
+      }
+     ],
+     "from_address": "thor1g98cy3n9mmjrpn0sxmn63lztelera37n8n67c0",
+     "gas": [
+      {
+       "amount": "2000000",
+       "asset": "THOR.RUNE"
+      }
+     ],
+     "id": "0000000000000000000000000000000000000000000000000000000000000000",
+     "memo": "OUT:6E63828BDC1B578479DF1226E35BA0D2B629B0081647778DF1796A608B9B0057",
+     "to_address": "thor1dl7un46w7l7f3ewrnrm6nq58nerjtp0dradjtd"
+    },
+    {
+     "chain": "LTC",
+     "coins": [
+      {
+       "amount": "3949217",
+       "asset": "LTC.LTC"
+      }
+     ],
+     "from_address": "ltc1qvx2krgnwyehcrjmz25t9vyt39fvxkthz4mxcuh",
+     "gas": [
+      {
+       "amount": "9750",
+       "asset": "LTC.LTC"
+      }
+     ],
+     "id": "3EA00DF272DA8B5FB8ED58677C8237AE82B5AEA62BB85C030CE05DA3D02851BD",
+     "memo": "OUT:6E63828BDC1B578479DF1226E35BA0D2B629B0081647778DF1796A608B9B0057",
+     "to_address": "ltc1q3anl6822c345et67gc77q9vf3g0puu2gyq9yy8"
+    }
+   ],
+   "planned_out_txs": [
+    {
+     "chain": "LTC",
+     "coin": {
+      "amount": "3949217",
+      "asset": "LTC.LTC"
+     },
+     "refund": false,
+     "to_address": "ltc1q3anl6822c345et67gc77q9vf3g0puu2gyq9yy8"
+    },
+    {
+     "chain": "THOR",
+     "coin": {
+      "amount": "2827769",
+      "asset": "THOR.RUNE"
+     },
+     "refund": false,
+     "to_address": "thor1dl7un46w7l7f3ewrnrm6nq58nerjtp0dradjtd"
+    }
+   ],
+   "stages": {
+    "inbound_confirmation_counted": {
+     "completed": true,
+     "remaining_confirmation_seconds": 0
+    },
+    "inbound_finalised": {
+     "completed": true
+    },
+    "inbound_observed": {
+     "completed": true,
+     "final_count": 107
+    },
+    "outbound_signed": {
+     "completed": true
+    },
+    "swap_finalised": {
+     "completed": true
+    },
+    "swap_status": {
+     "pending": false
+    }
+   },
+   "tx": {
+    "chain": "BTC",
+    "coins": [
+     {
+      "amount": "3499",
+      "asset": "BTC.BTC"
+     }
+    ],
+    "from_address": "bc1q5z2qlw6wlzytjmts8ey5gashch9u6v6v7wyfmm",
+    "gas": [
+     {
+      "amount": "336",
+      "asset": "BTC.BTC"
+     }
+    ],
+    "id": "6E63828BDC1B578479DF1226E35BA0D2B629B0081647778DF1796A608B9B0057",
+    "memo": "=:l:ltc1q3anl6822c345et67gc77q9vf3g0puu2gyq9yy8:3866530/0/0:-_/t1:0/70",
+    "to_address": "bc1qvx2krgnwyehcrjmz25t9vyt39fvxkthz38uuy8"
+   }
+  },
+  "txid": "6E63828BDC1B578479DF1226E35BA0D2B629B0081647778DF1796A608B9B0057"
+ },
+ "tx_status_pending": {
+  "response": {
+   "out_txs": [
+    {
+     "chain": "THOR",
+     "coins": [
+      {
+       "amount": "890640000",
+       "asset": "THOR.RUNE"
+      }
+     ],
+     "from_address": "thor1g98cy3n9mmjrpn0sxmn63lztelera37n8n67c0",
+     "gas": [
+      {
+       "amount": "2000000",
+       "asset": "THOR.RUNE"
+      }
+     ],
+     "id": "0000000000000000000000000000000000000000000000000000000000000000",
+     "memo": "OUT:8C76A255603073AA67FFF6BDC964BE80433DBB35D6F6A0C1C1AC1016AA65A2D1",
+     "to_address": "thor1ucrddux6ws5386566yckj5fd5ckwqt64p5g0n5"
+    }
+   ],
+   "planned_out_txs": [
+    {
+     "chain": "ETH",
+     "coin": {
+      "amount": "63205470700",
+      "asset": "ETH.USDC-0XA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48"
+     },
+     "refund": false,
+     "to_address": "0xF1f6064A520c39125E959FCf545Ed69115F776e6"
+    },
+    {
+     "chain": "THOR",
+     "coin": {
+      "amount": "890640000",
+      "asset": "THOR.RUNE"
+     },
+     "refund": false,
+     "to_address": "thor1ucrddux6ws5386566yckj5fd5ckwqt64p5g0n5"
+    }
+   ],
+   "stages": {
+    "inbound_confirmation_counted": {
+     "completed": true,
+     "remaining_confirmation_seconds": 0
+    },
+    "inbound_finalised": {
+     "completed": true
+    },
+    "inbound_observed": {
+     "completed": true,
+     "final_count": 91
+    },
+    "outbound_signed": {
+     "blocks_since_scheduled": 9,
+     "completed": false,
+     "scheduled_outbound_height": 28142730
+    },
+    "swap_finalised": {
+     "completed": true
+    },
+    "swap_status": {
+     "pending": false
+    }
+   },
+   "tx": {
+    "chain": "BTC",
+    "coins": [
+     {
+      "amount": "770000",
+      "asset": "BTC.BTC"
+     }
+    ],
+    "from_address": "bc1qx0ztyar4qz2nr3l9mkvdx8kh2jw0w69v8nm7ge",
+    "gas": [
+     {
+      "amount": "630",
+      "asset": "BTC.BTC"
+     }
+    ],
+    "id": "8C76A255603073AA67FFF6BDC964BE80433DBB35D6F6A0C1C1AC1016AA65A2D1",
+    "memo": "=:ETH.USDC:0xF1f6064A520c39125E959FCf545Ed69115F776e6:62641261834:hrz:100",
+    "to_address": "bc1qz0lk8z50a39hyplthvh373yn303ga0cn7rneyt"
+   }
+  },
+  "txid": "8C76A255603073AA67FFF6BDC964BE80433DBB35D6F6A0C1C1AC1016AA65A2D1"
+ }
+}

@@ -3,8 +3,8 @@
  *
  * The wallet UI talks to a `Swap`. This package owns the interface and
  * the aggregator-style implementations. `TrocadorSwap` is the one that
- * ships in v0.3 and backs the swap screen; `ThorchainSwap` is a stub
- * whose methods throw `not_implemented`. Native peer-to-peer
+ * ships in v0.3; `ThorchainSwap` routes BTC, LTC and (once THORChain
+ * lists it) XMR through THORChain vault deposits. Native peer-to-peer
  * adaptor-signature implementations land in v0.4+ and will delegate the
  * cryptography to the `swap-core` Rust crate via `@smirk/wasm`.
  *
@@ -44,5 +44,19 @@ export type {
   SwapStatus,
 } from './types';
 
-export { ThorchainSwap, type ThorchainSwapOptions } from './thorchain';
+export {
+  ThorchainSwap,
+  DEFAULT_THORCHAIN_POLICY,
+  DEFAULT_THORNODE_URL,
+  assertMemo,
+  toThorUnits,
+  fromThorUnits,
+  type ThorchainSwapOptions,
+  type ThorchainAsset,
+  type ThorchainAssetPolicy,
+  type ThorchainPolicy,
+  type ThorchainAvailability,
+  type AssetAvailability,
+  type ThorchainQuoteData,
+} from './thorchain';
 export { TrocadorSwap, type TrocadorSwapOptions } from './trocador';

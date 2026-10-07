@@ -1,0 +1,75 @@
+{
+ "_meta": {
+  "note": "SYNTHESIZED, not recorded. On 2026-10-07 THORChain mainnet listed no XMR pool and no public stagenet answered (ninerealms and liquify stagenet refused). These responses copy the exact shape of the recorded mainnet BTC/LTC fixtures in mainnet-btc-ltc.json, with XMR values: asset XMR.XMR, chain XMR, a Monero inbound address, amounts in THORChain 1e8 units, and the memo form the quote API documents for a refund address (=:ASSET:DEST/REFUND:LIMIT). Replace with recorded responses once XMR is live.",
+  "xmr_vault": "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge",
+  "xmr_refund": "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+  "btc_destination": "bc1qjc86s9s508ttkryzsk35agghhv664a6an5eclv"
+ },
+ "pool_xmr": {
+  "asset": "XMR.XMR",
+  "short_code": "x",
+  "status": "Available",
+  "balance_asset": "250000000000",
+  "balance_rune": "900000000000000",
+  "decimals": 12
+ },
+ "inbound_xmr": {
+  "address": "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge",
+  "chain": "XMR",
+  "chain_lp_actions_paused": false,
+  "chain_trading_paused": false,
+  "dust_threshold": "1000000",
+  "gas_rate": "20000",
+  "gas_rate_units": "piconero",
+  "global_trading_paused": false,
+  "halted": false,
+  "outbound_fee": "120000",
+  "pub_key": "thorpub1addwnpepq0z4x67edvrsvsfr2vtqfvqpje9d42cs0f3zqgyah8jqtv9hv92354m3v63"
+ },
+ "quote_xmr_to_btc": {
+  "dust_threshold": "1000000",
+  "expected_amount_out": "295000",
+  "expiry": 1791385044,
+  "fees": {
+   "affiliate": "0",
+   "asset": "BTC.BTC",
+   "liquidity": "1100",
+   "outbound": "2226",
+   "slippage_bps": 30,
+   "total": "3326",
+   "total_bps": 112
+  },
+  "inbound_address": "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge",
+  "inbound_confirmation_blocks": 10,
+  "inbound_confirmation_seconds": 1200,
+  "memo": "=:b:bc1qjc86s9s508ttkryzsk35agghhv664a6an5eclv/44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A:286150",
+  "outbound_delay_blocks": 1,
+  "outbound_delay_seconds": 6,
+  "recommended_min_amount_in": "5000000",
+  "total_swap_seconds": 1206,
+  "warning": "Do not cache this response. Do not send funds after the expiry."
+ },
+ "tx_status_refunded": {
+  "out_txs": [
+   {
+    "chain": "XMR",
+    "coins": [{"amount": "99880000", "asset": "XMR.XMR"}],
+    "id": "9F1B3A6C2D4E5F708192A3B4C5D6E7F8091A2B3C4D5E6F708192A3B4C5D6E7F8",
+    "memo": "REFUND:5C1E8A2B3D4F6071829304A5B6C7D8E9F0A1B2C3D4E5F60718293A4B5C6D7E8F",
+    "to_address": "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"
+   }
+  ],
+  "planned_out_txs": [
+   {"chain": "XMR", "coin": {"amount": "99880000", "asset": "XMR.XMR"}, "refund": true, "to_address": "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"}
+  ],
+  "stages": {
+   "inbound_confirmation_counted": {"completed": true, "remaining_confirmation_seconds": 0},
+   "inbound_finalised": {"completed": true},
+   "inbound_observed": {"completed": true, "final_count": 100},
+   "outbound_signed": {"completed": true},
+   "swap_finalised": {"completed": true},
+   "swap_status": {"pending": false}
+  },
+  "tx": {"chain": "XMR", "id": "5C1E8A2B3D4F6071829304A5B6C7D8E9F0A1B2C3D4E5F60718293A4B5C6D7E8F"}
+ }
+}

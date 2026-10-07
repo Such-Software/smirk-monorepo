@@ -162,7 +162,7 @@ export type AssetDetailTxRow =
       context?:
         | { kind: 'send' }
         | { kind: 'tip-fund'; tipId: string }
-        | { kind: 'swap-deposit'; tradeId: string; toAsset: string; provider: string };
+        | { kind: 'swap-deposit'; tradeId: string; toAsset: string; provider: string; memo?: string; amountAtomic?: string; depositBeforeMs?: number };
     };
 
 export interface SparklinePoint {

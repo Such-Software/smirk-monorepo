@@ -34,6 +34,7 @@ import { mustGetAsset } from '@smirk/assets';
 import { useWizard } from '../state/hooks';
 import { AssetIcon } from './AssetIcon';
 import { formatAmountWithTicker, formatAmount } from '../format';
+import { WhereToTrade, type TradePairPrice } from './WhereToTrade';
 
 // ============================================================================
 // Public types
@@ -59,6 +60,9 @@ export interface SwapQuoteSummary {
   etaSeconds: number;
   /** Unix ms; UI computes "valid for Ns" off this. */
   expiresAtMs: number;
+  /** Provider-specific, JSON-safe data the confirm step hands back
+   *  (THORChain: vault address, memo, limits). Absent for Trocador. */
+  providerData?: unknown;
 }
 
 /** A started swap. Persisted so popup-close mid-deposit recovers and
@@ -71,6 +75,19 @@ export interface SwapInFlight {
   fromAmountAtomic: string;
   toAmountEstimateAtomic: string;
   depositAddress: string;
+  /** Which provider runs this swap. Absent means Trocador (older state). */
+  provider?: string;
+  /**
+   * Instruction the deposit must carry (THORChain). When present the
+   * deposit address must never be paid without it: Smirk's Send adds it,
+   * another wallet will not, and a deposit without it is not swapped.
+   */
+  memo?: string;
+  /** Unix ms after which the deposit must not be sent (THORChain). */
+  depositBeforeMs?: number;
+  /** Txid of the deposit once the wallet broadcast it (THORChain tracks
+   *  swaps by the inbound txid). */
+  depositTxid?: string;
   state:
     | { state: 'pending'; reason: 'awaiting_deposit' | 'awaiting_confirmations' | 'in_progress' }
     | { state: 'completed'; outboundTxId: string; toAmount: string }
@@ -174,6 +191,26 @@ export interface SwapTabProps {
    */
   onResumeSwap?: (swap: SwapSummary) => Promise<void> | void;
   resolveIcon?: (iconKey: string) => string | undefined;
+  /**
+   * THORChain. Omit to leave it listed as unavailable. Pairs are decided
+   * live by the consumer (THORChain's own state plus the wallet server's
+   * policy), so an empty pair list shows `unavailableReason` instead.
+   */
+  thorchain?: ThorchainHandlers;
+  /** Live DEX prices for the WOW/GRIN "where to trade" panel. Optional;
+   *  the panel renders its venue list without them. */
+  loadTradePrices?: () => Promise<TradePairPrice[]>;
+}
+
+/** Everything the THORChain wizard needs from the consumer. */
+export interface ThorchainHandlers {
+  fromAssets: ReadonlyArray<string>;
+  toAssets: ReadonlyArray<string>;
+  /** Shown on the provider card when no pair is live. */
+  unavailableReason?: string;
+  onQuote: (req: { fromAsset: string; toAsset: string; fromAmountAtomic: string }) => Promise<SwapQuoteSummary>;
+  onConfirm: (args: { quote: SwapQuoteSummary; toAddress: string; refundAddress: string }) => Promise<SwapInFlight>;
+  onFetchStatus?: (id: string) => Promise<SwapInFlight>;
 }
 
 // ============================================================================
@@ -260,14 +297,22 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     statusNote: 'Watching mainnet stability.',
   },
   {
-    id: 'thorswap',
+    id: 'thorchain',
     kind: 'DEX',
-    name: 'THORChain (THORSwap)',
-    blurb: 'BTC ↔ LTC ↔ ETH cross-chain DEX. XMR pending.',
+    name: 'THORChain',
+    blurb: 'Cross-chain pools. BTC and LTC, and XMR when THORChain lists it.',
     status: 'paused',
-    statusNote: 'Returning if/when they recover from the May 2026 incident.',
+    statusNote: 'Checking THORChain…',
+    support: [
+      { label: 'THORChain transaction tracker', href: 'https://thorchain.net' },
+      { label: 'THORChain Discord', href: 'https://discord.gg/thorchain' },
+    ],
+    publicTradeUrl: 'https://thorchain.net/tx/{ID}',
   },
 ];
+
+/** Stable wizard id for the THORChain flow. */
+export const THORCHAIN_WIZARD_ID = 'swap-thorchain';
 
 // ============================================================================
 // Trocador wizard fields (persisted via useWizard)
@@ -316,13 +361,26 @@ interface TrocadorFields extends Record<string, unknown> {
 // ============================================================================
 
 export function SwapTab(props: SwapTabProps) {
-  const wizard = useWizard<TrocadorFields>(TROCADOR_WIZARD_ID, {
+  const trocador = useWizard<TrocadorFields>(TROCADOR_WIZARD_ID, {
     step: 0,
+  });
+  const thorchain = useWizard<TrocadorFields>(THORCHAIN_WIZARD_ID, {
+    step: 0,
+  });
+  const thor = props.thorchain;
+  const thorLive = !!thor && thor.fromAssets.length > 0 && thor.toAssets.length > 0;
+  const liveTickers = thor
+    ? [...new Set([...thor.fromAssets, ...thor.toAssets])].map((a) => a.toUpperCase()).join(', ')
+    : '';
+  const cards: ReadonlyArray<ProviderCard> = PROVIDERS.map((p) => {
+    if (p.id !== 'thorchain') return p;
+    if (thorLive) return { ...p, status: 'active' as const, blurb: `Cross-chain pools. Live now: ${liveTickers}.` };
+    return { ...p, statusNote: thor?.unavailableReason ?? 'Not available in this app.' };
   });
 
   // Provider list when no active wizard; otherwise the active
   // provider's wizard takes the whole tab.
-  if (!wizard.active) {
+  if (!trocador.active && !thorchain.active) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <SwapHeader />
@@ -340,11 +398,15 @@ export function SwapTab(props: SwapTabProps) {
           />
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {PROVIDERS.map((p) => {
+          {cards.map((p) => {
             const activate =
-              p.status === 'active' && p.id === 'trocador'
-                ? () => void wizard.start()
-                : null;
+              p.status !== 'active'
+                ? null
+                : p.id === 'trocador'
+                  ? () => void trocador.start()
+                  : p.id === 'thorchain'
+                    ? () => void thorchain.start()
+                    : null;
             return (
               <ProviderRow
                 key={p.id}
@@ -354,12 +416,14 @@ export function SwapTab(props: SwapTabProps) {
             );
           })}
         </div>
+        <WhereToTrade {...(props.loadTradePrices ? { loadPrices: props.loadTradePrices } : {})} />
       </div>
     );
   }
 
-  // Trocador is the only provider with an active wizard in v0.3.
-  const trocadorCard = PROVIDERS.find((p) => p.id === 'trocador')!;
+  const usingThor = thorchain.active && !!thor;
+  const wizard = usingThor ? thorchain : trocador;
+  const card = cards.find((p) => p.id === (usingThor ? 'thorchain' : 'trocador'))!;
   // Step-aware cancel. When the wizard already holds a real Trocador
   // trade (step ≥ 2 and a non-terminal inFlight), destroying the
   // wizard state strands the user: no recovery surface for the
@@ -379,29 +443,44 @@ export function SwapTab(props: SwapTabProps) {
       // can drop in an in-tree modal that matches the wallet's
       // visual language.
       const ok = window.confirm(
-        `Close this view? Your swap (${inFlight.id}) continues at the provider — recover it from "Recent swaps" or the Activity row.`,
+        usingThor
+          ? 'Close this view? If you already sent the deposit, THORChain still completes the swap. Follow it from the Activity row.'
+          : `Close this view? Your swap (${inFlight.id}) continues at the provider — recover it from "Recent swaps" or the Activity row.`,
       );
       if (!ok) return;
     }
     void wizard.cancel();
   };
+  const handlers = usingThor
+    ? {
+        fromAssets: thor!.fromAssets,
+        toAssets: thor!.toAssets,
+        onQuote: thor!.onQuote,
+        onConfirm: thor!.onConfirm,
+        onFetchStatus: thor!.onFetchStatus,
+      }
+    : {
+        fromAssets: props.fromAssets,
+        toAssets: props.toAssets,
+        onQuote: props.onTrocadorQuote,
+        onConfirm: props.onTrocadorConfirm,
+        onFetchStatus: props.onTrocadorFetchStatus,
+      };
   return (
     <TrocadorWizard
-      provider={trocadorCard}
+      provider={card}
       fields={wizard.fields}
       step={stepFromFields}
       patchFields={wizard.patchFields}
       cancel={cancel}
-      fromAssets={props.fromAssets}
-      toAssets={props.toAssets}
+      fromAssets={handlers.fromAssets}
+      toAssets={handlers.toAssets}
       resolveBalance={props.resolveBalance}
       parseAmount={props.parseAmount}
-      onQuote={props.onTrocadorQuote}
-      onConfirm={props.onTrocadorConfirm}
+      onQuote={handlers.onQuote}
+      onConfirm={handlers.onConfirm}
       onOpenSend={props.onOpenSend}
-      {...(props.onTrocadorFetchStatus
-        ? { onFetchStatus: props.onTrocadorFetchStatus }
-        : {})}
+      {...(handlers.onFetchStatus ? { onFetchStatus: handlers.onFetchStatus } : {})}
       {...(props.resolveAddress ? { resolveAddress: props.resolveAddress } : {})}
       {...(props.validateAddress ? { validateAddress: props.validateAddress } : {})}
       {...(props.resolveIcon ? { resolveIcon: props.resolveIcon } : {})}
@@ -690,9 +769,9 @@ function TrocadorWizard(props: TrocadorWizardProps) {
             color: 'var(--smirk-fg-muted)',
           }}
         >
-          CEX
+          {props.provider.kind}
         </span>
-        <h2 style={{ margin: 0, fontSize: 16, flex: 1 }}>Trocador</h2>
+        <h2 style={{ margin: 0, fontSize: 16, flex: 1 }}>{props.provider.name}</h2>
         <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)' }} data-testid="swap-wizard-step">
           {step + 1}/4
         </span>
@@ -1313,9 +1392,30 @@ function DepositStep({
             return a !== null ? formatAmountWithTicker(a, from.id) : '—';
           })()}
         </Row>
-        <Row label="Address" mono>
-          <span data-testid="swap-deposit-address">{swap.depositAddress}</span>
-        </Row>
+        {swap.memo ? (
+          // A memo deposit: the vault address alone is NOT a payment
+          // destination. Paid from another wallet, or by hand, the deposit
+          // arrives without its instruction and is not swapped. So the
+          // address is not shown as something to copy, only Send is offered,
+          // and the deadline is explicit.
+          <div
+            data-testid="swap-deposit-memo-warning"
+            style={{ fontSize: 12, lineHeight: 1.45, color: 'var(--smirk-fg)' }}
+          >
+            Use the button below. This deposit carries a swap instruction that
+            only Smirk adds; paying the address from another wallet loses the
+            funds to the pool.
+            {swap.depositBeforeMs !== undefined && (
+              <div style={{ marginTop: 6, color: 'var(--smirk-fg-muted)', fontSize: 11 }}>
+                Send before {new Date(swap.depositBeforeMs).toLocaleTimeString()}. After that, get a new quote.
+              </div>
+            )}
+          </div>
+        ) : (
+          <Row label="Address" mono>
+            <span data-testid="swap-deposit-address">{swap.depositAddress}</span>
+          </Row>
+        )}
         {/* Deposit window warning. Trocador (and the providers it
             aggregates) honor deposits within ~15-30 minutes of
             /new_trade. A user who hands off to Send, closes the
@@ -1323,18 +1423,21 @@ function DepositStep({
             trade that the provider refuses to honor at the quoted
             rate: refund flow at best, off-quote forced fill at
             worst. The warning is generic because Trocador doesn't
-            return an explicit deposit_window field. */}
-        <div
-          style={{
-            fontSize: 11,
-            color: 'var(--smirk-fg-muted)',
-            lineHeight: 1.45,
-            marginTop: 4,
-          }}
-        >
-          Send within ~15-30 minutes. Providers may not honor stale
-          deposits at the quoted rate.
-        </div>
+            return an explicit deposit_window field. A memo deposit
+            states its own deadline above. */}
+        {!swap.memo && (
+          <div
+            style={{
+              fontSize: 11,
+              color: 'var(--smirk-fg-muted)',
+              lineHeight: 1.45,
+              marginTop: 4,
+            }}
+          >
+            Send within ~15-30 minutes. Providers may not honor stale
+            deposits at the quoted rate.
+          </div>
+        )}
       </div>
 
       <button onClick={onOpenSend} data-testid="swap-deposit-open-send" style={primaryBtnStyle(false, false)}>

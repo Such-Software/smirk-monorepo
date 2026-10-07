@@ -133,6 +133,8 @@ import {
   ReceiveScreen,
   SendWizard,
   StateProvider,
+  THORCHAIN_WIZARD_ID,
+  type SwapInFlight,
   TipMaker,
   applyTheme,
   defaultTheme,
@@ -205,7 +207,8 @@ import { FeedRoute } from './routes/feed';
 import { SettingsRouter } from './routes/settings';
 import { ensureWasmInit } from './wasm-init';
 import { setGrinJournalScope, clearGrinJournal } from './grin-tx-journal';
-import { setSendJournalScope, clearSendJournal } from './send-journal';
+import { setSendJournalScope, clearSendJournal, recordSend } from './send-journal';
+import { checkMemoDeposit } from './thorchain';
 import { clearPendingPremium } from './premium-pending';
 import { ApprovalApp } from './routes/approval';
 import { AssetDetailRoute } from './routes/asset-detail';
@@ -2420,7 +2423,54 @@ function HomeRouter({
             sessionState.pendingOutgoing ?? [],
             fields.fromAssetId,
           );
-          const result = await send(wallet, fields, excludeInputs);
+          // A THORChain deposit must carry its memo, and must still be the
+          // quoted deposit to a live vault. Decide that BEFORE signing: a
+          // vault payment without its memo is not a swap and cannot be undone.
+          const preSend = (await store.load()).wizards.send?.fields as
+            | {
+                pendingContext?: import('@smirk/core').PendingOutgoingContext;
+                pendingContextSeed?: { fromAssetId?: string; toAddress?: string };
+              }
+            | undefined;
+          const memoCheck = await checkMemoDeposit({
+            ctx: preSend?.pendingContext,
+            seed: preSend?.pendingContextSeed,
+            fields,
+          });
+          if (memoCheck.kind === 'refuse') return { ok: false, error: memoCheck.error };
+          const result = await send(
+            wallet,
+            memoCheck.kind === 'send-with-memo' ? { ...fields, memo: memoCheck.memo } : fields,
+            excludeInputs,
+          );
+          const memoCtx = preSend?.pendingContext;
+          if (result.ok && memoCheck.kind === 'send-with-memo' && memoCtx?.kind === 'swap-deposit') {
+            // THORChain tracks the swap by this txid. Give it to the status
+            // poll and keep it in the send journal, so the swap shows in
+            // history even after the wizard is gone.
+            const txid = result.txid;
+            await store.update((s) => {
+              const f = s.wizards[THORCHAIN_WIZARD_ID]?.fields as { inFlight?: SwapInFlight } | undefined;
+              if (f?.inFlight && f.inFlight.id === memoCtx.tradeId) {
+                f.inFlight = { ...f.inFlight, depositTxid: txid };
+              }
+            });
+            void recordSend({
+              txid,
+              asset: fields.fromAssetId,
+              destination: fields.toAddress,
+              amountAtomic: String(result.amountAtomic ?? fields.amountAtomic),
+              ...(result.feeAtomic !== undefined ? { feeAtomic: String(result.feeAtomic) } : {}),
+              createdAt: Date.now(),
+              swap: {
+                provider: 'thorchain',
+                tradeId: memoCtx.tradeId,
+                toAsset: memoCtx.toAsset,
+                memo: memoCheck.memo,
+                state: 'pending',
+              },
+            });
+          }
           if (result.ok && result.amountAtomic !== undefined && result.feeAtomic !== undefined) {
             // Carry through the wizard's stashed `pendingContext` (if
             // any), set by non-vanilla entry points like the Trocador

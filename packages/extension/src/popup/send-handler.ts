@@ -118,8 +118,19 @@ const MAX_U64_ATOMIC = 2n ** 64n - 1n;
  * recompute after signing; the popular tradeoff is to round fees
  * up rather than tighten the estimator.
  */
-function estimateVsize(numInputs: number, numOutputs: number): number {
-  return numInputs * 68 + numOutputs * 31 + 10;
+function estimateVsize(numInputs: number, numOutputs: number, extraVbytes = 0): number {
+  return numInputs * 68 + numOutputs * 31 + 10 + extraVbytes;
+}
+
+/**
+ * vbytes an `OP_RETURN` output carrying `memo` adds: 8-byte value, 1-byte
+ * script length, OP_RETURN, a push opcode (OP_PUSHDATA1 + length above 75
+ * bytes), and the payload.
+ */
+export function opReturnVbytes(memo: string | undefined): number {
+  if (memo === undefined) return 0;
+  const len = new TextEncoder().encode(memo).length;
+  return 8 + 1 + 1 + (len > 75 ? 2 : 1) + len;
 }
 
 /**
@@ -179,6 +190,7 @@ function selectUtxos(
   utxos: Array<{ txid: string; vout: number; value: number; height: number }>,
   targetSat: number,
   feeRateSatPerVb: number,
+  extraVbytes = 0,
 ): SelectedSet | { error: string } {
   // Sort largest-first. Confirmed-only would be more conservative;
   // for v0.3 we include unconfirmed (height === 0): explorers + LWS
@@ -195,7 +207,7 @@ function selectUtxos(
     // Add the next largest UTXO until we cover target + fee.
     while (
       selectedSat <
-        targetSat + estimateVsize(selected.length, numOutputs) * feeRateSatPerVb &&
+        targetSat + estimateVsize(selected.length, numOutputs, extraVbytes) * feeRateSatPerVb &&
       selected.length < sorted.length
     ) {
       const next = sorted[selected.length]!;
@@ -203,7 +215,7 @@ function selectUtxos(
       selectedSat += next.value;
     }
 
-    const feeSat = Math.ceil(estimateVsize(selected.length, numOutputs) * feeRateSatPerVb);
+    const feeSat = Math.ceil(estimateVsize(selected.length, numOutputs, extraVbytes) * feeRateSatPerVb);
     const changeSat = selectedSat - targetSat - feeSat;
 
     if (changeSat < 0) {
@@ -267,7 +279,16 @@ async function sendBtcLtc(
    * the mempool: Electrum would reject as "missing inputs".
    */
   excludeInputs: Set<string>,
+  /**
+   * Optional swap memo, written as a trailing zero-value `OP_RETURN` output
+   * (THORChain reads its swap instruction there). Never combined with sweep:
+   * a swap deposit is an exact amount the quote was priced on.
+   */
+  memo?: string,
 ): Promise<SendSubmitResult> {
+  if (memo !== undefined && sweep) {
+    return { ok: false, error: 'A swap deposit cannot be a sweep. Enter the quoted amount.' };
+  }
   if (!wallet.mnemonic && !wallet.sessionSecrets?.[asset]) {
     return { ok: false, error: 'Signing keys are unavailable. Unlock the wallet again.' };
   }
@@ -370,7 +391,7 @@ async function sendBtcLtc(
     if (target > Number.MAX_SAFE_INTEGER) {
       return { ok: false, error: 'Amount exceeds JS-safe-integer range' };
     }
-    const r = selectUtxos(utxos, target, feeRateSatPerVb);
+    const r = selectUtxos(utxos, target, feeRateSatPerVb, opReturnVbytes(memo));
     if ('error' in r) return { ok: false, error: r.error };
     selection = r;
   }
@@ -407,6 +428,7 @@ async function sendBtcLtc(
         })),
         recipientAddress: toAddress, recipientSat: selection.recipientSat,
         changeAddress, changeSat: selection.changeSat, feeSat: selection.feeSat,
+        ...(memo !== undefined ? { opReturnMemo: memo } : {}),
       });
     } catch (e) {
       return { ok: false, error: `Sign transaction failed: ${e instanceof Error ? e.message : 'Unknown signing error'}` };
@@ -435,6 +457,7 @@ async function sendBtcLtc(
       ...(selection.changeSat > 0
         ? { changeAddress, changeSat: selection.changeSat }
         : {}),
+      ...(memo !== undefined ? { opReturnMemo: memo } : {}),
       mnemonic: wallet.mnemonic!,
       passphrase: '',
     });
@@ -581,11 +604,24 @@ async function sendXmrWow(
    * address; that's protocol-mandated padding, not "real" change.
    */
   sweep: boolean,
+  /**
+   * Optional swap memo, carried as `tx_extra` arbitrary data (THORChain reads
+   * its swap instruction there). Never combined with sweep: a swap deposit is
+   * an exact amount the quote was priced on.
+   */
+  memo?: string,
 ): Promise<SendSubmitResult> {
   const fromAddress = wallet.addresses[asset];
   if (!fromAddress) {
     return { ok: false, error: `No ${asset.toUpperCase()} address in wallet` };
   }
+  if (memo !== undefined && sweep) {
+    return { ok: false, error: 'A swap deposit cannot be a sweep. Enter the quoted amount.' };
+  }
+  // The memo adds its bytes plus a few bytes of tx_extra framing to the
+  // transaction. Price them into selection so the signer's own fee check
+  // cannot come up short after the inputs are chosen.
+  const memoFeeBytes = memo === undefined ? 0n : BigInt(new TextEncoder().encode(memo).length + 8);
   const keys = wallet.keys[asset];
   const viewKeyHex = bytesToHex(keys.privateViewKey);
   const spendKeyHex = bytesToHex(keys.privateSpendKey);
@@ -738,7 +774,7 @@ async function sendXmrWow(
       } catch (e) {
         return { ok: false, error: `Fee estimate failed: ${e instanceof Error ? e.message : String(e)}` };
       }
-      accFee = BigInt(feeNum);
+      accFee = BigInt(feeNum) + memoFeeBytes * feePerByteBig;
       if (accTotal >= target + accFee) {
         covered = true;
         break;
@@ -826,6 +862,7 @@ async function sendXmrWow(
     spend_key: spendKeyHex,
     network: 'mainnet',
     coin: asset,
+    ...(memo !== undefined ? { memo } : {}),
   };
 
   // 5. Sign. `wasm.sign_transaction` generates a fresh outgoing_view_key
@@ -925,6 +962,12 @@ export async function send(
     toAddress: string;
     feeRateSatPerVb: number;
     sweep: boolean;
+    /**
+     * Swap memo for a provider deposit (THORChain). BTC/LTC carry it in an
+     * `OP_RETURN` output, XMR in `tx_extra` arbitrary data. WOW and Grin
+     * refuse it: no provider reads a memo there.
+     */
+    memo?: string;
   },
   excludeInputs: Set<string> = new Set(),
 ): Promise<SendSubmitResult> {
@@ -948,7 +991,12 @@ export async function send(
       applyRelayFloor(fields.feeRateSatPerVb),
       fields.sweep,
       excludeInputs,
+      fields.memo,
     );
+  }
+
+  if (fields.memo !== undefined && asset.id !== 'btc' && asset.id !== 'ltc' && asset.id !== 'xmr') {
+    return { ok: false, error: `${asset.ticker} sends cannot carry a swap memo.` };
   }
 
   if (asset.id === 'xmr' || asset.id === 'wow') {
@@ -966,6 +1014,7 @@ export async function send(
       fields.toAddress,
       excludeInputs,
       fields.sweep,
+      fields.memo,
     );
   }
 

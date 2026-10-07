@@ -6,8 +6,8 @@
  * adaptor-signature flow (v0.4+ for Grin↔BTC/LTC, v0.6+ for WOW↔XMR).
  *
  * Implementations live in sibling modules: `./trocador` (the shipping
- * aggregator client), `./thorchain` (interface shape only, every method
- * throws `not_implemented`), and eventually `./native`. Consumers should
+ * aggregator client), `./thorchain` (THORChain vault deposits with a
+ * swap memo), and eventually `./native`. Consumers should
  * import the `Swap` interface and the common value types from this
  * barrel.
  */
@@ -35,6 +35,12 @@ export interface QuoteRequest {
    * `SwapStartParams.toAddress` regardless.
    */
   toAddress?: string;
+  /**
+   * Where `fromAsset` returns if the swap fails. Needed at quote time only by
+   * providers that write it into the swap instruction itself: THORChain from
+   * Monero, whose deposits carry no visible sender.
+   */
+  refundAddress?: string;
 }
 
 export interface SwapQuote {
@@ -122,6 +128,13 @@ export interface SwapStarted {
    * via `SwapStatus.outboundTxId` once the chain catches up.
    */
   depositAddress: string;
+  /**
+   * Instruction the deposit transaction must carry, for providers that read
+   * one from the chain (THORChain: an `OP_RETURN` output on BTC/LTC,
+   * `tx_extra` arbitrary data on XMR). A deposit sent without it is not a
+   * swap, so the wallet must refuse to send to `depositAddress` without it.
+   */
+  memo?: string;
 }
 
 export interface SwapError extends Error {
@@ -130,7 +143,9 @@ export interface SwapError extends Error {
     | 'insufficient_amount'
     | 'asset_pair_unsupported'
     | 'network_error'
-    | 'not_implemented';
+    | 'not_implemented'
+    | 'refund_address_required'
+    | 'provider_unavailable';
 }
 
 /**

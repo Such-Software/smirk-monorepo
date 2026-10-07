@@ -1,5 +1,5 @@
 import { HDKey } from '@scure/bip32';
-import { NETWORK, Transaction, p2wpkh } from '@scure/btc-signer';
+import { NETWORK, Script, Transaction, p2wpkh } from '@scure/btc-signer';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { hex } from '@scure/base';
 import type { UnlockedWallet } from '@smirk/core';
@@ -16,6 +16,8 @@ export function signUtxoSessionTransaction(args: {
   changeAddress: string;
   changeSat: number;
   feeSat: number;
+  /** Swap memo for a trailing zero-value OP_RETURN output (THORChain). */
+  opReturnMemo?: string;
 }): string {
   const { wallet, asset } = args;
   const network = asset === 'btc' ? NETWORK : LTC_NETWORK;
@@ -24,7 +26,10 @@ export function signUtxoSessionTransaction(args: {
   const node = new HDKey({ privateKey: account.privateKey.slice(), chainCode: account.chainCode.slice() });
   const keys: Uint8Array[] = [];
   try {
-    const tx = new Transaction({ version: 2 });
+    // An OP_RETURN output is an "unknown" script to scure. Allow it only when
+    // this transaction carries a swap memo, so an ordinary send still refuses
+    // any output script it does not recognise.
+    const tx = new Transaction({ version: 2, allowUnknownOutputs: args.opReturnMemo !== undefined });
     const seen = new Set<string>();
     let total = 0;
     const amount = (n: number) => Number.isSafeInteger(n) && n >= 0;
@@ -59,6 +64,13 @@ export function signUtxoSessionTransaction(args: {
     if (total !== args.recipientSat + args.changeSat + args.feeSat) throw new Error('Transaction totals do not balance.');
     tx.addOutputAddress(args.recipientAddress, BigInt(args.recipientSat), network);
     if (args.changeSat > 0) tx.addOutputAddress(args.changeAddress, BigInt(args.changeSat), network);
+    if (args.opReturnMemo !== undefined) {
+      // Same rule as the wasm builder: last output, zero value, at most 80
+      // bytes, refused rather than truncated.
+      const memo = new TextEncoder().encode(args.opReturnMemo);
+      if (memo.length === 0 || memo.length > 80) throw new Error('Swap memo does not fit in an OP_RETURN output.');
+      tx.addOutput({ script: Script.encode(['RETURN', memo]), amount: 0n });
+    }
     for (let i = 0; i < keys.length; i++) {
       if (!tx.signIdx(keys[i]!, i)) throw new Error('An input could not be signed.');
     }

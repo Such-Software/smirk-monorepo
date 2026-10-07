@@ -196,6 +196,31 @@ pub struct TxParams {
     /// Coin type: "xmr" or "wow" - affects RCT type encoding
     #[serde(default = "default_coin")]
     pub coin: String,
+    /// Optional UTF-8 memo carried as `tx_extra` arbitrary data (marker 127),
+    /// the field THORChain's Monero signer reads its swap instruction from.
+    /// At most `monero_wallet::extra::MAX_ARBITRARY_DATA_SIZE` bytes; longer
+    /// memos are refused, never truncated. Absent for ordinary sends, which
+    /// therefore stay byte-identical to the pre-memo path.
+    #[serde(default)]
+    pub memo: Option<String>,
+}
+
+/// Turn the optional memo into `SignableTransaction`'s data list.
+pub(crate) fn memo_data(memo: Option<&str>) -> Result<Vec<Vec<u8>>, String> {
+    match memo {
+        None => Ok(vec![]),
+        Some(m) => {
+            let bytes = m.as_bytes();
+            if bytes.is_empty() || bytes.len() > monero_wallet::extra::MAX_ARBITRARY_DATA_SIZE {
+                return Err(format!(
+                    "Memo of {} bytes is outside 1..={}",
+                    bytes.len(),
+                    monero_wallet::extra::MAX_ARBITRARY_DATA_SIZE
+                ));
+            }
+            Ok(vec![bytes.to_vec()])
+        }
+    }
 }
 
 fn default_network() -> String {
@@ -771,7 +796,7 @@ fn sign_transaction_inner(params_json: &str) -> Result<SignedTx, String> {
         inputs_with_decoys,
         payments,
         change,
-        vec![], // no extra data
+        memo_data(params.memo.as_deref())?,
         fee_rate,
     ).map_err(|e| format!("Failed to create signable tx: {:?}", e))?;
 

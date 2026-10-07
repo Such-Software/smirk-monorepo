@@ -143,6 +143,10 @@ struct BuildPsbtParamsJson {
     change_address: Option<String>,
     #[serde(default)]
     change_sat: u64,
+    /// Optional UTF-8 memo carried in a trailing `OP_RETURN` output (a
+    /// THORChain swap memo). Absent for ordinary sends.
+    #[serde(default)]
+    op_return_memo: Option<String>,
     /// BIP39 mnemonic: used to derive the master xprv at build time so
     /// the resulting PSBT carries `bip32_derivation` origin entries that
     /// `btc_sign_psbt` can later resolve.
@@ -176,6 +180,7 @@ pub fn btc_build_psbt(params_json: &str) -> Result<String, JsValue> {
         change_address: params.change_address.as_deref(),
         change_sat: params.change_sat,
         master_xpriv: &master,
+        op_return_data: params.op_return_memo.as_deref().map(str::as_bytes),
     })
     .map_err(|e| JsValue::from_str(&format!("{e}")))
 }
