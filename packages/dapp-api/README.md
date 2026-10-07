@@ -68,6 +68,7 @@ and request envelopes before dispatch.
 | `connect`, `disconnect`, `isConnected` | Origin connection and asset scopes |
 | `getPublicKeys`, `getAddresses` | Public identities for granted assets |
 | `signMessage` | BTC, LTC, XMR, WOW, and Grin; consent per request |
+| `signIn` | Connect (when needed) and sign a login challenge in one approval |
 | `requestPayment` | BTC, LTC, XMR, and WOW; consent per request |
 | `claimPublicTip` | Tip claim with confirmation |
 | `getBackend` | Selected backend URL for an unlocked, connected origin |

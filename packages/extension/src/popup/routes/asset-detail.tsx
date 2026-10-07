@@ -13,6 +13,7 @@ import {
 import { storage } from '../singletons';
 import {
   AssetDetailScreen,
+  formatApproximateUsd,
   useRoute,
   useSessionState,
   type AssetDetailTxRow,
@@ -130,8 +131,8 @@ export function AssetDetailRoute({
               return [] as AssetDetailTxRow[];
             })
           : Promise.resolve([] as AssetDetailTxRow[]),
-        // Sparkline only for a priced asset: skip the request (and its 404) for an
-        // asset the feed carries no quote for (e.g. WOW) or a no-prices backend.
+        // Sparkline only for a priced asset: skip the request (and its 404) when
+        // the feed has no quote for this asset or the backend serves no prices.
         capAllowsPrices(peekCapabilities()) &&
         (session?.prices as Record<string, number | null> | null | undefined)?.[assetId] != null
           ? api.getSparkline(assetId).then(
@@ -176,9 +177,20 @@ export function AssetDetailRoute({
     };
   }, [assetId, wallet, session?.bootstrap?.userId, reloadKey]);
 
+  // USD under the balance, the same total the Home row shows (confirmed plus
+  // pending plus locked). Hidden on a backend without prices, or while the
+  // asset has no quote, rather than showing a misleading $0.00.
+  const price = (session?.prices as Record<string, number | null> | null | undefined)?.[assetId];
+  const balanceTotal =
+    (balance?.confirmed ?? 0n) + (balance?.pending ?? 0n) + (balance?.locked ?? 0n);
+  const fiatDisplay = capAllowsPrices(peekCapabilities())
+    ? formatApproximateUsd(balanceTotal, assetId, price)
+    : null;
+
   return (
     <AssetDetailScreen
       assetId={assetId}
+      {...(fiatDisplay ? { fiatDisplay } : {})}
       balanceAtomic={balance?.confirmed ?? 0n}
       {...(balance?.pending !== undefined && balance.pending > 0n
         ? { pendingAtomic: balance.pending }

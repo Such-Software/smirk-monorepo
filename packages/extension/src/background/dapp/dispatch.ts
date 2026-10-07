@@ -30,6 +30,7 @@ import {
 import { chromePopupApprovalHandler } from './approval';
 import { chromeStoragePermissionStore } from './permissions';
 import { chromePublicCacheProvider } from './provider';
+import { clearFlowGraceForTab } from '../../popup/flow-grace-scope';
 
 /**
  * Wire the dapp-api handler into the SW's onMessage channel. Call
@@ -45,6 +46,11 @@ export function installDappBridge(): void {
     provider: chromePublicCacheProvider(),
     permissions: chromeStoragePermissionStore(),
     approval: chromePopupApprovalHandler(),
+  });
+
+  // A closed tab ends any sign-in flow grace it held.
+  chrome.tabs?.onRemoved?.addListener((tabId) => {
+    void clearFlowGraceForTab(chrome.storage.session, tabId).catch(() => undefined);
   });
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -118,6 +124,9 @@ function deriveOrigin(
     return null;
   }
   const out: OriginContext = { origin };
+  // The tab id scopes the sign-in flow grace to the tab that unlocked it. It
+  // comes from the browser's MessageSender, never from the page.
+  if (typeof sender.tab?.id === 'number' && sender.tab.id >= 0) out.tabId = sender.tab.id;
   if (sender.tab?.title) out.siteName = sender.tab.title;
   if (sender.tab?.favIconUrl) out.favicon = sender.tab.favIconUrl;
   return out;

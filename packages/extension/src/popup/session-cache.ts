@@ -9,6 +9,7 @@ import { clearCachedActiveNostrKey } from './nostr-vault';
 import { ensureSessionSecrets } from './session-signing';
 import { authorizeOperation, assertOperationSession } from './operation-auth';
 import { SESSION_LOCK_KEY, canRestoreLocalSession, acknowledgePasswordUnlock } from './session-lock';
+import { DAPP_FLOW_GRACE_KEY } from './flow-grace-scope';
 
 const SESSION_HANDOFF_KEY = 'smirk.session.handoff.v1';
 export const HANDOFF_TTL_MS = 30_000;
@@ -17,6 +18,9 @@ export async function clearSessionCache(): Promise<void> {
   await Promise.all([
     sessionStorage.remove(SESSION_CACHE_KEY),
     sessionStorage.remove(SESSION_HANDOFF_KEY),
+    // The sign-in flow grace holds the same kind of keys; every path that
+    // drops the session drops it too.
+    sessionStorage.remove(DAPP_FLOW_GRACE_KEY),
     clearCachedActiveNostrKey(),
   ]);
 }

@@ -235,6 +235,8 @@ function installPostMessageRuntime(
       request('getPublicKeys', { assets }),
     signMessage: (message: string, assets?: string[]): Promise<unknown> =>
       request('signMessage', { message, assets }),
+    signIn: (message: string, assets?: string[]): Promise<unknown> =>
+      request('signIn', { message, assets }),
     requestPayment: (req: unknown): Promise<unknown> =>
       request('requestPayment', req),
     claimPublicTip: (tipId: string, fragmentKey: string): Promise<unknown> =>
