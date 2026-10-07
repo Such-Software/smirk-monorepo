@@ -27,6 +27,7 @@ import {
   SmirkPaymentResult,
   SmirkPublicKeys,
   SmirkRpcError,
+  SmirkSignInResult,
   SmirkSignResult,
   SmirkClaimResult,
   SmirkWireRequest,
@@ -59,6 +60,9 @@ export interface SmirkPageApi {
   getPublicKeys(): Promise<SmirkPublicKeys | null>;
   getAddresses(): Promise<SmirkAddresses | null>;
   signMessage(message: string): Promise<SmirkSignResult>;
+  /** Connect (if needed) and sign a login challenge with one approval and at
+   *  most one unlock. Feature-detect: `typeof window.smirk.signIn === 'function'`. */
+  signIn(message: string, assets?: SmirkAsset[]): Promise<SmirkSignInResult>;
   requestPayment(request: SmirkPaymentRequest): Promise<SmirkPaymentResult>;
   claimPublicTip(tipId: string, fragmentKey: string): Promise<SmirkClaimResult>;
   /** The backend the wallet is pointed at (so a page talks to the user's
@@ -148,6 +152,8 @@ export function createSmirkPageApi(transport: SmirkPageTransport): SmirkPageApi 
     getPublicKeys: () => call('getPublicKeys', {}),
     getAddresses: () => call('getAddresses', {}),
     signMessage: (message: string) => call('signMessage', { message }),
+    signIn: (message: string, assets?: SmirkAsset[]) =>
+      call('signIn', assets ? { message, assets } : { message }),
     requestPayment: (request: SmirkPaymentRequest) =>
       call('requestPayment', request),
     claimPublicTip: (tipId: string, fragmentKey: string) =>

@@ -54,7 +54,7 @@ This table describes checked-in source, not store availability.
 | NIP-07 `window.nostr` provider | Installed if unclaimed | Absent | Absent |
 
 The core methods are `connect`, `getPublicKeys`, `getAddresses`, `signMessage`,
-`requestPayment`, and `claimPublicTip`. Payments support BTC, LTC, XMR, and WOW;
+`signIn`, `requestPayment`, and `claimPublicTip`. Payments support BTC, LTC, XMR, and WOW;
 the dapp payment method does not support Grin. The wallet-side dispatcher knows
 more methods than the embedded page adapters currently expose.
 
@@ -77,6 +77,37 @@ Connection approval grants an origin access to the selected public asset
 identities. Repeated calls can use that stored permission. Message signing and
 payment requests require approval for the specific request. A stored permission
 does not unlock the wallet.
+
+### Sign in with one prompt
+
+A login is a connect followed by a signature, which is two prompts and, on a
+wallet set to lock every time, two unlocks. Wallets that implement `signIn` do
+both in one approval. Feature-detect it and keep the two-call path for older
+wallets:
+
+```ts
+const challenge = 'The exact message shown to the user';
+let keys, signed;
+if (typeof window.smirk.signIn === 'function') {
+  try {
+    const r = await window.smirk.signIn(challenge, ['btc']);
+    keys = r.publicKeys;
+    signed = { message: r.message, signatures: r.signatures };
+  } catch (e) {
+    if (e?.code !== 'UNSUPPORTED') throw e;
+  }
+}
+if (!signed) {
+  keys = await window.smirk.connect(['btc']);
+  signed = await window.smirk.signMessage(challenge);
+}
+```
+
+On the extension, a wallet set to lock every time also keeps a short sign-in
+flow grace: after the user unlocks in an approval window, further requests from
+the same site and the same tab skip the password for up to two minutes (90
+seconds by default). Each request still shows its approval screen. The grace is
+memory-only, never renewed, and ends on lock, on deny, and when the tab closes.
 
 The user's optional password confirmation settings apply in addition to dapp
 consent. They can require a password for every send or every signing operation.

@@ -209,6 +209,57 @@ async function dispatchInner<M extends SmirkMethod>(
       return decision.result;
     }
 
+    case 'signIn': {
+      const params = req.params as { message: string; assets?: SmirkAsset[] };
+      if (typeof params?.message !== 'string' || params.message.length === 0) {
+        throw new HandlerError('INVALID_PARAMS', 'signIn needs a non-empty message');
+      }
+      const requestedAssets = normalizeAssets(params.assets);
+      const existing = await deps.permissions.get(origin.origin);
+      const alreadyConnected = hasAssetsAuthorized(existing, requestedAssets);
+      // One prompt for both halves. A signature is always prompted (same rule
+      // as signMessage), so there is no silent fast path here even when the
+      // origin is already connected; what this saves is the SECOND window and
+      // its unlock, not the user's decision.
+      const decision = await deps.approval({
+        kind: 'signIn',
+        origin,
+        message: params.message,
+        requestedAssets: alreadyConnected ? existing!.assets : requestedAssets,
+        alreadyConnected,
+      });
+      if (!decision.approved) {
+        throw new HandlerError('USER_REJECTED', 'User rejected the sign-in request');
+      }
+      if (decision.kind !== 'signIn') {
+        throw new HandlerError(
+          'INTERNAL',
+          `Approval handler returned wrong kind: ${decision.kind}`,
+        );
+      }
+      // Persist the grant exactly as connect() does: merge, only ever widen.
+      const next: OriginPermission = {
+        ...(existing ?? {}),
+        origin: origin.origin,
+        assets: existing
+          ? Array.from(new Set([...existing.assets, ...decision.approvedAssets]))
+          : decision.approvedAssets,
+        ...(origin.siteName ? { siteName: origin.siteName } : {}),
+        ...(origin.favicon ? { favicon: origin.favicon } : {}),
+        grantedAt: existing?.grantedAt ?? Date.now(),
+        lastUsedAt: Date.now(),
+      };
+      await deps.permissions.set(next);
+      // The public keys come from the signatures the wallet just produced, so
+      // the answer cannot disagree with what was signed, and it does not depend
+      // on the routing context having seen the unlock yet.
+      const publicKeys = emptyPublicKeys();
+      for (const sig of decision.result.signatures) {
+        if (decision.approvedAssets.includes(sig.asset)) publicKeys[sig.asset] = sig.publicKey;
+      }
+      return { ...decision.result, publicKeys };
+    }
+
     case 'requestPayment': {
       // No LOCKED pre-check: the approval popup unlocks first, then
       // shows the payment confirmation and sends from the unlocked

@@ -61,6 +61,12 @@ export interface SmirkSignResult {
   signatures: SmirkSignature[];
 }
 
+/** `signIn` result: the origin's authorized public keys plus the signed
+ *  challenge, from one approval and at most one unlock. */
+export interface SmirkSignInResult extends SmirkSignResult {
+  publicKeys: SmirkPublicKeys;
+}
+
 export interface SmirkPaymentRequest {
   asset: 'btc' | 'ltc' | 'xmr' | 'wow';
   /** Human decimal amount in whole coins, e.g. "9" or "9.5". The wallet converts to
@@ -154,6 +160,14 @@ export type SmirkMethodMap = {
   signMessage: {
     params: { message: string };
     result: SmirkSignResult;
+  };
+  /** Connect (when needed) and sign a login challenge in ONE approval. A site
+   *  that signs users in calls this instead of `connect` then `signMessage`,
+   *  which cost two prompts and, on a wallet that locks every time, two
+   *  unlocks. Feature-detect it: older wallets do not implement it. */
+  signIn: {
+    params: { message: string; assets?: SmirkAsset[] };
+    result: SmirkSignInResult;
   };
   requestPayment: {
     params: SmirkPaymentRequest;

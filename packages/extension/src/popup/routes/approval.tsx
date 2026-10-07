@@ -14,6 +14,7 @@ import type { ApprovalResult as DappApprovalResult } from '@such-software/smirk-
 import { store, walletKeystore } from '../singletons';
 import { normalizePaymentAmount } from '../format';
 import { tryRestoreSessionCache, writeSessionCache, convergeLegacySweep } from '../session-cache';
+import { tryRestoreFlowGrace, startFlowGrace, clearFlowGrace, scopeOf, flowGraceSeconds } from '../flow-grace';
 import { dappPublicCacheFor } from '../dapp-public-cache';
 import { readBootstrapCache } from '../bootstrap-cache';
 import { ensureWasmInit } from '../wasm-init';
@@ -47,10 +48,14 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
   }, []);
 
   const refresh = async () => {
+    const p = await approvalPopupBridge.readPending(approvalId);
+    // The sign-in flow grace serves only a request from the site and tab
+    // that unlocked it; it is tried before the general session cache, which
+    // is empty under "lock every time".
+    if (p) await tryRestoreFlowGrace(scopeOf(p.request.origin));
     await tryRestoreSessionCache();
     const ks = await walletKeystore.getState();
     setWalletState(ks);
-    const p = await approvalPopupBridge.readPending(approvalId);
     if (!p) {
       // SW already cleaned it up (race), or never wrote it. Show
       // "no longer valid" and close shortly.
@@ -117,8 +122,17 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
         iconUrl={chrome.runtime.getURL('icons/icon-128.png')}
         onUnlock={async (password) => {
           const wallet = await walletKeystore.unlock(password);
-          const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
+          const ui = (await store.load()).ui;
+          const minutes = ui.autoLockMinutes ?? 0;
           await writeSessionCache(wallet, minutes);
+          // "Lock every time": let the rest of this site's flow in this tab
+          // reuse the unlock for a short, fixed window (see flow-grace.ts).
+          const scope = scopeOf(pending?.request.origin);
+          if (scope) {
+            await startFlowGrace(wallet, scope, minutes, flowGraceSeconds(ui.dappFlowGraceSeconds)).catch((e) => {
+              console.warn('[smirk] sign-in flow grace not started:', e);
+            });
+          }
           // Converge any un-swept legacy m/44' funds (in-between wallets that
           // migrated the keystore before the sweep shipped). Fire-and-forget so
           // unlock stays snappy; idempotent + gated on legacy state presence.
@@ -187,7 +201,10 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
     <ApprovalScreen
       request={uiRequest}
       onApprove={handleApprove}
-      onDeny={() => void finish({ approved: false })}
+      onDeny={() => {
+        // A denied step ends the flow: the next request asks for the password.
+        void clearFlowGrace().finally(() => finish({ approved: false }));
+      }}
       formatAmount={formatAmount}
     />
   );

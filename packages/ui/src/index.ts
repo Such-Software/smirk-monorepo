@@ -228,7 +228,7 @@ export {
 } from './themes';
 
 // ----- Helpers -----
-export { formatAmount, formatAmountWithAsset, formatAmountWithTicker } from './format';
+export { formatAmount, formatAmountWithAsset, formatAmountWithTicker, formatApproximateUsd } from './format';
 
 // ----- Advanced settings -----
 export { RevealKeysPanel } from './components/RevealKeysPanel';

@@ -40,6 +40,10 @@ export interface OriginContext {
   origin: string;
   siteName?: string;
   favicon?: string;
+  /** Browser tab the request came from, when the platform knows it. Used only
+   *  to scope wallet-side conveniences (the extension's sign-in flow grace) to
+   *  one tab; never shown to the user and never trusted from the page. */
+  tabId?: number;
 }
 
 /** Discriminated union of what we'd ever prompt for. Lets the
@@ -63,6 +67,19 @@ export type ApprovalRequest =
        *  with each, since dapps that ask for a multi-asset wallet
        *  typically want a signature per asset they care about. */
       assets: SmirkAsset[];
+    }
+  | {
+      kind: 'signIn';
+      origin: OriginContext;
+      /** The login challenge the site wants signed. */
+      message: string;
+      /** Assets the signature covers. When `alreadyConnected`, these are the
+       *  origin's existing grant; otherwise the assets the site asked for, and
+       *  approving also grants them (as `connect` would). */
+      requestedAssets: SmirkAsset[];
+      /** True when the origin already holds a grant covering the assets, so the
+       *  screen shows only the signature, not a connection request. */
+      alreadyConnected: boolean;
     }
   | {
       kind: 'requestPayment';
@@ -162,6 +179,14 @@ export type ApprovalResult =
   | {
       kind: 'signMessage';
       approved: true;
+      result: SmirkSignResult;
+    }
+  | {
+      kind: 'signIn';
+      approved: true;
+      /** Assets granted and signed with (the requested set; sign-in does not
+       *  offer a narrower subset, since the site needs the keys it asked for). */
+      approvedAssets: SmirkAsset[];
       result: SmirkSignResult;
     }
   | {

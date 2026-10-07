@@ -117,7 +117,7 @@ export async function executeApproval(
   if (approval.kind === 'signNostrEvent' && request.kind === 'signNostrEvent' && request.tier === 'money') {
     await deps.authorizeOperation('send', deps.wallet, `Approve ${request.origin.origin}'s payment signature`);
 
-  } else if (['signMessage', 'signNostrEvent', 'appEncKey', 'appSealOpen', 'nostrCrypt'].includes(approval.kind)) {
+  } else if (['signMessage', 'signIn', 'signNostrEvent', 'appEncKey', 'appSealOpen', 'nostrCrypt'].includes(approval.kind)) {
     await deps.authorizeOperation('sign', deps.wallet, `Approve ${request.origin.origin}'s private-key request`);
   }
   await deps.ensureWasmInit();
@@ -147,6 +147,23 @@ export async function executeApproval(
         request.assets,
       );
       return { kind: 'signMessage', approved: true, result };
+    }
+
+    case 'signIn': {
+      if (request.kind !== 'signIn') {
+        throw new Error('Pending request kind mismatch (expected signIn)');
+      }
+      const result = signMessageWithUnlocked(
+        deps.wallet,
+        request.message,
+        request.requestedAssets,
+      );
+      return {
+        kind: 'signIn',
+        approved: true,
+        approvedAssets: request.requestedAssets,
+        result,
+      };
     }
 
     case 'requestPayment': {

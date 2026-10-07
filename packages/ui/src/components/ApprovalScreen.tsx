@@ -53,6 +53,13 @@ export type ApprovalRequest =
       assets: ApprovalAsset[];
     }
   | {
+      kind: 'signIn';
+      origin: ApprovalOrigin;
+      message: string;
+      requestedAssets: ApprovalAsset[];
+      alreadyConnected: boolean;
+    }
+  | {
       kind: 'requestPayment';
       origin: ApprovalOrigin;
       asset: 'btc' | 'ltc' | 'xmr' | 'wow';
@@ -140,6 +147,7 @@ export interface ApprovalScreenProps {
 export type ApprovalApproval =
   | { kind: 'connect'; approvedAssets: ApprovalAsset[] }
   | { kind: 'signMessage' }
+  | { kind: 'signIn' }
   | { kind: 'requestPayment' }
   | { kind: 'claimPublicTip' }
   | { kind: 'nostrGrant'; perOrigin?: boolean }
@@ -335,6 +343,14 @@ function ApprovalBody({
       return <ConnectBody assets={request.requestedAssets} />;
     case 'signMessage':
       return <SignMessageBody message={request.message} />;
+    case 'signIn':
+      return (
+        <SignInBody
+          message={request.message}
+          assets={request.requestedAssets}
+          alreadyConnected={request.alreadyConnected}
+        />
+      );
     case 'requestPayment':
       return (
         <PaymentBody
@@ -430,6 +446,56 @@ function SignMessageBody({ message }: { message: string }) {
             fontSize: 12,
             fontFamily: 'var(--smirk-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
             maxHeight: 200,
+            overflow: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}
+        >
+          {message}
+        </pre>
+      </Section>
+    </div>
+  );
+}
+
+function SignInBody({
+  message,
+  assets,
+  alreadyConnected,
+}: {
+  message: string;
+  assets: ApprovalAsset[];
+  alreadyConnected: boolean;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h2 style={{ margin: 0, fontSize: 18, color: 'var(--smirk-fg)' }}>
+        Sign in to this site?
+      </h2>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--smirk-fg-muted)' }}>
+        {alreadyConnected
+          ? 'The site is asking you to sign in by signing the message below. It cannot move funds.'
+          : 'Approving connects the site and signs you in. It will see the public keys below and can request signatures, but it cannot move funds without a separate prompt every time.'}
+      </p>
+      <Section title={alreadyConnected ? 'Signing with' : 'Assets requested'}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {assets.map((a) => (
+            <AssetChip key={a} asset={a} />
+          ))}
+        </div>
+      </Section>
+      <Section title="Message">
+        <pre
+          style={{
+            margin: 0,
+            padding: 12,
+            background: 'var(--smirk-bg-sunken)',
+            color: 'var(--smirk-fg)',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 8,
+            fontSize: 12,
+            fontFamily: 'var(--smirk-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+            maxHeight: 160,
             overflow: 'auto',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-all',
@@ -770,6 +836,8 @@ function ApprovalActions({
               });
             case 'signMessage':
               return onApprove({ kind: 'signMessage' });
+            case 'signIn':
+              return onApprove({ kind: 'signIn' });
             case 'requestPayment':
               return onApprove({ kind: 'requestPayment' });
             case 'claimPublicTip':

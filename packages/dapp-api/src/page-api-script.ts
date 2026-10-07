@@ -159,6 +159,7 @@ export function getPageApiInjectionScript(
     '  getAddresses: function(assets){ return makeRequest("getAddresses", { assets: assets }); },',
     '  getPublicKeys: function(assets){ return makeRequest("getPublicKeys", { assets: assets }); },',
     '  signMessage: function(message, assets){ return makeRequest("signMessage", { message: message, assets: assets }); },',
+    '  signIn: function(message, assets){ return makeRequest("signIn", { message: message, assets: assets }); },',
     '  requestPayment: function(req){ return makeRequest("requestPayment", req); },',
     '  claimPublicTip: function(tipId, fragmentKey){ return makeRequest("claimPublicTip", { tipId: tipId, fragmentKey: fragmentKey }); },',
     '};',

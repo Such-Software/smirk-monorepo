@@ -90,6 +90,16 @@ export interface SessionState {
      * explicit "I want to see this" signal).
      */
     hiddenAssets: string[];
+    /**
+     * Sign-in flow grace, in seconds, for "lock every time"
+     * (`autoLockMinutes === 0`). After the user unlocks inside a website's
+     * approval window, the next approval windows from THAT site and THAT tab
+     * skip the password for this long, so one sign-in or tip claim costs one
+     * unlock. Every request still shows its approval screen. Memory only,
+     * never renewed, cleared on lock, deny and tab close. Optional: absent
+     * means the extension default (90 s); `0` turns it off.
+     */
+    dappFlowGraceSeconds?: number;
   };
 
   /**
