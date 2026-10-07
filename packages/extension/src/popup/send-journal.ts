@@ -9,24 +9,35 @@
  *
  * WHAT IS STORED, AND WHY THIS SHAPE
  * ----------------------------------
- * `outgoingViewKey` rather than the transaction key itself. monero-oxide
- * derives the tx key from that plus the input keys (`TransactionKeys::new`), so
- * these 32 bytes reproduce the tx key AND the additional keys a subaddress send
- * uses, where storing one tx key would not. monero-core solves the same problem
- * by persisting `m_tx_keys[txid]` in its wallet cache, which is also why losing
- * that cache loses the ability to prove old payments.
+ * `txKeyHex` is the transaction private key, exactly what `get_tx_key` reports
+ * and what a payment proof is checked against. The signer derives it while the
+ * spent outputs are still in hand and returns it only after checking it against
+ * the public key the signed transaction published (see `verified_tx_key_hex` in
+ * smirk-wasm), so a stored key is never one that would produce a false proof.
+ * It is absent for subaddress destinations, where per-output keys apply.
  *
- * It is fresh OS randomness per signature and deliberately NOT derived from the
- * seed: monero-oxide seeds its whole signing RNG from it, so a deterministic
- * value would repeat a CLSAG nonce across two signings of the same inputs and
- * leak the spend key. That trade is the reason this file exists rather than a
- * derivation function.
+ * `outgoingViewKeyHex` is kept as well. It is the 32 bytes the tx key derives
+ * from, but reproducing the key from it also needs the spent outputs' keys and
+ * commitments, which the wallet does not keep; it stays for completeness and
+ * for any later tool that can supply those.
+ *
+ * Both are fresh OS randomness per signature and deliberately NOT derived from
+ * the seed: monero-oxide seeds its whole signing RNG from the outgoing view key,
+ * so a deterministic value would repeat a CLSAG nonce across two signings of the
+ * same inputs and leak the spent key.
  *
  * SECRET AT REST
  * --------------
- * `outgoingViewKey` is key material. It cannot move funds, but it reveals who
- * was paid and how much to anyone holding it, so it is encrypted with the same
- * wallet secret that protects the tip-key backups rather than written in clear.
+ * The whole journal is one XChaCha20-Poly1305 ciphertext under a key derived
+ * from the wallet's BTC private key with its own label (`send-journal`), bound
+ * by AAD to the wallet fingerprint, so a copy moved to another wallet's slot
+ * fails to decrypt rather than showing that wallet someone else's payments. The
+ * tx key reveals who was paid and how much; the destinations and amounts do too.
+ * None of it may sit in the browser profile in clear, and none of it is ever
+ * sent to the backend.
+ *
+ * Journals written before encryption (the plaintext `{entries}` shape) are read
+ * as-is and rewritten encrypted on the next write or keyed read.
  *
  * DISPLAY-ONLY, BEST-EFFORT
  * -------------------------
@@ -35,8 +46,16 @@
  * failing a payment because a receipt could not be written is worse.
  */
 
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha256';
+import { encryptWithAad, decryptWithAad, bytesToHex, hexToBytes } from '@smirk/core';
+
 /** chrome.storage.local slot. Bump the suffix on any breaking shape change. */
 export const SEND_JOURNAL_KEY = 'smirk_send_journal_v1';
+
+/** Label for the journal's key derivation. Distinct from the tip-key backup's
+ *  `sha256(btcPrivateKey)`, so the two stores never share a key. */
+const KEY_LABEL = new TextEncoder().encode('smirk:send-journal:v2');
 
 /** One recorded outgoing payment, keyed by txid. */
 export interface SendJournalEntry {
@@ -50,18 +69,30 @@ export interface SendJournalEntry {
   amountAtomic: string;
   /** Network fee in atomic units, as a decimal string. */
   feeAtomic?: string;
-  /**
-   * XMR/WOW only. Hex `outgoing_view_key` the signature used, from which the
-   * transaction key is reproduced for a payment proof. Absent for chains that
-   * need no such proof, and for sends made before this was recorded.
-   */
+  /** XMR/WOW only. The verified transaction private key, hex. */
+  txKeyHex?: string;
+  /** XMR/WOW only. The per-signature `outgoing_view_key`, hex. */
   outgoingViewKeyHex?: string;
   /** Unix ms at which the send was signed. */
   createdAt: number;
 }
 
-interface SendJournal {
+interface JournalPlain {
   entries: Record<string, SendJournalEntry>;
+}
+
+/** What sits in storage: ciphertext only. */
+interface JournalSealed {
+  v: 2;
+  ct: string;
+}
+
+/**
+ * The journal key for a wallet. Callers pass the unlocked wallet's BTC private
+ * key; the key is derived on demand and never stored.
+ */
+export function sendJournalKey(btcPrivateKey: Uint8Array): Uint8Array {
+  return hmac(sha256, btcPrivateKey, KEY_LABEL);
 }
 
 // Serialise writes so two concurrent sends cannot tear each other's
@@ -87,60 +118,107 @@ function scopedKey(fingerprint: string): string {
   return `${SEND_JOURNAL_KEY}:${fingerprint}`;
 }
 
-async function load(): Promise<SendJournal> {
-  if (!scopeFingerprint) return { entries: {} };
-  try {
-    const key = scopedKey(scopeFingerprint);
-    const got = await chrome.storage.local.get(key);
-    const raw = got[key];
-    if (raw && typeof raw === 'object' && 'entries' in raw) return raw as SendJournal;
-  } catch {
-    // chrome undefined (tests) or storage error: degrade to empty.
-  }
-  return { entries: {} };
+function aadFor(fingerprint: string): Uint8Array {
+  return new TextEncoder().encode(`${SEND_JOURNAL_KEY}:${fingerprint}`);
 }
 
-async function save(j: SendJournal): Promise<void> {
-  if (!scopeFingerprint) return;
-  await chrome.storage.local.set({ [scopedKey(scopeFingerprint)]: j });
+function isSealed(raw: unknown): raw is JournalSealed {
+  return (
+    !!raw &&
+    typeof raw === 'object' &&
+    (raw as JournalSealed).v === 2 &&
+    typeof (raw as JournalSealed).ct === 'string'
+  );
+}
+
+function isPlain(raw: unknown): raw is JournalPlain {
+  return !!raw && typeof raw === 'object' && 'entries' in raw;
+}
+
+/**
+ * Load and decrypt. A sealed journal that does not decrypt under `key` (wrong
+ * wallet, corrupted) reads as empty, so a write will not merge into it; the
+ * write path refuses to overwrite such a slot.
+ */
+async function load(
+  fingerprint: string,
+  key: Uint8Array,
+): Promise<{ journal: JournalPlain; writable: boolean; wasPlain: boolean }> {
+  const slot = scopedKey(fingerprint);
+  const got = await chrome.storage.local.get(slot);
+  const raw = got[slot];
+  if (raw === undefined) return { journal: { entries: {} }, writable: true, wasPlain: false };
+  if (isSealed(raw)) {
+    try {
+      const pt = decryptWithAad(hexToBytes(raw.ct), key, aadFor(fingerprint));
+      const parsed = JSON.parse(new TextDecoder().decode(pt)) as unknown;
+      if (isPlain(parsed)) return { journal: parsed, writable: true, wasPlain: false };
+    } catch {
+      // Fall through: unreadable under this key.
+    }
+    return { journal: { entries: {} }, writable: false, wasPlain: false };
+  }
+  if (isPlain(raw)) return { journal: raw, writable: true, wasPlain: true };
+  return { journal: { entries: {} }, writable: true, wasPlain: false };
+}
+
+async function save(fingerprint: string, key: Uint8Array, j: JournalPlain): Promise<void> {
+  const pt = new TextEncoder().encode(JSON.stringify(j));
+  const sealed: JournalSealed = {
+    v: 2,
+    ct: bytesToHex(encryptWithAad(pt, key, aadFor(fingerprint))),
+  };
+  await chrome.storage.local.set({ [scopedKey(fingerprint)]: sealed });
 }
 
 /**
  * Record a send. Best-effort: never rejects, never throws.
  *
  * Merges onto an existing row so a later call cannot blank a field an earlier
- * one captured: the signing step knows the view key, the broadcast step knows
- * the confirmed txid, and neither should erase the other's work.
+ * one captured: the signing step knows the keys, the broadcast step knows the
+ * confirmed txid, and neither should erase the other's work.
  */
-export async function recordSend(entry: SendJournalEntry): Promise<void> {
+export async function recordSend(entry: SendJournalEntry, key: Uint8Array): Promise<void> {
   try {
     await enqueue(async () => {
-      const j = await load();
-      const existing = j.entries[entry.txid];
-      j.entries[entry.txid] = existing ? { ...existing, ...entry } : entry;
-      await save(j);
+      const fp = scopeFingerprint;
+      if (!fp) return;
+      const { journal, writable } = await load(fp, key);
+      if (!writable) return;
+      const existing = journal.entries[entry.txid];
+      journal.entries[entry.txid] = existing ? { ...existing, ...entry } : entry;
+      await save(fp, key, journal);
     });
   } catch {
     // A receipt must never fail a payment.
   }
 }
 
-/** Everything recorded for this wallet. Best-effort: `[]` on any failure. */
-export async function readSendJournal(): Promise<SendJournalEntry[]> {
+/**
+ * Everything recorded for this wallet. Best-effort: `[]` on any failure.
+ * Reading a pre-encryption journal rewrites it encrypted.
+ */
+export async function readSendJournal(key: Uint8Array): Promise<SendJournalEntry[]> {
   try {
-    return Object.values((await load()).entries);
+    return await enqueue(async () => {
+      const fp = scopeFingerprint;
+      if (!fp) return [];
+      const { journal, wasPlain } = await load(fp, key);
+      if (wasPlain) await save(fp, key, journal);
+      return Object.values(journal.entries);
+    });
   } catch {
     return [];
   }
 }
 
 /** One recorded send, or `null` when this wallet never recorded that txid. */
-export async function getSendRecord(txid: string): Promise<SendJournalEntry | null> {
-  try {
-    return (await load()).entries[txid] ?? null;
-  } catch {
-    return null;
-  }
+export async function getSendRecord(
+  txid: string,
+  key: Uint8Array,
+): Promise<SendJournalEntry | null> {
+  const all = await readSendJournal(key);
+  return all.find((e) => e.txid === txid) ?? null;
 }
 
 /** Drop a wallet's journal. Called when the user forgets that wallet. */
