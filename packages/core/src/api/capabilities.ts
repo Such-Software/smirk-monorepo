@@ -132,6 +132,22 @@ export interface BackendCapabilities {
   premium?: PremiumCapability;
   /** Operator feed configuration; present only when `features.feed`. */
   feed?: FeedCapability;
+  /**
+   * Operator switches for swap providers. Absent (an older backend) means
+   * every provider follows its own live state. This is the remote kill
+   * switch: an operator turns THORChain, or one of its assets, off here
+   * without shipping a client.
+   */
+  swaps?: SwapsCapability;
+}
+
+/** Per-provider swap switches. */
+export interface SwapsCapability {
+  thorchain?: {
+    enabled: boolean;
+    /** `auto` follows THORChain's pools and halts; `off` hides the asset. */
+    assets?: Partial<Record<'btc' | 'ltc' | 'xmr', 'auto' | 'off'>>;
+  };
 }
 
 /** One premium plan the operator sells (unlocks posting on a `premium-post` relay). */

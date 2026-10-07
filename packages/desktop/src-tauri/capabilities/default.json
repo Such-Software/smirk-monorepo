@@ -16,6 +16,12 @@
       "allow": [
         {
           "url": "https://api.trocador.app/*"
+        },
+        {
+          "url": "https://gateway.liquify.com/chain/thorchain_api/thorchain/*"
+        },
+        {
+          "url": "https://neroswap.com/api/v1/*"
         }
       ]
     }

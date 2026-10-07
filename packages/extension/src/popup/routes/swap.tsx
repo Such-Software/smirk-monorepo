@@ -1,13 +1,15 @@
 import { nativeFetch } from '../native-fetch';
-import { useMemo } from 'preact/hooks';
-import { TrocadorSwap } from '@smirk/swap';
+import { useEffect, useMemo, useState } from 'preact/hooks';
+import { TrocadorSwap, type ThorchainQuoteData } from '@smirk/swap';
 import { api, type UnlockedWallet } from '@smirk/core';
 import {
   SwapTab,
   useRoute,
   TROCADOR_WIZARD_ID,
+  THORCHAIN_WIZARD_ID,
   type SwapInFlight,
   type SwapQuoteSummary,
+  type ThorchainHandlers,
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { parseAmount, atomicToText, randomToken } from '../format';
@@ -15,6 +17,8 @@ import { validateAddress } from '../address';
 import { resolveIcon } from '../icons';
 import { store } from '../singletons';
 import type { WalletSession } from '../types';
+import { thorchainSwap } from '../thorchain';
+import { findSwapDeposit, recordSend } from '../send-journal';
 
 /**
  * SwapRouter: wires the @smirk/ui SwapTab to the TrocadorSwap library
@@ -75,7 +79,166 @@ export function SwapRouter({
     }
   }, [apiKey, webhookUrl]);
 
-  if (!trocador) {
+  // THORChain needs no key. Which pairs it offers is decided live, from
+  // THORChain's pools and halt flags plus our backend's policy, every time
+  // this screen opens: XMR appears on its own once THORChain lists it.
+  const thor = useMemo(() => {
+    try {
+      return { swap: thorchainSwap(), error: null as string | null };
+    } catch (e) {
+      return { swap: null, error: e instanceof Error ? e.message : 'THORChain is unavailable in this app.' };
+    }
+  }, []);
+  const [thorPairs, setThorPairs] = useState<{ from: string[]; to: string[]; reason?: string }>({
+    from: [],
+    to: [],
+    reason: 'Checking THORChain…',
+  });
+  useEffect(() => {
+    if (!thor.swap) {
+      setThorPairs({ from: [], to: [], reason: thor.error ?? 'Unavailable.' });
+      return;
+    }
+    let alive = true;
+    thor.swap
+      .availablePairs()
+      .then((pairs) => {
+        if (!alive) return;
+        const held = (a: string) => !!(wallet.addresses as unknown as Record<string, string | undefined>)[a];
+        const usable = pairs.filter((p) => held(p.from) && held(p.to));
+        setThorPairs(
+          usable.length > 0
+            ? { from: [...new Set(usable.map((p) => p.from))], to: [...new Set(usable.map((p) => p.to))] }
+            : { from: [], to: [], reason: 'THORChain has no live pair for this wallet right now.' },
+        );
+      })
+      .catch((e: unknown) => {
+        if (alive) setThorPairs({ from: [], to: [], reason: e instanceof Error ? e.message : 'THORChain is unreachable.' });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [thor, wallet]);
+
+  const thorHandlers: ThorchainHandlers | undefined = thor.swap
+    ? {
+        fromAssets: thorPairs.from,
+        toAssets: thorPairs.to,
+        ...(thorPairs.reason ? { unavailableReason: thorPairs.reason } : {}),
+        onQuote: async (req) => {
+          // Indicative: no destination yet, so no memo. Confirm quotes again
+          // with the real destination, and that is the quote that is sent.
+          const q = await thor.swap!.quote({ fromAsset: req.fromAsset, toAsset: req.toAsset, fromAmount: req.fromAmountAtomic });
+          return {
+            tradeId: '',
+            fromAsset: q.fromAsset,
+            toAsset: q.toAsset,
+            fromAmountAtomic: q.fromAmount,
+            toAmountEstimateAtomic: q.toAmountEstimate,
+            feeEstimateAtomic: q.feeEstimate,
+            provider: 'thorchain',
+            etaSeconds: q.etaSeconds,
+            expiresAtMs: q.expiresAt.getTime(),
+            providerData: q.implementationData,
+          };
+        },
+        onConfirm: async ({ quote, toAddress }) => {
+          // The refund address is always the wallet's own: THORChain cannot
+          // see a Monero sender, and a typo here would lose a refund.
+          const ownRefund = (wallet.addresses as unknown as Record<string, string | undefined>)[quote.fromAsset];
+          if (quote.fromAsset === 'xmr' && !ownRefund) throw new Error('This wallet has no XMR address for a refund.');
+          const fresh = await thor.swap!.quote({
+            fromAsset: quote.fromAsset,
+            toAsset: quote.toAsset,
+            fromAmount: quote.fromAmountAtomic,
+            toAddress,
+            ...(quote.fromAsset === 'xmr' ? { refundAddress: ownRefund! } : {}),
+          });
+          const started = await thor.swap!.start({ quote: fresh, toAddress });
+          const data = fresh.implementationData as ThorchainQuoteData;
+          const sw: SwapInFlight = {
+            id: started.id,
+            fromAsset: fresh.fromAsset,
+            toAsset: fresh.toAsset,
+            fromAmountAtomic: fresh.fromAmount,
+            toAmountEstimateAtomic: fresh.toAmountEstimate,
+            depositAddress: started.depositAddress,
+            provider: 'thorchain',
+            ...(started.memo ? { memo: started.memo } : {}),
+            depositBeforeMs: data.expiresAtMs,
+            state: { state: 'pending', reason: 'awaiting_deposit' },
+          };
+          return sw;
+        },
+        onFetchStatus: async (id) => {
+          const st = await store.load();
+          const cur = (st.wizards[THORCHAIN_WIZARD_ID]?.fields as { inFlight?: SwapInFlight } | undefined)?.inFlight;
+          const base: SwapInFlight =
+            cur && cur.id === id
+              ? cur
+              : {
+                  id,
+                  fromAsset: '',
+                  toAsset: '',
+                  fromAmountAtomic: '',
+                  toAmountEstimateAtomic: '',
+                  depositAddress: '',
+                  provider: 'thorchain',
+                  state: { state: 'pending', reason: 'awaiting_deposit' },
+                };
+          const journal = await findSwapDeposit(id);
+          const txid = base.depositTxid ?? journal?.txid;
+          if (!txid) {
+            if (base.depositBeforeMs !== undefined && Date.now() > base.depositBeforeMs) {
+              return { ...base, state: { state: 'failed', reason: 'The quote expired before a deposit was sent. Nothing was spent.' } };
+            }
+            return base;
+          }
+          const state = await thor.swap!.status(txid);
+          if (journal?.swap) {
+            void recordSend({
+              ...journal,
+              swap: {
+                ...journal.swap,
+                state: state.state,
+                ...(state.state === 'completed' ? { outboundTxid: state.outboundTxId } : {}),
+              },
+            });
+          }
+          return { ...base, depositTxid: txid, state };
+        },
+      }
+    : undefined;
+
+  // WOW and GRIN: live DEX prices from our Neroswap aggregator for the
+  // link-out panel. Best-effort; the panel lists venues without them.
+  const loadTradePrices = useMemo(
+    () => async (): Promise<Array<{ pair: string; bestBid: number | null; bestAsk: number | null }>> => {
+      let transport: typeof fetch | undefined;
+      try {
+        transport = nativeFetch();
+      } catch {
+        transport = undefined;
+      }
+      const get = transport ?? ((...a: Parameters<typeof fetch>) => globalThis.fetch(...a));
+      const out: Array<{ pair: string; bestBid: number | null; bestAsk: number | null }> = [];
+      for (const pair of ['WOW-BTC', 'WOW-XMR', 'GRIN-BTC']) {
+        try {
+          const res = await get(`https://neroswap.com/api/v1/best?pair=${pair}`);
+          if (!res.ok) continue;
+          const body = (await res.json()) as { consolidated?: { bestBid?: unknown; bestAsk?: unknown } };
+          const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+          out.push({ pair, bestBid: num(body.consolidated?.bestBid), bestAsk: num(body.consolidated?.bestAsk) });
+        } catch {
+          // One pair failing leaves the others.
+        }
+      }
+      return out;
+    },
+    [],
+  );
+
+  if (!trocador && !thorHandlers) {
     return (
       <div>
         <h2 style={{ fontSize: 16, marginTop: 0 }}>Swap</h2>
@@ -88,12 +251,14 @@ export function SwapRouter({
 
   return (
     <SwapTab
-      fromAssets={listAssets()
-        .filter((a) => a.sendable && trocador.isKnownAsset(a.id))
-        .map((a) => a.id)}
-      toAssets={listAssets()
-        .filter((a) => a.receivable && trocador.isKnownAsset(a.id))
-        .map((a) => a.id)}
+      fromAssets={trocador
+        ? listAssets().filter((a) => a.sendable && trocador.isKnownAsset(a.id)).map((a) => a.id)
+        : []}
+      toAssets={trocador
+        ? listAssets().filter((a) => a.receivable && trocador.isKnownAsset(a.id)).map((a) => a.id)
+        : []}
+      {...(thorHandlers ? { thorchain: thorHandlers } : {})}
+      loadTradePrices={loadTradePrices}
       resolveBalance={(assetId) => {
         // Pull from the session's last-fetched balance snapshot.
         const b = session?.balances?.[
@@ -164,6 +329,7 @@ export function SwapRouter({
         });
       }}
       onTrocadorQuote={async (req) => {
+        if (!trocador) throw new Error(connectionError ?? 'Trocador is unavailable in this app.');
         const q = await trocador.quote({
           fromAsset: req.fromAsset,
           toAsset: req.toAsset,
@@ -186,6 +352,7 @@ export function SwapRouter({
         return sum;
       }}
       onTrocadorConfirm={async ({ quote, toAddress, refundAddress }) => {
+        if (!trocador) throw new Error(connectionError ?? 'Trocador is unavailable in this app.');
         if (!quote.tradeId || !quote.provider) {
           throw new Error('Quote is missing trade context — please re-quote.');
         }
@@ -331,7 +498,16 @@ export function SwapRouter({
                   kind: 'swap-deposit',
                   tradeId: deposit.id,
                   toAsset: deposit.toAsset,
-                  provider: 'trocador',
+                  provider: deposit.provider ?? 'trocador',
+                  // THORChain: the send path refuses this vault unless the
+                  // memo, the quoted amount and the deadline all still hold.
+                  ...(deposit.memo
+                    ? {
+                        memo: deposit.memo,
+                        amountAtomic: deposit.fromAmountAtomic,
+                        ...(deposit.depositBeforeMs !== undefined ? { depositBeforeMs: deposit.depositBeforeMs } : {}),
+                      }
+                    : {}),
                 },
                 // Stash the original prefill seed so the
                 // popup-level onSubmit cross-checker (below) can
@@ -351,6 +527,7 @@ export function SwapRouter({
         })();
       }}
       onTrocadorFetchStatus={async (id) => {
+        if (!trocador) throw new Error(connectionError ?? 'Trocador is unavailable in this app.');
         // Hybrid: backend for identities (from/to/amount/address),
         // Trocador direct for state. v0.3.0 originally trusted the
         // backend's `status` column unconditionally, but the only

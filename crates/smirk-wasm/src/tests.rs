@@ -134,6 +134,26 @@ mod tests {
     /// Not hypothetical: an earlier implementation hardcoded
     /// `Zeroizing::new([0u8; 32])` here, breaking amount privacy on all
     /// outgoing XMR/WOW transactions.
+    /// A swap memo rides in `tx_extra` arbitrary data. An absent memo must add
+    /// nothing (ordinary sends stay byte-identical), and a memo that does not
+    /// fit must be refused, never truncated: a truncated swap memo routes the
+    /// deposit by whatever prefix survived.
+    #[test]
+    fn test_memo_data_bounds() {
+        use monero_wallet::extra::MAX_ARBITRARY_DATA_SIZE;
+        assert!(crate::signing::memo_data(None).unwrap().is_empty());
+        let memo = "=:b:bc1qjc86s9s508ttkryzsk35agghhv664a6an5eclv/4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge:1000";
+        assert_eq!(
+            crate::signing::memo_data(Some(memo)).unwrap(),
+            vec![memo.as_bytes().to_vec()]
+        );
+        let at_limit = "a".repeat(MAX_ARBITRARY_DATA_SIZE);
+        assert!(crate::signing::memo_data(Some(&at_limit)).is_ok());
+        let over = "a".repeat(MAX_ARBITRARY_DATA_SIZE + 1);
+        assert!(crate::signing::memo_data(Some(&over)).is_err());
+        assert!(crate::signing::memo_data(Some("")).is_err());
+    }
+
     #[test]
     fn test_outgoing_view_key_is_fresh_per_call() {
         use std::collections::HashSet;

@@ -75,6 +75,42 @@ export interface SendJournalEntry {
   outgoingViewKeyHex?: string;
   /** Unix ms at which the send was signed. */
   createdAt: number;
+  /**
+   * Set when this send was a swap deposit: what the deposit was for, so the
+   * history detail can show the swap and the status poll can find the
+   * deposit's txid (THORChain tracks a swap by its inbound txid). Display
+   * only, like everything else here.
+   */
+  swap?: SwapJournalFields;
+}
+
+export interface SwapJournalFields {
+  /** `thorchain` | `trocador`. */
+  provider: string;
+  /** The wallet's id for the swap. */
+  tradeId: string;
+  /** Asset the swap pays out in. */
+  toAsset: string;
+  /** Payout address. */
+  toAddress?: string;
+  /** Quoted payout, in the destination asset's atomic units. */
+  expectedToAtomic?: string;
+  /** THORChain: the instruction the deposit carried. */
+  memo?: string;
+  /** Payout transaction once the provider reports it. */
+  outboundTxid?: string;
+  /** Last known state: `pending` | `completed` | `refunded` | `failed`. */
+  state?: string;
+}
+
+/** The recorded swap deposit for a wallet swap id, if any. */
+export async function findSwapDeposit(tradeId: string): Promise<SendJournalEntry | null> {
+  try {
+    const all = Object.values((await load()).entries);
+    return all.find((e) => e.swap?.tradeId === tradeId) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 interface JournalPlain {

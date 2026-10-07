@@ -18,6 +18,14 @@ interface ImportMetaEnv {
    */
   readonly VITE_TROCADOR_API_KEY?: string;
   /**
+   * THORChain affiliate THORName and fee in basis points, set at build time.
+   * Public values (the name is registered on chain). Unset or zero means no
+   * affiliate fee; a name that is not registered on THORChain makes every
+   * quote fail, so set it only after registering.
+   */
+  readonly VITE_THORCHAIN_AFFILIATE?: string;
+  readonly VITE_THORCHAIN_AFFILIATE_BPS?: string;
+  /**
    * Backend URL used for the Trocador webhook receiver and the
    * /api/v1/swaps bookkeeping endpoints. Falls back to the default
    * smirk-backend URL when unset.

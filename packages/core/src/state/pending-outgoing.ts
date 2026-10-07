@@ -96,7 +96,19 @@ export interface PendingOutgoingTx {
 export type PendingOutgoingContext =
   | { kind: 'send' }
   | { kind: 'tip-fund'; tipId: string }
-  | { kind: 'swap-deposit'; tradeId: string; toAsset: string; provider: string };
+  | {
+      kind: 'swap-deposit';
+      tradeId: string;
+      toAsset: string;
+      provider: string;
+      /** THORChain: the instruction the deposit must carry. */
+      memo?: string;
+      /** THORChain: the quoted deposit, in atomic units. A memo deposit of any
+       *  other amount is refused rather than sent. */
+      amountAtomic?: string;
+      /** THORChain: Unix ms after which the deposit must not be sent. */
+      depositBeforeMs?: number;
+    };
 
 /**
  * Per-asset age-out window (ms). After this duration, an entry is

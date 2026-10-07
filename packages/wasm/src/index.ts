@@ -898,6 +898,11 @@ export interface BtcBuildPsbtParams {
   /** Optional change output. Omit + set `changeSat: 0` to skip. */
   changeAddress?: string;
   changeSat?: number;
+  /**
+   * Optional swap memo (THORChain), written as a trailing zero-value
+   * `OP_RETURN` output. At most 80 bytes; the builder refuses longer.
+   */
+  opReturnMemo?: string;
   /** BIP39 mnemonic: needed to derive the master xprv at build time. */
   mnemonic: string;
   /** BIP39 passphrase (empty string if unused). */
@@ -971,6 +976,7 @@ export const bitcoin = {
       recipient_sat: params.recipientSat,
       ...(params.changeAddress !== undefined ? { change_address: params.changeAddress } : {}),
       ...(params.changeSat !== undefined ? { change_sat: params.changeSat } : {}),
+      ...(params.opReturnMemo !== undefined ? { op_return_memo: params.opReturnMemo } : {}),
       mnemonic: params.mnemonic,
       ...(params.passphrase !== undefined ? { passphrase: params.passphrase } : {}),
     };

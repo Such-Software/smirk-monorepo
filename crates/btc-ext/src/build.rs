@@ -61,6 +61,11 @@ pub enum BuildError {
     InvalidOwnerAddress {
         input_index: usize,
     },
+    /// The `OP_RETURN` payload was empty or longer than
+    /// [`MAX_OP_RETURN_BYTES`].
+    InvalidOpReturn {
+        len: usize,
+    },
 }
 
 impl core::fmt::Display for BuildError {
@@ -91,6 +96,10 @@ impl core::fmt::Display for BuildError {
             BuildError::InvalidOwnerAddress { input_index } => {
                 write!(f, "input {input_index}: owner address could not be decoded for this network")
             }
+            BuildError::InvalidOpReturn { len } => write!(
+                f,
+                "OP_RETURN payload of {len} bytes is outside 1..={MAX_OP_RETURN_BYTES}"
+            ),
         }
     }
 }
@@ -134,7 +143,17 @@ pub struct BuildParams<'a> {
     /// `network`; otherwise the resulting PSBT will be useless on the
     /// target chain.
     pub master_xpriv: &'a Xpriv,
+    /// Optional `OP_RETURN` payload, appended as the LAST output with a zero
+    /// value. THORChain reads its swap memo from here, and its quote notes
+    /// require exactly this order: inbound address first, change second,
+    /// `OP_RETURN` third. At most [`MAX_OP_RETURN_BYTES`]; larger payloads are
+    /// refused rather than truncated, since a truncated memo routes funds by
+    /// whatever prefix survived.
+    pub op_return_data: Option<&'a [u8]>,
 }
+
+/// Standard relay policy caps an `OP_RETURN` payload at 80 bytes.
+pub const MAX_OP_RETURN_BYTES: usize = 80;
 
 /// P2WPKH dust limit per BIP-376 / Bitcoin Core. LTC inherits this.
 pub const DUST_LIMIT_P2WPKH: u64 = 294;
@@ -222,6 +241,17 @@ pub fn build_psbt(params: &BuildParams<'_>) -> Result<String, BuildError> {
         tx_out.push(TxOut {
             value: Amount::from_sat(params.change_sat),
             script_pubkey: script,
+        });
+    }
+    if let Some(data) = params.op_return_data {
+        if data.is_empty() || data.len() > MAX_OP_RETURN_BYTES {
+            return Err(BuildError::InvalidOpReturn { len: data.len() });
+        }
+        let push = bitcoin::script::PushBytesBuf::try_from(data.to_vec())
+            .map_err(|_| BuildError::InvalidOpReturn { len: data.len() })?;
+        tx_out.push(TxOut {
+            value: Amount::ZERO,
+            script_pubkey: ScriptBuf::new_op_return(push),
         });
     }
 
@@ -329,6 +359,7 @@ mod tests {
             change_address: None,
             change_sat: 0,
             master_xpriv: &master,
+            op_return_data: None,
         })
         .expect("build_psbt");
 
@@ -364,6 +395,7 @@ mod tests {
             change_address: None,
             change_sat: 0,
             master_xpriv: &master,
+            op_return_data: None,
         })
         .expect("build_psbt should accept LTC recipient");
 
@@ -392,6 +424,7 @@ mod tests {
             change_address: None,
             change_sat: 0,
             master_xpriv: &master,
+            op_return_data: None,
         })
         .unwrap_err();
         assert!(matches!(err, BuildError::InvalidRecipient));
@@ -416,6 +449,7 @@ mod tests {
             change_address: Some("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
             change_sat: 49_999_000, // 1000 sat fee
             master_xpriv: &master,
+            op_return_data: None,
         })
         .expect("build_psbt with change");
 
@@ -443,6 +477,7 @@ mod tests {
             change_address: None,
             change_sat: 0,
             master_xpriv: &master,
+            op_return_data: None,
         })
         .unwrap_err();
         assert!(matches!(err, BuildError::InsufficientFunds { .. }));
@@ -467,6 +502,7 @@ mod tests {
             change_address: Some("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
             change_sat: 100, // below DUST_LIMIT_P2WPKH = 294
             master_xpriv: &master,
+            op_return_data: None,
         })
         .unwrap_err();
         assert!(matches!(err, BuildError::DustChange));
@@ -499,6 +535,7 @@ mod tests {
             change_address: None,
             change_sat: 0,
             master_xpriv: &master,
+            op_return_data: None,
         })
         .expect("matching owner address should build");
     }
@@ -531,6 +568,7 @@ mod tests {
             change_address: None,
             change_sat: 0,
             master_xpriv: &master,
+            op_return_data: None,
         })
         .unwrap_err();
         assert!(matches!(err, BuildError::InputScriptMismatch { input_index: 0 }));
@@ -561,6 +599,7 @@ mod tests {
             change_address: None,
             change_sat: 0,
             master_xpriv: &master,
+            op_return_data: None,
         })
         .unwrap();
 
@@ -579,5 +618,86 @@ mod tests {
         let witness = &tx.input[0].witness;
         assert_eq!(witness.len(), 2, "P2WPKH witness should have 2 items (sig, pubkey)");
         assert!(!witness.iter().any(<[u8]>::is_empty), "witness items must be non-empty");
+    }
+
+    fn memo_inputs() -> Vec<UnsignedInput> {
+        vec![UnsignedInput {
+            txid: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            vout: 0,
+            value_sat: 100_000_000,
+            master_path: "m/84'/0'/0'/0/0".to_string(),
+            owner_address: None,
+        }]
+    }
+
+    fn memo_params<'a>(
+        inputs: &'a [UnsignedInput],
+        master: &'a Xpriv,
+        change: bool,
+        memo: Option<&'a [u8]>,
+    ) -> BuildParams<'a> {
+        BuildParams {
+            network: Network::BtcMainnet,
+            inputs,
+            recipient_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            recipient_sat: if change { 50_000_000 } else { 99_000_000 },
+            change_address: change.then_some("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
+            change_sat: if change { 49_999_000 } else { 0 },
+            master_xpriv: master,
+            op_return_data: memo,
+        }
+    }
+
+    fn op_return_payload(script: &ScriptBuf) -> Vec<u8> {
+        script
+            .instructions()
+            .filter_map(|i| match i {
+                Ok(bitcoin::script::Instruction::PushBytes(b)) => Some(b.as_bytes().to_vec()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn op_return_memo_is_the_last_zero_value_output() {
+        let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::BtcMainnet).unwrap();
+        let inputs = memo_inputs();
+        let memo: &[u8] = b"=:l:ltc1qp6r3vr50h7ehdq5qw2k8alzqwjq76xd5ux38mz:1212699958";
+        let psbt_b64 = build_psbt(&memo_params(&inputs, &master, true, Some(memo))).expect("memo");
+        let psbt = Psbt::from_str(&psbt_b64).unwrap();
+        let outs = &psbt.unsigned_tx.output;
+        assert_eq!(outs.len(), 3, "inbound, change, OP_RETURN");
+        assert_eq!(psbt.outputs.len(), 3);
+        assert_eq!(outs[0].value, Amount::from_sat(50_000_000));
+        assert_eq!(outs[1].value, Amount::from_sat(49_999_000));
+        assert_eq!(outs[2].value, Amount::ZERO);
+        assert!(outs[2].script_pubkey.is_op_return());
+        assert_eq!(op_return_payload(&outs[2].script_pubkey), memo.to_vec());
+    }
+
+    #[test]
+    fn op_return_memo_without_change_follows_the_recipient() {
+        let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::BtcMainnet).unwrap();
+        let inputs = memo_inputs();
+        let psbt_b64 =
+            build_psbt(&memo_params(&inputs, &master, false, Some(b"=:l:x"))).unwrap();
+        let psbt = Psbt::from_str(&psbt_b64).unwrap();
+        assert_eq!(psbt.unsigned_tx.output.len(), 2);
+        assert!(psbt.unsigned_tx.output[1].script_pubkey.is_op_return());
+    }
+
+    #[test]
+    fn op_return_memo_outside_policy_size_is_refused() {
+        let master = mnemonic_to_xpriv(ABANDON_MNEMONIC, "", Network::BtcMainnet).unwrap();
+        let inputs = memo_inputs();
+        let empty: Vec<u8> = vec![];
+        let long = vec![b'a'; MAX_OP_RETURN_BYTES + 1];
+        for memo in [&empty, &long] {
+            let err = build_psbt(&memo_params(&inputs, &master, false, Some(memo))).unwrap_err();
+            assert!(matches!(err, BuildError::InvalidOpReturn { .. }));
+        }
+        let at_limit = vec![b'a'; MAX_OP_RETURN_BYTES];
+        assert!(build_psbt(&memo_params(&inputs, &master, false, Some(&at_limit))).is_ok());
     }
 }

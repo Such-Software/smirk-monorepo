@@ -21,36 +21,36 @@ describe('ThorchainSwap', () => {
     assert.equal(swap.supports('wow', 'xmr'), false);
   });
 
-  it('quote/start/status throw `not_implemented` until v0.3 wires HTTP', async () => {
+  it('supports XMR pairs statically; whether they are live is decided at runtime', () => {
     const swap = new ThorchainSwap();
-    for (const fn of [
-      () =>
-        swap.quote({
+    assert.equal(swap.supports('xmr', 'btc'), true);
+    assert.equal(swap.supports('btc', 'xmr'), true);
+  });
+
+  it('start refuses a quote that is not a THORChain quote, without touching the network', async () => {
+    let called = false;
+    const swap = new ThorchainSwap({
+      fetch: (async () => {
+        called = true;
+        throw new Error('no network in this test');
+      }) as unknown as typeof fetch,
+    });
+    await assert.rejects(
+      swap.start({
+        quote: {
           fromAsset: 'btc',
           toAsset: 'ltc',
           fromAmount: '100000',
-          toAddress: 'ltc1q',
-        }),
-      () =>
-        swap.start({
-          quote: {
-            fromAsset: 'btc',
-            toAsset: 'ltc',
-            fromAmount: '100000',
-            toAmountEstimate: '0',
-            feeEstimate: '0',
-            etaSeconds: 0,
-            expiresAt: new Date(),
-            kind: 'aggregator',
-            implementationData: null,
-          },
-        }),
-      () => swap.status('any-id'),
-    ]) {
-      await assert.rejects(fn, (err: unknown) => {
-        const e = err as SwapError;
-        return e.code === 'not_implemented';
-      });
-    }
+          toAmountEstimate: '0',
+          feeEstimate: '0',
+          etaSeconds: 0,
+          expiresAt: new Date(),
+          kind: 'aggregator',
+          implementationData: null,
+        },
+      }),
+      (err: unknown) => (err as SwapError).code === 'network_error',
+    );
+    assert.equal(called, false);
   });
 });

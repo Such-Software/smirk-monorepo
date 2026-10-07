@@ -1,7 +1,7 @@
 {
   "name": "@smirk/swap",
   "version": "0.3.0",
-  "description": "Swap orchestration with a Trocador quote, trade and status implementation. THORChain and native atomic swaps remain unimplemented.",
+  "description": "Swap orchestration: Trocador quotes and trades, THORChain vault deposits with a swap memo. Native atomic swaps remain unimplemented.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,8 +11,8 @@
       "import": "./dist/index.js"
     },
     "./thorchain": {
-      "types": "./dist/thorchain/index.d.ts",
-      "import": "./dist/thorchain/index.js"
+      "types": "./dist/thorchain.d.ts",
+      "import": "./dist/thorchain.js"
     }
   },
   "files": [
