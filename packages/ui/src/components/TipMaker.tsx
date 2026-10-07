@@ -1,216 +1,146 @@
 /**
- * TipMaker: single-screen social tip composer.
+ * TipMaker: single-screen tip composer (v0.3.1).
  *
- * Replaces the 4-step wizard from smirk-extension v0.2.4 (platform →
- * username → amount → success). The v0.2.4 flow buried the interesting
- * decision ("who and how much") behind a platform-first gate and made
- * public tips a separate "platform" rather than a property of any tip.
+ * One form, top to bottom: who, what, how much, a message, and how long the
+ * recipient has to claim.
  *
- * v0.3 design (UI_DESIGN.md Principle 5 refinement):
+ *   - Recipient: an npub, a `name@domain` Nostr address, or a Smirk username.
+ *     Leave it empty to make a link tip that anyone holding the link can claim.
+ *     A person tip is a link tip whose claim key is delivered to that npub in a
+ *     NIP-17 gift wrap instead of a URL, so only they can claim it. The shell
+ *     resolves the text through `resolveRecipient` and owns the delivery.
+ *   - Amount, with its USD value when the shell supplies prices.
+ *   - Message: optional, person tips only. It travels inside the gift wrap;
+ *     the backend stores no message for a link tip.
+ *   - Expiry: after it the sender may reclaim. The tip stays claimable until a
+ *     reclaim actually runs.
  *
- *   - One screen: To, Amount, asset toggle, public/anonymous flags.
- *   - Autocomplete recipient from recent tips.
- *   - Asset defaults to last-used-per-recipient, fallback to largest
- *     balance. Tap the asset chip to cycle.
- *   - Quick-amount chips ($1 / $5 / $20) when fiat denomination set.
- *   - "Anyone with the link can claim" is a checkbox, not a platform.
- *   - "Send anonymously" is a checkbox per Q6 of the design pass.
- *
- * Submission goes through the shell's onSubmit callback which talks to
- * grin-flows (for Grin via voucher) / send-handler (for BTC/LTC/XMR/WOW)
- * + posts to /api/v1/social/tip via @smirk/core.
+ * The v0.2.4 targeted tips (Telegram, Discord or Smirk handle, sealed to the
+ * recipient's BTC key and announced by a bot) are retired from this composer.
+ * Tips already sent that way stay claimable from the Inbox.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { mustGetAsset, listAssets } from '@smirk/assets';
+import { mustGetAsset } from '@smirk/assets';
 import { AssetIcon } from './AssetIcon';
 import { formatAmountWithTicker } from '../format';
 import { copyText } from '../clipboard';
 
-/** Platforms users can address. "smirk" means the recipient is a known
- *  Smirk user looked up by their Smirk username. */
+/** Platforms of the retired v0.2.4 targeted tips. Kept so old tip rows can
+ *  still be labelled; the composer no longer creates them. */
 export type TipPlatform = 'telegram' | 'discord' | 'smirk';
 
-/** Recent recipient surfaced as a chip + autocomplete suggestion. */
+/** Retained for API compatibility; the v0.3.1 composer shows no recent chips. */
 export interface RecentRecipient {
   platform: TipPlatform;
   username: string;
-  /** Asset used last time this user tipped this recipient: drives the
-   *  default asset for the new tip. */
   lastAssetId?: string;
-  /** ISO timestamp of last tip. Used to sort the chips. */
   lastTippedAt?: string;
 }
 
-/** What the shell needs to know to dispatch the actual tip-creation. */
+/** A recipient resolved to the npub that will receive the claim key. */
+export interface TipRecipient {
+  /** x-only hex pubkey: the gift wrap's addressee. */
+  pubkeyHex: string;
+  /** What the user typed or a short npub, for display only. */
+  display: string;
+}
+
+export type ResolveTipRecipient = (
+  text: string,
+) => Promise<{ ok: true; recipient: TipRecipient } | { ok: false; error: string }>;
+
+/** What the shell needs to know to dispatch the actual tip creation. */
 export interface TipSubmitFields {
-  /** Empty string ⇒ public tip (no recipient lookup). */
+  /** Legacy targeted-tip handle. Always empty from this composer. */
   username: string;
   platform: TipPlatform;
   assetId: string;
   amountAtomic: bigint;
+  /** Always true from this composer: every tip is funded as a link tip, and a
+   *  person tip differs only in how its claim key is delivered. */
   isPublic: boolean;
   senderAnonymous: boolean;
+  /** Set for a person tip: deliver the claim key to this npub. */
+  recipient?: TipRecipient;
+  memo?: string;
+  /** Unix seconds after which the sender may reclaim. */
+  expiresAt?: number;
 }
 
 export type TipSubmitOutcome =
   | {
       ok: true;
       tipId: string;
-      /** Set for public tips once the funding tx hits the confirmation
-       *  threshold. Targeted tips don't need a share URL (the recipient
-       *  is notified by the bot directly). */
+      /** The claim link. For a person tip it is a fallback the sender can
+       *  forward if delivery could not be confirmed. */
       shareUrl: string | null;
-      /** True iff the share URL isn't ready yet because funding still
-       *  needs to confirm. Targeted tips also set false. */
+      /** True while funding still needs to confirm before the link works. */
       shareUrlPending: boolean;
+      /** Set for a person tip once the gift wrap was published. */
+      deliveredTo?: string;
+      /** Set when a person tip was funded but its delivery failed or is
+       *  uncertain; the UI then offers the share link as a fallback. */
+      deliveryWarning?: string;
     }
   | { ok: false; error: string };
 
 export interface TipMakerProps {
-  /** Asset ids the user can tip with (ordered as on the asset registry).
-   *  Filter out assets where the user has zero balance via
-   *  `resolveBalance` upstream if desired. */
+  /** Asset ids the user can tip with. */
   assetIds: string[];
-  /** Spendable atomic balance for an asset (drives the "Insufficient
-   *  funds" check + the default-asset auto-pick). */
+  /** Spendable atomic balance for an asset. */
   resolveBalance: (assetId: string) => bigint;
-  /** Parse user-typed amount in the asset's native unit (e.g. "0.005"
-   *  → 500000 satoshis). Returns null on bad input. */
+  /** Parse a typed amount in the asset's native unit. Null on bad input. */
   parseAmount: (assetId: string, text: string) => bigint | null;
-  /** Recent recipients surfaced as chips + autocomplete. Shell pulls
-   *  these from getSentSocialTips / local cache. Newest first. */
-  recentRecipients?: RecentRecipient[];
-  /** Look up a username on a platform to see if they're a registered
-   *  Smirk user (drives the encryption-to-known-pubkey path). The shell
-   *  wraps `api.lookupSocial` / `api.lookupSmirkName`. */
-  lookupRecipient?: (
-    platform: TipPlatform,
-    username: string,
-  ) => Promise<{ registered: boolean; hasAssetWallet: boolean }>;
-  /** Submit the tip. Shell handles per-asset tx-construction +
-   *  posting to /social/tip + Telegram/Discord bot notification. */
+  /** Resolve the recipient field to an npub. Omitted, the composer offers
+   *  link tips only. */
+  resolveRecipient?: ResolveTipRecipient;
+  /** Format an atomic amount as USD ("$1.23"), or null when no price. */
+  formatUsd?: (assetId: string, amountAtomic: bigint) => string | null;
+  /** Submit the tip. The shell funds it and, for a person tip, delivers it. */
   onSubmit: (fields: TipSubmitFields) => Promise<TipSubmitOutcome>;
-  /** Back to Home. */
   onExit: () => void;
-  /** Optional: icon resolver for AssetIcon. */
   resolveIcon?: (iconKey: string) => string | undefined;
-  /** Optional: hide an asset id (e.g. while Grin tipping is gated on
-   *  user feature flag). Pass to filter the asset chip cycle. */
   hideAssetIds?: string[];
-  /** Optional: pre-select this asset on mount, overriding the
-   *  largest-balance default. Shell wires this when the user arrives
-   *  via the per-asset detail screen's Tip button: entering the Tip
-   *  flow with the *intent* already attached to a coin is much less
-   *  surprising than landing on whatever asset has the biggest
-   *  balance. The recent-recipient lookup still overrides this once
-   *  the user types a known handle (their last-tipped asset wins
-   *  there; that's the stronger signal). */
+  /** Pre-select this asset on mount (arriving from a coin's detail screen). */
   prefilledAssetId?: string;
-  /**
-   * Whether this backend can serve TARGETED (@username / platform) tips.
-   *
-   * Wire this from the backend's `features.targeted_tips` capability
-   * (`capHasTargetedTips`), never from a constant. An instance that does not
-   * serve targeted tips rejects the create with a 400 at submit time, so with
-   * this false the composer:
-   *   - opens as a PUBLIC share-URL tip, the tip such a backend accepts, and
-   *   - hides the "anyone with the link can claim" toggle, so the composer
-   *     cannot be flipped into a tip the backend will not fulfil.
-   *
-   * Defaults to false, which is the correct reading of both an older backend
-   * that does not advertise the capability and one whose operator has left it
-   * off. Hardcoding it true regresses every public-only instance to the 400
-   * trap, with the user having already picked a recipient and an amount.
-   */
-  allowTargeted?: boolean;
 }
 
-const PLATFORM_LABEL: Record<TipPlatform, string> = {
-  telegram: 'Telegram',
-  discord: 'Discord',
-  smirk: 'Smirk',
-};
+const DAY = 24 * 60 * 60;
+const EXPIRY_CHOICES: { label: string; seconds: number }[] = [
+  { label: '1 day', seconds: DAY },
+  { label: '7 days', seconds: 7 * DAY },
+  { label: '30 days', seconds: 30 * DAY },
+];
+const MEMO_MAX = 200;
 
-/** Brand-correct platform icons rendered inline as SVG (telegram,
- *  discord) or unicode emoji (smirk). v0.3 doesn't bundle a Nerd
- *  Font or icon-font, so SVGs go inline: they're tiny and avoid the
- *  extra HTTP fetch. */
-function PlatformIcon({ platform, size = 14 }: { platform: TipPlatform; size?: number }) {
-  if (platform === 'smirk') {
-    // The Smirk emoji, used in the wallet's header brand mark and
-    // throughout. Matches the wallet's identity character.
-    return <span style={{ fontSize: size }}>😏</span>;
-  }
-  if (platform === 'telegram') {
-    // Telegram brand: simpleicons.org path, public domain.
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        aria-hidden="true"
-        style={{ display: 'inline-block', verticalAlign: 'middle' }}
-      >
-        <path d="M12 0C5.374 0 0 5.372 0 12s5.374 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.022c.24-.213-.054-.334-.373-.121l-6.869 4.326-2.96-.924c-.64-.203-.658-.643.135-.953l11.566-4.458c.538-.196 1.006.128.832.939z" />
-      </svg>
-    );
-  }
-  if (platform === 'discord') {
-    // Discord brand: simpleicons.org path, public domain.
-    return (
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        aria-hidden="true"
-        style={{ display: 'inline-block', verticalAlign: 'middle' }}
-      >
-        <path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.211.375-.445.865-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.003-3.03.077.077 0 0 0 .031-.055c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.182 0-2.157-1.085-2.157-2.42 0-1.332.956-2.42 2.157-2.42 1.21 0 2.176 1.096 2.157 2.42 0 1.334-.955 2.42-2.157 2.42zm7.974 0c-1.182 0-2.157-1.085-2.157-2.42 0-1.332.955-2.42 2.157-2.42 1.21 0 2.176 1.096 2.157 2.42 0 1.334-.946 2.42-2.157 2.42z" />
-      </svg>
-    );
-  }
-  return null;
+/** A recipient-field value worth resolving: npub, hex key, name@domain, or a
+ *  plain Smirk username (optionally with a leading @). */
+export function looksLikeTipRecipient(raw: string): boolean {
+  const t = raw.trim().replace(/^@/, '');
+  if (!t) return false;
+  if (/^npub1[02-9ac-hj-np-z]{58}$/.test(t)) return true;
+  if (/^[0-9a-fA-F]{64}$/.test(t)) return true;
+  if (/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(t)) return true;
+  return /^[a-z0-9._-]{2,32}$/i.test(t);
 }
 
-const PLATFORM_PLACEHOLDER: Record<TipPlatform, string> = {
-  telegram: '@username',
-  discord: 'username',
-  smirk: '@username',
-};
-
-function normalizeUsername(platform: TipPlatform, raw: string): string {
-  const trimmed = raw.trim();
-  if (platform === 'telegram' || platform === 'smirk') {
-    return trimmed.replace(/^@/, '').toLowerCase();
-  }
-  return trimmed;
-}
+type RecipientState =
+  | { kind: 'empty' }
+  | { kind: 'checking' }
+  | { kind: 'ok'; recipient: TipRecipient }
+  | { kind: 'error'; error: string };
 
 export function TipMaker(props: TipMakerProps) {
   const visibleAssetIds = useMemo(
-    () =>
-      props.assetIds.filter(
-        (id) => !(props.hideAssetIds ?? []).includes(id),
-      ),
+    () => props.assetIds.filter((id) => !(props.hideAssetIds ?? []).includes(id)),
     [props.assetIds, props.hideAssetIds],
   );
 
-  // Pick a default asset:
-  //   1. `prefilledAssetId` (shell-supplied: "I came from the Grin
-  //      screen, I want to tip Grin"). Highest-priority signal.
-  //   2. Recent recipient's `lastAssetId`: applied in the useEffect
-  //      below once a known username is typed.
-  //   3. Asset with the largest balance: final fallback when neither
-  //      hint is available.
+  // Default asset: the shell's prefilled one, else the largest balance.
   const defaultAssetId = useMemo(() => {
     if (visibleAssetIds.length === 0) return '';
-    if (
-      props.prefilledAssetId &&
-      visibleAssetIds.includes(props.prefilledAssetId)
-    ) {
+    if (props.prefilledAssetId && visibleAssetIds.includes(props.prefilledAssetId)) {
       return props.prefilledAssetId;
     }
     let best = visibleAssetIds[0]!;
@@ -225,128 +155,99 @@ export function TipMaker(props: TipMakerProps) {
     return best;
   }, [visibleAssetIds, props.resolveBalance, props.prefilledAssetId]);
 
-  const [platform, setPlatform] = useState<TipPlatform>('smirk');
-  const [username, setUsername] = useState('');
+  const [recipientText, setRecipientText] = useState('');
+  const [recipientState, setRecipientState] = useState<RecipientState>({ kind: 'empty' });
   const [assetId, setAssetId] = useState<string>(defaultAssetId);
   const [amountText, setAmountText] = useState('');
-  // Default to a PUBLIC share-URL tip unless this backend can serve targeted
-  // tips (see `allowTargeted`). A public-only backend leaves it off, so the
-  // out-of-box tip must be one it accepts: a targeted default would 400 on
-  // submit the moment the user filled the composer and pressed Send.
-  const [isPublic, setIsPublic] = useState(!props.allowTargeted);
+  const [memo, setMemo] = useState('');
+  const [expirySeconds, setExpirySeconds] = useState(7 * DAY);
   const [senderAnonymous, setSenderAnonymous] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [lookupStatus, setLookupStatus] = useState<
-    null | 'checking' | 'registered' | 'unregistered' | 'no-asset-wallet'
-  >(null);
-  const [result, setResult] = useState<
-    null | { tipId: string; shareUrl: string | null; shareUrlPending: boolean }
-  >(null);
+  const [result, setResult] = useState<null | {
+    outcome: Extract<TipSubmitOutcome, { ok: true }>;
+    recipient: TipRecipient | null;
+  }>(null);
 
-  // Re-default asset when recipient changes (uses lastAssetId if known).
+  // Debounced recipient resolution. Empty means a link tip.
   useEffect(() => {
-    if (!username.trim()) return;
-    const normalized = normalizeUsername(platform, username);
-    const recent = props.recentRecipients?.find(
-      (r) => r.platform === platform && r.username === normalized,
-    );
-    if (recent?.lastAssetId && visibleAssetIds.includes(recent.lastAssetId)) {
-      setAssetId(recent.lastAssetId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [username, platform]);
-
-  // Debounced recipient lookup. Skipped for public tips.
-  useEffect(() => {
-    if (isPublic) {
-      setLookupStatus(null);
+    const text = recipientText.trim();
+    if (!text || !props.resolveRecipient) {
+      setRecipientState({ kind: 'empty' });
       return;
     }
-    if (!username.trim() || !props.lookupRecipient) {
-      setLookupStatus(null);
-      return;
-    }
-    const normalized = normalizeUsername(platform, username);
-    if (normalized.length < 2) {
-      setLookupStatus(null);
+    if (!looksLikeTipRecipient(text)) {
+      setRecipientState({ kind: 'error', error: 'Enter an npub, a name@domain address or a Smirk username' });
       return;
     }
     let cancelled = false;
-    setLookupStatus('checking');
+    setRecipientState({ kind: 'checking' });
     const handle = window.setTimeout(async () => {
       try {
-        const r = await props.lookupRecipient!(platform, normalized);
+        const r = await props.resolveRecipient!(text);
         if (cancelled) return;
-        if (!r.registered) setLookupStatus('unregistered');
-        else if (!r.hasAssetWallet) setLookupStatus('no-asset-wallet');
-        else setLookupStatus('registered');
-      } catch {
-        if (!cancelled) setLookupStatus(null);
+        setRecipientState(r.ok ? { kind: 'ok', recipient: r.recipient } : { kind: 'error', error: r.error });
+      } catch (e) {
+        if (!cancelled) {
+          setRecipientState({ kind: 'error', error: e instanceof Error ? e.message : 'Could not find that recipient' });
+        }
       }
     }, 400);
     return () => {
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [username, platform, isPublic, assetId]);
+  }, [recipientText, props.resolveRecipient]);
 
-  const balance = useMemo(
-    () => (assetId ? props.resolveBalance(assetId) : 0n),
-    [assetId, props.resolveBalance],
-  );
-
+  const balance = useMemo(() => (assetId ? props.resolveBalance(assetId) : 0n), [assetId, props.resolveBalance]);
   const parsedAmount = useMemo(
     () => (amountText && assetId ? props.parseAmount(assetId, amountText) : null),
     [amountText, assetId, props.parseAmount],
   );
+  const usd = parsedAmount && parsedAmount > 0n && props.formatUsd ? props.formatUsd(assetId, parsedAmount) : null;
 
   const insufficientFunds = parsedAmount !== null && parsedAmount > balance;
-  const validRecipient =
-    isPublic || normalizeUsername(platform, username).length >= 2;
+  const isPersonTip = recipientText.trim().length > 0;
+  const recipientReady = !isPersonTip || recipientState.kind === 'ok';
   const canSubmit =
     !submitting &&
     !!assetId &&
     parsedAmount !== null &&
     parsedAmount > 0n &&
     !insufficientFunds &&
-    validRecipient;
+    recipientReady &&
+    memo.length <= MEMO_MAX;
 
   const submit = async () => {
     setError(null);
     if (!parsedAmount || !assetId) return;
+    const recipient = recipientState.kind === 'ok' ? recipientState.recipient : null;
+    if (isPersonTip && !recipient) return;
     setSubmitting(true);
     const outcome = await props.onSubmit({
-      username: isPublic ? '' : normalizeUsername(platform, username),
-      platform,
+      username: '',
+      platform: 'smirk',
       assetId,
       amountAtomic: parsedAmount,
-      isPublic,
+      isPublic: true,
       senderAnonymous,
+      ...(recipient ? { recipient } : {}),
+      ...(recipient && memo.trim() ? { memo: memo.trim() } : {}),
+      expiresAt: Math.floor(Date.now() / 1000) + expirySeconds,
     });
     setSubmitting(false);
-    if (outcome.ok) {
-      setResult({
-        tipId: outcome.tipId,
-        shareUrl: outcome.shareUrl,
-        shareUrlPending: outcome.shareUrlPending,
-      });
-    } else {
-      setError(outcome.error);
-    }
+    if (outcome.ok) setResult({ outcome, recipient });
+    else setError(outcome.error);
   };
 
   if (result) {
     return (
       <TipSuccess
-        tipId={result.tipId}
-        shareUrl={result.shareUrl}
-        shareUrlPending={result.shareUrlPending}
-        platform={platform}
-        username={username}
-        isPublic={isPublic}
+        outcome={result.outcome}
+        recipient={result.recipient}
         amount={amountText}
         ticker={mustGetAsset(assetId).ticker}
+        usd={usd}
         onClose={props.onExit}
       />
     );
@@ -355,7 +256,7 @@ export function TipMaker(props: TipMakerProps) {
   const asset = assetId ? mustGetAsset(assetId) : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
         <button onClick={props.onExit} style={navBtn}>
           Cancel
@@ -364,83 +265,25 @@ export function TipMaker(props: TipMakerProps) {
         <span style={{ width: 60 }} />
       </header>
 
-      <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, textAlign: 'center' }}>
-        Send a Tip 🎁
-      </h2>
+      <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, textAlign: 'center' }}>Send a tip</h2>
 
-      {/* --- Recipient --- */}
-      {!isPublic && (
+      {props.resolveRecipient && (
         <div>
-          <Label>Platform</Label>
-          <PlatformDropdown value={platform} onChange={setPlatform} />
-          <div style={{ marginTop: 8 }}>
-            <Label>{PLATFORM_LABEL[platform]} username</Label>
-            <input
-              type="text"
-              data-testid="tip-username-input"
-              value={username}
-              onInput={(e) => setUsername((e.target as HTMLInputElement).value)}
-              placeholder={PLATFORM_PLACEHOLDER[platform]}
-              autoFocus
-              style={inputStyle}
-            />
-          </div>
-          {lookupStatus && (
-            <div
-              data-testid="tip-lookup-status"
-              style={{
-                fontSize: 11,
-                color:
-                  lookupStatus === 'registered'
-                    ? 'var(--smirk-positive)'
-                    : lookupStatus === 'checking'
-                    ? 'var(--smirk-fg-muted)'
-                    : 'var(--smirk-warning, #d8a14d)',
-                marginTop: 4,
-              }}
-            >
-              {lookupStatus === 'checking' && 'Checking…'}
-              {lookupStatus === 'registered' &&
-                '✓ Smirk user found — they\'ll get an in-app notification'}
-              {lookupStatus === 'unregistered' &&
-                "Not yet a Smirk user — we'll notify them via " + PLATFORM_LABEL[platform]}
-              {lookupStatus === 'no-asset-wallet' &&
-                'Recipient doesn\'t have a wallet for this asset yet'}
-            </div>
-          )}
+          <Label>To</Label>
+          <input
+            type="text"
+            data-testid="tip-recipient-input"
+            value={recipientText}
+            onInput={(e) => setRecipientText((e.target as HTMLInputElement).value)}
+            placeholder="npub, name@domain or Smirk username"
+            autoComplete="off"
+            spellcheck={false}
+            style={inputStyle}
+          />
+          <RecipientHint state={recipientState} empty={!isPersonTip} />
         </div>
       )}
 
-      {/* --- Recent recipients chip row --- */}
-      {!isPublic &&
-        props.recentRecipients &&
-        props.recentRecipients.length > 0 && (
-          <div>
-            <Label>Recent</Label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {props.recentRecipients.slice(0, 6).map((r) => (
-                <button
-                  key={`${r.platform}:${r.username}`}
-                  onClick={() => {
-                    setPlatform(r.platform);
-                    setUsername(r.username);
-                  }}
-                  style={{
-                    ...chipStyle,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}
-                >
-                  <PlatformIcon platform={r.platform} size={12} />
-                  <span>{r.username}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-      {/* --- Amount + asset --- */}
       <div>
         <Label>Amount</Label>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -465,67 +308,74 @@ export function TipMaker(props: TipMakerProps) {
         {asset && (
           <div
             style={{
+              display: 'flex',
+              justifyContent: 'space-between',
               fontSize: 11,
-              color: insufficientFunds
-                ? 'var(--smirk-negative, #ff6b6b)'
-                : 'var(--smirk-fg-muted)',
               marginTop: 4,
+              color: insufficientFunds ? 'var(--smirk-negative, #ff6b6b)' : 'var(--smirk-fg-muted)',
             }}
           >
-            {insufficientFunds
-              ? 'Insufficient balance'
-              : `Available: ${formatAmountWithTicker(balance, assetId)}`}
+            <span>{insufficientFunds ? 'Insufficient balance' : `Available: ${formatAmountWithTicker(balance, assetId)}`}</span>
+            {usd && <span data-testid="tip-amount-usd">≈ {usd}</span>}
           </div>
         )}
       </div>
 
-      {/* --- Toggles --- */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-          padding: '10px 12px',
-          background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
-          border: '1px solid var(--smirk-border)',
-          borderRadius: 8,
-        }}
-      >
-        {/* Public/targeted toggle: only when this backend can actually serve a
-            targeted tip. On a public-only backend the tip is ALWAYS a public
-            share-URL tip, so surfacing this toggle would just let the user
-            compose a targeted tip the backend 400s. See `allowTargeted`. */}
-        {props.allowTargeted && (
-          <Toggle
-            checked={isPublic}
-            onChange={setIsPublic}
-            label="Anyone with the link can claim"
-            hint="Generates a share URL; anyone who opens it first claims the tip."
-            testid="tip-public-toggle"
+      {/* A message rides inside the gift wrap, so only a person tip carries
+          one: the backend stores no message for a link tip. */}
+      {isPersonTip && (
+        <div>
+          <Label>Message (optional)</Label>
+          <input
+            type="text"
+            data-testid="tip-memo-input"
+            value={memo}
+            maxLength={MEMO_MAX}
+            onInput={(e) => setMemo((e.target as HTMLInputElement).value)}
+            placeholder="Only they can read it"
+            style={inputStyle}
           />
-        )}
+        </div>
+      )}
+
+      <div>
+        <Label>Reclaimable after</Label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {EXPIRY_CHOICES.map((c) => (
+            <button
+              key={c.seconds}
+              data-testid={`tip-expiry-${c.seconds / DAY}d`}
+              onClick={() => setExpirySeconds(c.seconds)}
+              style={{
+                ...chipStyle,
+                ...(expirySeconds === c.seconds
+                  ? { borderColor: 'var(--smirk-accent)', color: 'var(--smirk-accent)', fontWeight: 600 }
+                  : {}),
+              }}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)', marginTop: 4 }}>
+          Unclaimed after this, you can take the tip back. Until you do, it can still be claimed.
+        </div>
+      </div>
+
+      {!isPersonTip && (
         <Toggle
           checked={senderAnonymous}
           onChange={setSenderAnonymous}
           label="Send anonymously"
-          hint="Hide your Smirk username from the recipient."
+          hint="Hide your Smirk username on the tip page."
           testid="tip-anonymous-toggle"
         />
-      </div>
+      )}
 
       {error && (
         <div
-          style={{
-            fontSize: 12,
-            color: 'var(--smirk-negative, #ff6b6b)',
-            // wrap long error strings (e.g., "Funded WOW at <95-char
-            // address> but backend POST failed: …") instead of letting
-            // them blow out the popup width with a horizontal
-            // scrollbar.
-            wordBreak: 'break-word',
-            overflowWrap: 'anywhere',
-            maxWidth: '100%',
-          }}
+          data-testid="tip-error"
+          style={{ fontSize: 12, color: 'var(--smirk-negative, #ff6b6b)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}
         >
           {error}
         </div>
@@ -535,71 +385,103 @@ export function TipMaker(props: TipMakerProps) {
         onClick={() => void submit()}
         disabled={!canSubmit}
         data-testid="tip-submit-btn"
-        style={{
-          ...primaryBtnStyle,
-          opacity: canSubmit ? 1 : 0.5,
-          cursor: canSubmit ? 'pointer' : 'not-allowed',
-        }}
+        style={{ ...primaryBtnStyle, opacity: canSubmit ? 1 : 0.5, cursor: canSubmit ? 'pointer' : 'not-allowed' }}
       >
-        {submitting ? 'Sending…' : 'Send Tip 🎁'}
+        {submitting
+          ? 'Sending…'
+          : isPersonTip && recipientState.kind === 'ok'
+          ? `Send to ${recipientState.recipient.display}`
+          : 'Create tip link'}
       </button>
     </div>
   );
 }
 
+function RecipientHint({ state, empty }: { state: RecipientState; empty: boolean }) {
+  const style = { fontSize: 11, marginTop: 4 };
+  if (empty) {
+    return (
+      <div data-testid="tip-recipient-hint" style={{ ...style, color: 'var(--smirk-fg-muted)' }}>
+        Leave empty to make a link anyone can claim.
+      </div>
+    );
+  }
+  if (state.kind === 'checking') {
+    return <div style={{ ...style, color: 'var(--smirk-fg-muted)' }}>Looking up…</div>;
+  }
+  if (state.kind === 'ok') {
+    return (
+      <div data-testid="tip-recipient-hint" style={{ ...style, color: 'var(--smirk-positive)' }}>
+        Only {state.recipient.display} can claim this tip.
+      </div>
+    );
+  }
+  if (state.kind === 'error') {
+    return (
+      <div data-testid="tip-recipient-hint" style={{ ...style, color: 'var(--smirk-warning, #d8a14d)' }}>
+        {state.error}
+      </div>
+    );
+  }
+  return null;
+}
+
 // ---- Success view --------------------------------------------------------
 
 function TipSuccess({
-  tipId,
-  shareUrl,
-  shareUrlPending,
-  platform,
-  username,
-  isPublic,
+  outcome,
+  recipient,
   amount,
   ticker,
+  usd,
   onClose,
 }: {
-  tipId: string;
-  shareUrl: string | null;
-  shareUrlPending: boolean;
-  platform: TipPlatform;
-  username: string;
-  isPublic: boolean;
+  outcome: Extract<TipSubmitOutcome, { ok: true }>;
+  recipient: TipRecipient | null;
   amount: string;
   ticker: string;
+  usd: string | null;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
-    void copyText(text).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    }).catch(() => undefined);
+    void copyText(text)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => undefined);
   };
+  const { shareUrl, shareUrlPending, deliveryWarning } = outcome;
+  // A person tip shows its link only as a fallback when delivery is in doubt.
+  const showLink = !!shareUrl && !shareUrlPending && (!recipient || !!deliveryWarning);
 
   return (
     <div style={{ textAlign: 'center', padding: '32px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ fontSize: 48 }}>🎁</div>
-      <h2 data-testid="tip-success-heading" style={{ margin: 0, fontSize: 18 }}>Tip sent!</h2>
+      <h2 data-testid="tip-success-heading" style={{ margin: 0, fontSize: 18 }}>
+        {recipient ? 'Tip sent' : 'Tip link created'}
+      </h2>
       <div style={{ fontSize: 14 }}>
         {amount} {ticker}
+        {usd ? <span style={{ color: 'var(--smirk-fg-muted)' }}> (≈ {usd})</span> : null}
       </div>
-      <div style={{ fontSize: 12, color: 'var(--smirk-fg-muted)' }}>
-        {isPublic
-          ? 'Public tip — anyone with the link can claim'
-          : `We notified @${normalizeUsername(platform, username)} on ${PLATFORM_LABEL[platform]} 🎉`}
+      <div data-testid="tip-success-detail" style={{ fontSize: 12, color: 'var(--smirk-fg-muted)', lineHeight: 1.5 }}>
+        {recipient
+          ? `Delivered privately to ${recipient.display}. It shows up in their Inbox, ready to claim once funding confirms.`
+          : 'Anyone with the link can claim it.'}
       </div>
 
-      {/* Two states for public tips:
-          (a) confirmation-gated chains (XMR/WOW/GRIN) right after
-              create: link exists but recipients would just see "0
-              confs" if we surfaced it now. Hide the URL + button
-              entirely; point the user at the Home banner that lights
-              up when funding confirms.
-          (b) instant chains (BTC/LTC) or any tip that's already
-              past the confirmation gate: show URL + Copy link. */}
-      {isPublic && shareUrl && !shareUrlPending && (
+      {deliveryWarning && (
+        <div
+          data-testid="tip-delivery-warning"
+          style={{ fontSize: 12, color: 'var(--smirk-warning, #d8a14d)', lineHeight: 1.5 }}
+        >
+          {deliveryWarning}
+        </div>
+      )}
+
+      {showLink && shareUrl && (
         <div>
           <div
             data-testid="tip-share-url"
@@ -621,7 +503,7 @@ function TipSuccess({
         </div>
       )}
 
-      {isPublic && shareUrlPending && (
+      {!recipient && shareUrlPending && (
         <div
           data-testid="tip-share-pending"
           style={{
@@ -631,25 +513,16 @@ function TipSuccess({
             background: 'rgba(255,255,255,0.04)',
             border: '1px dashed var(--smirk-border)',
             borderRadius: 6,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
             lineHeight: 1.5,
           }}
         >
-          <div style={{ fontWeight: 600, color: 'inherit' }}>
-            ⏳ Waiting for funding to confirm
-          </div>
-          <div>
-            Share link goes live once the funding tx has enough
-            confirmations. Home will show a banner the moment it's
-            ready to share.
-          </div>
+          <div style={{ fontWeight: 600, color: 'inherit' }}>Waiting for funding to confirm</div>
+          <div>The link goes live once the funding transaction confirms. Find it under Tips, sent.</div>
         </div>
       )}
 
       <div data-testid="tip-id-label" style={{ fontSize: 10, color: 'var(--smirk-fg-muted)' }}>
-        tip id: <code>{tipId.slice(0, 12)}…</code>
+        tip id: <code>{outcome.tipId.slice(0, 12)}…</code>
       </div>
 
       <button onClick={onClose} data-testid="tip-success-done-btn" style={primaryBtnStyle}>
@@ -677,109 +550,6 @@ function Label({ children }: { children: preact.ComponentChildren }) {
   );
 }
 
-/**
- * Inline-expanding dropdown: single row when closed, vertical list
- * when open. Scales to N platforms without crowding the popup
- * (popup is ~360px wide, so 3-button-row blew out horizontally as
- * brand names grew; future Matrix/Signal/Nostr/etc. would have made
- * it worse).
- */
-function PlatformDropdown({
-  value,
-  onChange,
-}: {
-  value: TipPlatform;
-  onChange: (p: TipPlatform) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  // Single source of platform ordering. Extend this when adding
-  // Matrix / Signal / Nostr / etc.; Label + Icon already keyed by
-  // TipPlatform union elsewhere in this file.
-  const order: TipPlatform[] = ['smirk', 'telegram', 'discord'];
-
-  return (
-    <div style={{ position: 'relative' }}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        data-testid="tip-platform-dropdown"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          width: '100%',
-          padding: '10px 12px',
-          background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.03))',
-          border: '1px solid var(--smirk-border)',
-          borderRadius: 6,
-          color: 'inherit',
-          cursor: 'pointer',
-          fontFamily: 'inherit',
-          fontSize: 13,
-          fontWeight: 500,
-          boxSizing: 'border-box',
-          textAlign: 'left',
-        }}
-      >
-        <PlatformIcon platform={value} size={16} />
-        <span style={{ flex: 1 }}>{PLATFORM_LABEL[value]}</span>
-        <span style={{ opacity: 0.5, fontSize: 10 }}>{open ? '▲' : '▼'}</span>
-      </button>
-
-      {open && (
-        <div
-          role="listbox"
-          style={{
-            marginTop: 4,
-            background: 'var(--smirk-bg-elevated, rgba(255,255,255,0.04))',
-            border: '1px solid var(--smirk-border)',
-            borderRadius: 6,
-            overflow: 'hidden',
-          }}
-        >
-          {order.map((p) => {
-            const active = p === value;
-            return (
-              <button
-                key={p}
-                role="option"
-                aria-selected={active}
-                data-testid={`tip-platform-option-${p}`}
-                onClick={() => {
-                  onChange(p);
-                  setOpen(false);
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  width: '100%',
-                  padding: '10px 12px',
-                  background: active
-                    ? 'color-mix(in srgb, var(--smirk-accent) 18%, transparent)'
-                    : 'transparent',
-                  border: 'none',
-                  color: active ? 'var(--smirk-accent)' : 'inherit',
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  fontSize: 13,
-                  fontWeight: active ? 600 : 500,
-                  textAlign: 'left',
-                }}
-              >
-                <PlatformIcon platform={p} size={16} />
-                <span style={{ flex: 1 }}>{PLATFORM_LABEL[p]}</span>
-                {active && <span style={{ fontSize: 10, opacity: 0.7 }}>✓</span>}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Toggle({
   checked,
   onChange,
@@ -794,15 +564,7 @@ function Toggle({
   testid?: string;
 }) {
   return (
-    <label
-      style={{
-        display: 'flex',
-        gap: 8,
-        alignItems: 'flex-start',
-        cursor: 'pointer',
-        fontSize: 12,
-      }}
-    >
+    <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', fontSize: 12 }}>
       <input
         type="checkbox"
         {...(testid ? { 'data-testid': testid } : {})}
@@ -819,14 +581,8 @@ function Toggle({
 }
 
 /**
- * Asset picker: popover anchored under the chip. Sits next to the
- * amount input, so we can't expand inline like the platform
- * dropdown (would shove the input out of place). Instead the option
- * list renders absolutely-positioned below the chip, right-aligned
- * to the chip's right edge so it stays within the popup width.
- *
- * Closes when user clicks outside (via a click-listener installed on
- * `document` while the popover is open) or selects an option.
+ * Asset picker: a popover anchored under the chip, right-aligned so it stays
+ * inside the popup width. Closes on an outside click or a selection.
  */
 function AssetDropdown({
   value,
@@ -842,13 +598,11 @@ function AssetDropdown({
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Click-outside to close. Re-bound each time `open` flips on.
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
       const el = containerRef.current;
-      if (!el) return;
-      if (!el.contains(e.target as Node)) setOpen(false);
+      if (el && !el.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -865,15 +619,9 @@ function AssetDropdown({
         data-testid="tip-asset-dropdown"
         style={assetChipStyle}
       >
-        <AssetIcon
-          assetId={value}
-          size={18}
-          {...(resolveIcon ? { resolveIcon } : {})}
-        />
+        <AssetIcon assetId={value} size={18} {...(resolveIcon ? { resolveIcon } : {})} />
         <span style={{ marginLeft: 4 }}>{current.ticker}</span>
-        <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>
-          {open ? '▲' : '▼'}
-        </span>
+        <span style={{ marginLeft: 4, opacity: 0.5, fontSize: 10 }}>{open ? '▲' : '▼'}</span>
       </button>
 
       {open && (
@@ -911,9 +659,7 @@ function AssetDropdown({
                   gap: 8,
                   width: '100%',
                   padding: '10px 12px',
-                  background: active
-                    ? 'color-mix(in srgb, var(--smirk-accent) 18%, transparent)'
-                    : 'transparent',
+                  background: active ? 'color-mix(in srgb, var(--smirk-accent) 18%, transparent)' : 'transparent',
                   border: 'none',
                   color: active ? 'var(--smirk-accent)' : 'inherit',
                   cursor: 'pointer',
@@ -923,15 +669,9 @@ function AssetDropdown({
                   textAlign: 'left',
                 }}
               >
-                <AssetIcon
-                  assetId={id}
-                  size={18}
-                  {...(resolveIcon ? { resolveIcon } : {})}
-                />
+                <AssetIcon assetId={id} size={18} {...(resolveIcon ? { resolveIcon } : {})} />
                 <span style={{ flex: 1 }}>{asset.ticker}</span>
-                <span style={{ fontSize: 10, opacity: 0.5 }}>
-                  {asset.displayName}
-                </span>
+                <span style={{ fontSize: 10, opacity: 0.5 }}>{asset.displayName}</span>
                 {active && <span style={{ fontSize: 10, opacity: 0.7 }}>✓</span>}
               </button>
             );
@@ -941,10 +681,6 @@ function AssetDropdown({
     </div>
   );
 }
-
-// suppress unused-import warning if listAssets isn't called above;
-// retain reference so the import survives tree-shake refactors.
-void listAssets;
 
 const navBtn = {
   background: 'transparent',

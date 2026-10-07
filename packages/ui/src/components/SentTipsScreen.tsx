@@ -21,6 +21,7 @@ import { formatAmount } from '../format';
 import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
 import { copyText } from '../clipboard';
+import { TipDetailSheet } from './TipDetailSheet';
 
 export interface SentTipRow {
   id: string;
@@ -47,6 +48,12 @@ export interface SentTipRow {
    * persistence (those tips can still be clawed back).
    */
   shareUrl?: string;
+  /** For a tip delivered to an npub (v0.3.1): who it went to. */
+  recipientDisplay?: string;
+  /** The message sent with a person tip. */
+  memo?: string;
+  /** ISO time after which the sender may reclaim. */
+  expiresAt?: string;
 }
 
 export interface SentTipsScreenProps {
@@ -76,6 +83,7 @@ export function SentTipsScreen({
   resolveIcon,
 }: SentTipsScreenProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [rowMsg, setRowMsg] = useState<Record<string, string>>({});
 
   const setMsg = (id: string, msg: string) =>
@@ -83,10 +91,10 @@ export function SentTipsScreen({
 
   const handleClawback = async (id: string) => {
     setBusyId(id);
-    setMsg(id, 'Clawing back…');
+    setMsg(id, 'Reclaiming…');
     const r = await onClawback(id);
     setBusyId(null);
-    setMsg(id, r.ok ? '✓ Clawed back' : `Error: ${r.error ?? 'unknown'}`);
+    setMsg(id, r.ok ? '✓ Reclaimed to your wallet' : `Error: ${r.error ?? 'unknown'}`);
     if (r.ok) await onRefresh();
   };
 
@@ -189,6 +197,8 @@ export function SentTipsScreen({
             <TipCard
               key={row.id}
               row={row}
+              open={openId === row.id}
+              onToggle={() => setOpenId((cur) => (cur === row.id ? null : row.id))}
               busy={busyId === row.id}
               {...(rowMsg[row.id] ? { message: rowMsg[row.id] } : {})}
               onClawback={() => void handleClawback(row.id)}
@@ -206,8 +216,17 @@ export function SentTipsScreen({
 // One row per tip
 // ============================================================================
 
+/** Who a sent tip went to: an npub recipient, a link, or a legacy handle. */
+function recipientLabel(row: SentTipRow): string {
+  if (row.recipientDisplay) return row.recipientDisplay;
+  if (row.isPublic) return 'link';
+  return `@${row.recipientUsername ?? '?'}${row.recipientPlatform ? ` (${row.recipientPlatform})` : ''}`;
+}
+
 function TipCard({
   row,
+  open,
+  onToggle,
   busy,
   message,
   onClawback,
@@ -215,6 +234,8 @@ function TipCard({
   resolveIcon,
 }: {
   row: SentTipRow;
+  open: boolean;
+  onToggle: () => void;
   busy: boolean;
   message?: string;
   onClawback: () => void;
@@ -223,11 +244,9 @@ function TipCard({
 }) {
   const asset = mustGetAsset(row.asset);
   const amount = formatAmount(row.amount, row.asset, 8);
-  const recipient = row.isPublic
-    ? 'public link'
-    : `@${row.recipientUsername ?? '?'}${
-        row.recipientPlatform ? ` (${row.recipientPlatform})` : ''
-      }`;
+  const recipient = recipientLabel(row);
+  const expiry = row.expiresAt ? Date.parse(row.expiresAt) : NaN;
+  const pastExpiry = Number.isFinite(expiry) && expiry < Date.now();
 
   const { label, color } = statusBadge(row);
 
@@ -252,6 +271,25 @@ function TipCard({
     row.status === 'funding_mismatch' ||
     (row.status === 'cancelled' && !!row.hasLocalBackup);
 
+  const actions =
+    isDraft || isClawbackable || row.shareUrl ? (
+      <>
+        {/* Share affordance sits next to (not instead of) reclaim: the
+            sender may still want the funds back after sharing the link. */}
+        {row.shareUrl && <ShareUrlPanel shareUrl={row.shareUrl} />}
+        {isDraft && (
+          <Button testid="sent-tip-discard-btn" onClick={onDiscard} {...(busy ? { disabled: true } : {})}>
+            Discard draft
+          </Button>
+        )}
+        {isClawbackable && (
+          <Button testid="sent-tip-clawback-btn" onClick={onClawback} {...(busy ? { disabled: true } : {})}>
+            {pastExpiry ? '↩ Reclaim' : '↩ Cancel and reclaim'}
+          </Button>
+        )}
+      </>
+    ) : undefined;
+
   return (
     <div
       data-testid={`sent-tip-card-${row.id}`}
@@ -261,12 +299,25 @@ function TipCard({
         gap: 6,
         padding: '10px',
         background: 'var(--smirk-bg-sunken)',
-        border: '1px solid var(--smirk-border)',
+        border: `1px solid ${pastExpiry && isClawbackable ? 'var(--smirk-warning, #d8a14d)' : 'var(--smirk-border)'}`,
         borderRadius: 'var(--smirk-radius, 8px)',
         boxSizing: 'border-box',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        data-testid="sent-tip-toggle"
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+      >
         <AssetIcon
           assetId={asset.id}
           size={18}
@@ -292,6 +343,11 @@ function TipCard({
             }}
           >
             {formatRelative(row.createdAt)}
+            {isClawbackable &&
+              Number.isFinite(expiry) &&
+              (pastExpiry
+                ? ' · unclaimed, you can reclaim it'
+                : ` · reclaimable ${new Date(expiry).toLocaleDateString()}`)}
             {row.hasLocalBackup && ' · 🔐 local backup'}
           </div>
         </div>
@@ -314,44 +370,42 @@ function TipCard({
         </span>
       </div>
 
-      {row.status === 'pending_confirmation' &&
-        row.confirmationsRequired > 0 && (
-          <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)' }}>
-            Confirming on chain: {row.fundingConfirmations}/
-            {row.confirmationsRequired}
-          </div>
-        )}
-
-      {/* Public-tip share affordance: only present when the shell
-          successfully reconstructed the URL from the local backup's
-          fragment AND funding has buried. Sits next to (not instead
-          of) Clawback: the sender may still want to recover funds
-          even after sharing the link. */}
-      {row.shareUrl && (
-        <ShareUrlPanel shareUrl={row.shareUrl} />
+      {row.status === 'pending_confirmation' && row.confirmationsRequired > 0 && !open && (
+        <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)' }}>
+          Confirming on chain: {row.fundingConfirmations}/{row.confirmationsRequired}
+        </div>
       )}
 
-      {(isDraft || isClawbackable) && (
-        <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
-          {isDraft && (
-            <Button
-              testid="sent-tip-discard-btn"
-              onClick={onDiscard}
-              {...(busy ? { disabled: true } : {})}
-            >
-              Discard draft
+      {open ? (
+        <TipDetailSheet
+          tip={{
+            tipId: row.id,
+            direction: 'sent',
+            assetId: row.asset,
+            amount: row.amount,
+            counterparty: recipient,
+            ...(row.memo ? { memo: row.memo } : {}),
+            createdAt: row.createdAt,
+            ...(row.expiresAt ? { expiresAt: row.expiresAt } : {}),
+            status: row.status,
+            fundingConfirmations: row.fundingConfirmations,
+            confirmationsRequired: row.confirmationsRequired,
+          }}
+          {...(actions ? { actions } : {})}
+          onClose={onToggle}
+          {...(resolveIcon ? { resolveIcon } : {})}
+        />
+      ) : (
+        // Closed, keep the one action that needs attention reachable without
+        // opening: reclaiming an expired, unclaimed tip.
+        pastExpiry &&
+        isClawbackable && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+            <Button testid="sent-tip-clawback-btn" onClick={onClawback} {...(busy ? { disabled: true } : {})}>
+              ↩ Reclaim
             </Button>
-          )}
-          {isClawbackable && (
-            <Button
-              testid="sent-tip-clawback-btn"
-              onClick={onClawback}
-              {...(busy ? { disabled: true } : {})}
-            >
-              ↩ Clawback
-            </Button>
-          )}
-        </div>
+          </div>
+        )
       )}
 
       {message && (

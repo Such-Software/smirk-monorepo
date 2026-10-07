@@ -81,6 +81,13 @@ export interface InboxTipItem {
   fundingConfirmations: number;
   confirmationsRequired: number;
   createdAt: string;
+  /** Set for a tip delivered to our npub in a gift wrap (v0.3.1): the key
+   *  that claims it. Absent for a legacy targeted tip. */
+  claimKey?: string;
+  /** The sender's message, from inside the gift wrap. */
+  memo?: string;
+  /** ISO time after which the sender may reclaim. */
+  expiresAt?: string;
 }
 
 export interface InboxTabProps {
@@ -591,6 +598,7 @@ function TipClaimableRow({
           testid="tip-claim-btn"
         />
       </div>
+      <TipNote tip={tip} />
       {/* CryptoNote (XMR/WOW) sweep involves WASM ring-sig + key-image
           computation; total wall time is typically 5-10s on first
           claim. Without this hint, the static "Claiming…" label looks
@@ -619,6 +627,26 @@ function TipClaimableRow({
           }}
         >
           {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The sender's message and the claim-by date of a gift-wrapped tip. The memo
+ *  is sender-controlled text, rendered as text only. */
+function TipNote({ tip }: { tip: InboxTipItem }) {
+  if (!tip.memo && !tip.expiresAt) return null;
+  const expiry = tip.expiresAt ? Date.parse(tip.expiresAt) : NaN;
+  const expired = Number.isFinite(expiry) && expiry < Date.now();
+  return (
+    <div data-testid={`tip-note-${tip.tipId}`} style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' }}>
+      {tip.memo && <div style={{ fontStyle: 'italic' }}>“{tip.memo}”</div>}
+      {Number.isFinite(expiry) && (
+        <div style={{ fontSize: 10, color: expired ? 'var(--smirk-warning, #d8a14d)' : 'var(--smirk-fg-muted)' }}>
+          {expired
+            ? 'Past its claim-by date: the sender may take it back, so claim it soon.'
+            : `Claim by ${new Date(expiry).toLocaleDateString()}`}
         </div>
       )}
     </div>
@@ -662,6 +690,7 @@ function TipPendingRow({ tip }: { tip: InboxTipItem }) {
         {tip.senderDisplay ? `from ${tip.senderDisplay}` : 'from anonymous'} ·{' '}
         {timeAgo(tip.createdAt)}
       </div>
+      <TipNote tip={tip} />
       <div
         style={{
           height: 4,

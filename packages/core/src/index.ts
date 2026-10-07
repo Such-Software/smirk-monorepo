@@ -42,6 +42,7 @@ export * from './payments/slatepack-channel';
 export * from './payments/nostr-channel-io';
 export * from './payments/paylink';
 export * from './payments/channels';
+export * from './payments/npub-tips';
 export * from './payments/grin-pending-overlay';
 
 // v0.2 -> v0.3 migration (detect / decrypt legacy seed / legacy BTC-LTC keys)

@@ -159,11 +159,15 @@ export type {
   ApprovalAsset,
 } from './components/ApprovalScreen';
 
-export { TipMaker } from './components/TipMaker';
+export { TipMaker, looksLikeTipRecipient } from './components/TipMaker';
+export { TipDetailSheet, tipTimeline } from './components/TipDetailSheet';
+export type { TipDetail, TipDetailSheetProps, TimelineStep, TimelineState } from './components/TipDetailSheet';
 export type {
   TipMakerProps,
   TipPlatform,
   RecentRecipient,
+  TipRecipient,
+  ResolveTipRecipient,
   TipSubmitFields,
   TipSubmitOutcome,
 } from './components/TipMaker';

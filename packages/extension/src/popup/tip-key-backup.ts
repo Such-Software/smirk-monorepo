@@ -104,6 +104,11 @@ export interface TipKeyBackup {
    * Never written in this form.
    */
   urlFragmentEncoded?: string;
+  /** Unix seconds after which the sender may reclaim (v0.3.1 composer).
+   *  Advisory: a tip stays claimable until a reclaim runs. */
+  expiresAt?: number;
+  /** For a tip delivered to an npub: who it went to, for display. */
+  recipientDisplay?: string;
 }
 
 /** Derive the symmetric encryption key from the wallet's BTC private
@@ -247,6 +252,30 @@ export async function storeTipKeyBackup(params: {
     // Intentional: don't throw. The backend already has the key
     // (this is a third-layer-of-defense backup). Failing to write
     // locally degrades to "backend-only" which is the v0.3 default.
+  }
+}
+
+/** Record display metadata (expiry, recipient) on an existing backup. Neither
+ *  field is secret. A missing record or a storage failure is ignored, like
+ *  every write in this file: the tip itself is already funded. */
+export async function annotateTipKeyBackup(
+  tipId: string,
+  meta: { expiresAt?: number; recipientDisplay?: string },
+): Promise<void> {
+  try {
+    const key = `${STORAGE_PREFIX}${tipId}`;
+    const got = (await chrome.storage.local.get(key)) as Record<string, TipKeyBackup | undefined>;
+    const record = got[key];
+    if (!record) return;
+    await chrome.storage.local.set({
+      [key]: {
+        ...record,
+        ...(meta.expiresAt ? { expiresAt: meta.expiresAt } : {}),
+        ...(meta.recipientDisplay ? { recipientDisplay: meta.recipientDisplay } : {}),
+      },
+    });
+  } catch (err) {
+    console.warn('[tip-key-backup] failed to annotate:', err);
   }
 }
 

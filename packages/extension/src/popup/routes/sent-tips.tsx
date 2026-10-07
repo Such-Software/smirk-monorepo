@@ -1,10 +1,25 @@
 import { useEffect, useState } from 'preact/hooks';
-import { api, type UnlockedWallet } from '@smirk/core';
+import { api, createNostrChannelIO, readNpubTips, type NpubTip, type UnlockedWallet } from '@smirk/core';
 import { SentTipsScreen, type SentTipRow } from '@smirk/ui';
 import { listTipKeyBackups, removeTipKeyBackup } from '../tip-key-backup';
 import { clawbackSocialTip } from '../tip-claim-handler';
+import { getActiveNostrIdentityFromWallet } from '../nostr-vault';
+import { shortNpubFromHex } from '../tip-recipient';
 import { resolveIcon } from '../icons';
 import type { WalletSession } from '../types';
+
+/** Our own gift-wrap history copies, by tip id. Best effort: a relay outage
+ *  only loses the recipient and message on person tips, never the row. */
+async function loadPersonTipHistory(wallet: UnlockedWallet): Promise<Map<string, NpubTip>> {
+  try {
+    const resolved = await getActiveNostrIdentityFromWallet(wallet);
+    if (!resolved.identity) return new Map();
+    const { sent } = await readNpubTips(createNostrChannelIO(resolved.identity));
+    return new Map(sent.map((t) => [t.tipId, t]));
+  } catch {
+    return new Map();
+  }
+}
 
 /**
  * Sent Tips cross-asset surface. Loads the user's sent tips from
@@ -31,9 +46,10 @@ export function SentTipsRoute({
     setLoading(true);
     setError(undefined);
     try {
-      const [resp, backups] = await Promise.all([
+      const [resp, backups, personTips] = await Promise.all([
         api.getSentSocialTips(),
         listTipKeyBackups().catch(() => []),
+        loadPersonTipHistory(wallet),
       ]);
       const backupsById = new Map(backups.map((b) => [b.tipId, b]));
       const serverTips = resp.data?.tips ?? [];
@@ -58,6 +74,11 @@ export function SentTipsRoute({
           backup?.urlFragmentEncoded
             ? `https://smirk.cash/tip/${t.id}#${backup.urlFragmentEncoded}`
             : undefined;
+        // A person tip: who it went to and its message come from our own
+        // gift-wrap copy, else from the local backup's display label.
+        const person = personTips.get(t.id);
+        const recipientDisplay = person ? shortNpubFromHex(person.counterpartyHex) : backup?.recipientDisplay;
+        const expiresAtSec = person?.expiresAt ?? backup?.expiresAt;
         out.push({
           id: t.id,
           asset: t.asset,
@@ -71,6 +92,9 @@ export function SentTipsRoute({
           confirmationsRequired: t.confirmations_required,
           ...(backup ? { hasLocalBackup: true } : {}),
           ...(shareUrl ? { shareUrl } : {}),
+          ...(recipientDisplay ? { recipientDisplay } : {}),
+          ...(person?.memo ? { memo: person.memo } : {}),
+          ...(expiresAtSec ? { expiresAt: new Date(expiresAtSec * 1000).toISOString() } : {}),
         });
       }
       // Orphan local backups: server lost the row but we can still
@@ -89,6 +113,8 @@ export function SentTipsRoute({
           fundingConfirmations: 0,
           confirmationsRequired: 0,
           hasLocalBackup: true,
+          ...(b.recipientDisplay ? { recipientDisplay: b.recipientDisplay } : {}),
+          ...(b.expiresAt ? { expiresAt: new Date(b.expiresAt * 1000).toISOString() } : {}),
         });
       }
       setRows(out);
