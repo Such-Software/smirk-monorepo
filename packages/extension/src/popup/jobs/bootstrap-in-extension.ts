@@ -30,6 +30,7 @@ import {
   solvePowChallenge,
   bootstrapAuth,
   requireRestoreState,
+  mergeLegacyIdentityAfterSignIn,
 } from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
@@ -244,6 +245,9 @@ async function bootstrapViaNostr(
   }
 
   api.setAccessToken(res.data.accessToken);
+  // A known wallet may have been split from its pre-v0.3 identity by an earlier
+  // import; with the seed in hand, ask the backend to merge it back. Best-effort.
+  if (isKnown) await mergeLegacyIdentityAfterSignIn(api, wallet);
   return {
     userId: res.data.user.id,
     ...(res.data.user.username !== undefined ? { username: res.data.user.username } : {}),

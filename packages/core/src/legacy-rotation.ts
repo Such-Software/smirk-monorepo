@@ -67,3 +67,49 @@ export function legacyBtcRotationProof(
     legacy.privateKey.fill(0);
   }
 }
+
+/**
+ * After an npub sign-in, merge a pre-v0.3 identity into the signed-in one.
+ *
+ * A wallet imported by v0.3.0 could not prove its legacy key, so it may hold a
+ * second identity while its handle, tips and premium sit on the legacy row. The
+ * BTC sign-in path carries the proof itself; the npub path never reaches it, so
+ * it asks here. Needs the seed (fresh unlock or import) and a session. Never
+ * throws: a failed or refused merge leaves both identities as they were.
+ */
+export async function mergeLegacyIdentityAfterSignIn(
+  api: {
+    getBaseUrl(): string;
+    legacyMerge(params: {
+      btcPublicKey: string;
+      previousPublicKey: string;
+      signedTimestamp: number;
+      rotationSignature: string;
+    }): Promise<{ data?: { outcome: string; conflict?: string }; error?: string }>;
+  },
+  wallet: { seed?: Uint8Array; keys: { btc: { publicKey: Uint8Array } } },
+): Promise<'merged' | 'nothing_to_merge' | 'conflict' | 'skipped' | 'failed'> {
+  if (!wallet.seed) return 'skipped';
+  const btcPublicKey = bytesToHex(wallet.keys.btc.publicKey);
+  const signedTimestamp = Math.floor(Date.now() / 1000);
+  const proof = legacyBtcRotationProof(wallet.seed, btcPublicKey, signedTimestamp, api.getBaseUrl());
+  if (!proof) return 'skipped';
+  try {
+    const res = await api.legacyMerge({
+      btcPublicKey,
+      previousPublicKey: proof.rotationPublicKey,
+      signedTimestamp,
+      rotationSignature: proof.rotationSignature,
+    });
+    const outcome = res.data?.outcome;
+    if (outcome === 'conflict') {
+      console.warn(`[legacy-merge] refused: both identities hold a different ${res.data?.conflict}`);
+    }
+    return outcome === 'merged' || outcome === 'nothing_to_merge' || outcome === 'conflict'
+      ? outcome
+      : 'failed';
+  } catch (e) {
+    console.warn('[legacy-merge] request failed:', e);
+    return 'failed';
+  }
+}

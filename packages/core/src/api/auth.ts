@@ -115,6 +115,17 @@ export interface AuthMethods {
    */
   powChallenge(): Promise<ApiResponse<unknown>>;
 
+  /**
+   * Merge a pre-v0.3 identity into the signed-in one, for wallets that sign in
+   * by npub (the BTC sign-in carries the same proof itself). Needs the session.
+   */
+  legacyMerge(params: {
+    btcPublicKey: string;
+    previousPublicKey: string;
+    signedTimestamp: number;
+    rotationSignature: string;
+  }): Promise<ApiResponse<{ outcome: 'merged' | 'nothing_to_merge' | 'conflict'; conflict?: string }>>;
+
   checkRestore(params: {
     fingerprint: string;
     keys: Array<{
@@ -318,6 +329,21 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
       return await client.retryableRequest<unknown>('/auth/pow-challenge', {
         method: 'POST',
       });
+    },
+
+    async legacyMerge(params) {
+      return await client.request<{ outcome: 'merged' | 'nothing_to_merge' | 'conflict'; conflict?: string }>(
+        '/auth/legacy-merge',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            btc_public_key: params.btcPublicKey,
+            previous_public_key: params.previousPublicKey,
+            signed_timestamp: params.signedTimestamp,
+            rotation_signature: params.rotationSignature,
+          }),
+        },
+      );
     },
 
     async checkRestore(params) {

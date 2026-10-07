@@ -17,6 +17,7 @@ import {
   deriveAllKeys,
   deriveLegacyBtcLtcKey,
   legacyBtcRotationProof,
+  mergeLegacyIdentityAfterSignIn,
   mnemonicToSeed,
   rotationMessage,
 } from '../index';
@@ -63,4 +64,47 @@ test('no proof when the old and new keys coincide', () => {
   const seed = mnemonicToSeed(PHRASE);
   const legacyHex = bytesToHex(deriveLegacyBtcLtcKey(seed, 0).publicKey);
   assert.equal(legacyBtcRotationProof(seed, legacyHex, 1, API), null);
+});
+
+test('after an npub sign-in, the merge request carries a proof for the v0.3 key', async () => {
+  const seed = mnemonicToSeed(PHRASE);
+  const v3 = deriveAllKeys(PHRASE, '', 3);
+  const sent: Array<Record<string, unknown>> = [];
+  const api = {
+    getBaseUrl: () => API,
+    legacyMerge: async (params: Record<string, unknown>) => {
+      sent.push(params);
+      return { data: { outcome: 'merged' } };
+    },
+  };
+  const outcome = await mergeLegacyIdentityAfterSignIn(api as never, { seed, keys: v3 });
+  assert.equal(outcome, 'merged');
+  assert.equal(sent.length, 1);
+  const req = sent[0]!;
+  assert.equal(req.btcPublicKey, bytesToHex(v3.btc.publicKey));
+  assert.equal(req.previousPublicKey, bytesToHex(deriveLegacyBtcLtcKey(seed, 0).publicKey));
+  const sig = Uint8Array.from(atob(String(req.rotationSignature)), (c) => c.charCodeAt(0));
+  const digest = bitcoinMessageHash(
+    rotationMessage(API, String(req.btcPublicKey), Number(req.signedTimestamp)),
+  );
+  assert.ok(secp256k1.verify(sig.slice(1), digest, deriveLegacyBtcLtcKey(seed, 0).publicKey));
+});
+
+test('no seed means no merge request, and a failure never throws', async () => {
+  const v3 = deriveAllKeys(PHRASE, '', 3);
+  let calls = 0;
+  const api = {
+    getBaseUrl: () => API,
+    legacyMerge: async () => {
+      calls += 1;
+      throw new Error('offline');
+    },
+  };
+  assert.equal(await mergeLegacyIdentityAfterSignIn(api as never, { keys: v3 }), 'skipped');
+  assert.equal(calls, 0);
+  assert.equal(
+    await mergeLegacyIdentityAfterSignIn(api as never, { seed: mnemonicToSeed(PHRASE), keys: v3 }),
+    'failed',
+  );
+  assert.equal(calls, 1);
 });
