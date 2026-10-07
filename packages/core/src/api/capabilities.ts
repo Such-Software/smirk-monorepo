@@ -139,6 +139,9 @@ export interface PremiumPlanInfo {
   id: string;
   days: number;
   amount: string;
+  /** Display name, e.g. "Founding member". Optional: backends that do not
+   *  send one get a name derived from `id`. */
+  label?: string;
 }
 
 /** The authenticated user's CURRENT premium subscription status (`GET
@@ -212,6 +215,9 @@ export interface FeedCapability {
   allowlist_npubs: string[];
   /** Extra relays to pull feed notes from, beyond `relay_url`. */
   extra_relays: string[];
+  /** Authors the operator hides from the feed. Optional: older backends omit
+   *  it. The owner's NIP-51 mute list (kind 10000) applies on top. */
+  muted_npubs?: string[];
 }
 
 /** A plain summary of a backend's registration gates for onboarding UI. An

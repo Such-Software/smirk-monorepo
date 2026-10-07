@@ -6,6 +6,14 @@ import assert from 'node:assert/strict';
 
 import {
   planPeriodLabel,
+  planLabel,
+  planName,
+  nextPremiumPollDelayMs,
+  premiumActivationOutcome,
+  PREMIUM_POLL_FAST_MS,
+  PREMIUM_POLL_SLOW_MS,
+  PREMIUM_POLL_FAST_WINDOW_MS,
+  PREMIUM_POLL_MAX_MS,
   offeredRails,
   railLabel,
   isPendingRedeemable,
@@ -81,4 +89,66 @@ test('only a real URL is opened as a checkout', () => {
   assert.equal(isCheckoutUrl('https://btcpay.such.software/i/abc'), true);
   assert.equal(isCheckoutUrl('4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx'), false);
   assert.equal(isCheckoutUrl('javascript:alert(1)'), false);
+});
+
+test('two plans with the same period and currency get different labels', () => {
+  // Production sells a founding promo beside the standing price, both 1 year.
+  const founding = planLabel({ id: 'founding', days: 365, amount: '5' }, 'USD');
+  const year = planLabel({ id: 'year', days: 365, amount: '15' }, 'USD');
+  assert.notEqual(founding, year);
+  const withoutAmounts = (l: string) => l.replace(/\d+/g, '');
+  assert.notEqual(withoutAmounts(founding), withoutAmounts(year));
+});
+
+test('a plan label carries its name, period and price', () => {
+  const label = planLabel({ id: 'founding', days: 365, amount: '5' }, 'USD');
+  assert.ok(label.includes(planName({ id: 'founding', days: 365, amount: '5' })), label);
+  assert.ok(label.includes(planPeriodLabel(365)), label);
+  assert.ok(label.includes('5') && label.includes('USD'), label);
+});
+
+test("the backend's own plan label wins over the id", () => {
+  const name = planName({ id: 'founding', days: 365, amount: '5', label: 'Early bird' });
+  assert.equal(name, 'Early bird');
+});
+
+test('an unknown plan id still gets a non-empty name derived from it', () => {
+  const name = planName({ id: 'half_year', days: 182, amount: '9' });
+  assert.ok(name.length > 0);
+  assert.match(name.toLowerCase(), /half/);
+  assert.ok(planName({ id: '  ', days: 1, amount: '1', label: ' ' }).length > 0);
+});
+
+test('automatic checks run fast first, then slower, then stop', () => {
+  const t0 = 5_000_000;
+  assert.equal(nextPremiumPollDelayMs(t0, t0), PREMIUM_POLL_FAST_MS);
+  const slow = nextPremiumPollDelayMs(t0, t0 + PREMIUM_POLL_FAST_WINDOW_MS);
+  assert.equal(slow, PREMIUM_POLL_SLOW_MS);
+  assert.equal(nextPremiumPollDelayMs(t0, t0 + PREMIUM_POLL_MAX_MS), null);
+  assert.equal(nextPremiumPollDelayMs(t0, t0 + PREMIUM_POLL_MAX_MS + 1), null);
+});
+
+test('no automatic check is ever scheduled past the cap', () => {
+  const t0 = 0;
+  for (let age = 0; age < PREMIUM_POLL_MAX_MS; age += 7_919) {
+    const d = nextPremiumPollDelayMs(t0, age);
+    assert.ok(d !== null && d > 0, String(age));
+    assert.ok(age + d <= PREMIUM_POLL_MAX_MS, String(age));
+  }
+});
+
+test('a clock earlier than the invoice does not start checking', () => {
+  assert.equal(nextPremiumPollDelayMs(10_000, 9_000), null);
+});
+
+test('only invoices that can never activate stop automatic checking', () => {
+  // The backend's actual refusals (src/api/premium.rs activate).
+  assert.equal(premiumActivationOutcome('Payment not yet confirmed. Complete the payment and retry.'), 'waiting');
+  assert.equal(
+    premiumActivationOutcome("This invoice's payment method is currently unavailable. Try again later."),
+    'waiting',
+  );
+  assert.equal(premiumActivationOutcome(undefined), 'waiting');
+  assert.equal(premiumActivationOutcome('Unknown or invalid premium invoice.'), 'final');
+  assert.equal(premiumActivationOutcome('This premium invoice has already been used.'), 'final');
 });

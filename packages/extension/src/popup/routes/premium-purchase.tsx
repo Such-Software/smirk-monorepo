@@ -6,19 +6,22 @@
  *
  * The flow survives the popup closing, which it always does: opening the
  * checkout opens a tab. The invoice is remembered per wallet BEFORE the tab
- * opens, so on return the only thing left to do is "I've paid". Redeeming asks
- * the backend, which asks the processor that minted the invoice; an unsettled
- * invoice is simply not yet redeemable and stays so, so retrying is always
- * safe.
+ * opens. While this screen is open the wallet checks for the payment on its
+ * own, on a backing-off schedule that ends an hour after the invoice was
+ * minted; "Check now" does the same on demand. Redeeming asks the backend,
+ * which asks the processor that minted the invoice; an unsettled invoice is
+ * simply not yet redeemable and stays so, so retrying is always safe.
  */
 
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   api,
   planLabel,
   offeredRails,
   isPendingRedeemable,
   isCheckoutUrl,
+  nextPremiumPollDelayMs,
+  premiumActivationOutcome,
   type PremiumCapability,
   type PendingPremiumInvoice,
 } from '@smirk/core';
@@ -76,6 +79,12 @@ export function PremiumPurchase({
   const [pending, setPending] = useState<PendingPremiumInvoice | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+  /** Automatic checking: running, over (the hour is up), or ended because the
+   *  invoice can never activate. */
+  const [auto, setAuto] = useState<'running' | 'over' | 'final'>('running');
+  const [lastChecked, setLastChecked] = useState<number | null>(null);
+  const [pollTick, setPollTick] = useState(0);
+  const checking = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,42 +129,82 @@ export function PremiumPurchase({
     }
   };
 
-  const redeem = async () => {
-    if (!pending) return;
-    setBusy(true);
-    setMessage(null);
+  /** One activation attempt. Automatic attempts stay quiet while the payment
+   *  is merely unconfirmed; a manual one always reports. */
+  const check = async (automatic: boolean) => {
+    if (!pending || checking.current) return;
+    checking.current = true;
+    if (!automatic) setBusy(true);
+    if (!automatic) setMessage(null);
     try {
       const r = await api.activatePremium(pending.invoiceId);
+      setLastChecked(Date.now());
       if (r.data?.active) {
         await clearPendingPremium(fingerprint);
         setPending(null);
         setMessage({ tone: 'info', text: 'Premium is active. You can post now.' });
         onActivated();
-      } else {
+      } else if (premiumActivationOutcome(r.error) === 'final') {
+        setAuto('final');
+        setMessage({ tone: 'error', text: r.error ?? 'This invoice cannot be used.' });
+      } else if (!automatic) {
         // Not settled yet is the common case, and the server says so in words.
         setMessage({ tone: 'info', text: r.error ?? 'Payment not confirmed yet. Try again shortly.' });
       }
     } catch {
-      setMessage({ tone: 'error', text: 'Could not reach the server. Try again.' });
+      if (!automatic) setMessage({ tone: 'error', text: 'Could not reach the server. Try again.' });
     } finally {
-      setBusy(false);
+      checking.current = false;
+      if (!automatic) setBusy(false);
+      setPollTick((t) => t + 1);
     }
   };
+
+  // Check for the payment on a backing-off schedule while this screen is open.
+  useEffect(() => {
+    if (!pending || auto === 'final') return;
+    const delay = nextPremiumPollDelayMs(pending.createdAt, Date.now());
+    if (delay === null) {
+      setAuto('over');
+      return;
+    }
+    setAuto('running');
+    const timer = setTimeout(() => void check(true), delay);
+    return () => clearTimeout(timer);
+    // pollTick re-arms the timer after every attempt, manual or automatic.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending?.invoiceId, pollTick, auto === 'final']);
 
   const abandon = async () => {
     await clearPendingPremium(fingerprint);
     setPending(null);
     setMessage(null);
+    setAuto('running');
+    setLastChecked(null);
   };
+
+  const autoStatus =
+    auto === 'running'
+      ? `Checking for your payment automatically${
+          lastChecked ? `; last checked ${new Date(lastChecked).toLocaleTimeString()}` : ''
+        }.`
+      : auto === 'over'
+        ? 'Automatic checking has stopped. Use Check now once your payment has confirmed.'
+        : null;
 
   return (
     <div data-testid="premium-purchase" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {pending ? (
         <>
           <p style={{ ...muted, margin: 0 }}>
-            Finish paying at the checkout, then come back here. Confirmation can take a few
-            minutes for on-chain payments.
+            Finish paying at the checkout. Confirmation can take a few minutes for on-chain
+            payments; keep this screen open and premium turns on by itself.
           </p>
+          {autoStatus ? (
+            <p style={{ ...muted, margin: 0 }} data-testid="premium-auto-status" aria-live="polite">
+              {autoStatus}
+            </p>
+          ) : null}
           {isCheckoutUrl(pending.payTo) ? (
             <a
               href={pending.payTo}
@@ -176,10 +225,10 @@ export function PremiumPurchase({
               type="button"
               data-testid="premium-redeem"
               disabled={busy}
-              onClick={() => void redeem()}
+              onClick={() => void check(false)}
               style={button(!busy)}
             >
-              {busy ? 'Checking…' : "I've paid"}
+              {busy ? 'Checking…' : 'Check now'}
             </button>
             <button
               type="button"
