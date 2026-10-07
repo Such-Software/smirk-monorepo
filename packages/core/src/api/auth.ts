@@ -51,6 +51,13 @@ export interface AuthMethods {
     /** Bitcoin message signature of `smirk-auth-{timestamp}` using BTC private key. */
     signature: string;
     /**
+     * Derivation-rotation proof for a wallet registered under its pre-v0.3 BTC
+     * key: the old key (hex) and its signature over the `smirk-rotate-v1`
+     * message (see `legacy-rotation.ts`). Omitted when there is nothing to rotate.
+     */
+    rotationPublicKey?: string;
+    rotationSignature?: string;
+    /**
      * Optional ALTCHA proof-of-work solution. Sent for a NEW wallet,
      * so the backend can run `POW_REQUIRED=true` without a client
      * redeploy; omitted for a returning wallet, which the backend
@@ -269,6 +276,8 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
           wow_start_height: params.wowStartHeight,
           signed_timestamp: params.signedTimestamp,
           signature: params.signature,
+          rotation_public_key: params.rotationPublicKey,
+          rotation_signature: params.rotationSignature,
           altcha_solution: params.altchaSolution,
           // Registration-gate credentials. Omitted (undefined) unless the
           // backend advertises the gate; the backend ignores them when the gate

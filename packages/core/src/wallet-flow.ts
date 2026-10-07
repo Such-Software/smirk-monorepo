@@ -33,6 +33,7 @@
  */
 
 import { requireRestoreState } from './restore-state';
+import { legacyBtcRotationProof } from './legacy-rotation';
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
@@ -186,11 +187,21 @@ export async function bootstrapAuth(
     altchaSolution = await (options.powSolver ?? solvePowChallenge)(api);
   }
 
+  // A wallet the backend already knows may still be registered under its
+  // pre-v0.3 BTC key (`migrate-legacy` rows). Prove control of that key so the
+  // backend carries the identity over instead of minting a new one. Needs the
+  // seed, which a fresh password unlock (and every import) has.
+  const rotation =
+    isKnownWallet && wallet.seed
+      ? legacyBtcRotationProof(wallet.seed, keys[0]!.publicKey, timestamp, api.getBaseUrl())
+      : null;
+
   const result = await api.extensionRegister({
     keys,
     seedFingerprint: wallet.fingerprint,
     signedTimestamp: timestamp,
     signature,
+    ...(rotation ?? {}),
     ...(walletBirthday !== undefined ? { walletBirthday } : {}),
     ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
     ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
