@@ -207,7 +207,7 @@ import { FeedRoute } from './routes/feed';
 import { SettingsRouter } from './routes/settings';
 import { ensureWasmInit } from './wasm-init';
 import { setGrinJournalScope, clearGrinJournal } from './grin-tx-journal';
-import { setSendJournalScope, clearSendJournal, recordSend } from './send-journal';
+import { setSendJournalScope, clearSendJournal, recordSend, journalKeyFor } from './send-journal';
 import { checkMemoDeposit } from './thorchain';
 import { clearPendingPremium } from './premium-pending';
 import { ApprovalApp } from './routes/approval';
@@ -2455,7 +2455,8 @@ function HomeRouter({
                 f.inFlight = { ...f.inFlight, depositTxid: txid };
               }
             });
-            void recordSend({
+            const journalKey = journalKeyFor(wallet);
+            if (journalKey) void recordSend({
               txid,
               asset: fields.fromAssetId,
               destination: fields.toAddress,
@@ -2469,7 +2470,7 @@ function HomeRouter({
                 memo: memoCheck.memo,
                 state: 'pending',
               },
-            });
+            }, journalKey);
           }
           if (result.ok && result.amountAtomic !== undefined && result.feeAtomic !== undefined) {
             // Carry through the wizard's stashed `pendingContext` (if
