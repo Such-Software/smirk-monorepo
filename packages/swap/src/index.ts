@@ -60,3 +60,34 @@ export {
   type ThorchainQuoteData,
 } from './thorchain';
 export { TrocadorSwap, type TrocadorSwapOptions } from './trocador';
+export {
+  NonlogsSwap,
+  NonlogsBackendError,
+  NONLOGS_MARKETS,
+  NONLOGS_TAKER_FEE,
+  NONLOGS_CONVENIENCE_FEE,
+  mapStatus as mapNonlogsStatus,
+  type NonlogsAsset,
+  type NonlogsBackend,
+  type NonlogsQuoteData,
+  type NonlogsStarted,
+  type NonlogsSwapOptions,
+  type BookAnalysis,
+} from './nonlogs';
+export {
+  walkLeg,
+  walkRoute,
+  planRoute,
+  legsFromPairs,
+  maxFillableInput,
+  depthWarning,
+  materiallyDifferent,
+  IMPACT_NOTICE,
+  IMPACT_STRONG,
+  type OrderBook,
+  type Leg,
+  type LegResult,
+  type RouteResult,
+  type Fees,
+  type DepthWarning,
+} from './orderbook';

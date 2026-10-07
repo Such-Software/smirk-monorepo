@@ -148,6 +148,16 @@ export interface SwapsCapability {
     /** `auto` follows THORChain's pools and halts; `off` hides the asset. */
     assets?: Partial<Record<'btc' | 'ltc' | 'xmr', 'auto' | 'off'>>;
   };
+  /**
+   * NonLogs swaps brokered by this wallet server (`/swaps/nonlogs/*`).
+   * Absent or `enabled: false` means the server offers none and those routes
+   * answer 404. `assets` is the server's cached list of symbols NonLogs
+   * reports swappable, advisory only.
+   */
+  nonlogs?: {
+    enabled: boolean;
+    assets: string[];
+  };
 }
 
 /** One premium plan the operator sells (unlocks posting on a `premium-post` relay). */

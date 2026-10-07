@@ -1,12 +1,14 @@
 import { nativeFetch } from '../native-fetch';
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { TrocadorSwap, type ThorchainQuoteData } from '@smirk/swap';
+import { TrocadorSwap, type ThorchainQuoteData, type NonlogsQuoteData } from '@smirk/swap';
 import { api, type UnlockedWallet } from '@smirk/core';
 import {
   SwapTab,
   useRoute,
   TROCADOR_WIZARD_ID,
   THORCHAIN_WIZARD_ID,
+  NONLOGS_WIZARD_ID,
+  type ProviderHandlers,
   type SwapInFlight,
   type SwapQuoteSummary,
   type ThorchainHandlers,
@@ -18,6 +20,7 @@ import { resolveIcon } from '../icons';
 import { store } from '../singletons';
 import type { WalletSession } from '../types';
 import { thorchainSwap } from '../thorchain';
+import { nonlogsOffered, nonlogsSwap, ownAddressesOnly } from '../nonlogs';
 import { findSwapDeposit, journalKeyFor, recordSend } from '../send-journal';
 
 /**
@@ -211,6 +214,143 @@ export function SwapRouter({
       }
     : undefined;
 
+  // NonLogs: offered only when our wallet server brokers it (it holds the
+  // NonLogs key). Coins are the ones NonLogs lists as swappable now that
+  // this wallet holds; any listed coin swaps to any other.
+  const nonlogs = useMemo(() => nonlogsSwap(), []);
+  const [nlAssets, setNlAssets] = useState<{ assets: string[]; reason?: string }>({
+    assets: [],
+    reason: 'Checking NonLogs…',
+  });
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        if (!(await nonlogsOffered())) {
+          if (alive) setNlAssets({ assets: [], reason: 'Not offered by this wallet server.' });
+          return;
+        }
+        const listed = await nonlogs.availableAssets();
+        const held = listed.filter((a) => !!(wallet.addresses as unknown as Record<string, string | undefined>)[a]);
+        if (alive) {
+          setNlAssets(
+            held.length >= 2 ? { assets: held } : { assets: [], reason: 'NonLogs lists no pair for this wallet right now.' },
+          );
+        }
+      } catch (e) {
+        if (alive) setNlAssets({ assets: [], reason: e instanceof Error ? e.message : 'NonLogs is unreachable.' });
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [nonlogs, wallet]);
+
+  const ownAddress = (asset: string) => (wallet.addresses as unknown as Record<string, string | undefined>)[asset];
+
+  const nonlogsHandlers: ProviderHandlers = {
+    fromAssets: nlAssets.assets,
+    toAssets: nlAssets.assets,
+    ...(nlAssets.reason ? { unavailableReason: nlAssets.reason } : {}),
+    onQuote: async (req) => {
+      const q = await nonlogs.quote({ fromAsset: req.fromAsset, toAsset: req.toAsset, fromAmount: req.fromAmountAtomic });
+      const data = q.implementationData as NonlogsQuoteData;
+      return {
+        tradeId: '',
+        fromAsset: q.fromAsset,
+        toAsset: q.toAsset,
+        fromAmountAtomic: q.fromAmount,
+        toAmountEstimateAtomic: q.toAmountEstimate,
+        feeEstimateAtomic: q.feeEstimate,
+        provider: 'nonlogs',
+        etaSeconds: q.etaSeconds,
+        expiresAtMs: q.expiresAt.getTime(),
+        providerData: data,
+        ...(data.analysis ? { bookAnalysis: data.analysis } : {}),
+        notices: [
+          'Prices float until NonLogs executes; nothing is reserved by this quote.',
+          'After your deposit confirms, matching can take up to 12 hours.',
+          'If only part fills, NonLogs pays out that part and refunds the rest to your refund address.',
+          ...(data.minimum ? [`NonLogs minimum for this pair: ${data.minimum}.`] : []),
+        ],
+      };
+    },
+    onConfirm: async ({ quote, toAddress, refundAddress }) => {
+      const refusal = ownAddressesOnly({
+        toAddress,
+        refundAddress,
+        ownTo: ownAddress(quote.toAsset),
+        ownFrom: ownAddress(quote.fromAsset),
+      });
+      if (refusal) throw new Error(refusal);
+      const data = quote.providerData as NonlogsQuoteData | undefined;
+      if (!data || data.provider !== 'nonlogs') throw new Error('This quote is not a NonLogs quote. Get a new quote.');
+      // The persisted quote carries its request id, so confirming again after
+      // a failure or a closed popup returns the same swap, never a second one.
+      const started = await nonlogs.start({
+        quote: {
+          fromAsset: quote.fromAsset,
+          toAsset: quote.toAsset,
+          fromAmount: quote.fromAmountAtomic,
+          toAmountEstimate: quote.toAmountEstimateAtomic,
+          feeEstimate: quote.feeEstimateAtomic,
+          etaSeconds: quote.etaSeconds,
+          expiresAt: new Date(quote.expiresAtMs),
+          kind: 'aggregator',
+          implementationData: data,
+        },
+        toAddress,
+        refundAddress,
+      });
+      const sw: SwapInFlight = {
+        id: started.id,
+        fromAsset: quote.fromAsset,
+        toAsset: quote.toAsset,
+        fromAmountAtomic: quote.fromAmountAtomic,
+        toAmountEstimateAtomic: quote.toAmountEstimateAtomic,
+        depositAddress: started.depositAddress,
+        provider: 'nonlogs',
+        ...(started.statusUrl ? { statusUrl: started.statusUrl } : {}),
+        state: { state: 'pending', reason: 'awaiting_deposit' },
+      };
+      return sw;
+    },
+    onFetchStatus: async (id) => {
+      const st = await store.load();
+      const cur = (st.wizards[NONLOGS_WIZARD_ID]?.fields as { inFlight?: SwapInFlight } | undefined)?.inFlight;
+      const base: SwapInFlight =
+        cur && cur.id === id
+          ? cur
+          : {
+              id,
+              fromAsset: '',
+              toAsset: '',
+              fromAmountAtomic: '',
+              toAmountEstimateAtomic: '',
+              depositAddress: '',
+              provider: 'nonlogs',
+              state: { state: 'pending', reason: 'awaiting_deposit' },
+            };
+      const state = base.toAsset ? await nonlogs.statusFor(id, base.toAsset) : await nonlogs.status(id);
+      const journalKey = journalKeyFor(wallet);
+      const journal = journalKey ? await findSwapDeposit(id, journalKey) : null;
+      if (journal?.swap && journalKey) {
+        void recordSend(
+          {
+            ...journal,
+            swap: {
+              ...journal.swap,
+              state: state.state,
+              ...(state.state === 'completed' ? { outboundTxid: state.outboundTxId } : {}),
+            },
+          },
+          journalKey,
+        );
+      }
+      return { ...base, ...(journal?.txid ? { depositTxid: journal.txid } : {}), state };
+    },
+  };
+
   // WOW and GRIN: live DEX prices from our Neroswap aggregator for the
   // link-out panel. Best-effort; the panel lists venues without them.
   const loadTradePrices = useMemo(
@@ -239,7 +379,7 @@ export function SwapRouter({
     [],
   );
 
-  if (!trocador && !thorHandlers) {
+  if (!trocador && !thorHandlers && nlAssets.assets.length === 0) {
     return (
       <div>
         <h2 style={{ fontSize: 16, marginTop: 0 }}>Swap</h2>
@@ -259,6 +399,7 @@ export function SwapRouter({
         ? listAssets().filter((a) => a.receivable && trocador.isKnownAsset(a.id)).map((a) => a.id)
         : []}
       {...(thorHandlers ? { thorchain: thorHandlers } : {})}
+      nonlogs={nonlogsHandlers}
       loadTradePrices={loadTradePrices}
       resolveBalance={(assetId) => {
         // Pull from the session's last-fetched balance snapshot.

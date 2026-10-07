@@ -85,7 +85,7 @@ export interface SendJournalEntry {
 }
 
 export interface SwapJournalFields {
-  /** `thorchain` | `trocador`. */
+  /** `thorchain` | `trocador` | `nonlogs`. */
   provider: string;
   /** The wallet's id for the swap. */
   tradeId: string;
