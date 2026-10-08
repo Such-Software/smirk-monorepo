@@ -158,6 +158,7 @@ import { send } from './send-handler';
 import { authorizeOperation, assertOperationSession } from './operation-auth';
 import { bootstrapAuthInExtension } from './jobs/bootstrap-in-extension';
 import { canHostOnboarding, openOnboardingTab } from './onboarding-surface';
+import { isActionPopup } from './surface';
 import { openOrCreateOnboardingWallet } from './onboarding-keystore';
 import {
   startGrinSend,
@@ -568,6 +569,9 @@ async function buildUtxoScanContext(wallet: UnlockedWallet): Promise<{
  * present and inert.
  */
 const IS_DESKTOP = chrome.runtime.id === 'smirk-desktop';
+// The toolbar popup always gets the compact layout, decided from context, not
+// measured (see ./surface). Tabs, the pop-out window and desktop measure.
+const ACTION_POPUP = !IS_DESKTOP && isActionPopup();
 
 function openPopOut(unlocked?: UnlockedWallet) {
   // Desktop already IS the popped-out window. The chrome-shim stubs
@@ -2088,6 +2092,7 @@ function App() {
   return (
     <StateProvider store={store} router={router}>
       <AppShell
+        layout={ACTION_POPUP ? 'popup' : 'auto'}
         onPopOut={() => openPopOut(walletState?.kind === 'unlocked' ? walletState.wallet : undefined)}
         {...(IS_DESKTOP
           ? {}

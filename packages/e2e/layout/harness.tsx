@@ -1,22 +1,34 @@
 /**
- * Renders the real AppShell with the extension popup's real stylesheet, so the
- * layout specs exercise the same component and CSS the popup ships, in any
- * browser Playwright drives (Firefox cannot load our extension under Playwright,
- * so this is how its popup layout is tested).
+ * Renders the real AppShell with the extension popup's real stylesheet and the
+ * real theme engine, so the layout specs exercise the same component, CSS and
+ * themes the popup ships, in any browser Playwright drives (Firefox cannot
+ * load our extension under Playwright, so this is how its popup is tested).
  *
- * The header gets the same controls the extension passes: an identity chip as
- * `headerActions`, plus open-in-tab, pop-out and lock.
+ * Query parameters:
+ *   theme=<id>     apply a built-in theme (default: default)
+ *   layout=<mode>  AppShell layout prop: auto (default), popup or wide
+ *
+ * The header gets the same controls the extension passes (identity chip,
+ * open-in-tab, pop-out, lock), and Home starts with a balance card carrying
+ * the `smirk-unified-balance` class that themes such as WinXP position.
  */
 import { h, render } from 'preact';
 import { InMemoryStorage, RouteController, SessionStateStore } from '@smirk/core';
 import { StateProvider } from '../../ui/src/state/hooks';
 import { AppShell } from '../../ui/src/components/shell/AppShell';
+import { applyTheme, getTheme } from '../../ui/src/themes';
+import { defaultTheme } from '../../ui/src/themes/default';
 
 declare global {
   interface Window {
     __shellClicks: string[];
   }
 }
+
+const params = new URLSearchParams(location.search);
+applyTheme(getTheme(params.get('theme') ?? 'default') ?? defaultTheme);
+const layoutParam = params.get('layout');
+const layout = layoutParam === 'popup' || layoutParam === 'wide' ? layoutParam : 'auto';
 
 window.__shellClicks = [];
 const clicked = (name: string) => () => {
@@ -29,13 +41,29 @@ const router = new RouteController(store);
 
 const body = (label: string) => h('div', { 'data-testid': `route-${label}` }, label);
 
+const home = h(
+  'div',
+  { 'data-testid': 'route-home' },
+  h(
+    'div',
+    {
+      class: 'smirk-unified-balance',
+      'data-testid': 'balance-card',
+      style: { padding: 16, textAlign: 'center', fontSize: 28, fontWeight: 700 },
+    },
+    '$0.20',
+    h('div', { style: { fontSize: 12, opacity: 0.7 } }, 'USD'),
+  ),
+);
+
 render(
   h(
     StateProvider,
     { store, router },
     h(AppShell, {
+      layout,
       routes: {
-        home: body('home'),
+        home,
         swap: body('swap'),
         inbox: body('inbox'),
         feed: body('feed'),

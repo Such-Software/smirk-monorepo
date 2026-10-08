@@ -243,6 +243,7 @@ export {
   listThemes,
   getTheme,
   applyTheme,
+  colorSchemeFor,
   resetTheme,
 } from './themes';
 
