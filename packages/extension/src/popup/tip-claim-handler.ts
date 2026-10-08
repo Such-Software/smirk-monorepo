@@ -494,6 +494,12 @@ export async function claimPublicTip(
   // Step 1: fetch tip info (unauthenticated). Confirms the tip
   // exists, exposes asset + tip_address + ciphertext + claimability.
   const info = await api.getPublicSocialTip(tipId);
+  if (info.status === 404 && isSmirkCashBackend()) {
+    // Not on this server: it may be a tip made by a v0.2.x wallet, which only
+    // the old Smirk server knows. Claim it there (already authorized above).
+    const { claimLegacyTip } = await import('./legacy-tips');
+    return claimLegacyTip(wallet, tipId, { fragmentKey: fragmentKeyEncoded, alreadyAuthorized: true });
+  }
   if (info.error || !info.data) {
     return { ok: false, error: info.error ?? 'Public tip not found' };
   }
@@ -684,6 +690,46 @@ async function sweepUtxo(
   tipAddress: string,
   wallet: UnlockedWallet,
 ): Promise<ClaimOutcome> {
+  return sweepUtxoKey(asset, tipPrivateKey, tipAddress, wallet);
+}
+
+/** What a sweep will move, shown to the user before anything is signed. */
+export interface SweepSummary {
+  /** Amount that lands in the wallet, atomic units. */
+  amountAtomic: bigint;
+  /** Network fee, atomic units. */
+  feeAtomic: bigint;
+  /** Value left behind because it is not settled yet (unconfirmed or still locked), atomic units. */
+  unsettledAtomic: bigint;
+}
+
+export interface SweepOptions {
+  /**
+   * BTC/LTC: leave unconfirmed outputs alone. XMR/WOW: leave outputs younger
+   * than the network's unlock window alone. A later sweep picks them up.
+   * Tips do not need this (they are only claimable once confirmed).
+   */
+  settledOnly?: boolean;
+  /** Called with the exact amount and fee before signing. Throw to refuse. */
+  authorize?: (summary: SweepSummary) => Promise<void>;
+}
+
+/** A sweep's outcome, with the amounts that actually moved on success. */
+export type SweepOutcome =
+  | (ClaimResult & { summary: SweepSummary; txKeyHex?: string })
+  | ClaimError;
+
+/**
+ * Raw-key P2WPKH sweep of every output at `sourceAddress` into this wallet's
+ * current receive address. Shared by tip claims and the older-address recovery.
+ */
+export async function sweepUtxoKey(
+  asset: 'btc' | 'ltc',
+  tipPrivateKey: Uint8Array,
+  tipAddress: string,
+  wallet: UnlockedWallet,
+  opts: SweepOptions = {},
+): Promise<SweepOutcome> {
   const recipientAddress = wallet.addresses[asset];
   if (!recipientAddress) {
     return { ok: false, error: `No ${asset.toUpperCase()} address in wallet` };
@@ -696,11 +742,18 @@ async function sweepUtxo(
       error: utxosResp.error ?? 'Failed to fetch UTXOs at tip address',
     };
   }
-  const utxos = utxosResp.data.utxos;
+  const allUtxos = utxosResp.data.utxos;
+  const utxos = opts.settledOnly ? allUtxos.filter((u) => u.height > 0) : allUtxos;
+  const unsettledAtomic = allUtxos
+    .filter((u) => !utxos.includes(u))
+    .reduce((s, u) => s + BigInt(u.value), 0n);
   if (utxos.length === 0) {
     return {
       ok: false,
-      error: 'No UTXOs at tip address — may already be claimed',
+      error:
+        unsettledAtomic > 0n
+          ? 'The funds at this address are still confirming. Try again after the next block.'
+          : 'No UTXOs at tip address — may already be claimed',
     };
   }
 
@@ -734,6 +787,18 @@ async function sweepUtxo(
   if (sweepSat < 546) {
     return { ok: false, error: `Sweep amount ${sweepSat} below dust threshold (546)` };
   }
+  const summary: SweepSummary = {
+    amountAtomic: BigInt(sweepSat),
+    feeAtomic: BigInt(feeSat),
+    unsettledAtomic,
+  };
+  if (opts.authorize) {
+    try {
+      await opts.authorize(summary);
+    } catch (failure) {
+      return { ok: false, error: failure instanceof Error ? failure.message : 'Not confirmed.' };
+    }
+  }
 
   const pubKey = secp256k1.getPublicKey(tipPrivateKey, true);
   const network = asset === 'btc' ? NETWORK : LTC_NETWORK;
@@ -761,7 +826,7 @@ async function sweepUtxo(
       error: `Broadcast failed: ${broadcast.error ?? 'unknown'}`,
     };
   }
-  return { ok: true, txid: broadcast.data.txid };
+  return { ok: true, txid: broadcast.data.txid, assetId: asset, amountAtomic: summary.amountAtomic, summary };
 }
 
 // @scure/btc-signer ships NETWORK = bitcoin mainnet. Litecoin needs
@@ -796,14 +861,36 @@ async function sweepXmrWow(
   tipAddress: string,
   wallet: UnlockedWallet,
 ): Promise<ClaimOutcome> {
+  // Smirk's tip view key derivation. Matches sender side exactly so
+  // the LWS-registered tip address is the same one we now scan.
+  const tipViewKey = deriveViewKeyFromSpendKey(tipSpendKey);
+  return sweepCryptonoteKeys(asset, tipSpendKey, tipViewKey, tipAddress, wallet, {
+    deactivateSource: true,
+  });
+}
+
+/** Blocks before a received Cryptonote output may be spent (consensus unlock window). */
+const CRYPTONOTE_UNLOCK_BLOCKS: Record<'xmr' | 'wow', number> = { xmr: 10, wow: 4 };
+
+/**
+ * Sweep every unspent output at `tipAddress` (spend and view keys given) into
+ * this wallet's current address. Shared by tip claims and the older-address
+ * recovery. `deactivateSource` drops the source account from the server after
+ * broadcast (tips only: a tip address never receives again; an older wallet
+ * address might).
+ */
+export async function sweepCryptonoteKeys(
+  asset: 'xmr' | 'wow',
+  tipSpendKey: Uint8Array,
+  tipViewKey: Uint8Array,
+  tipAddress: string,
+  wallet: UnlockedWallet,
+  opts: SweepOptions & { deactivateSource?: boolean } = {},
+): Promise<SweepOutcome> {
   const recipientAddress = wallet.addresses[asset];
   if (!recipientAddress) {
     return { ok: false, error: `No ${asset.toUpperCase()} address in wallet` };
   }
-
-  // Smirk's tip view key derivation. Matches sender side exactly so
-  // the LWS-registered tip address is the same one we now scan.
-  const tipViewKey = deriveViewKeyFromSpendKey(tipSpendKey);
   const viewKeyHex = bytesToHex(tipViewKey);
   const spendKeyHex = bytesToHex(tipSpendKey);
 
@@ -868,6 +955,30 @@ async function sweepXmrWow(
     };
   }
 
+  // Older-address recovery: leave outputs that are not unlocked yet. Signing
+  // them would only produce a transaction the network rejects; the next
+  // recovery picks them up.
+  let unsettledAtomic = 0n;
+  if (opts.settledOnly) {
+    const tipRes = await chainProviders.lws(asset).getHeight();
+    const chainHeight = tipRes.data?.height ?? 0;
+    if (!(chainHeight > 0)) {
+      return { ok: false, error: 'Could not read the current block height. Try again shortly.' };
+    }
+    const unlock = CRYPTONOTE_UNLOCK_BLOCKS[asset];
+    const settled = spendable.filter((o) => o.height > 0 && chainHeight - o.height >= unlock);
+    unsettledAtomic = spendable
+      .filter((o) => !settled.includes(o))
+      .reduce((s, o) => s + BigInt(o.amount), 0n);
+    if (settled.length === 0) {
+      return {
+        ok: false,
+        error: `These ${asset.toUpperCase()} funds are still unlocking (the network requires ${unlock} confirmations). Try again in a few minutes.`,
+      };
+    }
+    spendable.splice(0, spendable.length, ...settled);
+  }
+
   // Sweep: all inputs → recipient. RingCT minimum 2 outputs, so a
   // zero-value padding output to the tip address comes for free
   // from the signer.
@@ -883,6 +994,22 @@ async function sweepXmrWow(
     };
   }
   const sweepAmount = total - feeAtomic;
+  // Older-address recovery refuses dust: when the fee would eat as much as it
+  // moves, sweeping only burns the user's money.
+  if (opts.settledOnly && sweepAmount <= feeAtomic) {
+    return {
+      ok: false,
+      error: `Too little ${asset.toUpperCase()} at this address to be worth moving: the network fee would take as much as it moves.`,
+    };
+  }
+  const summary: SweepSummary = { amountAtomic: sweepAmount, feeAtomic, unsettledAtomic };
+  if (opts.authorize) {
+    try {
+      await opts.authorize(summary);
+    } catch (failure) {
+      return { ok: false, error: failure instanceof Error ? failure.message : 'Not confirmed.' };
+    }
+  }
 
   // Decoy fetch: ring-size minus 1 per input, plus one input's worth of slack.
   // The pool can contain duplicates or the output being spent, both unusable in
@@ -947,11 +1074,11 @@ async function sweepXmrWow(
     coin: asset,
   };
 
-  let signed: { tx_hex: string; tx_hash: string; fee: number };
+  let signed: { tx_hex: string; tx_hash: string; fee: number; tx_key?: string };
   try {
     assertOperationSession(wallet);
     const signedJson = wasmMonero.signTransaction(JSON.stringify(params));
-    signed = parseWasmResult<{ tx_hex: string; tx_hash: string; fee: number }>(signedJson);
+    signed = parseWasmResult<{ tx_hex: string; tx_hash: string; fee: number; tx_key?: string }>(signedJson);
   } catch (e) {
     return {
       ok: false,
@@ -970,11 +1097,20 @@ async function sweepXmrWow(
 
   // Best-effort LWS cleanup: deactivate the tip address now that
   // it'll never receive again. Server resource hygiene, not safety.
-  chainProviders.lws(asset).deactivateAccount(tipAddress).catch((e) => {
-    console.warn('[tip-claim xmr/wow] deactivateLws failed', e);
-  });
+  if (opts.deactivateSource) {
+    chainProviders.lws(asset).deactivateAccount(tipAddress).catch((e) => {
+      console.warn('[tip-claim xmr/wow] deactivateLws failed', e);
+    });
+  }
 
-  return { ok: true, txid: signed.tx_hash };
+  return {
+    ok: true,
+    txid: signed.tx_hash,
+    assetId: asset,
+    amountAtomic: sweepAmount,
+    summary: { ...summary, feeAtomic: BigInt(signed.fee) },
+    ...(signed.tx_key ? { txKeyHex: signed.tx_key } : {}),
+  };
 }
 
 /**
@@ -997,6 +1133,22 @@ async function sweepXmrWow(
  */
 function deriveViewKeyFromSpendKey(spendKey: Uint8Array): Uint8Array {
   return scalarToBytes(bytesToScalar(sha256(spendKey)));
+}
+
+/** A tip address's view key from its spend key (v0.2.x and v0.3 senders alike). */
+export const deriveTipViewKey = deriveViewKeyFromSpendKey;
+
+/**
+ * Whether the wallet talks to the smirk.cash server, the only one that ever ran
+ * v0.2.x. A self-hosted instance has no old Smirk server to fall back to.
+ */
+function isSmirkCashBackend(): boolean {
+  try {
+    const host = new URL(api.getBaseUrl()).hostname.toLowerCase();
+    return host === 'smirk.cash' || host.endsWith('.smirk.cash');
+  } catch {
+    return false;
+  }
 }
 
 // ed25519 group order ℓ = 2^252 + 27742317777372353535851937790883648493.

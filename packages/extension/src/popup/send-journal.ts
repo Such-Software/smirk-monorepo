@@ -82,6 +82,14 @@ export interface SendJournalEntry {
    * only, like everything else here.
    */
   swap?: SwapJournalFields;
+  /**
+   * Set when this transaction moved funds from one of this seed's older Smirk
+   * addresses into the current wallet (`destination` is then the wallet's own
+   * address). Display only.
+   */
+  recovery?: { fromAddress: string; source: string };
+  /** Set when this transaction claimed a tip held by the old Smirk server. */
+  legacyTipId?: string;
 }
 
 export interface SwapJournalFields {

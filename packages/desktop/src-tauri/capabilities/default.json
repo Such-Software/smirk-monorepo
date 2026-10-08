@@ -22,6 +22,9 @@
         },
         {
           "url": "https://neroswap.com/api/v1/*"
+        },
+        {
+          "url": "https://backend.smirk.cash/api/v1/*"
         }
       ]
     }
