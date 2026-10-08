@@ -192,6 +192,7 @@ import {
 import type { WalletSession } from './types';
 import { resolveIcon } from './icons';
 import { isTipStale } from './tip-inbox';
+import { startBackgroundPoll } from './background-poll';
 import { dappPublicCacheFor } from './dapp-public-cache';
 import {
   tryRestoreSessionCache,
@@ -1435,11 +1436,12 @@ function App() {
       setGrinInbox(nextGrin);
       setTipInbox(nextTips);
     };
-    void tick();
-    const handle = setInterval(() => void tick(), 30000);
+    // Skips every tick once the backend refuses the session token, until the
+    // next unlock or bootstrap installs a new one (see background-poll.ts).
+    const stop = startBackgroundPoll(api, tick, 30000, { immediate: true });
     return () => {
       alive = false;
-      clearInterval(handle);
+      stop();
     };
   }, [walletState, session?.error, session?.bootstrap?.userId]);
 
@@ -1462,10 +1464,11 @@ function App() {
     );
     if (!anyScanning) return undefined;
 
-    const handle = setInterval(() => {
-      void refreshBalances(walletState.wallet, session.bootstrap);
-    }, 8000);
-    return () => clearInterval(handle);
+    return startBackgroundPoll(
+      api,
+      () => refreshBalances(walletState.wallet, session.bootstrap),
+      8000,
+    );
   }, [walletState, session]);
 
   // Steady-state background refresh: keep balances live while the popup is open
@@ -1492,12 +1495,15 @@ function App() {
     );
     if (anyScanning) return undefined; // the 8s scan poll owns this window
 
-    const handle = setInterval(() => {
-      // Don't poll a backgrounded popout; only refresh what the user can see.
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void refreshBalances(walletState.wallet, session.bootstrap);
-    }, BACKGROUND_REFRESH_MS);
-    return () => clearInterval(handle);
+    return startBackgroundPoll(
+      api,
+      () => {
+        // Don't poll a backgrounded popout; only refresh what the user can see.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        void refreshBalances(walletState.wallet, session.bootstrap);
+      },
+      BACKGROUND_REFRESH_MS,
+    );
   }, [walletState, session]);
 
   // Refresh on regained focus/visibility: a popup is usually reopened rather
@@ -3390,11 +3396,10 @@ function HomeRouter({
       );
       if (alive) setReadyToShareCount(ready.length);
     };
-    void tick();
-    const handle = window.setInterval(() => void tick(), 60_000);
+    const stop = startBackgroundPoll(api, tick, 60_000, { immediate: true });
     return () => {
       alive = false;
-      window.clearInterval(handle);
+      stop();
     };
   }, []);
 

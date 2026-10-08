@@ -20,6 +20,19 @@ function setGlobalToken(token: string | null): void {
   (globalThis as Record<string, unknown>)[GLOBAL_TOKEN_KEY] = token;
 }
 
+// The access token the backend last refused, held beside the token itself for
+// the same multiple-module-copies reason. Background polls read it so they stop
+// presenting a dead token (see `ApiClient.isSessionRejected`).
+const GLOBAL_REJECTED_TOKEN_KEY = '__smirk_api_token_rejected__';
+
+function getRejectedToken(): string | null {
+  return ((globalThis as Record<string, unknown>)[GLOBAL_REJECTED_TOKEN_KEY] as string | null) ?? null;
+}
+
+function setRejectedToken(token: string | null): void {
+  (globalThis as Record<string, unknown>)[GLOBAL_REJECTED_TOKEN_KEY] = token;
+}
+
 export interface ApiResponse<T> {
   data?: T;
   error?: string;
@@ -86,12 +99,34 @@ export class ApiClient {
     return this.walletApiStyle;
   }
 
+  /** Install the session token (or clear it with `null`). A new token is
+   *  presumed live, so this also clears any earlier rejection. */
   setAccessToken(token: string | null): void {
     setGlobalToken(token);
+    setRejectedToken(null);
   }
 
   getAccessToken(): string | null {
     return getGlobalToken();
+  }
+
+  /**
+   * True once the backend has refused the CURRENT access token, until the next
+   * bootstrap or unlock installs another one with `setAccessToken`.
+   *
+   * v0.3.0 never refreshes its token, so a popup or desktop window left open
+   * past the token's lifetime polled the inbox and tip routes with the expired
+   * token once a minute for hours, every request a 401. Background polls check
+   * this before each tick and skip it instead.
+   *
+   * Only a 401 to a GET that carried the session bearer counts. On
+   * smirk-backend-core a GET answers 401 only when the bearer itself is refused;
+   * several POST handlers also answer 401 for a bad proof in the body (a NIP-98
+   * action, a link nonce, an erasure proof), which says nothing about the token.
+   */
+  isSessionRejected(): boolean {
+    const token = getGlobalToken();
+    return token !== null && getRejectedToken() === token;
   }
 
   async request<T>(
@@ -131,6 +166,18 @@ export class ApiClient {
       });
 
       clearTimeout(timeoutId);
+
+      // Record the refusal against the token this request carried. A refusal
+      // that lands after a re-bootstrap installed a new token names the old
+      // one, so it never marks the new one (`isSessionRejected` compares).
+      if (
+        response.status === 401 &&
+        accessToken !== null &&
+        headers['Authorization'] === `Bearer ${accessToken}` &&
+        (options.method ?? 'GET').toUpperCase() === 'GET'
+      ) {
+        setRejectedToken(accessToken);
+      }
 
       if (!response.ok) {
         // Try JSON first (our backend's normal { error, code } shape).
