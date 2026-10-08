@@ -100,6 +100,13 @@ export interface SessionState {
      * means the extension default (90 s); `0` turns it off.
      */
     dappFlowGraceSeconds?: number;
+    /**
+     * Check this seed's older Smirk addresses for funds once per wallet after
+     * unlock (see `legacy-recovery`). Only reads addresses the server already
+     * watches; scanning an address it does not know always takes an explicit
+     * tap. Optional: absent means on; `false` turns the automatic check off.
+     */
+    legacyFundsAutoCheck?: boolean;
   };
 
   /**

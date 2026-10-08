@@ -91,6 +91,9 @@ import {
   deliverNpubTip,
   readNpubTips,
   verifyNpubTipKey,
+  legacyCheckRecordKey,
+  legacyFindingNeedsAttention,
+  type LegacyCheckRecord,
   type BackendCapabilities,
 } from '@smirk/core';
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
@@ -201,6 +204,8 @@ import {
   writeSessionHandoff,
   convergeLegacySweep,
 } from './session-cache';
+import { maybeAutoLegacyCheck, readLegacyCheck } from './legacy-funds';
+import { LegacyFundsBanner } from './routes/legacy-funds';
 import { lockWalletContexts, subscribeWalletLock } from './session-lock';
 import { readBootstrapCache, writeBootstrapCache, clearBootstrapCache } from './bootstrap-cache';
 import { browserController } from './browser-controller';
@@ -1835,6 +1840,9 @@ function App() {
             gate,
           );
           await finishOnboardRegister(wallet, onboardBootstrap);
+          // An imported phrase may have funds at addresses earlier Smirk
+          // versions used. Read-only, once per wallet; see legacy-funds.ts.
+          void maybeAutoLegacyCheck(wallet);
         }}
         reserveSmirkName={async (handle) => {
           // Double-import guard: handles are PER-INSTANCE, so ask THIS backend
@@ -1872,6 +1880,10 @@ function App() {
           // migrated the keystore before the sweep shipped). Fire-and-forget so
           // unlock stays snappy; idempotent + gated on legacy state presence.
           void convergeLegacySweep(wallet);
+          // Once per wallet: look (read-only) for funds at the older addresses
+          // earlier Smirk versions used for this phrase. Never moves anything;
+          // a find shows up on Home and in Settings.
+          void maybeAutoLegacyCheck(wallet);
           await refresh();
         }}
       />
@@ -3371,6 +3383,22 @@ function HomeRouter({
 
   // Default: Home root.
 
+  // Funds the older-address check found (see legacy-funds.ts). The check runs
+  // after unlock in the background, so listen for its record landing as well as
+  // reading it on mount.
+  const [legacyFundsCount, setLegacyFundsCount] = useState(0);
+  useEffect(() => {
+    const slot = legacyCheckRecordKey(wallet.fingerprint);
+    const apply = (r: LegacyCheckRecord | null | undefined) =>
+      setLegacyFundsCount((r?.findings ?? []).filter(legacyFindingNeedsAttention).length);
+    void readLegacyCheck(wallet.fingerprint).then(apply);
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === 'local' && slot in changes) apply(changes[slot]?.newValue as LegacyCheckRecord | undefined);
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
+  }, [wallet.fingerprint]);
+
   // Sent public tips whose funding has buried past the per-asset
   // confirmation gate: the URL we minted at create time is now safe
   // to actually distribute. v0.2.4 surfaced this as a banner on its
@@ -3629,6 +3657,10 @@ function HomeRouter({
           <ReadyToShareTipsBanner
             count={readyToShareCount}
             onView={() => void navigate('settings/sent-tips')}
+          />
+          <LegacyFundsBanner
+            count={legacyFundsCount}
+            onView={() => void navigate('settings/old-addresses')}
           />
           {scanningAssets.length > 0 ? (
             <ScanProgressBanner

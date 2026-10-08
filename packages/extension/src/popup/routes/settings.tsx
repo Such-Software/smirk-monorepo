@@ -19,6 +19,7 @@ import { isInjectDisabled, setInjectDisabled } from '../../background/dapp/injec
 import { chromeStoragePermissionStore } from '../../background/dapp/permissions';
 import type { WalletSession } from '../types';
 import { SentTipsRoute } from './sent-tips';
+import { LegacyFundsRoute } from './legacy-funds';
 import { NostrIdentityRoute } from './nostr-identity';
 import { BackendRoute } from './backend';
 import { OperationAuthSettings } from '../operation-auth-settings';
@@ -411,6 +412,16 @@ export function SettingsRouter({
   if (route.current === 'settings/sent-tips') {
     return (
       <SentTipsRoute
+        wallet={wallet}
+        session={session}
+        onRefresh={onRefresh}
+        onBack={() => void navigate('settings')}
+      />
+    );
+  }
+  if (route.current === 'settings/old-addresses') {
+    return (
+      <LegacyFundsRoute
         wallet={wallet}
         session={session}
         onRefresh={onRefresh}
@@ -1413,6 +1424,15 @@ function SettingsStub({ wallet, onLock, onForgetComplete }: {
         hint="Cross-asset list of every tip you've sent + inline clawback"
         onClick={() => void navigate('settings/sent-tips')}
         testid="settings-sent-tips-nav"
+      />
+
+      {/* Coins and tips left at addresses earlier Smirk versions used for the
+          same phrase. v0.3 never looks there on its own. */}
+      <SettingsNavRow
+        label="Older addresses and tips"
+        hint="Find and move funds left at addresses earlier Smirk versions used"
+        onClick={() => void navigate('settings/old-addresses')}
+        testid="settings-old-addresses-nav"
       />
 
       {/* Nostr identity: link the seed-derived npub for "Sign in with Nostr"
