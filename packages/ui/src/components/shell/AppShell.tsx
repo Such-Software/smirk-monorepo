@@ -172,8 +172,16 @@ function Header({ label, iconUrl, onPopOut, onOpenInTab, onLock, extra }: Header
         gap: 8,
       }}
     >
-      <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={16} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {/* The brand gives way first. Without minWidth 0 a flex item cannot shrink
+          below its content, so a narrow surface pushed the actions past the
+          right edge instead, where nothing could click them. */}
+      <div style={{ minWidth: 0, overflow: 'hidden', flex: '0 1 auto' }}>
+        <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={16} />
+      </div>
+      <div
+        data-testid="app-shell-header-actions"
+        style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+      >
         {extra}
         <ShellActions
           {...(onOpenInTab ? { onOpenInTab } : {})}
