@@ -194,3 +194,30 @@ test('extensionRegister: altcha_solution OMITTED when undefined (graceful-migrat
   // POW_REQUIRED=false.
   assert.equal('altcha_solution' in captured.bodyJson, false);
 });
+
+test('extensionRegister: rotation proof goes out as rotation_public_key and rotation_signature', async () => {
+  const captured = await captureRegisterCall((auth) =>
+    auth.extensionRegister({
+      keys: [{ asset: 'btc', publicKey: '02' + 'aa'.repeat(32) }],
+      seedFingerprint: 'f'.repeat(64),
+      signedTimestamp: 1_790_000_000,
+      signature: 'sig',
+      rotationPublicKey: '03' + 'bb'.repeat(32),
+      rotationSignature: 'rot-sig',
+    }),
+  );
+  assert.equal(captured.bodyJson.rotation_public_key, '03' + 'bb'.repeat(32));
+  assert.equal(captured.bodyJson.rotation_signature, 'rot-sig');
+});
+
+test('extensionRegister: no rotation fields when there is nothing to rotate', async () => {
+  const captured = await captureRegisterCall((auth) =>
+    auth.extensionRegister({
+      keys: [{ asset: 'btc', publicKey: '02' + 'aa'.repeat(32) }],
+      signedTimestamp: 1_790_000_000,
+      signature: 'sig',
+    }),
+  );
+  assert.equal('rotation_public_key' in captured.bodyJson, false);
+  assert.equal('rotation_signature' in captured.bodyJson, false);
+});

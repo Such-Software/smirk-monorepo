@@ -75,6 +75,7 @@ export class SmirkApi
   extensionRegister: AuthMethods['extensionRegister'];
   createPaymentInvoice: AuthMethods['createPaymentInvoice'];
   checkRestore: AuthMethods['checkRestore'];
+  legacyMerge: AuthMethods['legacyMerge'];
   powChallenge: AuthMethods['powChallenge'];
   nostrLogin: AuthMethods['nostrLogin'];
   linkNostr: AuthMethods['linkNostr'];
@@ -165,6 +166,7 @@ export class SmirkApi
     this.extensionRegister = auth.extensionRegister;
     this.createPaymentInvoice = auth.createPaymentInvoice;
     this.checkRestore = auth.checkRestore;
+    this.legacyMerge = auth.legacyMerge;
     this.powChallenge = auth.powChallenge;
     this.nostrLogin = auth.nostrLogin;
     this.linkNostr = auth.linkNostr;

@@ -50,6 +50,7 @@ export * from './migration';
 
 // Legacy cleanup fund-safety warn-block (gate before deleting the walletState beacon)
 export * from './legacy-cleanup';
+export * from './legacy-rotation';
 
 // Messaging plane (NIP-17 encrypted DMs over the relay, via a swappable seam)
 export * from './messaging';

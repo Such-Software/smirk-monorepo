@@ -28,8 +28,12 @@ import {
   deriveNostrIdentity,
   requireNostrKeySource,
   solvePowChallenge,
+  isPowRequiredRejection,
+  POW_CHECK_INCOMPLETE,
   bootstrapAuth,
   requireRestoreState,
+  mergeLegacyIdentityAfterSignIn,
+  legacyBtcRotationProof,
 } from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
@@ -132,16 +136,18 @@ export async function bootstrapAuthInExtension(
       return bootstrap;
     } catch (e) {
       // A wallet already registered on THIS backend (its seed is known, e.g. it
-      // onboarded via the BTC path before npub-native existed) can't npub-register:
-      // by design its npub links via the authenticated /auth/nostr/link flow, not
-      // bootstrap. Fall back to BTC auth, which signs the existing account in.
-      // Anything else (a genuinely new wallet's failure, the payment-pending
-      // sentinel) propagates.
+      // onboarded via the BTC path before npub-native existed, or it is a pre-v0.3
+      // wallet) can't npub-register: by design its npub links via the
+      // authenticated /auth/nostr/link flow, not bootstrap. Fall back to BTC auth,
+      // which signs the existing account in. Anything else (a genuinely new
+      // wallet's failure, a rate limit, the payment-pending sentinel) propagates.
       if (!(e instanceof Error && e.message === NOSTR_FALLBACK_TO_BTC)) throw e;
       // Re-auth INLINE (popup-resident) rather than via the offscreen job: this is
-      // a fast returning-user sign-in (no PoW, nothing to strand), and the offscreen
-      // path hits an MV3 "receiving end does not exist" race right after a reload.
-      // bootstrapAuth sets the access token itself.
+      // usually a fast returning-user sign-in, and the offscreen path hits an MV3
+      // "receiving end does not exist" race right after a reload. A pre-v0.3
+      // wallet is the exception: the backend knows it by fingerprint but not by
+      // its v0.3 key, so bootstrapAuth solves PoW when asked and sends the
+      // rotation proof. bootstrapAuth sets the access token itself.
       const bootstrap = await bootstrapAuth(api, wallet);
       await clearPendingRegistrationInvoice(wallet.fingerprint);
       return bootstrap;
@@ -152,6 +158,11 @@ export async function bootstrapAuthInExtension(
   const timestamp = Math.floor(Date.now() / 1000);
   const message = `smirk-auth-${timestamp}`;
   const signature = signBitcoinMessage(message, wallet.keys.btc.privateKey);
+  // The job cannot sign, so the pre-v0.3 rotation proof is made here too, over
+  // the same timestamp; the job sends it only for a known fingerprint.
+  const rotation = wallet.seed
+    ? legacyBtcRotationProof(wallet.seed, bytesToHex(wallet.keys.btc.publicKey), timestamp, api.getBaseUrl())
+    : null;
 
   const result = await runBootstrapInBackground(
     {
@@ -159,6 +170,7 @@ export async function bootstrapAuthInExtension(
       keys,
       signedTimestamp: timestamp,
       signature,
+      ...(rotation ?? {}),
       ...(effectiveGate?.inviteCode ? { inviteCode: effectiveGate.inviteCode } : {}),
       ...(paymentInvoiceId ? { paymentInvoiceId } : {}),
     },
@@ -175,9 +187,11 @@ export async function bootstrapAuthInExtension(
  * npub-native bootstrap (NIP-98). Signing uses the primary Nostr key source.
  * This path stays in the popup, including proof-of-work, so a backend requiring
  * expensive proof-of-work needs the popup to remain open. `checkRestore`
- * resumes heights + detects a returning wallet (so PoW is skipped, exactly like
- * the BTC handler). A not-yet-settled pay-to-register invoice throws the shared
- * PAYMENT_PENDING_SENTINEL so the onboarding router's poll keeps waiting.
+ * resumes heights and tells us whether the seed fingerprint is known, which
+ * only selects the fast path that skips the PoW solve: the backend waives PoW
+ * for a known npub, not a known fingerprint. A not-yet-settled pay-to-register
+ * invoice throws the shared PAYMENT_PENDING_SENTINEL so the onboarding router's
+ * poll keeps waiting.
  */
 async function bootstrapViaNostr(
   api: SmirkApi,
@@ -197,28 +211,43 @@ async function bootstrapViaNostr(
 
   const walletBirthday = isKnown ? undefined : Math.floor(Date.now() / 1000);
 
-  // Solve PoW for genuinely-new wallets (the backend bypasses it for a returning
-  // npub, so a known wallet skips the solve, mirroring the BTC handler).
-  let altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>> = null;
-  if (!isKnown) {
+  // Solve PoW for a wallet whose fingerprint is unknown. A known fingerprint
+  // skips the solve as a fast path: the backend waives PoW for an npub already
+  // on file, which is the usual case for a known wallet.
+  const solve = async (): Promise<Awaited<ReturnType<typeof solvePowChallenge>>> => {
     try {
-      altchaSolution = await solvePowChallenge(api);
+      return await solvePowChallenge(api);
     } catch (e) {
       console.warn('[bootstrap-nostr] PoW solve failed; registering without it:', e);
+      return null;
     }
-  }
+  };
+  // Each call fetches a fresh single-use nonce and signs a fresh NIP-98 action.
+  const register = (altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>>) =>
+    api.nostrRegister({
+      identity,
+      keys: keys.map((k) => ({ asset: k.asset, publicKey: k.publicKey })),
+      seedFingerprint: wallet.fingerprint,
+      ...(walletBirthday !== undefined ? { walletBirthday } : {}),
+      ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
+      ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+      ...(altchaSolution ? { altchaSolution } : {}),
+      ...(gate?.inviteCode ? { inviteCode: gate.inviteCode } : {}),
+      ...(gate?.paymentInvoiceId ? { paymentInvoiceId: gate.paymentInvoiceId } : {}),
+    });
 
-  const res = await api.nostrRegister({
-    identity,
-    keys: keys.map((k) => ({ asset: k.asset, publicKey: k.publicKey })),
-    seedFingerprint: wallet.fingerprint,
-    ...(walletBirthday !== undefined ? { walletBirthday } : {}),
-    ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
-    ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
-    ...(altchaSolution ? { altchaSolution } : {}),
-    ...(gate?.inviteCode ? { inviteCode: gate.inviteCode } : {}),
-    ...(gate?.paymentInvoiceId ? { paymentInvoiceId: gate.paymentInvoiceId } : {}),
-  });
+  let altchaSolution = isKnown ? null : await solve();
+  let res = await register(altchaSolution);
+
+  // A new wallet whose own solve failed above went out without a solution. If
+  // the backend insists, solve once more and resend. A KNOWN fingerprint with
+  // no npub on file is not retried here: past the PoW gate the backend refuses
+  // npub-register for an existing seed (409), so a solve would be wasted. It
+  // falls back to BTC sign-in below, which solves when the backend asks.
+  if ((res.error || !res.data) && !isKnown && altchaSolution === null && isPowRequiredRejection(res)) {
+    altchaSolution = await solve();
+    if (altchaSolution) res = await register(altchaSolution);
+  }
 
   if (res.error || !res.data) {
     // A not-yet-settled pay-to-register invoice is EXPECTED while paying, so signal
@@ -235,15 +264,23 @@ async function bootstrapViaNostr(
     }
     // The wallet's seed is already registered on this backend but its npub isn't
     // linked, so npub-register is refused. A 409 is the DEFINITIVE "already has an
-    // account" signal; `isKnown` covers the 400-PoW-required variant.
+    // account" signal. A known fingerprint refused for want of PoW is the same
+    // case, caught one gate earlier (the backend checks PoW before the 409).
     // Either way, fall back to BTC auth, which signs the existing account in.
-    if (res.status === 409 || isKnown) {
+    // Nothing else falls back: a rate limit, a rejected NIP-98 proof or an outage
+    // would fail the same way on the BTC path and only double the load.
+    if (res.status === 409 || (isKnown && isPowRequiredRejection(res))) {
       throw new Error(NOSTR_FALLBACK_TO_BTC);
     }
+    // Still refused for want of a solution: the resend above could not solve.
+    if (isPowRequiredRejection(res)) throw new Error(POW_CHECK_INCOMPLETE);
     throw new Error(res.error ?? 'Registration failed');
   }
 
   api.setAccessToken(res.data.accessToken);
+  // A known wallet may have been split from its pre-v0.3 identity by an earlier
+  // import; with the seed in hand, ask the backend to merge it back. Best-effort.
+  if (isKnown) await mergeLegacyIdentityAfterSignIn(api, wallet);
   return {
     userId: res.data.user.id,
     ...(res.data.user.username !== undefined ? { username: res.data.user.username } : {}),

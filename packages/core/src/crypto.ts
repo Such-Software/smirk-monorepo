@@ -288,7 +288,7 @@ function encodeVarint(n: number): Uint8Array {
 /**
  * Bitcoin-style double-SHA256 over `"\x18Bitcoin Signed Message:\n" || varint(len) || message`.
  */
-function bitcoinMessageHash(message: string): Uint8Array {
+export function bitcoinMessageHash(message: string): Uint8Array {
   const prefix = new TextEncoder().encode('\x18Bitcoin Signed Message:\n');
   const messageBytes = new TextEncoder().encode(message);
   const lenBytes = encodeVarint(messageBytes.length);

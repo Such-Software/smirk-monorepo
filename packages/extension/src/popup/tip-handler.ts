@@ -542,9 +542,9 @@ async function createXmrWowTip(
   // 4. Phase 1: persist the encrypted key + tip_address + view_key on
   //    the backend BEFORE we broadcast. If the popup closes or the
   //    network fails between here and broadcast (step 6), no on-chain
-  //    action has happened; funds are intact. Backend registers LWS
-  //    only when we call attach-funding in step 7, so we don't waste
-  //    LWS quota on never-funded drafts.
+  //    action has happened; funds are intact. The tip address reaches
+  //    the backend's LWS only at attach-funding in step 7 (see step 5),
+  //    so a never-funded draft costs no LWS account.
   const draft = await api.createSocialTip({
     ...(fields.isPublic ? {} : { platform: fields.platform, username: fields.username }),
     asset,
@@ -578,9 +578,14 @@ async function createXmrWowTip(
     ...(urlFragmentEncoded ? { urlFragmentEncoded } : {}),
   });
 
-  // 5. (Skipped: `senderUserId` previously used for `api.registerLws`
-  //    here; backend now registers LWS as part of the attach-funding
-  //    side-effects so we don't double-register. Discard unused arg.)
+  // 5. No `api.registerLws` here. View-key registration is the
+  //    backend's job, which keeps it on the server side of the
+  //    architecture boundary: its attach-funding handler
+  //    (`attach_funding`, smirk-backend-core src/api/tips.rs) registers
+  //    the tip address and view key with its LWS. smirk-backend-core
+  //    0fa9a11e and earlier skipped that step, so an XMR/WOW tip funded
+  //    against them never left pending_confirmation: its funding check
+  //    got LWS account_not_found (HTTP 403). `senderUserId` is unused.
   void senderUserId;
 
   // 6. Broadcast funding tx. XMR/WOW path ignores feeRateSatPerVb

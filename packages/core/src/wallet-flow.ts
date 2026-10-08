@@ -33,6 +33,7 @@
  */
 
 import { requireRestoreState } from './restore-state';
+import { legacyBtcRotationProof } from './legacy-rotation';
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
@@ -41,6 +42,8 @@ import { chainProviders, type ChainProviderRegistry, type UtxoAddressRef } from 
 import { btcLtcFreshAddrsEnabled } from './utxo-addressbook';
 import {
   solvePowChallenge,
+  isPowRequiredRejection,
+  POW_CHECK_INCOMPLETE,
   requiredRestorePowBits,
   solveRestorePow,
   type AltchaPayload,
@@ -149,53 +152,64 @@ export async function bootstrapAuth(
   const xmrStartHeight = isKnownWallet ? restore.xmrStartHeight ?? undefined : undefined;
   const wowStartHeight = isKnownWallet ? restore.wowStartHeight ?? undefined : undefined;
 
-  const timestamp = Math.floor(Date.now() / 1000);
-  const message = `smirk-auth-${timestamp}`;
-  const signature = signBitcoinMessage(message, wallet.keys.btc.privateKey);
-
   // For an unknown-fingerprint wallet, stamp the birthday now so the
   // backend can hand it back next time. For a known wallet the backend
   // already has it; ignore on resubmission.
   const walletBirthday = isKnownWallet ? undefined : Math.floor(Date.now() / 1000);
 
-  // ALTCHA proof-of-work: only for genuinely new wallets.
+  // ALTCHA proof-of-work.
   //
-  // The backend's `is_returning_user` check (smirk-backend
-  // src/api/auth.rs) accepts a re-registration for an already-known
-  // pubkey_hash WITHOUT a PoW solution, even when POW_REQUIRED=true.
-  // The bypass is intentional: it's how v0.2.x stragglers and
-  // lock+unlock flows avoid burning CPU on a solution the server
-  // immediately discards.
+  // A wallet `checkRestore` does not know always solves: that is the
+  // Sybil gate doing its job.
   //
-  // We mirror the same predicate client-side using the
-  // `isKnownWallet` flag `checkRestore` just gave us. Skipping the
-  // solve here saves ~3-5s of PBKDF2 on every lock+unlock and on
-  // every import of an already-registered wallet; the desktop
-  // wallet feels noticeably faster, and the extension SW handler
-  // also benefits via this code path.
-  //
-  // New wallets still solve normally: that's the Sybil gate doing
-  // its job. POW_REQUIRED=true with no isKnownWallet exemption =
-  // a real new-user PoW cost.
+  // A known wallet skips the solve as a FAST PATH, which saves ~3-5s of
+  // PBKDF2 on every lock+unlock. It does not mirror the backend's rule.
+  // `checkRestore` matches the seed fingerprint, while `extension_register`
+  // waives PoW only when the submitted BTC key's `pubkey_hash` is already on
+  // file. A pre-v0.3 wallet (a `migrate-legacy` row keyed by its `m/44'`
+  // BTC key) is known by fingerprint and not by key, and the rotation and
+  // adopt branches enforce PoW as well. So a refusal for want of a solution
+  // (`isPowRequiredRejection`) means: solve once and resend, with the same
+  // keys and a fresh signature and rotation proof.
   //
   // Host wallets can inject their own solver via `options.powSolver`
   // (the extension passes a background-SW-backed solver so the work
   // survives popup close; see `packages/extension/src/popup/jobs/`).
-  let altchaSolution: AltchaPayload | null = null;
-  if (!isKnownWallet) {
-    altchaSolution = await (options.powSolver ?? solvePowChallenge)(api);
-  }
+  const solvePow = options.powSolver ?? solvePowChallenge;
 
-  const result = await api.extensionRegister({
-    keys,
-    seedFingerprint: wallet.fingerprint,
-    signedTimestamp: timestamp,
-    signature,
-    ...(walletBirthday !== undefined ? { walletBirthday } : {}),
-    ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
-    ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
-    ...(altchaSolution !== null ? { altchaSolution } : {}),
-  });
+  const register = (altchaSolution: AltchaPayload | null) => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = signBitcoinMessage(`smirk-auth-${timestamp}`, wallet.keys.btc.privateKey);
+    // A wallet the backend already knows may still be registered under its
+    // pre-v0.3 BTC key (`migrate-legacy` rows). Prove control of that key so the
+    // backend carries the identity over instead of minting a new one. Needs the
+    // seed, which a fresh password unlock (and every import) has. The proof
+    // binds the timestamp, so it is signed afresh for every attempt.
+    const rotation =
+      isKnownWallet && wallet.seed
+        ? legacyBtcRotationProof(wallet.seed, keys[0]!.publicKey, timestamp, api.getBaseUrl())
+        : null;
+    return api.extensionRegister({
+      keys,
+      seedFingerprint: wallet.fingerprint,
+      signedTimestamp: timestamp,
+      signature,
+      ...(rotation ?? {}),
+      ...(walletBirthday !== undefined ? { walletBirthday } : {}),
+      ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
+      ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+      ...(altchaSolution !== null ? { altchaSolution } : {}),
+    });
+  };
+
+  let altchaSolution: AltchaPayload | null = isKnownWallet ? null : await solvePow(api);
+  let result = await register(altchaSolution);
+
+  if ((result.error || !result.data) && altchaSolution === null && isPowRequiredRejection(result)) {
+    altchaSolution = await solvePow(api);
+    if (altchaSolution === null) throw new Error(POW_CHECK_INCOMPLETE);
+    result = await register(altchaSolution);
+  }
 
   if (result.error || !result.data) {
     throw new Error(result.error ?? 'Auth failed');

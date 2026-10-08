@@ -6,21 +6,28 @@
  * `solvePowChallenge(api)` once before submitting a registration; the
  * returned payload is the JSON the wallet posts back to the server.
  *
- * When we solve. Only genuinely new wallets solve. Every bootstrap
- * path (`bootstrapAuth`, the extension SW handler, the nostr
- * bootstrap) skips the solve when `checkRestore` reports a known
- * fingerprint, mirroring the backend's `is_returning_user` bypass.
- * A new wallet always sends a solution even when the backend's
- * `POW_REQUIRED=false`, so the operator can flip the env var with no
- * client redeploy; the ~1-2s cost hides behind the existing
- * onboarding animations.
+ * When we solve. A wallet whose seed fingerprint `checkRestore` does
+ * not know always solves, even when the backend's `POW_REQUIRED=false`,
+ * so the operator can flip the env var with no client redeploy; the
+ * ~1-2s cost hides behind the existing onboarding animations.
+ *
+ * A wallet `checkRestore` does know skips the solve as a fast path,
+ * but that is a guess, not the backend's rule. The backend waives PoW
+ * only for a known identity KEY (the BTC `pubkey_hash` on
+ * `/auth/extension`, the npub on `/auth/nostr/register`), never for a
+ * fingerprint alone. A pre-v0.3 wallet is known by fingerprint under
+ * its old `m/44'` key, so the fast path is refused. A refusal that
+ * {@link isPowRequiredRejection} recognises is therefore answered by
+ * solving once and resending; npub sign-in of a known fingerprint
+ * instead falls back to the BTC sign-in, which does the solving.
  *
  * Network failure handling: if the challenge fetch fails, the wallet
  * should NOT block onboarding: the backend will accept the
  * registration with no `altcha_solution` field while
  * `POW_REQUIRED=false`. Caller should treat solve failures as a soft
- * warning and continue. Once `POW_REQUIRED=true`, of course, the
- * backend rejects no-solution requests with a clear error message.
+ * warning and continue. Once `POW_REQUIRED=true` the backend refuses
+ * the request, and the bootstrap tries one more solve before reporting
+ * {@link POW_CHECK_INCOMPLETE}.
  */
 
 import { solveChallenge, type Challenge, type Solution } from 'altcha-lib';
@@ -46,6 +53,38 @@ export interface AltchaPayload {
 // browser context.
 import { deriveKey as pbkdf2DeriveKey } from 'altcha-lib/algorithms/web/pbkdf2';
 import type { AuthMethods } from './api';
+
+/**
+ * What a bootstrap reports when the backend asked for a solution and the
+ * client could not produce one (the challenge fetch failed or the solve timed
+ * out). Retryable, and never the backend's "upgrade" advice: the client is
+ * current, the network is the likely cause.
+ */
+export const POW_CHECK_INCOMPLETE =
+  'This server asked for a proof-of-work check that could not be completed. ' +
+  'Check your connection and try again.';
+
+/**
+ * True when a registration was refused only because it carried no PoW
+ * solution, so solving and resending the same request can succeed.
+ *
+ * Prefers the stable `POW_REQUIRED` code. Backends that predate the code
+ * answer 400 with the message "Proof-of-work solution is required to create
+ * a new wallet. Please upgrade to a newer Smirk client.", which smirk-backend-core
+ * 0fa9a11e and earlier send from `enforce_pow`. A REJECTED solution
+ * ("PoW solution rejected (...)") is deliberately not matched: resending
+ * cannot fix a solution the server already refused.
+ */
+export function isPowRequiredRejection(result: {
+  status?: number;
+  code?: string;
+  error?: string;
+}): boolean {
+  if (result.code === 'POW_REQUIRED') return true;
+  return (
+    result.status === 400 && /proof[- ]of[- ]work solution is required/i.test(result.error ?? '')
+  );
+}
 
 /**
  * Maximum time we allow the solver to run. 30s is generous enough for
