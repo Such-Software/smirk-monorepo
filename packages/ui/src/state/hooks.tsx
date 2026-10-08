@@ -231,24 +231,44 @@ export function useWizard<TFields extends Record<string, unknown>>(
 // ============================================================================
 
 /**
+ * Whether a window's layout viewport is wide enough for the pop-out layout.
+ *
+ * Measures `innerWidth`, the space the layout actually gets, never
+ * `outerWidth`. In Firefox a browser-action popup is a `<browser>` inside a
+ * panel of the main window's document, so its `outerWidth` reports the whole
+ * browser window (Gecko's nsFrameLoader::GetWindowDimensions takes the size of
+ * the frame owner document's tree owner). Testing `outerWidth` put Firefox's
+ * 380px popup into the wide sidebar layout, where the header actions overflowed
+ * the sidebar and could not be clicked. In Chrome the popup is its own window,
+ * so both measures agreed there and the bug was Firefox-only.
+ */
+export function isPopoutViewport(
+  win: Pick<Window, 'innerWidth'> | undefined,
+  threshold = 500,
+): boolean {
+  if (!win) return false;
+  return win.innerWidth > threshold;
+}
+
+/**
  * Detect whether this document is the embedded extension popup or
  * the popped-out window.
  *
  * Heuristic: the extension popup is rendered in a fixed-width frame
  * (≤ ~500px wide). Pop-out windows / Capacitor full-screen / Tauri
- * windowed are wider.
+ * windowed are wider. See {@link isPopoutViewport} for why the viewport,
+ * not the outer window, decides.
  *
  * Returns `false` during SSR (no `window`).
  */
 export function useIsPopout(threshold = 500): boolean {
-  const [isPopout, setIsPopout] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.outerWidth > threshold;
-  });
+  const [isPopout, setIsPopout] = useState(() =>
+    isPopoutViewport(typeof window === 'undefined' ? undefined : window, threshold),
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const update = () => setIsPopout(window.outerWidth > threshold);
+    const update = () => setIsPopout(isPopoutViewport(window, threshold));
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);

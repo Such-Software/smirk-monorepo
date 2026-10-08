@@ -217,6 +217,7 @@ export type { IframeBrowserContentProps } from './components/browser/IframeBrows
 // ----- State / hooks -----
 export {
   StateProvider,
+  isPopoutViewport,
   useIsPopout,
   useSessionState,
   useRoute,
@@ -242,6 +243,7 @@ export {
   listThemes,
   getTheme,
   applyTheme,
+  colorSchemeFor,
   resetTheme,
 } from './themes';
 
