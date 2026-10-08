@@ -56,6 +56,19 @@ body {
   }
 }
 
+/* The toolbar action popup is pinned to the popup size by CONTEXT (index.tsx
+   stamps data-surface="popup" when extension.getViews lists this window as an
+   action popup), never by measuring the viewport: hardened Firefox builds
+   (resistFingerprinting, letterboxing) report a rounded-up viewport, which made
+   the rule above widen html and body past the 380px popup and pushed the header
+   controls and the last tab out of sight. Higher specificity wins over the
+   media query. */
+html[data-surface='popup'],
+html[data-surface='popup'] body {
+  width: 380px;
+  height: 600px;
+}
+
 #root {
   height: 100%;
   display: flex;

@@ -6,7 +6,8 @@
  *
  * Query parameters:
  *   theme=<id>     apply a built-in theme (default: default)
- *   layout=<mode>  AppShell layout prop: auto (default), popup or wide
+ *   layout=<mode>  AppShell layout prop: auto (default), popup or wide;
+ *                  popup also stamps data-surface="popup" as the extension does
  *
  * The header gets the same controls the extension passes (identity chip,
  * open-in-tab, pop-out, lock), and Home starts with a balance card carrying
@@ -29,6 +30,8 @@ const params = new URLSearchParams(location.search);
 applyTheme(getTheme(params.get('theme') ?? 'default') ?? defaultTheme);
 const layoutParam = params.get('layout');
 const layout = layoutParam === 'popup' || layoutParam === 'wide' ? layoutParam : 'auto';
+// Mirror the extension: an action popup stamps its surface before rendering.
+if (layout === 'popup') document.documentElement.setAttribute('data-surface', 'popup');
 
 window.__shellClicks = [];
 const clicked = (name: string) => () => {

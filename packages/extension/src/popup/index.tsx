@@ -572,6 +572,9 @@ const IS_DESKTOP = chrome.runtime.id === 'smirk-desktop';
 // The toolbar popup always gets the compact layout, decided from context, not
 // measured (see ./surface). Tabs, the pop-out window and desktop measure.
 const ACTION_POPUP = !IS_DESKTOP && isActionPopup();
+// Pins the popup's size in styles.css before the first paint, so no viewport
+// media query can widen it.
+if (ACTION_POPUP) document.documentElement.setAttribute('data-surface', 'popup');
 
 function openPopOut(unlocked?: UnlockedWallet) {
   // Desktop already IS the popped-out window. The chrome-shim stubs

@@ -80,7 +80,16 @@ async function expectCompactLayoutWithClickableHeader(page: Page) {
   await expect(page.getByTestId('app-shell-root')).toHaveAttribute('data-layout', 'popup');
   await expect(page.locator('header')).toHaveCount(1);
   await expect(page.locator('aside')).toHaveCount(0);
-  const viewport = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  // The visible width is the WINDOW the test opened (the popup), never the
+  // page's own innerWidth: resistFingerprinting reports a rounded-up viewport.
+  const viewport = { w: page.viewportSize()!.width };
+  const bodyWidth = await page.evaluate(() => document.body.getBoundingClientRect().width);
+  expect(bodyWidth, 'the popup body is no wider than the popup').toBeLessThanOrEqual(viewport.w + 0.5);
+  const lastTab = page.getByRole('button', { name: /settings/i }).last();
+  if (await lastTab.count()) {
+    const tabBox = await lastTab.boundingBox();
+    expect(tabBox!.x + tabBox!.width, 'the last bottom tab ends on screen').toBeLessThanOrEqual(viewport.w + 0.5);
+  }
   for (const label of HEADER_CONTROLS) {
     const button = page.getByRole('button', { name: label, exact: true });
     await expect(button, `${label} is rendered`).toBeVisible();
@@ -109,11 +118,13 @@ const SCALES = [
   { name: '2x (high DPI)', outer: 1920, scale: 2 },
 ];
 
+// The popup cases render exactly what the extension's action popup renders:
+// layout=popup with data-surface="popup", and a Firefox-style outerWidth.
 for (const s of SCALES) {
   test(`popup 380x600 at ${s.name}: compact layout, header clickable`, async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: s.scale });
     const page = await context.newPage();
-    await open(page, { firefoxOuterWidth: s.outer });
+    await open(page, { firefoxOuterWidth: s.outer, layout: 'popup' });
     await shot(page, `default-380x600@${s.scale}`);
     await expectCompactLayoutWithClickableHeader(page);
     await context.close();
@@ -124,7 +135,7 @@ for (const theme of THEMES) {
   test(`popup 380x600, theme ${theme}: compact layout, header clickable, theme applied`, async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 380, height: 600 } });
     const page = await context.newPage();
-    await open(page, { firefoxOuterWidth: 1440, theme });
+    await open(page, { firefoxOuterWidth: 1440, theme, layout: 'popup' });
     await shot(page, `${theme}-380x600`);
     await expectCompactLayoutWithClickableHeader(page);
     // The chosen theme is applied (not the browser's native look): its class is
@@ -140,6 +151,18 @@ for (const theme of THEMES) {
   });
 }
 
+test('auto layout (no popup context) at 380x600 with Firefox outerWidth is compact', async ({ browser }) => {
+  // The measured fallback for surfaces that do not declare themselves. It
+  // reads the page's own size, which resistFingerprinting deliberately rounds,
+  // so it is not meaningful there; the extension's popup never uses it.
+  test.skip(test.info().project.name === 'firefox-rfp', 'resistFingerprinting spoofs the measured viewport by design');
+  const context = await browser.newContext({ viewport: { width: 380, height: 600 } });
+  const page = await context.newPage();
+  await open(page, { firefoxOuterWidth: 1440 });
+  await expectCompactLayoutWithClickableHeader(page);
+  await context.close();
+});
+
 test('an action popup stays compact even when the viewport misreports wide', async ({ browser }) => {
   // Firefox's popup viewport is unsettled while it opens; the extension passes
   // layout=popup from context, which must win over any measurement.
@@ -151,17 +174,18 @@ test('an action popup stays compact even when the viewport misreports wide', asy
   await context.close();
 });
 
-test('the popup body keeps its 380x600 size', async ({ browser }) => {
-  const context = await browser.newContext({ viewport: { width: 380, height: 600 } });
-  const page = await context.newPage();
-  await open(page, { firefoxOuterWidth: 1440 });
-  const size = await page.evaluate(() => {
-    const r = document.body.getBoundingClientRect();
-    return { w: r.width, h: r.height };
-  });
-  expect(size.w).toBeGreaterThanOrEqual(380);
-  expect(size.h).toBeGreaterThanOrEqual(600);
-  await context.close();
+test('the popup body is exactly 380x600 whatever the viewport claims', async ({ browser }) => {
+  for (const viewport of [{ width: 380, height: 600 }, { width: 800, height: 600 }]) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await open(page, { firefoxOuterWidth: 1440, layout: 'popup' });
+    const size = await page.evaluate(() => {
+      const r = document.body.getBoundingClientRect();
+      return { w: r.width, h: r.height };
+    });
+    expect(size, `popup body in a ${viewport.width}px viewport`).toEqual({ w: 380, h: 600 });
+    await context.close();
+  }
 });
 
 test('a wide window (tab, desktop) still gets the sidebar layout', async ({ browser }) => {
