@@ -63,6 +63,11 @@ export interface JobKindMap {
        *  the gate is off or the wallet is returning. */
       inviteCode?: string;
       paymentInvoiceId?: string;
+      /** Pre-v0.3 rotation proof (`legacyBtcRotationProof`), made in the
+       *  popup over `signedTimestamp` when the seed is in memory. Sent only
+       *  for a wallet whose fingerprint the backend knows. */
+      rotationPublicKey?: string;
+      rotationSignature?: string;
     };
     output: {
       bootstrap: {

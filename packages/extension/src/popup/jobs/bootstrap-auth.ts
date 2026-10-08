@@ -60,6 +60,8 @@ export async function runBootstrapInBackground(
     signature: string;
     inviteCode?: string;
     paymentInvoiceId?: string;
+    rotationPublicKey?: string;
+    rotationSignature?: string;
   },
   /**
    * Appended to the dedup key. The pay-to-register poll passes a per-attempt

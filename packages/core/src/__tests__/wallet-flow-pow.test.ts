@@ -1,10 +1,11 @@
 /**
- * Behavioral tests for `bootstrapAuth`'s client-side PoW bypass.
+ * Behavioral tests for `bootstrapAuth`'s client-side PoW fast path.
  *
- * The bypass mirrors the backend's `is_returning_user` predicate in
- * `smirk-backend/src/api/auth.rs`: a re-registration for an
- * already-known pubkey_hash skips PoW verification on the server,
- * so spending CPU on a solution that will be ignored is pure waste.
+ * A wallet whose seed fingerprint `checkRestore` knows skips the solve.
+ * That is a fast path, not the backend's rule (the backend waives PoW
+ * for a known BTC `pubkey_hash`, not a known fingerprint); the retry
+ * when the backend still asks for a solution is pinned in
+ * `wallet-flow-pow-retry.test.ts`.
  *
  * What's pinned here:
  *   1. New wallet (checkRestore.exists = false) → powSolver IS called
@@ -201,7 +202,7 @@ test('bootstrapAuth: NEW wallet → powSolver IS called and altcha_solution ride
   );
 });
 
-test('bootstrapAuth: RETURNING wallet → powSolver is NOT called (mirrors backend bypass)', async () => {
+test('bootstrapAuth: RETURNING wallet → powSolver is NOT called (fast path)', async () => {
   const script: ServerScript = {
     checkRestoreExists: true,
     registerCalls: [],
@@ -224,7 +225,7 @@ test('bootstrapAuth: RETURNING wallet → powSolver is NOT called (mirrors backe
   assert.equal(
     solverCalls,
     0,
-    'returning-wallet path MUST skip the PoW solver — backend would ignore the solution anyway',
+    'a returning wallet the backend accepts without PoW must not pay for a solve',
   );
   assert.equal(script.registerCalls.length, 1);
   const body = script.registerCalls[0];

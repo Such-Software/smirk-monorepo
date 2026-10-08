@@ -29,7 +29,13 @@
  * with HTTP 422 'altcha_solution: missing field `challenge`'.
  */
 
-import { api, solvePowChallenge, requireRestoreState } from '@smirk/core';
+import {
+  api,
+  solvePowChallenge,
+  isPowRequiredRejection,
+  POW_CHECK_INCOMPLETE,
+  requireRestoreState,
+} from '@smirk/core';
 
 import type { JobHandler } from '../types';
 import { PAYMENT_PENDING_SENTINEL } from '../types';
@@ -71,6 +77,9 @@ function friendlyRegisterError(result: {
   if (status === 429 || result.code === 'RATE_LIMITED') {
     return 'Too many wallet registrations from this network. Please try again in a few minutes.';
   }
+  // Still refused for want of a solution after the handler's own resend: the
+  // solve could not run, so this is a connection problem, not an old client.
+  if (isPowRequiredRejection(result)) return POW_CHECK_INCOMPLETE;
   if (status === 400) {
     const raw = result.error ?? '';
     if (/proof[- ]of[- ]work|altcha/i.test(raw)) {
@@ -122,52 +131,63 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
       ? undefined
       : Math.floor(Date.now() / 1000);
 
-    // ---- 2. PoW solve: only for genuinely new wallets ----
-    // The backend's returning-user bypass (see smirk-backend's
-    // src/api/auth.rs `is_returning_user`) accepts re-registrations
-    // for an already-known pubkey_hash WITHOUT a PoW solution, even
-    // when POW_REQUIRED=true. The whole bypass exists so v0.2.x
-    // stragglers and lock+unlock flows don't spin PBKDF2 for nothing.
+    // ---- 2. PoW solve ----
+    // A wallet whose seed fingerprint `checkRestore` does not know always
+    // solves; that's the Sybil gate doing its job.
     //
-    // We mirror that bypass client-side using the same signal:
-    // `checkRestore` already told us if the wallet is known (it's
-    // step 1 above), and that's exactly the predicate the backend
-    // uses. Skip the solve when it would be discarded anyway:
-    // saves ~3-5s of CPU on every lock+unlock and on every import
-    // of an already-registered wallet.
-    //
-    // New wallets still solve normally; that's the Sybil gate
-    // doing its job.
+    // A known fingerprint skips the solve as a FAST PATH (saves ~3-5s of
+    // CPU on every lock+unlock). It is not the backend's rule: the backend
+    // waives PoW only when the submitted BTC key's `pubkey_hash` is already
+    // on file, never for a fingerprint alone, so a pre-v0.3 wallet (known
+    // by fingerprint under its old `m/44'` key) is refused. Step 3 answers
+    // that refusal by solving once and resending.
     //
     // solvePowChallenge returns the `AltchaPayload` envelope ({
     // challenge, solution }); typed alias means a regression to a
     // bare `Solution` is a TS compile error, not a runtime 422.
     let altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>> = null;
-    if (isKnownWallet) {
-      console.debug(
-        '[bootstrap-auth] returning wallet (fingerprint matches existing user) — skipping PoW solve',
-      );
-    } else {
+    if (!isKnownWallet) {
       altchaSolution = await solvePowChallenge(api, { signal: ctx.signal });
     }
 
     // ---- 3. extensionRegister (+ optional registration-gate credentials) ----
-    const result = await api.extensionRegister({
-      keys: input.keys as Parameters<
-        typeof api.extensionRegister
-      >[0]['keys'],
-      seedFingerprint: input.fingerprint,
-      signedTimestamp: input.signedTimestamp,
-      signature: input.signature,
-      ...(walletBirthday !== undefined ? { walletBirthday } : {}),
-      ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
-      ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
-      ...(altchaSolution !== null ? { altchaSolution } : {}),
-      ...(input.inviteCode ? { inviteCode: input.inviteCode } : {}),
-      ...(input.paymentInvoiceId
-        ? { paymentInvoiceId: input.paymentInvoiceId }
-        : {}),
-    });
+    // This context holds no private key, so a resend reuses the popup's
+    // signature, exactly as the new-wallet path does after its own solve. The
+    // backend accepts a signed timestamp for 300 s and binds no nonce to it.
+    const register = (solution: typeof altchaSolution) =>
+      api.extensionRegister({
+        keys: input.keys as Parameters<
+          typeof api.extensionRegister
+        >[0]['keys'],
+        seedFingerprint: input.fingerprint,
+        signedTimestamp: input.signedTimestamp,
+        signature: input.signature,
+        // A known wallet may still be registered under its pre-v0.3 BTC key;
+        // the popup's proof lets the backend carry that identity over.
+        ...(isKnownWallet && input.rotationPublicKey && input.rotationSignature
+          ? {
+              rotationPublicKey: input.rotationPublicKey,
+              rotationSignature: input.rotationSignature,
+            }
+          : {}),
+        ...(walletBirthday !== undefined ? { walletBirthday } : {}),
+        ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
+        ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+        ...(solution !== null ? { altchaSolution: solution } : {}),
+        ...(input.inviteCode ? { inviteCode: input.inviteCode } : {}),
+        ...(input.paymentInvoiceId
+          ? { paymentInvoiceId: input.paymentInvoiceId }
+          : {}),
+      });
+    let result = await register(altchaSolution);
+    if (
+      (result.error || !result.data) &&
+      altchaSolution === null &&
+      isPowRequiredRejection(result)
+    ) {
+      altchaSolution = await solvePowChallenge(api, { signal: ctx.signal });
+      if (altchaSolution !== null) result = await register(altchaSolution);
+    }
 
     // Pay-to-register: a not-yet-Settled invoice is EXPECTED while the user is
     // paying. Surface it as the stable pending sentinel so the popup's poll
@@ -182,10 +202,11 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
     }
 
     if (result.error || !result.data) {
-      // Log the full failure context to the offscreen-document
-      // DevTools (chrome://extensions → Inspect views → jobs-
-      // offscreen.html). Real-money software shouldn't hide what
-      // went wrong even if the throw → popup string is friendly.
+      // Log the failure context to the offscreen-document DevTools
+      // (chrome://extensions, Inspect views, jobs-offscreen.html).
+      // Real-money software shouldn't hide what went wrong even if the
+      // popup string is friendly. Never the seed fingerprint: it is the
+      // lookup key for this wallet's account and restore history.
       console.error('[bootstrap-auth] extensionRegister failed', {
         status: result.status,
         code: result.code,
@@ -195,7 +216,6 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
             asset: k.asset,
             publicKeyLen: k.publicKey?.length ?? 0,
           })),
-          seedFingerprint: input.fingerprint,
           signedTimestamp: input.signedTimestamp,
           signatureLen: input.signature?.length ?? 0,
           walletBirthday,
