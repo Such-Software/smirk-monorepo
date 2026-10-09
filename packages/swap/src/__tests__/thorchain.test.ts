@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ThorchainSwap, assertMemo, toThorUnits, fromThorUnits, type ThorchainPolicy } from '../thorchain';
+import { ThorchainSwap, assertMemo, serverAffiliate, toThorUnits, fromThorUnits, type ThorchainPolicy } from '../thorchain';
 import type { SwapError } from '../types';
 
 // Recorded from THORChain mainnet on 2026-10-07 (BTC, LTC) and synthesized in
@@ -10,6 +10,8 @@ import type { SwapError } from '../types';
 const MAIN = JSON.parse(readFileSync(new URL('./fixtures/thorchain/mainnet-btc-ltc.json', import.meta.url), 'utf8'));
 const STATUS = JSON.parse(readFileSync(new URL('./fixtures/thorchain/mainnet-tx-status.json', import.meta.url), 'utf8'));
 const XMR = JSON.parse(readFileSync(new URL('./fixtures/thorchain/xmr-synthesized.json', import.meta.url), 'utf8'));
+// THORName lookups recorded 2026-10-09; the expired record is synthesized (see _meta).
+const TNS = JSON.parse(readFileSync(new URL('./fixtures/thorchain/thorname.json', import.meta.url), 'utf8'));
 
 const LTC_DEST: string = MAIN._meta.ltc_destination;
 const BTC_DEST: string = MAIN._meta.btc_destination;
@@ -22,6 +24,8 @@ interface World {
   inbound: Array<Record<string, unknown>>;
   quotes: Record<string, unknown>;
   statuses: Record<string, unknown>;
+  /** THORName records by name; a name not here answers THORChain's "doesn't exist". */
+  thornames: Record<string, unknown>;
 }
 
 function world(withXmr = false): World {
@@ -30,10 +34,19 @@ function world(withXmr = false): World {
     inbound: withXmr ? [...MAIN.inbound_addresses, XMR.inbound_xmr] : MAIN.inbound_addresses.map((x: object) => ({ ...x })),
     quotes: {},
     statuses: {},
+    // 'smirk' answers with the recorded live record (renamed), so it exists and is unexpired.
+    thornames: { smirk: { ...TNS.thorname_existing, name: 'smirk' }, smirkold: TNS.thorname_expired },
   };
 }
 
-function harness(w: World, opts: { policy?: ThorchainPolicy; affiliate?: { name: string; bps: number } } = {}) {
+function harness(
+  w: World,
+  opts: {
+    policy?: ThorchainPolicy;
+    affiliate?: { name: string; bps: number };
+    affiliateSource?: () => { name: string; bps: number } | undefined | Promise<{ name: string; bps: number } | undefined>;
+  } = {},
+) {
   const calls: string[] = [];
   const sleeps: number[] = [];
   let clock = NOW;
@@ -51,6 +64,12 @@ function harness(w: World, opts: { policy?: ThorchainPolicy; affiliate?: { name:
       const { _http, body } = q as { _http?: number; body?: unknown };
       return _http ? reply(_http, body) : reply(200, q);
     }
+    const tn = /\/thorchain\/thorname\/([^/]+)$/.exec(u.pathname);
+    if (tn) {
+      const rec = w.thornames[decodeURIComponent(tn[1]!)];
+      return rec ? reply(200, rec) : reply(TNS.thorname_missing._http, TNS.thorname_missing.body);
+    }
+    if (u.pathname.endsWith('/thorchain/lastblock')) return reply(200, TNS.lastblock);
     const m = /\/thorchain\/tx\/status\/([0-9A-F]+)$/.exec(u.pathname);
     if (m) return reply(200, w.statuses[m[1]!] ?? MAIN.tx_status_unknown);
     return reply(404, { message: 'unexpected ' + u.pathname });
@@ -64,6 +83,7 @@ function harness(w: World, opts: { policy?: ThorchainPolicy; affiliate?: { name:
     },
     ...(opts.policy ? { policy: () => opts.policy! } : {}),
     ...(opts.affiliate ? { affiliate: opts.affiliate } : {}),
+    ...(opts.affiliateSource ? { affiliateSource: opts.affiliateSource } : {}),
   });
   return { swap, calls, sleeps, advance: (ms: number) => (clock += ms) };
 }
@@ -184,6 +204,94 @@ test('the affiliate fee is added only when configured', async () => {
   const { swap, calls } = harness(w, { affiliate: { name: 'smirk', bps: 50 } });
   await swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST });
   assert.match(calls.find((c) => c.includes('/quote/swap'))!, /affiliate=smirk&affiliate_bps=50/);
+});
+
+// ── Server-controlled affiliate ────────────────────────────────────────────
+
+function affiliateWorld(memoTail: string) {
+  const w = world();
+  w.quotes['BTC.BTC>LTC.LTC'] = {
+    ...MAIN.quote_btc_to_ltc_affiliate,
+    memo: `=:l:${LTC_DEST}:1212699958${memoTail}`,
+    inbound_address: MAIN.inbound_addresses[0].address,
+  };
+  return w;
+}
+
+const quoteOf = (calls: string[]) => calls.find((c) => c.includes('/quote/swap'))!;
+
+test('a registered, unexpired THORName from the server is named on the quote and recorded', async () => {
+  const { swap, calls } = harness(affiliateWorld(':smirk:25'), { affiliateSource: () => ({ name: 'smirk', bps: 25 }) });
+  const q = await swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST });
+  assert.match(quoteOf(calls), /affiliate=smirk&affiliate_bps=25/);
+  assert.deepEqual((q.implementationData as { affiliate?: unknown }).affiliate, { name: 'smirk', bps: 25 });
+  assert.ok(calls.some((c) => c.endsWith('/thorchain/thorname/smirk')), 'the name was checked on THORChain');
+});
+
+test('a THORName that does not exist quotes without an affiliate instead of failing', async () => {
+  const w = affiliateWorld('');
+  delete w.thornames.smirk;
+  const { swap, calls } = harness(w, { affiliateSource: () => ({ name: 'smirk', bps: 25 }) });
+  const q = await swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST });
+  assert.doesNotMatch(quoteOf(calls), /affiliate/);
+  assert.equal((q.implementationData as { affiliate?: unknown }).affiliate, undefined);
+});
+
+test('an expired THORName quotes without an affiliate', async () => {
+  const { swap, calls } = harness(affiliateWorld(''), { affiliateSource: () => ({ name: 'smirkold', bps: 25 }) });
+  await swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST });
+  assert.doesNotMatch(quoteOf(calls), /affiliate/);
+  assert.ok(calls.some((c) => c.endsWith('/thorchain/lastblock')), 'expiry was judged against the chain height');
+});
+
+test('a fee above the cap is cut to 100 basis points, never passed through', async () => {
+  const { swap, calls } = harness(affiliateWorld(':smirk:100'), { affiliateSource: () => ({ name: 'smirk', bps: 750 }) });
+  await swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST });
+  assert.match(quoteOf(calls), /affiliate=smirk&affiliate_bps=100(&|$)/);
+});
+
+test('the THORName check is made once per session, and the source is re-read every quote', async () => {
+  let reads = 0;
+  const { swap, calls } = harness(affiliateWorld(':smirk:25'), {
+    affiliateSource: () => {
+      reads += 1;
+      return { name: 'smirk', bps: 25 };
+    },
+  });
+  for (let i = 0; i < 2; i++) {
+    await swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST });
+  }
+  assert.equal(reads, 2);
+  assert.equal(calls.filter((c) => c.includes('/thorchain/thorname/')).length, 1);
+});
+
+test('no affiliate from the server means no affiliate, and no THORName lookup', async () => {
+  const { swap, calls } = harness(affiliateWorld(''), { affiliateSource: () => undefined });
+  await swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST });
+  assert.doesNotMatch(quoteOf(calls), /affiliate/);
+  assert.ok(!calls.some((c) => c.includes('/thorname/')));
+});
+
+test('the server decides the affiliate; the build fallback applies only when the server sends no THORChain policy', () => {
+  const build = { name: 'buildname', bps: 10 };
+  assert.deepEqual(serverAffiliate({ affiliate: { name: 'smirk', bps: 25 } }, build), { name: 'smirk', bps: 25 });
+  assert.equal(serverAffiliate({}, build), undefined, 'a policy without an affiliate means none');
+  assert.equal(serverAffiliate({ affiliate: null }, build), undefined);
+  assert.deepEqual(serverAffiliate(undefined, build), build, 'no policy at all: the build decides');
+  assert.deepEqual(serverAffiliate(null, build), build);
+  assert.equal(serverAffiliate(undefined, undefined), undefined);
+});
+
+test('a memo that adds or changes the affiliate fee is refused before signing', async () => {
+  // Asked for none, memo adds one.
+  const a = harness(affiliateWorld(':evil:500'), { affiliateSource: () => undefined });
+  await rejects(a.swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST }), 'network_error');
+  // Asked for smirk:25, memo raises the fee.
+  const b = harness(affiliateWorld(':smirk:500'), { affiliateSource: () => ({ name: 'smirk', bps: 25 }) });
+  await rejects(b.swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST }), 'network_error');
+  // Asked for smirk:25, memo credits someone else.
+  const c = harness(affiliateWorld(':evil:25'), { affiliateSource: () => ({ name: 'smirk', bps: 25 }) });
+  await rejects(c.swap.quote({ fromAsset: 'btc', toAsset: 'ltc', fromAmount: '1000000', toAddress: LTC_DEST }), 'network_error');
 });
 
 test('THORChain refusing an oversized memo becomes a clear unsupported-pair error', async () => {

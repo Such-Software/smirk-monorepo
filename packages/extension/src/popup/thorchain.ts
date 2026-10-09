@@ -17,8 +17,10 @@ import {
   ThorchainSwap,
   DEFAULT_THORCHAIN_POLICY,
   DEFAULT_THORNODE_URL,
+  serverAffiliate,
   type SwapError,
   type SwapQuote,
+  type ThorchainAffiliate,
   type ThorchainPolicy,
   type ThorchainQuoteData,
 } from '@smirk/swap';
@@ -35,23 +37,33 @@ async function policy(): Promise<ThorchainPolicy> {
   return { enabled: t.enabled !== false, ...(t.assets ? { assets: t.assets } : {}) };
 }
 
-/** Affiliate fee, from the build. Off unless a registered THORName is set. */
-function affiliate(): { name: string; bps: number } | undefined {
+/** The build's affiliate, a fallback for wallet servers that send no THORChain policy. */
+function buildAffiliate(): ThorchainAffiliate | undefined {
   const name = (import.meta.env.VITE_THORCHAIN_AFFILIATE ?? '').trim();
   const bps = Number(import.meta.env.VITE_THORCHAIN_AFFILIATE_BPS ?? '0');
   if (!name || !Number.isInteger(bps) || bps <= 0) return undefined;
   return { name, bps };
 }
 
+/**
+ * The affiliate for the next quote: the wallet server's
+ * `swaps.thorchain.affiliate`, re-read every quote so the operator can set or
+ * change it without a release. The swap library caps the fee and checks the
+ * THORName on THORChain before naming it.
+ */
+async function affiliate(): Promise<ThorchainAffiliate | undefined> {
+  const caps = await loadCapabilities(api).catch(() => null);
+  return serverAffiliate(caps?.swaps?.thorchain, buildAffiliate());
+}
+
 /** The popup's THORChain client. Throws if the desktop transport is missing. */
 export function thorchainSwap(): ThorchainSwap {
   if (instance) return instance;
   const transport = nativeFetch();
-  const aff = affiliate();
   instance = new ThorchainSwap({
     policy,
+    affiliateSource: affiliate,
     ...(transport ? { fetch: transport } : {}),
-    ...(aff ? { affiliate: aff } : {}),
   });
   return instance;
 }
@@ -85,9 +97,13 @@ export function thorchainQuoteSummary(q: SwapQuote, gatewayHost = thorchainGatew
   const to = mustGetAsset(q.toAsset);
   const amt = (atomic: string) => `${atomicToText(atomic, to.id)} ${to.ticker}`;
   const parts = [`liquidity ${amt(data.fees.liquidity)}`, `outbound ${amt(data.fees.outbound)}`];
-  if (BigInt(data.fees.affiliate) > 0n) parts.push(`affiliate ${amt(data.fees.affiliate)}`);
   const limitPct = (data.toleranceBps / 100).toString();
   const xmr = q.fromAsset === 'xmr';
+  // The affiliate fee is Smirk's own, so it gets its own line rather than
+  // hiding among THORChain's.
+  const smirkFee = data.affiliate && data.affiliate.bps > 0
+    ? `Smirk fee ${(data.affiliate.bps / 100).toString()}% (${amt(data.fees.affiliate)}), also already taken out of the estimate.`
+    : null;
   return {
     tradeId: '',
     fromAsset: q.fromAsset,
@@ -103,6 +119,7 @@ export function thorchainQuoteSummary(q: SwapQuote, gatewayHost = thorchainGatew
     providerData: data,
     notices: [
       `THORChain's fees (${parts.join(', ')}) are already taken out of the estimate.`,
+      ...(smirkFee ? [smirkFee] : []),
       `The deposit sets a price limit ${limitPct}% below the estimate. If the price moves further before THORChain fills it, THORChain refunds the deposit less its outbound fee.`,
       `On confirm, Smirk quotes again with your address. If that quote is more than ${MAX_REQUOTE_DRIFT_BPS / 100}% worse than this one, you are asked to re-quote instead.`,
       `The deposit can be sent only before this quote expires; after that, get a new quote.`,

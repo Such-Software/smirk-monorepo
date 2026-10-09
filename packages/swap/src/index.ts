@@ -49,6 +49,8 @@ export {
   DEFAULT_THORCHAIN_POLICY,
   DEFAULT_ASSET_POLICY,
   DEFAULT_THORNODE_URL,
+  MAX_AFFILIATE_BPS,
+  serverAffiliate,
   assertMemo,
   toThorUnits,
   fromThorUnits,
@@ -59,6 +61,7 @@ export {
   type ThorchainAvailability,
   type AssetAvailability,
   type ThorchainQuoteData,
+  type ThorchainAffiliate,
 } from './thorchain';
 export { TrocadorSwap, type TrocadorSwapOptions } from './trocador';
 export {

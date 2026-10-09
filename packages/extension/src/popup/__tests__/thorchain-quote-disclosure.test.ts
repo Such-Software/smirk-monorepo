@@ -98,6 +98,40 @@ test('Confirm refuses a binding quote materially worse than the one shown, befor
   assert.ok(after.every((c) => c.includes('/quote/swap')), 'and nothing toward a deposit followed');
 });
 
+test('a Smirk affiliate fee is shown on its own line, and only when the quote names one', async () => {
+  const TNS = JSON.parse(
+    readFileSync(new URL('../../../../swap/src/__tests__/fixtures/thorchain/thorname.json', import.meta.url), 'utf8'),
+  );
+  const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+  const fetchImpl = (async (url: string) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith('/thorchain/pools')) return reply(MAIN.pools);
+    if (u.pathname.endsWith('/thorchain/inbound_addresses')) return reply(MAIN.inbound_addresses);
+    if (u.pathname.endsWith('/thorchain/thorname/smirk')) return reply({ ...TNS.thorname_existing, name: 'smirk' });
+    if (u.pathname.endsWith('/thorchain/lastblock')) return reply(TNS.lastblock);
+    if (u.pathname.endsWith('/thorchain/quote/swap')) {
+      return reply({ ...MAIN.quote_btc_to_ltc_affiliate, inbound_address: MAIN.inbound_addresses[0].address });
+    }
+    return new Response('{}', { status: 404 });
+  }) as unknown as typeof fetch;
+  let clock = NOW;
+  const swap = new ThorchainSwap({
+    fetch: fetchImpl,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    affiliateSource: () => ({ name: 'smirk', bps: 25 }),
+  });
+  const withFee = (await indicative(swap)).notices ?? [];
+  const line = withFee.find((n) => n.startsWith('Smirk fee 0.25%'));
+  assert.ok(line, 'the Smirk fee has its own line');
+  assert.ok(!withFee[0]!.includes('affiliate'), 'and is not folded into THORChain\'s fees');
+
+  const without = (await indicative(market(0).swap)).notices ?? [];
+  assert.ok(!without.some((n) => n.startsWith('Smirk fee')), 'no line when no affiliate was named');
+});
+
 test('Confirm goes ahead within the drift bound, and with a better market', async () => {
   for (const drift of [-20, 0, 150]) {
     const { swap } = market(drift);

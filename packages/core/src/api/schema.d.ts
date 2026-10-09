@@ -2886,11 +2886,21 @@ export interface components {
             vout: number;
         };
         /**
+         * @description A THORName and the fee, in basis points (100 = 1%), the wallet adds to
+         *     THORChain quotes.
+         */
+        ThorchainAffiliateCapability: {
+            /** Format: int32 */
+            bps: number;
+            name: string;
+        };
+        /**
          * @description THORChain swap policy the wallet follows. `enabled: false` turns THORChain
          *     off; an asset set to `off` hides that asset; anything absent means `auto`:
          *     THORChain's own pools and halt flags decide.
          */
         ThorchainSwapCapability: {
+            affiliate?: null | components["schemas"]["ThorchainAffiliateCapability"];
             /**
              * @description Per-asset overrides (`btc`, `ltc`, `xmr` to `off` or `auto`). Omitted
              *     when no asset is overridden.

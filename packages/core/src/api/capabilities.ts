@@ -157,6 +157,13 @@ export interface SwapsCapability {
     enabled: boolean;
     /** `auto` follows THORChain's pools and halts; `off` hides the asset. */
     assets?: Partial<Record<'btc' | 'ltc' | 'xmr', 'auto' | 'off'>>;
+    /**
+     * The operator's THORChain affiliate: a THORName and a fee in basis
+     * points (100 = 1%). Absent means no affiliate. Advisory: the wallet caps
+     * the fee and checks on THORChain that the name exists and has not
+     * expired, and quotes without an affiliate otherwise.
+     */
+    affiliate?: { name: string; bps: number };
   };
   /**
    * NonLogs swaps brokered by this wallet server (`/swaps/nonlogs/*`).
