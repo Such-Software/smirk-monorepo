@@ -42,3 +42,4 @@ export * from './provider';
 export * from './approval';
 export * from './wallet-handler';
 export * from './nostr-tiers';
+export * from './reserved-messages';

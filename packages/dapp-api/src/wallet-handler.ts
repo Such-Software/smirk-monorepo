@@ -29,6 +29,7 @@ import {
   OriginPermissionStore,
 } from './permissions';
 import { WalletProvider } from './provider';
+import { isReservedSmirkMessage, RESERVED_SMIRK_MESSAGE_REFUSAL } from './reserved-messages';
 import {
   ALL_ASSETS,
   APP_ENC_SCHEME,
@@ -182,6 +183,11 @@ async function dispatchInner<M extends SmirkMethod>(
     case 'signMessage': {
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
       const params = req.params as { message: string };
+      // Refused before any prompt: the user is never asked to approve a
+      // signature the wallet will not produce. The signer refuses it too.
+      if (isReservedSmirkMessage(params?.message)) {
+        throw new HandlerError('INVALID_PARAMS', RESERVED_SMIRK_MESSAGE_REFUSAL);
+      }
       // Always prompt per-signature. Signatures are auth credentials
       // for the receiving service; auto-signing every request would
       // let a connected origin impersonate the user without a refresh
@@ -213,6 +219,9 @@ async function dispatchInner<M extends SmirkMethod>(
       const params = req.params as { message: string; assets?: SmirkAsset[] };
       if (typeof params?.message !== 'string' || params.message.length === 0) {
         throw new HandlerError('INVALID_PARAMS', 'signIn needs a non-empty message');
+      }
+      if (isReservedSmirkMessage(params.message)) {
+        throw new HandlerError('INVALID_PARAMS', RESERVED_SMIRK_MESSAGE_REFUSAL);
       }
       const requestedAssets = normalizeAssets(params.assets);
       const existing = await deps.permissions.get(origin.origin);

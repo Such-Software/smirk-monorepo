@@ -49,10 +49,14 @@ export interface GrinSlatepackPayload {
  *  non-interactive one (XMR/BTC/…); `address` lets it double as a pay-me
  *  request. Only `asset` + `amount` are required.
  *
- *  A claimable Smirk tip also carries `tipId` and `claimKey`: the backend tip
- *  id and the symmetric key that a public share link would hold in its URL
- *  fragment. Inside the seal only the recipient can read the key, so the tip
- *  is claimable by that npub alone. `expiresAt` (unix seconds) is the date
+ *  A claimable Smirk tip also carries `tipId` and `sealedClaimKey`: the
+ *  backend tip id, and the symmetric key a public share link would hold in its
+ *  URL fragment, sealed a second time between sender and recipient
+ *  (`sealNpubTipClaimKey` in payments/npub-tips). The gift wrap alone is not
+ *  enough: the wallet lends the same Nostr key to websites through NIP-07, and
+ *  a site granted `nip44.decrypt` can open the wrap and the seal. The claim key
+ *  is a bearer secret, so it never appears here in the clear, and a plaintext
+ *  `claimKey` field is not accepted. `expiresAt` (unix seconds) is the date
  *  after which the sender may reclaim; the backend enforces nothing until a
  *  reclaim actually runs. `to` is set only on the sender's own self-addressed
  *  copy, so the sender's history knows who the tip went to. */
@@ -66,7 +70,8 @@ export interface TipPayload {
   txid?: string;
   address?: string;
   tipId?: string;
-  claimKey?: string;
+  /** Hex `nonce || ciphertext || tag`; see the interface comment. */
+  sealedClaimKey?: string;
   expiresAt?: number;
   to?: string;
 }
@@ -102,8 +107,9 @@ export function buildPaymentRumor(
 
 /** Backend tip ids are UUIDs. */
 const TIP_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-/** The share-link fragment key: base64url, as `generateUrlFragmentKey` encodes it. */
-const CLAIM_KEY_RE = /^[A-Za-z0-9_-]{20,128}$/;
+/** A sealed claim key: XChaCha20-Poly1305 `nonce(24) || ciphertext || tag(16)`
+ *  over a base64url fragment key of 20 to 128 characters, in hex. */
+const SEALED_CLAIM_KEY_RE = /^[0-9a-fA-F]{120,336}$/;
 const PUBKEY_HEX_RE = /^[0-9a-fA-F]{64}$/;
 
 const GRIN_ROLES: ReadonlySet<string> = new Set<GrinSlatepackRole>([
@@ -167,8 +173,8 @@ export function parsePaymentPayload(content: string): PaymentPayload {
       // Claim fields are accepted only in their exact shapes. A malformed one
       // is dropped, not trusted: the tip then reads as informational only.
       ...(typeof p.tipId === 'string' && TIP_ID_RE.test(p.tipId) ? { tipId: p.tipId } : {}),
-      ...(typeof p.claimKey === 'string' && CLAIM_KEY_RE.test(p.claimKey)
-        ? { claimKey: p.claimKey }
+      ...(typeof p.sealedClaimKey === 'string' && SEALED_CLAIM_KEY_RE.test(p.sealedClaimKey)
+        ? { sealedClaimKey: p.sealedClaimKey.toLowerCase() }
         : {}),
       ...(typeof p.expiresAt === 'number' && Number.isSafeInteger(p.expiresAt) && p.expiresAt > 0
         ? { expiresAt: p.expiresAt }
@@ -178,4 +184,37 @@ export function parsePaymentPayload(content: string): PaymentPayload {
   }
 
   throw new Error('unrecognized payment payload type');
+}
+
+/**
+ * True when `plaintext` is a kind-14 rumor carrying a claimable Smirk tip: a
+ * `tip` payload with a tip id or any claim-key field, sealed or not.
+ *
+ * The wallet lends its Nostr key to websites through NIP-07, and a site granted
+ * `nip44.decrypt` can open a gift wrap and its seal exactly as the wallet does.
+ * The decrypt executor uses this to refuse the last step for the wallet's own
+ * tip rail, so a site never reads tip ids, amounts or (from a pre-release
+ * wrap) a plaintext claim key. Ordinary direct messages, whose rumor content is
+ * not a payment payload, are unaffected. Reads the raw fields rather than
+ * {@link parsePaymentPayload}, which drops a plaintext `claimKey` on purpose.
+ */
+export function isClaimableTipRumor(plaintext: string): boolean {
+  let rumor: unknown;
+  try {
+    rumor = JSON.parse(plaintext);
+  } catch {
+    return false;
+  }
+  if (!rumor || typeof rumor !== 'object') return false;
+  const r = rumor as { kind?: unknown; content?: unknown };
+  if (r.kind !== PAYMENT_RUMOR_KIND || typeof r.content !== 'string') return false;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(r.content);
+  } catch {
+    return false;
+  }
+  if (!payload || typeof payload !== 'object') return false;
+  const p = payload as Record<string, unknown>;
+  return p.type === 'tip' && ('tipId' in p || 'claimKey' in p || 'sealedClaimKey' in p);
 }
