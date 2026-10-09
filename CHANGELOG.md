@@ -1,6 +1,6 @@
 # Changelog
 
-> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+> Status: stable · Updated 2026-10-09 · Applies to: Smirk client source
 
 All notable user-facing changes to Smirk Wallet.
 
@@ -37,6 +37,10 @@ are verified separately.
   new scan birthday that could hide earlier deposits.
 - Unsupported Nostr signing grants are refused, and a missing selected
   identity cannot silently fall back to the primary identity.
+- Claiming an XMR or WOW tip reports the key image of each tip output the
+  sweep spent, with a proof only the tip's key can make. A backend that checks
+  it settles the tip on the real sweep, so a stranger's report of a
+  transaction that merely sampled the tip output cannot mark it claimed.
 
 ## [0.3.0] - 2026-09-22
 

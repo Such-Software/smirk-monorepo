@@ -44,6 +44,7 @@ export type {
   SentTip,
   ReceivedTip,
   PublicTipInfo,
+  TipSweepKeyImage,
 } from './social';
 export type { WalletUtxoMethods, TaggedUtxo } from './wallet-utxo';
 // The batch cap lives with the client that enforces it, and is re-exported here

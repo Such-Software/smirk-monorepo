@@ -143,6 +143,25 @@ export const monero = {
     subaddrMinor?: number,
   ): string =>
     wasm.compute_key_image(viewKey, spendKey, txPubKey, outputIndex, subaddrMajor, subaddrMinor),
+  /**
+   * Prove a tip output's key image for the sweep report (`/confirm-sweep`
+   * `key_images`): the key image the sweep spends the output with, and a
+   * proof, bound to `tipId`, that it is that output's. Only the tip's spend
+   * key can make it, and it reveals nothing about the key.
+   *
+   * Returns a `WasmResult` JSON string whose `data` is
+   * `{ output_key, key_image, proof }`; an error when the keys do not control
+   * `outputKey`. Tip addresses are primary addresses (no subaddress index).
+   */
+  proveTipKeyImage: (
+    viewKey: string,
+    spendKey: string,
+    txPubKey: string,
+    outputIndex: number,
+    outputKey: string,
+    tipId: string,
+  ): string =>
+    wasm.prove_tip_key_image(viewKey, spendKey, txPubKey, outputIndex, outputKey, tipId),
 };
 
 // =============================================================================

@@ -26,6 +26,7 @@
 //! - [`sign_transaction`] - Build and sign transactions
 //! - [`derive_output_key_image`] - Derive key image for a specific output (requires output_key)
 //! - [`compute_key_image`] - Compute key image from wallet keys and tx_pub_key (no output_key needed)
+//! - [`prove_tip_key_image`] - Prove a tip output's key image for the sweep report
 
 use wasm_bindgen::prelude::*;
 
@@ -36,6 +37,7 @@ mod keys;
 mod output;
 mod result;
 mod signing;
+mod tip_proof;
 #[cfg(test)]
 mod tests;
 mod transaction;
@@ -79,6 +81,7 @@ pub use grin::{
 };
 pub use keys::derive_key_image;
 pub use signing::{compute_key_image, derive_output_key_image, estimate_fee, sign_transaction};
+pub use tip_proof::prove_tip_key_image;
 pub use transaction::parse_tx;
 
 /// Simple test function to verify WASM is loaded.
