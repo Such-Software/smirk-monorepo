@@ -6,7 +6,7 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createChallenge } from 'altcha-lib';
-import { api } from '@smirk/core';
+import { api, NOSTR_IDENTITY_CONFLICT } from '@smirk/core';
 
 import { bootstrapAuthHandler } from '../bootstrap-auth';
 
@@ -14,6 +14,13 @@ const LEGACY_POW_REFUSAL = {
   status: 400,
   code: 'VALIDATION_ERROR',
   error: 'Proof-of-work solution is required to create a new wallet. Please upgrade to a newer Smirk client.',
+};
+
+/** smirk-backend-core 45b0143 `NOSTR_ROW_ADOPT_REFUSED`, as the API client returns it. */
+const NOSTR_ROW_ADOPT_REFUSAL = {
+  status: 409,
+  code: 'CONFLICT',
+  error: 'This account is registered under a Nostr identity; sign in with it',
 };
 
 const KEYS = [{ asset: 'btc', publicKey: '02'.padEnd(66, 'a') }];
@@ -121,6 +128,29 @@ test('a registration failure is logged without the seed fingerprint', async (t) 
   assert.ok(logged.length > 0, 'the failure is still logged');
   assert.ok(!JSON.stringify(logged).includes(fingerprint), 'but never with the fingerprint');
   assert.equal(backend.challenges(), 0, 'an authentication failure is not a PoW refusal');
+});
+
+test('an adopt refused for another Nostr identity is neither solved nor resent, and says what to do', async (t) => {
+  const backend = knownWallet(t);
+  const sent: Array<Record<string, unknown>> = [];
+  backend.mock('extensionRegister', async (params: Record<string, unknown>) => {
+    sent.push(params);
+    return NOSTR_ROW_ADOPT_REFUSAL;
+  });
+  t.mock.method(console, 'error', () => undefined);
+  await assert.rejects(
+    bootstrapAuthHandler.run(
+      { fingerprint: 'fp-test', keys: KEYS, signedTimestamp: 1_790_000_000, signature: 'sig' },
+      { signal: new AbortController().signal } as never,
+    ),
+    (e: unknown) =>
+      e instanceof Error &&
+      e.message === NOSTR_IDENTITY_CONFLICT &&
+      !/proof-of-work|upgrade|update|newer|latest/i.test(e.message),
+  );
+  assert.equal(backend.challenges(), 0, 'no solve for a refusal no solve can change');
+  assert.equal(sent.length, 1, 'nothing is resent');
+  assert.equal('altchaSolution' in sent[0]!, false);
 });
 
 test('when no solve can run, the job fails as retryable, not as advice to upgrade', async (t) => {

@@ -19,6 +19,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import { bootstrapAuth } from '../wallet-flow';
 import { SmirkApi } from '../api';
 import { isPowRequiredRejection, type AltchaPayload } from '../pow';
+import { isNostrIdentityConflict, NOSTR_IDENTITY_CONFLICT } from '../nostr-identity-conflict';
 import { bitcoinMessageHash, bytesToHex } from '../crypto';
 import { deriveAllKeys, deriveLegacyBtcLtcKey, mnemonicToSeed } from '../hd';
 import { rotationMessage } from '../legacy-rotation';
@@ -39,6 +40,15 @@ const LEGACY_POW_REFUSAL = {
       'Proof-of-work solution is required to create a new wallet. Please upgrade to a newer Smirk client.',
     code: 'VALIDATION_ERROR',
   },
+};
+
+/**
+ * The refusal smirk-backend-core 45b0143 sends instead of adopting this wallet's
+ * BTC key onto an account registered under an npub (`NOSTR_ROW_ADOPT_REFUSED`).
+ */
+const NOSTR_ROW_ADOPT_REFUSAL = {
+  status: 409,
+  body: { error: 'This account is registered under a Nostr identity; sign in with it', code: 'CONFLICT' },
 };
 
 const FAKE_PAYLOAD: AltchaPayload = {
@@ -256,6 +266,66 @@ test('a resend whose solve fails stops with a retryable error, not the upgrade a
   );
 });
 
+test('an adopt refused for another Nostr identity is never solved or resent, and says what to do', async (t) => {
+  const api = new SmirkApi(API);
+  api.setAccessToken(null);
+  let solves = 0;
+  await withBackend(
+    t,
+    true,
+    // auth.rs refuses before the PoW gate, whether or not a solution came.
+    () => NOSTR_ROW_ADOPT_REFUSAL,
+    async (calls) => {
+      await assert.rejects(
+        bootstrapAuth(api, phraseWallet(), {
+          powSolver: async () => {
+            solves += 1;
+            return FAKE_PAYLOAD;
+          },
+        }),
+        (e: unknown) =>
+          e instanceof Error &&
+          e.message === NOSTR_IDENTITY_CONFLICT &&
+          !/proof-of-work|upgrade|update|newer|latest/i.test(e.message),
+      );
+      assert.equal(solves, 0, 'no solve for a refusal no solve can change');
+      assert.equal(calls.length, 1, 'nothing is resent');
+      assert.equal('altcha_solution' in calls[0]!, false);
+      assert.equal(api.getAccessToken(), null, 'no session from a refused sign-in');
+    },
+  );
+});
+
+test('the user-facing Nostr conflict message names the identity and a way forward', () => {
+  assert.notEqual(NOSTR_IDENTITY_CONFLICT, NOSTR_ROW_ADOPT_REFUSAL.body.error, 'not the bare backend text');
+  assert.match(NOSTR_IDENTITY_CONFLICT, /different nostr identity/i);
+  assert.match(NOSTR_IDENTITY_CONFLICT, /sign in/i);
+  assert.match(NOSTR_IDENTITY_CONFLICT, /support/i);
+  assert.doesNotMatch(NOSTR_IDENTITY_CONFLICT, /proof-of-work|try again/i, 'not retryable by the user either');
+});
+
+test('isNostrIdentityConflict matches the adopt refusal and no other 409 or PoW refusal', () => {
+  const refusal = { status: NOSTR_ROW_ADOPT_REFUSAL.status, ...NOSTR_ROW_ADOPT_REFUSAL.body };
+  assert.ok(isNostrIdentityConflict(refusal));
+  assert.ok(!isPowRequiredRejection(refusal), 'never read as "solve and resend"');
+  // The same 409 CONFLICT code answers refusals the client handles differently.
+  assert.ok(
+    !isNostrIdentityConflict({ status: 409, code: 'CONFLICT', error: 'That username is already taken. Choose another.' }),
+  );
+  assert.ok(
+    !isNostrIdentityConflict({
+      status: 409,
+      code: 'CONFLICT',
+      error:
+        'This wallet already has an account. Sign in with your existing credentials and link your Nostr identity from settings.',
+    }),
+    'the npub-register 409 still falls back to BTC sign-in',
+  );
+  assert.ok(!isNostrIdentityConflict({ status: 400, code: 'POW_REQUIRED', error: refusal.error }));
+  assert.ok(!isNostrIdentityConflict({ status: LEGACY_POW_REFUSAL.status, ...LEGACY_POW_REFUSAL.body }));
+  assert.ok(!isNostrIdentityConflict({ error: refusal.error }), 'a network failure carries no status');
+});
+
 test('isPowRequiredRejection matches a missing solution only', () => {
   assert.ok(isPowRequiredRejection({ code: 'POW_REQUIRED' }));
   assert.ok(isPowRequiredRejection({ status: 400, code: 'POW_REQUIRED', error: 'anything' }));
@@ -264,4 +334,5 @@ test('isPowRequiredRejection matches a missing solution only', () => {
   assert.ok(!isPowRequiredRejection({ status: 400, error: 'PoW solution rejected (wrong solution)' }));
   assert.ok(!isPowRequiredRejection({ status: 409, error: 'This wallet already has an account.' }));
   assert.ok(!isPowRequiredRejection({ error: 'Request timed out' }));
+  assert.ok(!isPowRequiredRejection({ status: 409, ...NOSTR_ROW_ADOPT_REFUSAL.body }));
 });

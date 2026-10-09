@@ -74,6 +74,11 @@ export const POW_CHECK_INCOMPLETE =
  * 0fa9a11e and earlier send from `enforce_pow`. A REJECTED solution
  * ("PoW solution rejected (...)") is deliberately not matched: resending
  * cannot fix a solution the server already refused.
+ *
+ * Nor is the refusal to adopt onto another npub's account
+ * (`isNostrIdentityConflict`): a 409 with code `CONFLICT` fails both
+ * tests, and must keep failing them, because a solve must never be what
+ * completes that adopt. The tests pin it.
  */
 export function isPowRequiredRejection(result: {
   status?: number;

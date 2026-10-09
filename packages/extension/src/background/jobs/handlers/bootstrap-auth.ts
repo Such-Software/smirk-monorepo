@@ -33,6 +33,8 @@ import {
   api,
   solvePowChallenge,
   isPowRequiredRejection,
+  isNostrIdentityConflict,
+  NOSTR_IDENTITY_CONFLICT,
   POW_CHECK_INCOMPLETE,
   requireRestoreState,
 } from '@smirk/core';
@@ -74,6 +76,10 @@ function friendlyRegisterError(result: {
   code?: string;
 }): string {
   const status = result.status;
+  // The seed's account is registered under an npub this wallet did not sign in
+  // with. Never PoW-shaped, so the handler did not resend; the bare 409 text
+  // would otherwise reach the user as the generic fallback below.
+  if (isNostrIdentityConflict(result)) return NOSTR_IDENTITY_CONFLICT;
   if (status === 429 || result.code === 'RATE_LIMITED') {
     return 'Too many wallet registrations from this network. Please try again in a few minutes.';
   }

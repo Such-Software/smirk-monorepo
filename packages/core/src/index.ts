@@ -81,6 +81,7 @@ export * from './keystore';
 // Bootstrap flows: auth + balances (combines keystore with the API client)
 export * from './wallet-flow';
 export * from './restore-state';
+export * from './nostr-identity-conflict';
 
 // Anti-abuse client-side helpers (ALTCHA proof-of-work for wallet creation)
 export * from './pow';

@@ -33,6 +33,7 @@
  */
 
 import { requireRestoreState } from './restore-state';
+import { isNostrIdentityConflict, NOSTR_IDENTITY_CONFLICT } from './nostr-identity-conflict';
 import { legacyBtcRotationProof } from './legacy-rotation';
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
@@ -172,6 +173,10 @@ export async function bootstrapAuth(
   // (`isPowRequiredRejection`) means: solve once and resend, with the same
   // keys and a fresh signature and rotation proof.
   //
+  // One adopt is never solved: onto a row registered under an npub, which
+  // smirk-backend-core 45b0143 and later refuse with a 409 that no solve can
+  // change (`isNostrIdentityConflict`). Older backends asked for PoW there.
+  //
   // Host wallets can inject their own solver via `options.powSolver`
   // (the extension passes a background-SW-backed solver so the work
   // survives popup close; see `packages/extension/src/popup/jobs/`).
@@ -212,6 +217,10 @@ export async function bootstrapAuth(
   }
 
   if (result.error || !result.data) {
+    // The seed's account is registered under an npub this wallet did not sign
+    // in with. Not PoW-shaped, so the resend above never ran; say what to do
+    // instead of echoing the backend's terse refusal.
+    if (isNostrIdentityConflict(result)) throw new Error(NOSTR_IDENTITY_CONFLICT);
     throw new Error(result.error ?? 'Auth failed');
   }
 

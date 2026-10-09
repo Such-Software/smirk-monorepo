@@ -14,7 +14,7 @@ import './_chrome-stub';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createChallenge, type Challenge } from 'altcha-lib';
-import { api, deriveAllKeys, mnemonicToSeed } from '@smirk/core';
+import { api, deriveAllKeys, mnemonicToSeed, NOSTR_IDENTITY_CONFLICT } from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
 import { bootstrapAuthInExtension } from '../jobs/bootstrap-in-extension';
@@ -26,6 +26,17 @@ const LEGACY_POW_REFUSAL = {
   status: 400,
   code: 'VALIDATION_ERROR',
   error: 'Proof-of-work solution is required to create a new wallet. Please upgrade to a newer Smirk client.',
+};
+
+/**
+ * smirk-backend-core 45b0143 `NOSTR_ROW_ADOPT_REFUSED`: the seed's account is
+ * registered under an npub other than this wallet's, so `/auth/extension`
+ * refuses to adopt the BTC key onto it.
+ */
+const NOSTR_ROW_ADOPT_REFUSAL = {
+  status: 409,
+  code: 'CONFLICT',
+  error: 'This account is registered under a Nostr identity; sign in with it',
 };
 
 function signedIn(isNew: boolean) {
@@ -128,6 +139,31 @@ test('a 409 from npub sign-in still falls back to BTC', async (t) => {
   assert.equal(calls.btc.length, 1);
   assert.equal(calls.challenges, 0, 'a returning BTC key needs no solve');
 });
+
+for (const [refusal, nostrReply] of [
+  ['a 409', { status: 409, code: 'CONFLICT', error: 'This wallet already has an account.' }],
+  ['a PoW refusal', LEGACY_POW_REFUSAL],
+] as const) {
+  test(`after ${refusal} on npub sign-in, a BTC adopt refused for another Nostr identity is never solved or resent`, async (t) => {
+    const calls = mockBackend(t, true, {
+      nostr: () => nostrReply,
+      btc: () => NOSTR_ROW_ADOPT_REFUSAL,
+    });
+    api.setAccessToken(null);
+    await assert.rejects(
+      bootstrapAuthInExtension(api, phraseWallet()),
+      (e: unknown) =>
+        e instanceof Error &&
+        e.message === NOSTR_IDENTITY_CONFLICT &&
+        !/proof-of-work|upgrade|update|newer|latest/i.test(e.message),
+    );
+    assert.equal(calls.nostr.length, 1);
+    assert.equal(calls.btc.length, 1, 'the refused BTC sign-in is not resent');
+    assert.equal('altchaSolution' in calls.btc[0]!, false);
+    assert.equal(calls.challenges, 0, 'no proof-of-work on either route');
+    assert.equal(api.getAccessToken(), null);
+  });
+}
 
 test('a known wallet whose npub sign-in fails for another reason does not fall back to BTC', async (t) => {
   const calls = mockBackend(t, true, {
