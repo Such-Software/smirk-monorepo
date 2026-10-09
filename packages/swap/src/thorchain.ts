@@ -1,5 +1,5 @@
 /**
- * THORChain swaps: BTC, LTC, and XMR once THORChain lists it.
+ * THORChain swaps: BTC and LTC, and XMR only when the wallet server opts in.
  *
  * Non-custodial in the same sense as a normal send: the wallet signs one
  * transaction to a THORChain vault (the "inbound address") carrying a swap
@@ -27,8 +27,16 @@
  * both chains: the pool reports `Available`, the chain has an inbound address,
  * and `inbound_addresses` reports it neither halted nor trading-paused. On top
  * of that, an operator policy (our backend's capabilities) can switch the
- * provider or any single asset off without a client release. XMR therefore
- * appears by itself the moment THORChain lists it, unless policy says off.
+ * provider or any single asset off without a client release.
+ *
+ * XMR is the exception to "absent means auto": it is closed unless the policy
+ * says `xmr: 'auto'` in so many words. Its only evidence so far is a
+ * synthesized fixture, never a recorded deposit against a real THORChain
+ * Monero vault, and an XMR deposit THORChain cannot attribute has no refund
+ * path. So a THORChain listing alone never turns it on, and neither does a
+ * missing, unreadable or older backend policy. The operator opens it, with a
+ * deposit cap, once one recorded deposit with an observed memo and an exercised
+ * refund replaces `xmr-synthesized.json`.
  *
  * KNOWN LIMIT
  * -----------
@@ -85,8 +93,9 @@ export type ThorchainAssetPolicy = 'auto' | 'off';
 
 /**
  * Operator policy, normally from our backend's `/capabilities`
- * (`swaps.thorchain`). Absent fields mean `auto`: THORChain's own state
- * decides. This is the remote kill switch.
+ * (`swaps.thorchain`). An absent asset takes {@link DEFAULT_ASSET_POLICY}:
+ * `auto` (THORChain's own state decides) for BTC and LTC, `off` for XMR. This
+ * is the remote kill switch, and for XMR the only way on.
  */
 export interface ThorchainPolicy {
   enabled: boolean;
@@ -94,6 +103,16 @@ export interface ThorchainPolicy {
 }
 
 export const DEFAULT_THORCHAIN_POLICY: ThorchainPolicy = { enabled: true };
+
+/**
+ * What an asset does when the policy does not name it. XMR is closed until an
+ * operator opens it explicitly (see the header, WHEN IT IS ON).
+ */
+export const DEFAULT_ASSET_POLICY: Readonly<Record<ThorchainAsset, ThorchainAssetPolicy>> = {
+  btc: 'auto',
+  ltc: 'auto',
+  xmr: 'off',
+};
 
 export interface ThorchainSwapOptions {
   /**
@@ -246,6 +265,15 @@ export class ThorchainSwap implements Swap {
     const t = this.now();
     if (!fresh && this.cached && t - this.cached.at < AVAILABILITY_TTL_MS) return this.cached.value;
     const policy = (await this.opts.policy?.()) ?? DEFAULT_THORCHAIN_POLICY;
+    // Nothing the policy allows: answer without asking THORChain, so a
+    // switched-off provider sends nothing to the gateway.
+    const allowed = (Object.keys(SPEC) as ThorchainAsset[]).filter((a) => policyAllows(policy, a));
+    if (allowed.length === 0) {
+      const value = {} as ThorchainAvailability;
+      for (const asset of Object.keys(SPEC) as ThorchainAsset[]) value[asset] = assess(asset, policy, [], []);
+      this.cached = { at: t, value };
+      return value;
+    }
     const [pools, inbound] = await Promise.all([
       this.get<ThorPool[]>('/thorchain/pools'),
       this.get<ThorInbound[]>('/thorchain/inbound_addresses'),
@@ -478,6 +506,11 @@ function isThorAsset(a: string): a is ThorchainAsset {
   return Object.prototype.hasOwnProperty.call(SPEC, a);
 }
 
+/** True when the operator policy lets THORChain's live state decide `asset`. */
+function policyAllows(policy: ThorchainPolicy, asset: ThorchainAsset): boolean {
+  return policy.enabled && (policy.assets?.[asset] ?? DEFAULT_ASSET_POLICY[asset]) !== 'off';
+}
+
 function assess(
   asset: ThorchainAsset,
   policy: ThorchainPolicy,
@@ -485,8 +518,10 @@ function assess(
   inbound: ThorInbound[],
 ): AssetAvailability {
   if (!policy.enabled) return { available: false, reason: 'turned off by this wallet server' };
-  if ((policy.assets?.[asset] ?? 'auto') === 'off') {
-    return { available: false, reason: 'turned off by this wallet server' };
+  if (!policyAllows(policy, asset)) {
+    return policy.assets?.[asset] === 'off'
+      ? { available: false, reason: 'turned off by this wallet server' }
+      : { available: false, reason: 'not yet enabled by this wallet server' };
   }
   const spec = SPEC[asset];
   const pool = Array.isArray(pools) ? pools.find((p) => p.asset === spec.pool) : undefined;

@@ -10,9 +10,16 @@ import { generateBurnerIdentity } from '../../nostr/identity';
 import type { NostrWireEvent, NostrFilter } from '../../nostr/client';
 import { wrapPayment } from '../../nostr/giftwrap';
 import { parsePaymentPayload } from '../../nostr/payments';
+import { nip44Decrypt } from '../../nostr/nip07';
 import { createPublicTipPayload, generateUrlFragmentKey, randomBytes } from '../../crypto';
 import type { NostrChannelIO } from '../slatepack-channel';
-import { deliverNpubTip, readNpubTips, verifyNpubTipKey } from '../npub-tips';
+import {
+  deliverNpubTip,
+  openNpubTipClaimKey,
+  readNpubTips,
+  sealNpubTipClaimKey,
+  verifyNpubTipKey,
+} from '../npub-tips';
 
 function fakeRelay() {
   const events: NostrWireEvent[] = [];
@@ -157,7 +164,7 @@ test('tip payload parser drops malformed claim fields instead of trusting them',
       asset: 'xmr',
       amount: 5,
       tipId: 'not-a-uuid',
-      claimKey: 'short',
+      sealedClaimKey: 'zz',
       expiresAt: -1,
       to: 'zz',
     }),
@@ -165,7 +172,76 @@ test('tip payload parser drops malformed claim fields instead of trusting them',
   assert.equal(p.type, 'tip');
   if (p.type !== 'tip') return;
   assert.equal(p.tipId, undefined);
-  assert.equal(p.claimKey, undefined);
+  assert.equal(p.sealedClaimKey, undefined);
   assert.equal(p.expiresAt, undefined);
   assert.equal(p.to, undefined);
+});
+
+/**
+ * What a website holding the wallet's NIP-07 grant can do: `nip44.decrypt` with
+ * the user's key, once for the gift wrap and once for the seal. Returns every
+ * plaintext it would see.
+ */
+function nip07View(identity: ReturnType<typeof generateBurnerIdentity>, wraps: NostrWireEvent[]): string[] {
+  const seen: string[] = [];
+  for (const wrap of wraps) {
+    try {
+      const sealJson = nip44Decrypt(identity, wrap.pubkey, wrap.content);
+      seen.push(sealJson);
+      const seal = JSON.parse(sealJson) as { pubkey: string; content: string };
+      seen.push(nip44Decrypt(identity, seal.pubkey, seal.content));
+    } catch {
+      // Not addressed to this identity.
+    }
+  }
+  return seen;
+}
+
+test('npub tip: the NIP-07 decrypt surface opens the wrap but never yields the claim key', async () => {
+  const relay = fakeRelay();
+  const alice = generateBurnerIdentity();
+  const bob = generateBurnerIdentity();
+  const { claimKey } = sealedTip();
+  await deliverNpubTip(relay.ioFor(alice), bob.pubkeyHex, { tipId: TIP_ID, claimKey, asset: 'btc', amount: 5000 });
+
+  // Received (Bob's grant) and the sender's own history copy (Alice's grant).
+  for (const who of [bob, alice]) {
+    const plaintexts = nip07View(who, relay.events);
+    assert.ok(plaintexts.length >= 2, 'the site really does open the wrap and the seal');
+    assert.ok(plaintexts.every((t) => !t.includes(claimKey)), 'no plaintext carries the claim key');
+    const rumors = plaintexts.map((t) => JSON.parse(t) as { kind: number; content: string }).filter((e) => e.kind === 14);
+    assert.ok(rumors.length >= 1);
+    for (const r of rumors) {
+      const payload = JSON.parse(r.content) as Record<string, unknown>;
+      assert.equal(payload.claimKey, undefined);
+      assert.equal(typeof payload.sealedClaimKey, 'string');
+    }
+  }
+  // While the wallet itself still recovers it on both sides.
+  assert.equal((await readNpubTips(relay.ioFor(bob))).received[0]?.claimKey, claimKey);
+  assert.equal((await readNpubTips(relay.ioFor(alice))).sent[0]?.claimKey, claimKey);
+});
+
+test('npub tip: a sealed claim key opens only for its own tip id and its two parties', () => {
+  const alice = generateBurnerIdentity();
+  const bob = generateBurnerIdentity();
+  const eve = generateBurnerIdentity();
+  const { claimKey } = sealedTip();
+  const sealed = sealNpubTipClaimKey(alice.privateKey, bob.pubkeyHex, TIP_ID, claimKey);
+  assert.equal(openNpubTipClaimKey(bob.privateKey, alice.pubkeyHex, TIP_ID, sealed), claimKey);
+  assert.equal(openNpubTipClaimKey(bob.privateKey, alice.pubkeyHex, '3f2504e0-4f89-41d3-9a0c-0305e82c3302', sealed), null);
+  assert.equal(openNpubTipClaimKey(eve.privateKey, alice.pubkeyHex, TIP_ID, sealed), null);
+  assert.equal(openNpubTipClaimKey(bob.privateKey, eve.pubkeyHex, TIP_ID, sealed), null);
+});
+
+test('npub tip: a wrap carrying a plaintext claim key is not a claimable tip', async () => {
+  const relay = fakeRelay();
+  const alice = generateBurnerIdentity();
+  const bob = generateBurnerIdentity();
+  const { claimKey } = sealedTip();
+  // The pre-release wire shape: the key in the rumor in the clear.
+  const legacy = { type: 'tip', v: 1, asset: 'btc', amount: 5000, tipId: TIP_ID, claimKey } as unknown as Parameters<typeof wrapPayment>[2];
+  await relay.ioFor(alice).publish(['wss://relay.test'], wrapPayment(alice, bob.pubkeyHex, legacy));
+  const { received } = await readNpubTips(relay.ioFor(bob));
+  assert.equal(received.length, 0);
 });

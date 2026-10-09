@@ -12,6 +12,18 @@
  * the sender's history: there is no server-side record of the recipient, and
  * none is needed.
  *
+ * The claim key is a bearer secret (whoever holds it can sweep the tip), so it
+ * never sits in the rumor in the clear. It is sealed again, inside the rumor,
+ * under {@link claimSealKey}: HKDF over the sender/recipient ECDH x-coordinate
+ * with its own salt and the tip id. That matters because the wallet lends this
+ * same Nostr key to websites through NIP-07, and a site granted
+ * `nip44.decrypt` can open the gift wrap and the seal exactly as we do. NIP-44
+ * derives with salt `nip44-v2` and NIP-04 uses the raw x-coordinate as an AES
+ * key; neither oracle yields an HMAC under another salt, so a site that reads
+ * the rumor learns the tip id and amount but not the key. Any other NIP-17
+ * client holding the nsec shows the same rumor as a chat message, which is the
+ * second reason the key must not be readable there.
+ *
  * Gift-wrap content is attacker-controlled. Anyone can wrap a "tip" with any
  * amount to any npub. Callers MUST treat `asset` and `amount` here as claims
  * and display the backend's record for `tipId` instead, dropping any tip the
@@ -21,10 +33,79 @@
  * Relay I/O is injected ({@link NostrChannelIO}) so this stays unit-testable.
  */
 
-import { decodeUrlFragmentKey, decryptPublicTipPayload } from '../crypto';
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { hkdf } from '@noble/hashes/hkdf';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+
+import { decodeUrlFragmentKey, decrypt, decryptPublicTipPayload, encrypt } from '../crypto';
 import { wrapPayment, unwrapPayment } from '../nostr/giftwrap';
 import { GIFT_WRAP_KIND, type TipPayload } from '../nostr/payments';
 import type { NostrChannelIO } from './slatepack-channel';
+
+/** Domain separator for the inner claim-key seal. Never `nip44-v2`. */
+const CLAIM_SEAL_LABEL = 'smirk-tip-claim-v1';
+
+/**
+ * The key that seals a tip's claim key between two Nostr identities.
+ *
+ * `HKDF-SHA256(ikm = x(ECDH(ourKey, peer)), salt = "smirk-tip-claim-v1",
+ * info = "smirk-tip-claim-v1:" + tipId)`. ECDH on x-only keys is symmetric
+ * (the x-coordinate of `a*B` equals that of `b*A` for either lift of the
+ * x-only keys), so the sender, sealing to the recipient, and the recipient,
+ * opening from the authenticated seal author, derive the same key. The
+ * sender's self copy uses its own pubkey as the peer. Binding the tip id means
+ * a sealed key cannot be lifted onto another tip's id.
+ */
+function claimSealKey(privateKey: Uint8Array, peerPubkeyHex: string, tipId: string): Uint8Array {
+  const shared = secp256k1.getSharedSecret(privateKey, `02${peerPubkeyHex.toLowerCase()}`);
+  const x = shared.slice(1, 33);
+  try {
+    const enc = new TextEncoder();
+    return hkdf(sha256, x, enc.encode(CLAIM_SEAL_LABEL), enc.encode(`${CLAIM_SEAL_LABEL}:${tipId.toLowerCase()}`), 32);
+  } finally {
+    shared.fill(0);
+    x.fill(0);
+  }
+}
+
+/** Seal `claimKey` for `peerPubkeyHex` (the recipient, or ourselves for the history copy). */
+export function sealNpubTipClaimKey(
+  privateKey: Uint8Array,
+  peerPubkeyHex: string,
+  tipId: string,
+  claimKey: string,
+): string {
+  const key = claimSealKey(privateKey, peerPubkeyHex, tipId);
+  try {
+    return bytesToHex(encrypt(new TextEncoder().encode(claimKey), key));
+  } finally {
+    key.fill(0);
+  }
+}
+
+/**
+ * Open a sealed claim key from `peerPubkeyHex` (the authenticated seal author).
+ * Returns null when it does not open: a forged or mismatched wrap.
+ */
+export function openNpubTipClaimKey(
+  privateKey: Uint8Array,
+  peerPubkeyHex: string,
+  tipId: string,
+  sealedHex: string,
+): string | null {
+  let key: Uint8Array | null = null;
+  try {
+    key = claimSealKey(privateKey, peerPubkeyHex, tipId);
+    const claimKey = new TextDecoder().decode(decrypt(hexToBytes(sealedHex), key));
+    // The share-link fragment shape, as `generateUrlFragmentKey` encodes it.
+    return /^[A-Za-z0-9_-]{20,128}$/.test(claimKey) ? claimKey : null;
+  } catch {
+    return null;
+  } finally {
+    key?.fill(0);
+  }
+}
 
 /** What the sender hands over to deliver one claimable tip. */
 export interface NpubTipDelivery {
@@ -60,14 +141,14 @@ export interface NpubTipDeliveryResult {
   selfCopy: boolean;
 }
 
-function tipPayload(d: NpubTipDelivery, to?: string): TipPayload {
+function tipPayload(sealedClaimKey: string, d: NpubTipDelivery, to?: string): TipPayload {
   return {
     type: 'tip',
     v: 1,
     asset: d.asset,
     amount: d.amount,
     tipId: d.tipId,
-    claimKey: d.claimKey,
+    sealedClaimKey,
     ...(d.memo ? { memo: d.memo } : {}),
     ...(d.expiresAt ? { expiresAt: d.expiresAt } : {}),
     ...(to ? { to } : {}),
@@ -86,13 +167,14 @@ export async function deliverNpubTip(
   tip: NpubTipDelivery,
 ): Promise<NpubTipDeliveryResult> {
   const recipient = recipientPubkeyHex.toLowerCase();
-  const wrap = wrapPayment(io.identity, recipient, tipPayload(tip));
+  const sealFor = (peer: string) => sealNpubTipClaimKey(io.identity.privateKey, peer, tip.tipId, tip.claimKey);
+  const wrap = wrapPayment(io.identity, recipient, tipPayload(sealFor(recipient), tip));
   await io.publish(await io.outboundRelays(recipient), wrap);
 
   const self = io.identity.pubkeyHex;
   if (recipient === self) return { selfCopy: true };
   try {
-    const copy = wrapPayment(io.identity, self, tipPayload(tip, recipient));
+    const copy = wrapPayment(io.identity, self, tipPayload(sealFor(self), tip, recipient));
     await io.publish(await io.inboxRelays(), copy);
     return { selfCopy: true };
   } catch {
@@ -144,7 +226,11 @@ export async function readNpubTips(
       continue;
     }
     const p = opened.payload;
-    if (p.type !== 'tip' || !p.tipId || !p.claimKey) continue;
+    if (p.type !== 'tip' || !p.tipId || !p.sealedClaimKey) continue;
+    // Sealed between us and the authenticated seal author (ourselves for a
+    // history copy). A wrap that does not open is not a tip we can claim.
+    const claimKey = openNpubTipClaimKey(io.identity.privateKey, opened.senderPubkeyHex, p.tipId, p.sealedClaimKey);
+    if (!claimKey) continue;
 
     const fromSelf = opened.senderPubkeyHex === self;
     let direction: NpubTip['direction'];
@@ -162,7 +248,7 @@ export async function readNpubTips(
     const tip: NpubTip = {
       direction,
       tipId: p.tipId,
-      claimKey: p.claimKey,
+      claimKey,
       asset: p.asset,
       amount: p.amount,
       ...(p.memo ? { memo: p.memo } : {}),
@@ -171,7 +257,7 @@ export async function readNpubTips(
       createdAt: opened.rumorCreatedAt,
     };
     const bucket = direction === 'sent' ? sent : received;
-    const key = direction === 'sent' ? p.tipId : `${p.tipId}:${p.claimKey}`;
+    const key = direction === 'sent' ? p.tipId : `${p.tipId}:${claimKey}`;
     const prev = bucket.get(key);
     if (!prev || tip.createdAt > prev.createdAt) bucket.set(key, tip);
   }

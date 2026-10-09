@@ -24,6 +24,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import {
   api,
   deriveAppEncryptionKey,
+  isClaimableTipRumor,
   nostrKeySource,
   sealOpen,
   signBitcoinMessage,
@@ -38,30 +39,39 @@ import {
   type UnlockedWallet,
   type UnsignedNostrEvent,
 } from '@smirk/core';
-import type { SmirkAsset, SmirkSignResult } from '@such-software/smirk-dapp-api';
+import {
+  isReservedSmirkMessage,
+  RESERVED_SMIRK_MESSAGE_REFUSAL,
+  type SmirkAsset,
+  type SmirkSignResult,
+} from '@such-software/smirk-dapp-api';
 
 /**
- * Messages the wallet's OWN backend treats as an authentication challenge:
- * `POST /auth/extension` verifies a BIP-137 signature over `smirk-auth-<ts>`.
- * The general dapp `signMessage` surface MUST NEVER produce one; otherwise a
+ * The dapp `signMessage` and `signIn` surfaces MUST NEVER produce a credential
+ * the wallet's OWN server accepts. Every such proof starts with `smirk-`:
+ * `POST /auth/extension` verifies a BIP-137 signature over `smirk-auth-<ts>`,
+ * and the legacy merge (`POST /auth/legacy-merge`, and the rotation fields of
+ * `/auth/extension`) accepts `smirk-rotate-v1|<api>|<key hash>|<ts>` as proof
+ * that a row belongs to the key that signed it. Both are predictable, so a
  * connected site (which already holds the btc pubkey from `connect()`) could
- * have the user approve a `signMessage("smirk-auth-<now>")` and replay it to the
- * backend to forge a full authenticated session for the user's own account.
- * The wallet's real registration signs these directly in core
- * (`wallet-flow.ts` / `bootstrap-in-extension.ts`), never through this executor,
- * so refusing the prefix here breaks no legitimate flow.
+ * have the user approve one and replay it: a sign-in for the user's account,
+ * or a rotation bound to the attacker's key that moves the user's handle, npub
+ * and tips to the attacker.
+ *
+ * Only `smirk-auth-` used to be refused here, which left the rotation proof
+ * open. The whole namespace is reserved now (`isReservedSmirkMessage`), and the
+ * check lives in this executor because every platform signs through it: the
+ * extension's approval popup and the desktop BrowseTab. The wallet's real
+ * proofs are signed directly in core (`wallet-flow.ts`, `legacy-rotation.ts`,
+ * `bootstrap-in-extension.ts`), never through here, so no legitimate flow breaks.
  */
-const RESERVED_AUTH_MESSAGE = /^\s*smirk-auth-/i;
-
 export function signMessageWithUnlocked(
   wallet: UnlockedWallet,
   message: string,
   assets: SmirkAsset[],
 ): SmirkSignResult {
-  if (RESERVED_AUTH_MESSAGE.test(message)) {
-    throw new Error(
-      'Refusing to sign a reserved Smirk backend-auth challenge through the dapp interface.',
-    );
+  if (isReservedSmirkMessage(message)) {
+    throw new Error(RESERVED_SMIRK_MESSAGE_REFUSAL);
   }
   const msgBytes = new TextEncoder().encode(message);
   const signatures: SmirkSignResult['signatures'] = [];
@@ -131,9 +141,10 @@ const NIP98_HTTP_AUTH_KIND = 27235;
 /**
  * Refuse to sign a NIP-98 token aimed at the user's OWN backend.
  *
- * This is the Nostr twin of {@link RESERVED_AUTH_MESSAGE}. `POST /auth/nostr`
- * mints a full session from a kind-27235 event whose `u` tag matches the
- * server's canonical URL, with no nonce and a 30s window. Nothing inspected the
+ * This is the Nostr twin of the `smirk-` message reservation in
+ * {@link signMessageWithUnlocked}. `POST /auth/nostr` mints a full session
+ * from a kind-27235 event whose `u` tag matches the server's canonical URL,
+ * with no nonce and a 30s window. Nothing inspected the
  * kind or tags before signing, so a connected site could ask for "a Nostr event",
  * get a valid login token for the user's wallet backend, and replay it. The BTC
  * path has refused the equivalent since the auth-replay hardening; this closes
@@ -239,10 +250,23 @@ export function openAppSealWithUnlocked(
   } finally { key.privateKey.fill(0); }
 }
 
+/** The refusal a page sees when it tries to read the wallet's own tip rail. */
+export const TIP_RUMOR_REFUSAL =
+  'Refusing to decrypt a Smirk tip for a website: tip messages belong to the wallet, and one can carry what is needed to claim the tip.';
+
 /**
  * NIP-07 DM crypto (NIP-44 v2 / legacy NIP-04) AS an already-resolved identity.
  * `op` selects encrypt/decrypt; `peer` is the counterparty x-only hex pubkey. The
  * caller resolves which identity the origin acts as (see {@link signNostrEventWith}).
+ *
+ * A decrypt that yields a claimable Smirk tip rumor is refused. Person tips
+ * travel as NIP-17 gift wraps to this same key, and after its first crypt
+ * prompt a granted site decrypts silently, so it could open every wrap and seal
+ * addressed to the user. The claim key is sealed again inside the rumor
+ * (`sealNpubTipClaimKey`), which a NIP-07 oracle cannot open; this refusal is
+ * the second layer, and it also keeps tip ids, amounts and senders, and any
+ * pre-release wrap with a plaintext key, away from the site. Direct messages
+ * still decrypt.
  */
 export function nostrCryptWith(
   identity: NostrIdentity | null,
@@ -254,12 +278,10 @@ export function nostrCryptWith(
   if (!identity) {
     throw new Error('Nostr encryption needs the unlocked identity — re-unlock the wallet');
   }
-  if (scheme === 'nip04') {
-    return op === 'encrypt'
-      ? nip04Encrypt(identity, peer, data)
-      : nip04Decrypt(identity, peer, data);
+  if (op === 'encrypt') {
+    return scheme === 'nip04' ? nip04Encrypt(identity, peer, data) : nip44Encrypt(identity, peer, data);
   }
-  return op === 'encrypt'
-    ? nip44Encrypt(identity, peer, data)
-    : nip44Decrypt(identity, peer, data);
+  const plaintext = scheme === 'nip04' ? nip04Decrypt(identity, peer, data) : nip44Decrypt(identity, peer, data);
+  if (isClaimableTipRumor(plaintext)) throw new Error(TIP_RUMOR_REFUSAL);
+  return plaintext;
 }

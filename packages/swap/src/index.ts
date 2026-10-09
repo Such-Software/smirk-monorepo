@@ -47,6 +47,7 @@ export type {
 export {
   ThorchainSwap,
   DEFAULT_THORCHAIN_POLICY,
+  DEFAULT_ASSET_POLICY,
   DEFAULT_THORNODE_URL,
   assertMemo,
   toThorUnits,

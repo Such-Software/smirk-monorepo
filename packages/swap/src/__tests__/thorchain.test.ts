@@ -76,7 +76,8 @@ async function rejects(p: Promise<unknown>, code: SwapError['code']) {
 }
 
 test('BTC and LTC are offered while THORChain reports them live; XMR is not listed yet', async () => {
-  const { swap } = harness(world());
+  // Opened by the operator, so the reason is THORChain's own listing state.
+  const { swap } = harness(world(), { policy: { enabled: true, assets: { xmr: 'auto' } } });
   const a = await swap.availability();
   assert.equal(a.btc.available, true);
   assert.equal(a.ltc.available, true);
@@ -85,8 +86,28 @@ test('BTC and LTC are offered while THORChain reports them live; XMR is not list
   assert.deepEqual(await swap.availablePairs(), [{ from: 'btc', to: 'ltc' }, { from: 'ltc', to: 'btc' }]);
 });
 
-test('XMR turns on with no client change the moment THORChain lists it', async () => {
-  const { swap } = harness(world(true));
+/** The only policy that opens XMR: the operator naming it. */
+const XMR_ON: ThorchainPolicy = { enabled: true, assets: { xmr: 'auto' } };
+
+test('XMR stays closed when THORChain lists it, unless the wallet server opens it by name', async () => {
+  // A listing alone, an absent policy (unreachable or older backend) and the
+  // production shape today ({enabled:true} with no asset overrides) all leave
+  // XMR off: its only evidence is a synthesized fixture.
+  for (const policy of [undefined, { enabled: true }] as const) {
+    const { swap } = harness(world(true), policy ? { policy } : {});
+    const a = await swap.availability();
+    assert.equal(a.xmr.available, false, JSON.stringify(policy));
+    assert.match(a.xmr.reason!, /not yet enabled/);
+    assert.equal(a.btc.available, true, 'BTC and LTC still follow THORChain');
+    const pairs = await swap.availablePairs();
+    assert.ok(!pairs.some((p) => p.from === 'xmr' || p.to === 'xmr'));
+    await rejects(
+      swap.quote({ fromAsset: 'xmr', toAsset: 'btc', fromAmount: '1000000000000', toAddress: BTC_DEST, refundAddress: XMR_REFUND }),
+      'provider_unavailable',
+    );
+  }
+
+  const { swap } = harness(world(true), { policy: XMR_ON });
   const a = await swap.availability();
   assert.equal(a.xmr.available, true);
   assert.equal(a.xmr.inboundAddress, XMR.inbound_xmr.address);
@@ -97,6 +118,16 @@ test('XMR turns on with no client change the moment THORChain lists it', async (
   assert.ok(!pairs.some((p) => p.to === 'xmr'));
 });
 
+test('a provider the wallet server switched off asks THORChain nothing', async () => {
+  for (const policy of [{ enabled: false }, { enabled: true, assets: { btc: 'off', ltc: 'off' } }] as ThorchainPolicy[]) {
+    const { swap, calls } = harness(world(true), { policy });
+    const a = await swap.availability(true);
+    assert.ok(!a.btc.available && !a.ltc.available && !a.xmr.available);
+    assert.deepEqual(await swap.availablePairs(), []);
+    assert.deepEqual(calls, [], `no request for ${JSON.stringify(policy)}`);
+  }
+});
+
 test('the wallet server can switch the provider or one asset off remotely', async () => {
   const off = harness(world(true), { policy: { enabled: false } });
   const a = await off.swap.availability();
@@ -105,6 +136,7 @@ test('the wallet server can switch the provider or one asset off remotely', asyn
   const xmrOff = harness(world(true), { policy: { enabled: true, assets: { xmr: 'off' } } });
   const b = await xmrOff.swap.availability();
   assert.equal(b.xmr.available, false);
+  assert.match(b.xmr.reason!, /turned off/);
   assert.equal(b.btc.available, true);
 });
 
@@ -190,7 +222,7 @@ test('a vault rotation between availability and quote is refused, not guessed', 
 test('XMR swaps require a refund address, and the memo must carry it', async () => {
   const w = world(true);
   w.quotes['XMR.XMR>BTC.BTC'] = XMR.quote_xmr_to_btc;
-  const { swap, calls } = harness(w);
+  const { swap, calls } = harness(w, { policy: XMR_ON });
   await rejects(swap.quote({ fromAsset: 'xmr', toAsset: 'btc', fromAmount: '1000000000000', toAddress: BTC_DEST }), 'refund_address_required');
   const q = await swap.quote({
     fromAsset: 'xmr', toAsset: 'btc', fromAmount: '1000000000000', toAddress: BTC_DEST, refundAddress: XMR_REFUND,
@@ -207,13 +239,13 @@ test('XMR swaps require a refund address, and the memo must carry it', async () 
   const stripped = world(true);
   stripped.quotes['XMR.XMR>BTC.BTC'] = { ...XMR.quote_xmr_to_btc, memo: `=:b:${BTC_DEST}:286150` };
   await rejects(
-    harness(stripped).swap.quote({ fromAsset: 'xmr', toAsset: 'btc', fromAmount: '1000000000000', toAddress: BTC_DEST, refundAddress: XMR_REFUND }),
+    harness(stripped, { policy: XMR_ON }).swap.quote({ fromAsset: 'xmr', toAsset: 'btc', fromAmount: '1000000000000', toAddress: BTC_DEST, refundAddress: XMR_REFUND }),
     'network_error',
   );
 });
 
 test('BTC or LTC to XMR is refused with the reason, not attempted', async () => {
-  const { swap } = harness(world(true));
+  const { swap } = harness(world(true), { policy: XMR_ON });
   await rejects(swap.quote({ fromAsset: 'btc', toAsset: 'xmr', fromAmount: '1000000', toAddress: XMR_REFUND }), 'asset_pair_unsupported');
 });
 

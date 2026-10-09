@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { secp256k1 } from '@noble/curves/secp256k1';
 
 import { bootstrapAuth } from '../wallet-flow';
-import { SmirkApi } from '../api';
+import { SmirkApi, invalidateCapabilities } from '../api';
 import { isPowRequiredRejection, type AltchaPayload } from '../pow';
 import { isNostrIdentityConflict, NOSTR_IDENTITY_CONFLICT } from '../nostr-identity-conflict';
 import { bitcoinMessageHash, bytesToHex } from '../crypto';
@@ -82,6 +82,10 @@ function phraseWallet(): UnlockedWallet {
 
 type Reply = { status: number; body: unknown };
 
+/** What the mock server's `/capabilities` advertises. The hardened legacy merge
+ *  by default, so the rotation proof is sent; one test turns it off. */
+let advertisedFeatures: Record<string, unknown> = { legacy_merge_v2: true };
+
 /**
  * Mock backend: check-restore reports `exists`, and `/auth/extension` answers
  * from `onRegister`, which sees each request body. The clock advances
@@ -95,13 +99,16 @@ async function withBackend<T>(
   run: (calls: Array<Record<string, unknown>>) => Promise<T>,
 ): Promise<T> {
   t.mock.timers.enable({ apis: ['Date'], now: START_MS });
+  invalidateCapabilities();
   const calls: Array<Record<string, unknown>> = [];
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
     let reply: Reply;
-    if (url.endsWith('/auth/check-restore')) {
+    if (url.endsWith('/capabilities')) {
+      reply = { status: 200, body: { features: advertisedFeatures } };
+    } else if (url.endsWith('/auth/check-restore')) {
       reply = {
         status: 200,
         body: { exists, keys_valid: exists ? true : null, xmr_start_height: exists ? 3_400_000 : undefined },
@@ -335,4 +342,29 @@ test('isPowRequiredRejection matches a missing solution only', () => {
   assert.ok(!isPowRequiredRejection({ status: 409, error: 'This wallet already has an account.' }));
   assert.ok(!isPowRequiredRejection({ error: 'Request timed out' }));
   assert.ok(!isPowRequiredRejection({ status: 409, ...NOSTR_ROW_ADOPT_REFUSAL.body }));
+});
+
+test('a server without the hardened legacy merge gets a plain v0.3.0 sign-in, no rotation proof', async (t) => {
+  // smirk-backend-core 45b0143 and older fold any unanchored row whose BTC key
+  // row is the wallet's m/44' key into the signed-in account, and any session
+  // can plant that row with POST /keys. The proof must not reach such a server.
+  const api = new SmirkApi(API);
+  for (const features of [{}, { legacy_merge_v2: false }]) {
+    advertisedFeatures = features;
+    try {
+      await withBackend(
+        t,
+        true,
+        () => SIGNED_IN,
+        async (calls) => {
+          await bootstrapAuth(api, phraseWallet());
+          assert.equal(calls.length, 1);
+          assert.equal('rotation_public_key' in calls[0]!, false, JSON.stringify(features));
+          assert.equal('rotation_signature' in calls[0]!, false);
+        },
+      );
+    } finally {
+      advertisedFeatures = { legacy_merge_v2: true };
+    }
+  }
 });

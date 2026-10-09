@@ -30,7 +30,7 @@
  */
 
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { mustGetAsset } from '@smirk/assets';
+import { getAsset, mustGetAsset } from '@smirk/assets';
 import { useWizard } from '../state/hooks';
 import { AssetIcon } from './AssetIcon';
 import { formatAmountWithTicker, formatAmount } from '../format';
@@ -56,6 +56,12 @@ export interface SwapQuoteSummary {
   fromAmountAtomic: string;
   toAmountEstimateAtomic: string;
   feeEstimateAtomic: string;
+  /** The asset `feeEstimateAtomic` is counted in. Absent means the from-asset.
+   *  THORChain charges in the destination asset. */
+  feeAssetId?: string;
+  /** True when the fee is already taken out of `toAmountEstimateAtomic`, so
+   *  the fee row reads as a breakdown, not a further charge. */
+  feeIncludedInEstimate?: boolean;
   provider: string;
   etaSeconds: number;
   /** Unix ms; UI computes "valid for Ns" off this. */
@@ -230,7 +236,8 @@ export interface SwapTabProps {
    */
   nonlogs?: ProviderHandlers;
   /** Live DEX prices for the WOW/GRIN "where to trade" panel. Optional;
-   *  the panel renders its venue list without them. */
+   *  the panel renders its venue list without them, and calls this only
+   *  when the user asks for prices. */
   loadTradePrices?: () => Promise<TradePairPrice[]>;
 }
 
@@ -243,6 +250,14 @@ export interface ThorchainHandlers {
   toAssets: ReadonlyArray<string>;
   /** Shown on the provider card when no pair is live. */
   unavailableReason?: string;
+  /**
+   * Ask the provider whether it is live. Opening the Swap tab is not a
+   * request to contact a third party, so a provider that answers from its
+   * own servers is checked only when the user taps its card (or has already
+   * chosen it). Present while there is no live answer and no check running;
+   * the card then reads as a tap target showing `unavailableReason`.
+   */
+  onCheck?: () => void;
   onQuote: (req: { fromAsset: string; toAsset: string; fromAmountAtomic: string }) => Promise<SwapQuoteSummary>;
   onConfirm: (args: { quote: SwapQuoteSummary; toAddress: string; refundAddress: string }) => Promise<SwapInFlight>;
   onFetchStatus?: (id: string) => Promise<SwapInFlight>;
@@ -268,6 +283,8 @@ interface ProviderCard {
   status: SwapProviderStatus;
   /** Reason / ETA copy when status !== 'active'. */
   statusNote?: string;
+  /** Not live yet, but a tap asks the provider (see `ThorchainHandlers.onCheck`). */
+  checkable?: boolean;
   /** Provider's support channels, displayed in StatusStep failure
    *  states and via the "Provider support" affordance on active cards.
    *  Stack Wallet feedback: 95% of swap support burden comes from
@@ -335,9 +352,9 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     id: 'thorchain',
     kind: 'DEX',
     name: 'THORChain',
-    blurb: 'Cross-chain pools. BTC and LTC, and XMR when THORChain lists it.',
+    blurb: 'Cross-chain pools. BTC and LTC; XMR once this wallet server enables it.',
     status: 'paused',
-    statusNote: 'Checking THORChain…',
+    statusNote: 'Not checked yet.',
     support: [
       { label: 'THORChain transaction tracker', href: 'https://thorchain.net' },
       { label: 'THORChain Discord', href: 'https://discord.gg/thorchain' },
@@ -428,7 +445,11 @@ export function SwapTab(props: SwapTabProps) {
   const cards: ReadonlyArray<ProviderCard> = PROVIDERS.map((p) => {
     if (p.id === 'thorchain') {
       if (live(thor)) return { ...p, status: 'active' as const, blurb: `Cross-chain pools. Live now: ${tickers(thor!)}.` };
-      return { ...p, statusNote: thor?.unavailableReason ?? 'Not available in this app.' };
+      return {
+        ...p,
+        statusNote: thor?.unavailableReason ?? 'Not available in this app.',
+        ...(thor?.onCheck ? { checkable: true } : {}),
+      };
     }
     if (p.id === 'nonlogs') {
       if (live(nl)) {
@@ -442,6 +463,17 @@ export function SwapTab(props: SwapTabProps) {
     }
     return p;
   });
+
+  // A THORChain wizard restored from an earlier session is the user's own
+  // choice of provider, so it may ask THORChain, once per mount (a failed
+  // check must not loop); the provider list never does.
+  const thorNeedsCheck = thorchain.active && !!thor?.onCheck && !live(thor);
+  const thorAutoChecked = useRef(false);
+  useEffect(() => {
+    if (!thorNeedsCheck || thorAutoChecked.current) return;
+    thorAutoChecked.current = true;
+    thor!.onCheck!();
+  }, [thorNeedsCheck]);
 
   // Provider list when no active wizard; otherwise the active
   // provider's wizard takes the whole tab.
@@ -465,7 +497,9 @@ export function SwapTab(props: SwapTabProps) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {cards.map((p) => {
             const activate =
-              p.status !== 'active'
+              p.checkable && p.id === 'thorchain' && thor?.onCheck
+                ? thor.onCheck
+                : p.status !== 'active'
                 ? null
                 : p.id === 'trocador'
                   ? () => void trocador.start()
@@ -675,13 +709,13 @@ function ProviderRow({
   provider: ProviderCard;
   onActivate?: () => void;
 }) {
-  const interactive = provider.status === 'active' && onActivate !== undefined;
+  const interactive = (provider.status === 'active' || !!provider.checkable) && onActivate !== undefined;
   return (
     <button
       onClick={onActivate}
       disabled={!interactive}
       title={provider.statusNote}
-      {...(provider.id === 'trocador' ? { 'data-testid': 'swap-provider-trocador' } : {})}
+      data-testid={`swap-provider-${provider.id}`}
       style={{
         textAlign: 'left',
         display: 'flex',
@@ -713,7 +747,7 @@ function ProviderRow({
           {provider.kind}
         </span>
         <span style={{ fontSize: 13, fontWeight: 600 }}>{provider.name}</span>
-        {provider.status !== 'active' && (
+        {provider.status !== 'active' && !provider.checkable && (
           <span
             style={{
               fontSize: 9,
@@ -1152,7 +1186,8 @@ function AssetRow({
 
 // ----- Step 1: Quote ---------------------------------------------------
 
-function QuoteStep({
+/** Exported for tests; the wizard is the only caller. */
+export function QuoteStep({
   quote,
   toAddress,
   refundAddress,
@@ -1196,7 +1231,11 @@ function QuoteStep({
     return () => window.clearInterval(handle);
   }, []);
   const secondsLeft = Math.max(0, Math.round((quote.expiresAtMs - now) / 1000));
-  const expired = secondsLeft === 0;
+  // A confirm the provider refused as stale (`quote_expired`: the rate moved,
+  // the vault rotated) needs a new quote just as an expired one does.
+  const [stale, setStale] = useState(false);
+  const expired = secondsLeft === 0 || stale;
+  const feeAsset = mustGetAsset(quote.feeAssetId ?? quote.fromAsset);
 
   // Wallet-owned addresses for the from / to assets. Used to
   // pre-fill the refund (almost always the user's own address;
@@ -1289,6 +1328,7 @@ function QuoteStep({
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start swap');
+      if ((e as { code?: unknown } | null)?.code === 'quote_expired') setStale(true);
     } finally {
       setBusy(false);
     }
@@ -1315,7 +1355,10 @@ function QuoteStep({
           {formatAmountWithTicker(BigInt(quote.toAmountEstimateAtomic), to.id)}
         </Row>
         <Row label="Network/provider fee">
-          ≈ {formatAmount(BigInt(quote.feeEstimateAtomic), from.id, 8)} {from.ticker}
+          <span data-testid="swap-quote-fee">
+            ≈ {formatAmount(BigInt(quote.feeEstimateAtomic), feeAsset.id, 8)} {feeAsset.ticker}
+            {quote.feeIncludedInEstimate ? ', included in the estimate' : ''}
+          </span>
         </Row>
         <Row label="Provider">{quote.provider}</Row>
         <Row label="ETA">{Math.max(1, Math.round(quote.etaSeconds / 60))} min</Row>
@@ -1435,7 +1478,7 @@ function QuoteStep({
           busy,
         )}
       >
-        {busy ? 'Creating trade…' : expired ? 'Quote expired — re-quote' : 'Confirm swap'}
+        {busy ? 'Creating trade…' : stale ? 'Get a new quote' : expired ? 'Quote expired — re-quote' : 'Confirm swap'}
       </button>
     </div>
   );
@@ -1520,7 +1563,8 @@ export function BookAnalysisPanel({
 
 // ----- Step 2: Deposit -------------------------------------------------
 
-function DepositStep({
+/** Exported for tests; the wizard is the only caller. */
+export function DepositStep({
   swap,
   onOpenSend,
   onContinue,
@@ -1530,6 +1574,8 @@ function DepositStep({
   onContinue: () => void;
 }) {
   const from = mustGetAsset(swap.fromAsset);
+  const to = swap.toAsset ? getAsset(swap.toAsset) ?? null : null;
+  const toEstimate = safeAtomicBigInt(swap.toAmountEstimateAtomic, 'DepositStep.toAmountEstimateAtomic');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div
@@ -1551,6 +1597,13 @@ function DepositStep({
             return a !== null ? formatAmountWithTicker(a, from.id) : '—';
           })()}
         </Row>
+        {/* The figure this deposit was quoted at, which can differ from the
+            estimate on the previous screen: the confirm re-quotes. */}
+        {to && toEstimate !== null && (
+          <Row label="You receive (est.)">
+            <span data-testid="swap-deposit-receive">{formatAmountWithTicker(toEstimate, to.id)}</span>
+          </Row>
+        )}
         {swap.memo ? (
           // A memo deposit: the vault address alone is NOT a payment
           // destination. Paid from another wallet, or by hand, the deposit

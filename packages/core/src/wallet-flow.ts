@@ -34,7 +34,7 @@
 
 import { requireRestoreState } from './restore-state';
 import { isNostrIdentityConflict, NOSTR_IDENTITY_CONFLICT } from './nostr-identity-conflict';
-import { legacyBtcRotationProof } from './legacy-rotation';
+import { legacyBtcRotationProof, legacyMergeAllowed } from './legacy-rotation';
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
@@ -182,16 +182,21 @@ export async function bootstrapAuth(
   // survives popup close; see `packages/extension/src/popup/jobs/`).
   const solvePow = options.powSolver ?? solvePowChallenge;
 
+  // The rotation proof goes only to a server that advertises the hardened
+  // merge (`legacyMergeAllowed`). Read once, before any signing.
+  const rotationAllowed = isKnownWallet && !!wallet.seed && (await legacyMergeAllowed(api));
+
   const register = (altchaSolution: AltchaPayload | null) => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = signBitcoinMessage(`smirk-auth-${timestamp}`, wallet.keys.btc.privateKey);
     // A wallet the backend already knows may still be registered under its
     // pre-v0.3 BTC key (`migrate-legacy` rows). Prove control of that key so the
     // backend carries the identity over instead of minting a new one. Needs the
-    // seed, which a fresh password unlock (and every import) has. The proof
-    // binds the timestamp, so it is signed afresh for every attempt.
+    // seed, which a fresh password unlock (and every import) has, and a server
+    // that advertises the hardened merge. The proof binds the timestamp, so it
+    // is signed afresh for every attempt.
     const rotation =
-      isKnownWallet && wallet.seed
+      rotationAllowed && wallet.seed
         ? legacyBtcRotationProof(wallet.seed, keys[0]!.publicKey, timestamp, api.getBaseUrl())
         : null;
     return api.extensionRegister({

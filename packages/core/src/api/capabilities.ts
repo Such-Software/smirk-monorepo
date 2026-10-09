@@ -122,6 +122,16 @@ export interface BackendCapabilities {
      *  backend that predates the feature, which is the same as off: that backend
      *  rejects a targeted create with a 400. */
     targeted_tips?: boolean;
+    /**
+     * The legacy identity merge is safe to ask for: the server folds a row in
+     * only when it has the pre-v0.3 shape, found by a key column no session
+     * can write (never a `POST /keys` row, never a row a v0.3 registration
+     * keyed). Until a server says so, the wallet sends no rotation proof on
+     * `/auth/extension` and never calls `/auth/legacy-merge`, because an older
+     * server lets a planted key fold an attacker's row into the user's account
+     * (and accepts a v0.3 row as "legacy"). Absent means off.
+     */
+    legacy_merge_v2?: boolean;
   };
   restore: RestoreCapability;
   /** Registration gates for a new wallet. Absent on legacy backends ⇒ treat as open. */
@@ -327,6 +337,9 @@ export const capHasRelay = (c: Caps): boolean => !!c?.features.nostr_relay && !!
 export const capHasFeed = (c: Caps): boolean => !!c?.features.feed && !!c?.feed;
 /** Paid premium relay tier. STRICT. */
 export const capHasPremium = (c: Caps): boolean => !!c?.features.premium_relay && !!c?.premium;
+/** The hardened legacy identity merge. STRICT: a rotation proof or a merge
+ *  request goes only to a server that advertises it (see `legacy_merge_v2`). */
+export const capHasLegacyMergeV2 = (c: Caps): boolean => c?.features?.legacy_merge_v2 === true;
 /** Whether a specific chain is serviceable. Permissive on unknown (legacy backends
  *  serve every chain the wallet knows). */
 export const capAllowsChain = (

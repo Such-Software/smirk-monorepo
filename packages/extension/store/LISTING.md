@@ -1,6 +1,6 @@
-# Store listings: Smirk Wallet v0.3.0
+# Store listings: Smirk Wallet v0.3.1
 
-> Status: stable · Updated 2026-10-02 · Applies to: Smirk client source
+> Status: stable · Updated 2026-10-09 · Applies to: Smirk client source
 
 Source of truth for what goes in the Chrome Web Store and addons.mozilla.org
 listings. Edit here, paste from here, so the two stores cannot drift apart.
@@ -52,7 +52,7 @@ longer the whole of it.
     Full Monero and Wownero light-wallet support, with history built only from your own outputs. Grin also uses our new open-source light-wallet system backend to offer seamless usage without having to wait on long wallet syncs.
 
     SWAP BETWEEN CHAINS
-    Swap between supported coins inside the wallet. You see the quote and the fee before you confirm.
+    Swap between supported coins inside the wallet through Trocador, THORChain or, where your wallet server offers it, NonLogs. Before you confirm you see the estimate, the provider's fees in the coin they are charged in, and any price limit the swap carries. Swap providers are third parties: none is contacted until you choose it.
 
     A NOSTR IDENTITY FROM THE SAME SEED
     Your Nostr key comes from your wallet seed, so your identity is restored with your backup. Use it on Nostr sites through the built-in NIP-07 signer, claim a readable name@domain handle, keep separate burner identities, or import an nsec you already have.
@@ -184,6 +184,33 @@ Tick these data types:
   end-to-end encrypted on the device and relayed as ciphertext; Feed posts are
   public by design. The wallet transmits both, so declare it.
 
+Swaps and tip recovery send the same kinds of data to parties other than the
+Smirk backend, each only after the user chooses it. They fall under the
+**Financial and payment information** box above; name them in the review notes
+so a reviewer watching the network sees nothing undeclared:
+
+- **Trocador** (`packages/swap/src/trocador.ts`), client-direct to
+  `api.trocador.app`: pair and amount for a quote, receive and refund addresses
+  on confirm.
+- **THORChain** (`packages/swap/src/thorchain.ts`), client-direct to Liquify's
+  public gateway `gateway.liquify.com`, only after the user taps the THORChain
+  card: pool and vault lookups, then pair and amount, then the receive address
+  (and a Monero refund address) on confirm, and the deposit txid for status.
+- **NonLogs** (`packages/extension/src/popup/nonlogs.ts`), brokered by the wallet
+  server's `/swaps/nonlogs/*` and shown only when that server enables it: pair,
+  amount, payout and refund addresses pass through the server to NonLogs under
+  the operator's account. The server keeps a 90-day record linking the user to
+  the swap, without addresses or amounts.
+- **Neroswap** (`packages/extension/src/popup/routes/swap.tsx`), WOW and GRIN
+  price lookups at `neroswap.com`, only on the user's tap.
+- **The old Smirk server** (`packages/extension/src/popup/legacy-tips.ts`),
+  `backend.smirk.cash`, only when the user taps to find tips sent to a v0.2
+  wallet: a BIP-137 sign-in with the pre-v0.3 BTC key, which creates an empty
+  account there if that key never had one.
+
+Opening the Swap tab contacts none of these; `packages/e2e/layout/swap-exposure.spec.ts`
+holds that line.
+
 Do NOT tick these, and the code backs that up:
 
 - Health information: never touched.
@@ -200,7 +227,8 @@ Certifications, all three of which we can sign:
 - Not being sold to third parties.
 - Not being used or transferred for purposes unrelated to the single purpose.
   Everything above is used only to look up chain data for the user's own wallet,
-  route tips to them, and deliver messages they chose to send.
+  route tips to them, deliver messages they chose to send, and carry out swaps
+  they asked for.
 - Not being used or transferred to determine creditworthiness or for lending.
 
 What never leaves the device, and say so in the same breath so the disclosure
@@ -265,7 +293,7 @@ the root of the source archive:
       wasm-bindgen CLI 0.2.121, which MUST match the version in Cargo.lock
       clang, whose version also affects the wasm: secp256k1zkp compiles C into
         it. The exact compiler used for this release is recorded in
-        TOOLCHAIN-v0.3.0.txt alongside SHA256SUMS. Everything else in the
+        TOOLCHAIN-v0.3.1.txt alongside SHA256SUMS. Everything else in the
         package reproduces without matching it.
 
     Toolchain setup
@@ -273,7 +301,7 @@ the root of the source archive:
       cargo install wasm-bindgen-cli --version 0.2.121
 
     Build
-      unzip smirk-wallet-source-v0.3.0.zip -d smirk
+      unzip smirk-wallet-source-v0.3.1.zip -d smirk
       cd smirk
       npm ci
       make ext-firefox
@@ -341,6 +369,9 @@ Both stores require these and reject placeholders:
       guards nothing
 - [ ] The data disclosures above still match the code, and the Firefox
       `data_collection_permissions` list still matches those disclosures
+- [ ] https://smirk.cash/privacy names every third party listed under Data
+      disclosures (the smirk-website privacy page, section G), and no longer says
+      that no swap data leaves the device until a quote is requested
 - [ ] Screenshots captured against production, not a local backend
 - [ ] Every caption describes what its own frame shows
 - [ ] https://smirk.cash/privacy resolves

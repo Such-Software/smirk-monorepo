@@ -34,6 +34,7 @@ import {
   requireRestoreState,
   mergeLegacyIdentityAfterSignIn,
   legacyBtcRotationProof,
+  capHasLegacyMergeV2,
 } from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
@@ -162,8 +163,10 @@ export async function bootstrapAuthInExtension(
   const message = `smirk-auth-${timestamp}`;
   const signature = signBitcoinMessage(message, wallet.keys.btc.privateKey);
   // The job cannot sign, so the pre-v0.3 rotation proof is made here too, over
-  // the same timestamp; the job sends it only for a known fingerprint.
-  const rotation = wallet.seed
+  // the same timestamp; the job sends it only for a known fingerprint. Only a
+  // server that advertises the hardened merge gets one (`legacy_merge_v2`): an
+  // older server lets a planted key row fold into this account.
+  const rotation = wallet.seed && capHasLegacyMergeV2(caps.data)
     ? legacyBtcRotationProof(wallet.seed, bytesToHex(wallet.keys.btc.publicKey), timestamp, api.getBaseUrl())
     : null;
 
@@ -282,7 +285,8 @@ async function bootstrapViaNostr(
 
   api.setAccessToken(res.data.accessToken);
   // A known wallet may have been split from its pre-v0.3 identity by an earlier
-  // import; with the seed in hand, ask the backend to merge it back. Best-effort.
+  // import; with the seed in hand, ask the backend to merge it back. Best-effort,
+  // and skipped unless the server advertises the hardened merge.
   if (isKnown) await mergeLegacyIdentityAfterSignIn(api, wallet);
   return {
     userId: res.data.user.id,
