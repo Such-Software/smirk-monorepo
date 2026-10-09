@@ -1,6 +1,6 @@
 {
   "name": "@smirk/desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Smirk Wallet desktop shell (Tauri 2.x). Wraps the @smirk/extension popup UI in a native window with a chrome.* compatibility shim so the same React/Preact code path renders on Mac, Windows, and Linux.",
   "type": "module",

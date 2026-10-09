@@ -1,6 +1,6 @@
 {
   "name": "@smirk/assets",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Asset registry: chain definitions, decimals, families and confirmation policy. Registry entries do not activate client capabilities.",
   "type": "module",
   "main": "./dist/index.js",

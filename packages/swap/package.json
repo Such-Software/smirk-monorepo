@@ -1,6 +1,6 @@
 {
   "name": "@smirk/swap",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Swap orchestration: Trocador quotes and trades, THORChain vault deposits with a swap memo. Native atomic swaps remain unimplemented.",
   "type": "module",
   "main": "./dist/index.js",

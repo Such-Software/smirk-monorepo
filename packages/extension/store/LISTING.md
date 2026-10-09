@@ -78,6 +78,23 @@ longer the whole of it.
 Keep the CAPS headers. Neither store renders markdown, and they are the only
 structure a plain-text field allows.
 
+## Version notes for v0.3.1
+
+For AMO's per-version "Release notes" field and the GitHub release body. Plain
+text, user-facing.
+
+    What's new in 0.3.1
+
+    - Tap any transaction to see its details: amount, fee, time, confirmations and, for your sends, the recipient.
+    - Funds sitting at addresses from older Smirk versions are found and can be moved to your current address in one step. Old tips can be claimed from the wallet.
+    - Send tips to an npub, a name@domain handle or a Smirk username, delivered privately over Nostr.
+    - Swap Bitcoin and Litecoin through THORChain, and through NonLogs where our server offers it, with every fee shown before you confirm.
+    - Signing in to a website takes one approval and one password.
+    - USD value at the top of each coin's page.
+    - Fixed: the Firefox popup layout, including LibreWolf and other privacy-hardened builds.
+    - Fixed: wallets created before v0.3 can sign in again with their existing account.
+    - Security fixes for website signing requests and tip claim keys.
+
 ## Category
 
 - Chrome: Productivity  (there is no wallet or finance category; every other
