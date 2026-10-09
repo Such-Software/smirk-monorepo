@@ -16,9 +16,13 @@ import { authorizeOperation, assertOperationSession } from './operation-auth';
  *                  keys to scan + spend the tip-address outputs
  *        Grin:     voucher sweep via WASM (the encrypted payload is
  *                  JSON metadata, not a key)
- *   4. `api.confirmTipSweep(tipId, txid)`: transitions the tip from
- *      'claiming' to 'claimed'. Best-effort: if it fails the funds
- *      are already swept; user just sees the tip stuck in 'claiming'.
+ *   4. `api.confirmTipSweep(tipId, txid, keyImages)`: reports the sweep.
+ *      The backend settles the tip to 'claimed' once the chain bears the
+ *      report out. XMR/WOW reports carry the key image of each tip output
+ *      the sweep spent, with a proof only the tip's spend key can make, so
+ *      the backend settles on the real spend and never on a ring decoy.
+ *      Best-effort: if it fails the funds are already swept; user just
+ *      sees the tip stuck in 'claiming'.
  *
  * **Which key decrypts.** Tips used to be encrypted to the recipient's BTC
  * pubkey whatever the asset, on the reasoning that every Smirk wallet has one.
@@ -58,6 +62,7 @@ import {
   TIP_ASSET_ID,
   TIP_ASSET_SUITE,
   TipSuite,
+  type TipSweepKeyImage,
   type UnlockedWallet,
 } from '@smirk/core';
 import {
@@ -111,6 +116,10 @@ export interface ClaimResult {
    *  set by `claimPublicTip` so the post-claim toast can show what
    *  the user received without a second fetch. */
   amountAtomic?: bigint;
+  /** XMR/WOW tip claims: the key image of each tip output the sweep spent,
+   *  with its proof, for the sweep report. Absent when no proof could be
+   *  made (the report then goes without one, as v0.3.0's did). */
+  keyImages?: TipSweepKeyImage[];
 }
 export interface ClaimError {
   ok: false;
@@ -171,7 +180,7 @@ export async function claimSocialTip(
         break;
       case 'xmr':
       case 'wow':
-        sweep = await sweepXmrWow(asset, decrypted, tip_address, wallet);
+        sweep = await sweepXmrWow(asset, decrypted, tip_address, wallet, tipId);
         break;
       case 'grin':
         sweep = await sweepGrin(decrypted, wallet, userId);
@@ -194,16 +203,16 @@ export async function claimSocialTip(
   // backend reconciliation can happen later), but log so support
   // can detect the desync if it ever lands in prod. Targeted tips
   // don't race (one recipient), so we ignore the response data.
-  void (await confirmSweepWithRetry(tipId, sweep.txid));
+  void (await confirmSweepWithRetry(tipId, sweep.txid, sweep.keyImages));
 
   return sweep;
 }
 
 /**
  * Backend `confirm_tip_sweep` retry helper. Mirrors
- * `attachFundingWithRetry` in tip-handler.ts. Backend is idempotent
- * (same `(tip_id, sweep_txid)` settles to the same outcome via
- * first-wins race) so repeated attempts are safe.
+ * `attachFundingWithRetry` in tip-handler.ts. The backend keeps one
+ * report per claimer and re-reporting the same sweep is idempotent, so
+ * repeated attempts are safe. `keyImages` (XMR/WOW) go with every attempt.
  *
  * Returns the response data on success so callers (specifically the
  * public-tip race detection) can inspect `sweep_txid` for race
@@ -213,6 +222,7 @@ export async function claimSocialTip(
 async function confirmSweepWithRetry(
   tipId: string,
   sweepTxid: string,
+  keyImages?: TipSweepKeyImage[],
 ): Promise<{ sweep_txid: string | null; status: string } | null> {
   const delays = [1_000, 3_000, 9_000];
   let lastErr: string | undefined;
@@ -221,7 +231,7 @@ async function confirmSweepWithRetry(
       await new Promise((resolve) => setTimeout(resolve, delays[attempt - 1]!));
     }
     try {
-      const conf = await api.confirmTipSweep(tipId, sweepTxid);
+      const conf = await api.confirmTipSweep(tipId, sweepTxid, keyImages);
       if (!conf.error && conf.data) return conf.data;
       lastErr = conf.error ?? 'unknown';
       console.warn(
@@ -558,7 +568,7 @@ export async function claimPublicTip(
         break;
       case 'xmr':
       case 'wow':
-        sweep = await sweepXmrWow(asset, decrypted, t.tip_address, wallet);
+        sweep = await sweepXmrWow(asset, decrypted, t.tip_address, wallet, tipId);
         break;
       case 'grin':
         sweep = await sweepGrin(decrypted, wallet, userId);
@@ -573,16 +583,16 @@ export async function claimPublicTip(
 
   if (!sweep.ok) return sweep;
 
-  // Step 5: confirm sweep on backend. Best-effort with race detection.
-  // Public tips can have multiple URL-holders racing: the backend
-  // records the FIRST sweep_txid to confirm and ignores subsequent
-  // calls (first-wins idempotency). If the returned sweep_txid
-  // doesn't match ours, we lost the race: our tx is in the mempool
-  // but another claimer's sweep landed in the row first. Surface
-  // that to the caller as a distinct outcome so the UI can render
-  // "swept by someone else" instead of generic success.
+  // Step 5: report the sweep to the backend. Best-effort with race
+  // detection. Public tips can have multiple URL-holders racing: the
+  // backend keeps each claimer's report and settles on the one the chain
+  // bears out (for XMR/WOW, the transaction that spends the proven key
+  // image). If the returned sweep_txid doesn't match ours, the backend
+  // kept an earlier report of ours that the chain already showed spending
+  // the tip. Surface that to the caller as a distinct outcome so the UI can
+  // render "swept by someone else" instead of generic success.
   // Retry via the shared helper per Finding 3.
-  const conf = await confirmSweepWithRetry(tipId, sweep.txid);
+  const conf = await confirmSweepWithRetry(tipId, sweep.txid, sweep.keyImages);
   if (conf?.sweep_txid && conf.sweep_txid !== sweep.txid) {
     // Race loser: backend already had a different winning sweep_txid.
     // Our own broadcast may still confirm on-chain (mempool race
@@ -712,6 +722,11 @@ export interface SweepOptions {
   settledOnly?: boolean;
   /** Called with the exact amount and fee before signing. Throw to refuse. */
   authorize?: (summary: SweepSummary) => Promise<void>;
+  /**
+   * XMR/WOW tip claims: prove, for the tip with this id, the key image of each
+   * output the sweep spends (returned as `keyImages` for the sweep report).
+   */
+  proveForTipId?: string;
 }
 
 /** A sweep's outcome, with the amounts that actually moved on success. */
@@ -860,12 +875,16 @@ async function sweepXmrWow(
   tipSpendKey: Uint8Array,
   tipAddress: string,
   wallet: UnlockedWallet,
+  /** The claimed tip, whose sweep report gets key-image proofs. Absent for a
+   *  clawback, which reports nothing. */
+  tipId?: string,
 ): Promise<ClaimOutcome> {
   // Smirk's tip view key derivation. Matches sender side exactly so
   // the LWS-registered tip address is the same one we now scan.
   const tipViewKey = deriveViewKeyFromSpendKey(tipSpendKey);
   return sweepCryptonoteKeys(asset, tipSpendKey, tipViewKey, tipAddress, wallet, {
     deactivateSource: true,
+    ...(tipId ? { proveForTipId: tipId } : {}),
   });
 }
 
@@ -1043,6 +1062,10 @@ export async function sweepCryptonoteKeys(
   }
   const rings = ringsResult.rings;
 
+  const keyImages = opts.proveForTipId
+    ? proveTipKeyImages(viewKeyHex, spendKeyHex, spendable, opts.proveForTipId)
+    : undefined;
+
   const inputs = spendable.map((out, i) => ({
     output: {
       amount: out.amount,
@@ -1110,7 +1133,44 @@ export async function sweepCryptonoteKeys(
     amountAtomic: sweepAmount,
     summary: { ...summary, feeAtomic: BigInt(signed.fee) },
     ...(signed.tx_key ? { txKeyHex: signed.tx_key } : {}),
+    ...(keyImages ? { keyImages } : {}),
   };
+}
+
+/**
+ * The key image of each output a tip sweep spends, with the proof (bound to
+ * `tipId`) that it is that output's, for the sweep report. The backend settles
+ * the tip on the transaction that spends one of them, which a ring decoy never
+ * does. Best effort: a proof that cannot be made is left out (and logged), so
+ * the claim itself never fails on it; with none, the report goes without, as
+ * v0.3.0's did.
+ */
+export function proveTipKeyImages(
+  viewKeyHex: string,
+  spendKeyHex: string,
+  outputs: ReadonlyArray<{ tx_pub_key: string; index: number; public_key: string }>,
+  tipId: string,
+): TipSweepKeyImage[] | undefined {
+  const proofs: TipSweepKeyImage[] = [];
+  for (const out of outputs) {
+    try {
+      proofs.push(
+        parseWasmResult<TipSweepKeyImage>(
+          wasmMonero.proveTipKeyImage(
+            viewKeyHex,
+            spendKeyHex,
+            out.tx_pub_key,
+            out.index,
+            out.public_key,
+            tipId,
+          ),
+        ),
+      );
+    } catch (e) {
+      console.warn('[tip-claim xmr/wow] key-image proof failed; reporting without it', e);
+    }
+  }
+  return proofs.length > 0 ? proofs : undefined;
 }
 
 /**

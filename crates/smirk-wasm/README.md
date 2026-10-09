@@ -306,6 +306,10 @@ The function:
 
 This uses `monero-oxide`'s `Point::biased_hash` for the `Hp()` operation, which is Monero's `hash_to_ec` (ge_fromfe_frombytes_vartime).
 
+#### `prove_tip_key_image(view_key, spend_key, tx_pub_key, output_index, output_key, tip_id) -> string`
+
+For a tip claim's sweep report: the key image the sweep spends a tip output with (`KI = x * Hp(P)`), and a proof, bound to the tip id, that it is that output's key image. The backend holds only the tip's view key, so it cannot tell a sweep from a stranger's ring that sampled the tip output; with the proof it settles the tip on the transaction that spends `KI`. Returns `{ output_key, key_image, proof }`, the proof being 64 bytes of hex (`c || s`) of a discrete-log-equality proof; see `src/tip_proof.rs` for the exact definition, which the backend verifies against a shared test vector.
+
 ## Project Structure
 
 ```

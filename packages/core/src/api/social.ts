@@ -168,6 +168,21 @@ export interface PublicTipInfo {
   is_claimable: boolean;
 }
 
+/**
+ * One XMR/WOW tip output's key image with the proof that it is that output's,
+ * as `/confirm-sweep` takes it (`SweepKeyImage` in the backend's OpenAPI).
+ * Only a holder of the tip's spend key can make the proof; the backend
+ * verifies it and settles the tip on the transaction that spends the key image.
+ */
+export interface TipSweepKeyImage {
+  /** The output's one-time public key (64 hex), as the light-wallet server lists it. */
+  output_key: string;
+  /** The key image the sweep spends the output with (64 hex). */
+  key_image: string;
+  /** 128 hex: `c || s` (see `crates/smirk-wasm/src/tip_proof.rs`). */
+  proof: string;
+}
+
 // ============================================================================
 // Methods interface
 // ============================================================================
@@ -282,20 +297,25 @@ export interface SocialMethods {
   clawbackSocialTip(tipId: string): Promise<ApiResponse<{ success: boolean }>>;
 
   /**
-   * Confirm that a tip sweep was broadcast successfully.
-   * Moves tip from `claiming` to `claimed` (first-wins semantics).
+   * Report a broadcast tip sweep. The backend records it; the tip moves
+   * from `claiming` to `claimed` only once the chain bears the report out
+   * at depth.
    *
-   * Response includes the **winning** `sweep_txid` recorded on the
-   * row; caller compares to their own broadcast txid to detect
-   * race loss (public tips: multiple URL-holders can race; whoever
-   * confirms first wins the chain race; loser sees the winner's
-   * txid here). When `sweep_txid !== yourBroadcastTxid`, the
-   * caller's sweep landed in the mempool but didn't make the
-   * winning transition; UI should render "swept by someone else".
+   * XMR/WOW: pass `keyImages`, the key image of each tip output the sweep
+   * spent with its proof (`@smirk/wasm` `monero.proveTipKeyImage`). The
+   * backend then settles on whichever mined transaction spends that key
+   * image, even if a racing claimer's report came later or a stranger
+   * re-claimed the tip, and a report without them is checked against the
+   * light-wallet server alone. Backends before 2026-10-09 ignore the field.
+   *
+   * Response: the `sweep_txid` the backend holds for this caller. When it
+   * differs from the caller's broadcast txid, the backend kept an earlier
+   * report the chain already showed spending the tip.
    */
   confirmTipSweep(
     tipId: string,
     sweepTxid: string,
+    keyImages?: TipSweepKeyImage[],
   ): Promise<ApiResponse<{ sweep_txid: string | null; status: string }>>;
 
   /** Get public tip info (unauthenticated). 404 for targeted tips. */
@@ -435,14 +455,18 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
       );
     },
 
-    async confirmTipSweep(tipId, sweepTxid) {
-      // Retry OK: confirm-sweep is idempotent (first-wins).
+    async confirmTipSweep(tipId, sweepTxid, keyImages) {
+      // Retry OK: re-reporting the same sweep is idempotent.
       return client.retryableRequest<{
         sweep_txid: string | null;
         status: string;
       }>(`/tips/social/${tipId}/confirm-sweep`, {
         method: 'POST',
-        body: JSON.stringify({ sweep_txid: sweepTxid }),
+        body: JSON.stringify(
+          keyImages && keyImages.length > 0
+            ? { sweep_txid: sweepTxid, key_images: keyImages }
+            : { sweep_txid: sweepTxid },
+        ),
       });
     },
 

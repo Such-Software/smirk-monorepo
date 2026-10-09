@@ -502,6 +502,11 @@ export interface paths {
          * Register or update one of the authenticated user's per-asset public keys.
          * @description Idempotent: the DB upsert keys on `(user_id, asset, key_type)`, so re-posting
          *     the same asset replaces the stored key material in place.
+         *
+         *     Nothing here proves the caller holds the key's private half, so the row is
+         *     stored UNPROVEN (re-posting an identical key keeps the provenance it already
+         *     had). An unproven key never selects an identity for the legacy merge and is
+         *     never carried into another account by one.
          */
         post: operations["register_key"];
         delete?: never;
@@ -853,11 +858,19 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Record the claimer's broadcast sweep txid (first-recorder-wins). RECORD not
-         *     settle: the tip stays `claiming` and the reconciler owns the settle to
-         *     `claimed` once the sweep confirms on-chain. Idempotent; a second, different
-         *     txid does NOT overwrite the recorded winner. A tip that was never claimed is
-         *     a 400.
+         * Report the current claimer's broadcast sweep. RECORD, not settle: the tip
+         *     stays `claiming` and the reconciler settles it to `claimed` only once the
+         *     chain bears the report out at depth.
+         * @description Only the tip's current claimer (whoever last claimed it) may report, so a
+         *     report from someone who never claimed cannot stand in the real claimer's
+         *     way. The one exception is an XMR/WOW report proving the key image of one of
+         *     the tip's own outputs (see [`SweepKeyImage`]): only the tip's spend key
+         *     makes that proof, so a later claim by someone else does not silence it.
+         *     Anyone else gets 403. Each reporter keeps its own report: a later report
+         *     replaces the caller's earlier one unless the chain already showed the
+         *     earlier one spending the tip, and never touches anyone else's. Idempotent.
+         *     A key-image proof that does not verify is a 400, as is a tip that is not
+         *     being claimed.
          */
         post: operations["confirm_sweep"];
         delete?: never;
@@ -1681,14 +1694,26 @@ export interface components {
         ClawbackTipResponse: {
             success: boolean;
         };
-        /** @description Record the claimer's broadcast sweep transaction (first-recorder-wins). */
+        /** @description Report the current claimer's broadcast sweep transaction. */
         ConfirmSweepRequest: {
-            /** @description The broadcast sweep transaction id. */
+            /**
+             * @description XMR/WOW only, from wallets that can prove them: for each tip output the
+             *     sweep spent, its key image and the proof that the key image is that
+             *     output's. An XMR/WOW tip with a proven key image settles only on the
+             *     mined transaction that spends it, whichever claimer sent it. Optional:
+             *     a report without it is checked against the light-wallet server alone.
+             */
+            key_images?: components["schemas"]["SweepKeyImage"][];
+            /** @description The broadcast sweep transaction id. XMR/WOW: 64 hex characters. */
             sweep_txid: string;
         };
         ConfirmSweepResponse: {
             status: string;
-            /** @description The WINNING (first-recorded) sweep txid, or `null` if none is recorded. */
+            /**
+             * @description The sweep txid on file for the caller: the one just reported, or the
+             *     caller's earlier report when the chain already showed that one spending
+             *     the tip.
+             */
             sweep_txid?: string | null;
         };
         /** @description Confirmation-count query for a tx. */
@@ -2143,7 +2168,10 @@ export interface components {
              *     (`username`, `nostr_pubkey` or `seed_fingerprint`).
              */
             conflict?: string | null;
-            /** @description `merged`, `nothing_to_merge` or `conflict`. */
+            /**
+             * @description `merged`, `nothing_to_merge`, `conflict`, or `ambiguous` (more than one
+             *     row holds the proven key with a proof on file; nothing changed).
+             */
             outcome: string;
         };
         LogoutRequest: {
@@ -2751,6 +2779,25 @@ export interface components {
         SwapsCapability: {
             nonlogs: components["schemas"]["NonlogsSwapCapability"];
             thorchain: components["schemas"]["ThorchainSwapCapability"];
+        };
+        /** @description One tip output's key image, with the proof that it is that output's. */
+        SweepKeyImage: {
+            /** @description The key image the sweep spends the output with (64 hex). */
+            key_image: string;
+            /**
+             * @description The output's one-time public key (64 hex), as the light-wallet server
+             *     lists it.
+             */
+            output_key: string;
+            /**
+             * @description 128 hex: `c || s`, a discrete-log-equality proof (Chaum-Pedersen,
+             *     Fiat-Shamir) that `key_image = x * Hp(output_key)` for the `x` with
+             *     `output_key = x * G`. The challenge is Keccak-256, reduced modulo the
+             *     group order, of `"smirk-tip-sweep-key-image-v1" || tip id (16 bytes) ||
+             *     output_key || key_image || s*G + c*output_key || s*Hp(output_key) +
+             *     c*key_image`; `Hp` is Monero's `hash_to_ec`.
+             */
+            proof: string;
         };
         /** @description A transaction-history entry TAGGED with its owning address. */
         TaggedHistoryEntry: {
@@ -4208,7 +4255,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Sweep txid recorded */
+            /** @description Sweep report recorded */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4217,7 +4264,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConfirmSweepResponse"];
                 };
             };
-            /** @description Tips off, empty/oversized txid, or tip not claiming */
+            /** @description Tips off, a malformed txid or key-image proof, too many reports, or tip not claiming */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4226,6 +4273,13 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not the tip's current claimer and proved no key image of the tip's outputs */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

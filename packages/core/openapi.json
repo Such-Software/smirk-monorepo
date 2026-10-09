@@ -570,7 +570,7 @@
           "users"
         ],
         "summary": "Register or update one of the authenticated user's per-asset public keys.",
-        "description": "Idempotent: the DB upsert keys on `(user_id, asset, key_type)`, so re-posting\nthe same asset replaces the stored key material in place.",
+        "description": "Idempotent: the DB upsert keys on `(user_id, asset, key_type)`, so re-posting\nthe same asset replaces the stored key material in place.\n\nNothing here proves the caller holds the key's private half, so the row is\nstored UNPROVEN (re-posting an identical key keeps the provenance it already\nhad). An unproven key never selects an identity for the legacy merge and is\nnever carried into another account by one.",
         "operationId": "register_key",
         "requestBody": {
           "content": {
@@ -1317,7 +1317,8 @@
         "tags": [
           "tips"
         ],
-        "summary": "Record the claimer's broadcast sweep txid (first-recorder-wins). RECORD not\nsettle: the tip stays `claiming` and the reconciler owns the settle to\n`claimed` once the sweep confirms on-chain. Idempotent; a second, different\ntxid does NOT overwrite the recorded winner. A tip that was never claimed is\na 400.",
+        "summary": "Report the current claimer's broadcast sweep. RECORD, not settle: the tip\nstays `claiming` and the reconciler settles it to `claimed` only once the\nchain bears the report out at depth.",
+        "description": "Only the tip's current claimer (whoever last claimed it) may report, so a\nreport from someone who never claimed cannot stand in the real claimer's\nway. The one exception is an XMR/WOW report proving the key image of one of\nthe tip's own outputs (see [`SweepKeyImage`]): only the tip's spend key\nmakes that proof, so a later claim by someone else does not silence it.\nAnyone else gets 403. Each reporter keeps its own report: a later report\nreplaces the caller's earlier one unless the chain already showed the\nearlier one spending the tip, and never touches anyone else's. Idempotent.\nA key-image proof that does not verify is a 400, as is a tip that is not\nbeing claimed.",
         "operationId": "confirm_sweep",
         "parameters": [
           {
@@ -1342,7 +1343,7 @@
         },
         "responses": {
           "200": {
-            "description": "Sweep txid recorded",
+            "description": "Sweep report recorded",
             "content": {
               "application/json": {
                 "schema": {
@@ -1352,10 +1353,13 @@
             }
           },
           "400": {
-            "description": "Tips off, empty/oversized txid, or tip not claiming"
+            "description": "Tips off, a malformed txid or key-image proof, too many reports, or tip not claiming"
           },
           "401": {
             "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "The caller is not the tip's current claimer and proved no key image of the tip's outputs"
           }
         },
         "security": [
@@ -3311,14 +3315,21 @@
       },
       "ConfirmSweepRequest": {
         "type": "object",
-        "description": "Record the claimer's broadcast sweep transaction (first-recorder-wins).",
+        "description": "Report the current claimer's broadcast sweep transaction.",
         "required": [
           "sweep_txid"
         ],
         "properties": {
+          "key_images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SweepKeyImage"
+            },
+            "description": "XMR/WOW only, from wallets that can prove them: for each tip output the\nsweep spent, its key image and the proof that the key image is that\noutput's. An XMR/WOW tip with a proven key image settles only on the\nmined transaction that spends it, whichever claimer sent it. Optional:\na report without it is checked against the light-wallet server alone."
+          },
           "sweep_txid": {
             "type": "string",
-            "description": "The broadcast sweep transaction id."
+            "description": "The broadcast sweep transaction id. XMR/WOW: 64 hex characters."
           }
         }
       },
@@ -3336,7 +3347,7 @@
               "string",
               "null"
             ],
-            "description": "The WINNING (first-recorded) sweep txid, or `null` if none is recorded."
+            "description": "The sweep txid on file for the caller: the one just reported, or the\ncaller's earlier report when the chain already showed that one spending\nthe tip."
           }
         }
       },
@@ -4208,7 +4219,7 @@
           },
           "outcome": {
             "type": "string",
-            "description": "`merged`, `nothing_to_merge` or `conflict`."
+            "description": "`merged`, `nothing_to_merge`, `conflict`, or `ambiguous` (more than one\nrow holds the proven key with a proof on file; nothing changed)."
           }
         }
       },
@@ -5600,6 +5611,29 @@
           },
           "thorchain": {
             "$ref": "#/components/schemas/ThorchainSwapCapability"
+          }
+        }
+      },
+      "SweepKeyImage": {
+        "type": "object",
+        "description": "One tip output's key image, with the proof that it is that output's.",
+        "required": [
+          "output_key",
+          "key_image",
+          "proof"
+        ],
+        "properties": {
+          "key_image": {
+            "type": "string",
+            "description": "The key image the sweep spends the output with (64 hex)."
+          },
+          "output_key": {
+            "type": "string",
+            "description": "The output's one-time public key (64 hex), as the light-wallet server\nlists it."
+          },
+          "proof": {
+            "type": "string",
+            "description": "128 hex: `c || s`, a discrete-log-equality proof (Chaum-Pedersen,\nFiat-Shamir) that `key_image = x * Hp(output_key)` for the `x` with\n`output_key = x * G`. The challenge is Keccak-256, reduced modulo the\ngroup order, of `\"smirk-tip-sweep-key-image-v1\" || tip id (16 bytes) ||\noutput_key || key_image || s*G + c*output_key || s*Hp(output_key) +\nc*key_image`; `Hp` is Monero's `hash_to_ec`."
           }
         }
       },
