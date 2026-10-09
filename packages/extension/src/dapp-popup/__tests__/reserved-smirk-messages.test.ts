@@ -28,6 +28,7 @@ import {
 import type { ApprovalRequest } from '@such-software/smirk-dapp-api';
 import type { ApprovalApproval } from '@smirk/ui';
 import { executeApproval, type ExecuteApprovalDeps } from '../execute-approval';
+import { signMessageWithUnlocked } from '../signers';
 
 const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -86,6 +87,55 @@ for (const message of RESERVED) {
 }
 
 const SMIRK_CASH_CHALLENGE = 'Smirk Authentication Challenge\nNonce: 00\nOrigin: https://smirk.cash\nTimestamp: 1';
+
+/**
+ * REGRESSION (2026-10-09 round 4 review): a message that is not a string got
+ * past every guard (each looked at strings only) and was turned into text by
+ * the encoders, so `['smirk-auth-1']` signed exactly as `smirk-auth-1`. Each
+ * signing entry point now refuses anything but non-empty text first.
+ */
+const NOT_TEXT: readonly unknown[] = [
+  [attackerRotation()],
+  [`smirk-auth-${Math.floor(Date.now() / 1000)}`],
+  [SMIRK_CASH_CHALLENGE],
+  { toString: () => attackerRotation() },
+  42,
+  null,
+  undefined,
+  new String(attackerRotation()),
+  new String(SMIRK_CASH_CHALLENGE),
+  '',
+];
+
+for (const message of NOT_TEXT) {
+  for (const kind of ['signIn', 'signMessage'] as const) {
+    test(`${kind} refuses a message that is not non-empty text before anything else: ${String(message).slice(0, 24)}`, async () => {
+      let prompted = 0;
+      const counting = {
+        ...deps,
+        async authorizeOperation() {
+          prompted += 1;
+        },
+      } as unknown as ExecuteApprovalDeps;
+      const request =
+        kind === 'signIn'
+          ? signInRequest(message as string, { origin: 'https://smirk.cash' })
+          : signMessageRequest(message as string, { origin: 'https://smirk.cash' });
+      await assert.rejects(
+        executeApproval(request, { kind } as ApprovalApproval, counting),
+        /Refusing to sign/,
+      );
+      assert.equal(prompted, 0, 'refused before the password prompt');
+    });
+  }
+
+  test(`the shared signer refuses a message that is not non-empty text: ${String(message).slice(0, 24)}`, () => {
+    assert.throws(
+      () => signMessageWithUnlocked(wallet, message as string, ['btc', 'ltc', 'xmr', 'wow', 'grin']),
+      /Refusing to sign/,
+    );
+  });
+}
 
 test("a website never gets another site's Smirk sign-in challenge signed", async () => {
   // The server trades this signature for a full session, so a site that got

@@ -12,7 +12,11 @@ import type { ApprovalHandler, ApprovalRequest } from '../approval';
 import type { OriginPermission, OriginPermissionStore } from '../permissions';
 import type { WalletProvider } from '../provider';
 import { PROTOCOL_VERSION } from '../protocol';
-import { isReservedSmirkMessage } from '../reserved-messages';
+import {
+  isReservedSmirkMessage,
+  signableMessageRefusal,
+  websiteChallengeOriginRefusal,
+} from '../reserved-messages';
 
 const ORIGIN = { origin: 'https://attacker.example', tabId: 3 };
 
@@ -78,7 +82,68 @@ test('the namespace is the whole smirk- prefix, case- and padding-insensitive, a
   for (const m of [ROTATION, ROTATION_V1, 'smirk-auth-1', '  SMIRK-auth-1', '\nsmirk-next-proof']) {
     assert.equal(isReservedSmirkMessage(m), true, m);
   }
-  for (const m of ['Smirk Authentication Challenge\nNonce: 00', 'login to smirk-example.com', 'smirk', '', 42]) {
-    assert.equal(isReservedSmirkMessage(m), false, String(m));
+  for (const m of ['Smirk Authentication Challenge\nNonce: 00', 'login to smirk-example.com', 'smirk', '']) {
+    assert.equal(isReservedSmirkMessage(m), false, m);
   }
 });
+
+/**
+ * Values that are not a primitive string. Each one turns into a reserved
+ * proof, a Smirk challenge, or other text once a signer encodes it, and a
+ * guard that looked at strings only let every one of them through (REGRESSION,
+ * 2026-10-09 round 4 review: `['smirk-auth-1']` signed as `smirk-auth-1`).
+ */
+const NOT_TEXT: readonly unknown[] = [
+  [ROTATION],
+  ['smirk-auth-1'],
+  [challengeFor('https://smirk.cash')],
+  { toString: () => ROTATION },
+  { message: ROTATION },
+  42,
+  0,
+  true,
+  null,
+  undefined,
+  new String(ROTATION),
+  new String('hello'),
+];
+
+function challengeFor(origin: string): string {
+  return `Smirk Authentication Challenge\nNonce: 00\nOrigin: ${origin}\nTimestamp: 1`;
+}
+
+test('anything that is not text fails closed in every guard', () => {
+  for (const m of NOT_TEXT) {
+    assert.equal(isReservedSmirkMessage(m), true, `reserved: ${String(m)}`);
+    assert.ok(signableMessageRefusal(m), `unsignable: ${String(m)}`);
+    assert.ok(websiteChallengeOriginRefusal(m, 'https://smirk.cash'), `challenge: ${String(m)}`);
+  }
+  assert.ok(signableMessageRefusal(''), 'an empty message is not signed either');
+  assert.equal(signableMessageRefusal('hello'), null);
+});
+
+for (const method of ['signIn', 'signMessage'] as const) {
+  for (const message of [...NOT_TEXT, '']) {
+    test(`${method} refuses a message that is not non-empty text, before asking: ${String(message).slice(0, 24)}`, async () => {
+      const { handler, seen } = recordingApproval();
+      let permissionReads = 0;
+      const permissions = store({ origin: ORIGIN.origin, assets: ['btc'], grantedAt: 1, lastUsedAt: 1 } as OriginPermission);
+      const counting: OriginPermissionStore = {
+        ...permissions,
+        async get(o) {
+          permissionReads += 1;
+          return permissions.get(o);
+        },
+      };
+      const dispatch = createWalletHandler({ provider, permissions: counting, approval: handler });
+      const resp = await dispatch(
+        { type: 'SMIRK_REQUEST', v: PROTOCOL_VERSION, id: 1, method, params: { message, assets: ['btc'] } } as never,
+        ORIGIN,
+      );
+      assert.equal(resp.error?.code, 'INVALID_PARAMS');
+      assert.match(resp.error?.message ?? '', /Refusing to sign/);
+      assert.equal(seen.length, 0, 'the user is never asked');
+      assert.equal(permissionReads, 0, 'refused before any other check');
+    });
+  }
+}

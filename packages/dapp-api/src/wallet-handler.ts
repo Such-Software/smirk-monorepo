@@ -32,6 +32,7 @@ import { WalletProvider } from './provider';
 import {
   isReservedSmirkMessage,
   RESERVED_SMIRK_MESSAGE_REFUSAL,
+  signableMessageRefusal,
   websiteChallengeOriginRefusal,
 } from './reserved-messages';
 import {
@@ -185,14 +186,20 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'signMessage': {
+      const params = (req.params ?? {}) as { message?: unknown };
+      // Before any other check: only a non-empty string is ever a message. A
+      // page sends JSON, and an array or object would otherwise slip past the
+      // checks below and be turned into text by the signer.
+      const unsignable = signableMessageRefusal(params.message);
+      if (unsignable) throw new HandlerError('INVALID_PARAMS', unsignable);
+      const message = params.message as string;
       const perm = await requireOriginPermission(deps.permissions, origin.origin);
-      const params = req.params as { message: string };
       // Refused before any prompt: the user is never asked to approve a
       // signature the wallet will not produce. The signer refuses it too.
-      if (isReservedSmirkMessage(params?.message)) {
+      if (isReservedSmirkMessage(message)) {
         throw new HandlerError('INVALID_PARAMS', RESERVED_SMIRK_MESSAGE_REFUSAL);
       }
-      const foreignChallenge = websiteChallengeOriginRefusal(params?.message, origin.origin);
+      const foreignChallenge = websiteChallengeOriginRefusal(message, origin.origin);
       if (foreignChallenge) throw new HandlerError('INVALID_PARAMS', foreignChallenge);
       // Always prompt per-signature. Signatures are auth credentials
       // for the receiving service; auto-signing every request would
@@ -205,7 +212,7 @@ async function dispatchInner<M extends SmirkMethod>(
       const decision = await deps.approval({
         kind: 'signMessage',
         origin,
-        message: params.message,
+        message,
         assets: perm.assets,
       });
       if (!decision.approved) {
@@ -222,14 +229,15 @@ async function dispatchInner<M extends SmirkMethod>(
     }
 
     case 'signIn': {
-      const params = req.params as { message: string; assets?: SmirkAsset[] };
-      if (typeof params?.message !== 'string' || params.message.length === 0) {
-        throw new HandlerError('INVALID_PARAMS', 'signIn needs a non-empty message');
-      }
-      if (isReservedSmirkMessage(params.message)) {
+      const params = (req.params ?? {}) as { message?: unknown; assets?: SmirkAsset[] };
+      // Before any other check, as for signMessage.
+      const unsignable = signableMessageRefusal(params.message);
+      if (unsignable) throw new HandlerError('INVALID_PARAMS', unsignable);
+      const message = params.message as string;
+      if (isReservedSmirkMessage(message)) {
         throw new HandlerError('INVALID_PARAMS', RESERVED_SMIRK_MESSAGE_REFUSAL);
       }
-      const foreignSignIn = websiteChallengeOriginRefusal(params.message, origin.origin);
+      const foreignSignIn = websiteChallengeOriginRefusal(message, origin.origin);
       if (foreignSignIn) throw new HandlerError('INVALID_PARAMS', foreignSignIn);
       const requestedAssets = normalizeAssets(params.assets);
       const existing = await deps.permissions.get(origin.origin);
@@ -241,7 +249,7 @@ async function dispatchInner<M extends SmirkMethod>(
       const decision = await deps.approval({
         kind: 'signIn',
         origin,
-        message: params.message,
+        message,
         requestedAssets: alreadyConnected ? existing!.assets : requestedAssets,
         alreadyConnected,
       });

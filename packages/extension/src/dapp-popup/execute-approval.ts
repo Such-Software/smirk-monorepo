@@ -27,6 +27,7 @@ import {
   type UnlockedWallet,
 } from '@smirk/core';
 import {
+  signableMessageRefusal,
   websiteChallengeOriginRefusal,
   type ApprovalRequest,
   type ApprovalResult as DappApprovalResult,
@@ -124,6 +125,13 @@ export async function executeApproval(
   approval: ApprovalApproval,
   deps: ExecuteApprovalDeps,
 ): Promise<DappApprovalResult> {
+  // A message to sign is a non-empty string, checked before anything else
+  // (the password prompt included): the stored request is whatever JSON the
+  // page sent, and only text is ever signed.
+  if (request.kind === 'signMessage' || request.kind === 'signIn') {
+    const unsignable = signableMessageRefusal(request.message);
+    if (unsignable) throw new Error(unsignable);
+  }
   // Payments and tip claims reach the same authorized handlers as the wallet.
   // Public connection/identity grants do not perform a private-key operation.
   if (approval.kind === 'signNostrEvent' && request.kind === 'signNostrEvent' && request.tier === 'money') {
