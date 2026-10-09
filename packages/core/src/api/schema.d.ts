@@ -73,6 +73,20 @@ export interface paths {
          *     the PoW gate applies and the wallet is new, a valid `altcha_solution` is
          *     required; a returning user (a known `pubkey_hash`) bypasses PoW.
          *
+         *     ## Proof-of-work follows what the client was told
+         *
+         *     Shipped clients skip the solve whenever [`check_restore`] answers
+         *     `exists && keys_valid`. Every branch a known fingerprint can reach therefore
+         *     either needs no PoW or is a deliberate exception:
+         *
+         *     * returning `pubkey_hash`: no PoW;
+         *     * proven rotation (a move under the key the row answers to): no PoW;
+         *     * a `migrate-legacy` row the client cannot prove yet: ONE PoW-free split per
+         *       legacy row (see [`legacy_split_waiver`]);
+         *     * adopt onto an npub-registered row: refused outright with 409
+         *       [`NOSTR_ROW_ADOPT_REFUSED`], never PoW (squat defence, below);
+         *     * a second split of the same legacy row: PoW required (the cap).
+         *
          *     ## Derivation rotation is authenticated (account-takeover defense)
          *
          *     A known `seed_fingerprint` at a NEW `pubkey_hash` (the wallet changed its
@@ -86,8 +100,8 @@ export interface paths {
          *     a captured login signature is worthless here and a proof minted for one
          *     instance does not verify on another. A bare fingerprint match WITHOUT a valid
          *     rotation proof is treated as a brand-new identity: a fresh user row is created
-         *     on the new `pubkey_hash` and the matched victim row is never modified. The
-         *     rotation path is gated by PoW exactly like any other new-pubkey registration.
+         *     on the new `pubkey_hash` and the matched victim row is never modified. A
+         *     proven rotation mints nothing, so it needs no PoW.
          *
          *     ## Adopting a `pubkey_hash` onto a keyless row
          *
@@ -98,6 +112,19 @@ export interface paths {
          *     `pubkey_hash` is adopted onto that row (`is_new=false`) instead of minting a
          *     second identity that would strand the handle, tips and premium state. If the
          *     row already has a `pubkey_hash`, or the BTC keys differ, nothing is adopted.
+         *
+         *     A row that carries an npub is never adopted here. Its keys came through
+         *     [`nostr_register`], bound only by TLS, so "the stored BTC key equals the
+         *     submitted one" does not prove the same seed owns the npub: whoever learned a
+         *     wallet's fingerprint and PUBLIC keys before its first sign-in here (a hostile
+         *     backend it used first, a leaked log) can pre-create that row under their own
+         *     npub. Adopting would then sign the victim into a row the attacker's npub also
+         *     signs in to. PoW was the old defence and fails both ways: off, the shipped
+         *     v0.3.0 completes the squat; on, v0.3.1 answers `POW_REQUIRED` by solving and
+         *     resending. So the answer is a 409 that neither client retries with a solve,
+         *     telling the wallet to use the npub path, where its own row (if it is its own)
+         *     signs in. Adopting needs a proof made with that npub binding the submitted
+         *     `pubkey_hash`, which no shipped client sends yet.
          */
         post: operations["extension_register"];
         delete?: never;
@@ -2999,6 +3026,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AuthResponse"];
                 };
+            };
+            /** @description The seed's account is registered under a Nostr identity; sign in with it (code CONFLICT) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

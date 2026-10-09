@@ -147,7 +147,10 @@ export async function bootstrapAuthInExtension(
       // "receiving end does not exist" race right after a reload. A pre-v0.3
       // wallet is the exception: the backend knows it by fingerprint but not by
       // its v0.3 key, so bootstrapAuth solves PoW when asked and sends the
-      // rotation proof. bootstrapAuth sets the access token itself.
+      // rotation proof. bootstrapAuth sets the access token itself. When the
+      // seed's account carries an npub other than this wallet's, the backend
+      // refuses the BTC sign-in too (409); bootstrapAuth reports that as
+      // NOSTR_IDENTITY_CONFLICT and solves nothing.
       const bootstrap = await bootstrapAuth(api, wallet);
       await clearPendingRegistrationInvoice(wallet.fingerprint);
       return bootstrap;
