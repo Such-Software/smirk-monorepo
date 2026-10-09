@@ -282,7 +282,15 @@ export interface SocialMethods {
   /** Get tips sent by the current user. */
   getSentSocialTips(): Promise<ApiResponse<{ tips: SentTip[] }>>;
 
-  /** Claim a social tip. */
+  /**
+   * Claim a social tip.
+   *
+   * `reported_sweep_txid` is the sweep THIS caller already reported for the
+   * tip, if any (never anyone else's; absent on backends before 2026-10-09).
+   * An XMR/WOW claim an older wallet reported by txid alone settles only once
+   * proven, so a wallet reopening the tip proves and re-reports that sweep
+   * instead of building a second one.
+   */
   claimSocialTip(
     tipId: string,
   ): Promise<
@@ -290,6 +298,7 @@ export interface SocialMethods {
       success: boolean;
       encrypted_key: string | null;
       tip_address: string | null;
+      reported_sweep_txid?: string | null;
     }>
   >;
 
@@ -303,14 +312,15 @@ export interface SocialMethods {
    *
    * XMR/WOW: pass `keyImages`, the key image of each tip output the sweep
    * spent with its proof (`@smirk/wasm` `monero.proveTipKeyImage`). The
-   * backend then settles on whichever mined transaction spends that key
-   * image, even if a racing claimer's report came later or a stranger
-   * re-claimed the tip, and a report without them is checked against the
-   * light-wallet server alone. Backends before 2026-10-09 ignore the field.
+   * backend settles an XMR/WOW tip ONLY on a proven key image that a mined
+   * transaction spends, even if a racing claimer's report came later or a
+   * stranger re-claimed the tip. A report without them is kept but settles
+   * nothing (what v0.3.0 sends). Backends before 2026-10-09 ignore the field.
    *
    * Response: the `sweep_txid` the backend holds for this caller. When it
    * differs from the caller's broadcast txid, the backend kept an earlier
-   * report the chain already showed spending the tip.
+   * proven report of this caller's that the chain already showed spending
+   * the tip. A report without a proof is always answered with its own txid.
    */
   confirmTipSweep(
     tipId: string,
@@ -445,6 +455,7 @@ export function createSocialMethods(client: ApiClient): SocialMethods {
         success: boolean;
         encrypted_key: string | null;
         tip_address: string | null;
+        reported_sweep_txid?: string | null;
       }>(`/tips/social/${tipId}/claim`, { method: 'POST' });
     },
 

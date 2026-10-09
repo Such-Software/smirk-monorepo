@@ -184,7 +184,7 @@ export function PasteTipLinkScreen({
   onClaim: (
     url: string,
   ) => Promise<
-    | { ok: true; assetId?: string; amountAtomic?: bigint }
+    | { ok: true; assetId?: string; amountAtomic?: bigint; confirming?: boolean }
     | { ok: false; error: string }
   >;
   onExit: () => void;
@@ -195,6 +195,7 @@ export function PasteTipLinkScreen({
   const [result, setResult] = useState<{
     assetId?: string;
     amountAtomic?: bigint;
+    confirming?: boolean;
   } | null>(null);
 
   const submit = async () => {
@@ -211,9 +212,10 @@ export function PasteTipLinkScreen({
       setError(outcome.error);
       return;
     }
-    const next: { assetId?: string; amountAtomic?: bigint } = {};
+    const next: { assetId?: string; amountAtomic?: bigint; confirming?: boolean } = {};
     if (outcome.assetId !== undefined) next.assetId = outcome.assetId;
     if (outcome.amountAtomic !== undefined) next.amountAtomic = outcome.amountAtomic;
+    if (outcome.confirming) next.confirming = true;
     setResult(next);
   };
 
@@ -233,7 +235,7 @@ export function PasteTipLinkScreen({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
           <span style={{ width: 60 }} />
-          <span style={{ opacity: 0.5 }}>Tip claimed</span>
+          <span style={{ opacity: 0.5 }}>{result.confirming ? 'Claim sent' : 'Tip claimed'}</span>
           <span style={{ width: 60 }} />
         </header>
         <div
@@ -247,10 +249,12 @@ export function PasteTipLinkScreen({
           }}
         >
           <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>
-            {result.assetId && result.amountAtomic !== undefined
-              ? `Received ${formatAmountWithTicker(result.amountAtomic, result.assetId)}`
-              : 'Tip claimed'}
+          <div style={{ fontSize: 14, fontWeight: 600 }} data-testid="paste-tip-success-title">
+            {result.confirming
+              ? 'Claim sent, confirming'
+              : result.assetId && result.amountAtomic !== undefined
+                ? `Received ${formatAmountWithTicker(result.amountAtomic, result.assetId)}`
+                : 'Tip claimed'}
           </div>
           <div
             style={{
@@ -259,7 +263,9 @@ export function PasteTipLinkScreen({
               marginTop: 6,
             }}
           >
-            Funds are settling on-chain. They'll appear on Home shortly.
+            {result.confirming
+              ? 'You claimed this tip earlier and the funds already reached your wallet. Smirk has now proved that claim; the tip settles once the network confirms the transfer.'
+              : "Funds are settling on-chain. They'll appear on Home shortly."}
           </div>
         </div>
         <button

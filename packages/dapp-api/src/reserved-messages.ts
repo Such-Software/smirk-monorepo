@@ -3,12 +3,13 @@
  *
  * Every proof a Smirk wallet server accepts from a wallet key starts with
  * `smirk-`: the sign-in challenge (`smirk-auth-<ts>`), the pre-v0.3 identity
- * rotation proof (`smirk-rotate-v1|<api>|<key hash>|<ts>`), and whatever the
- * server adds next. Each is predictable to an outsider, so a connected site that
- * gets one signed can replay it to the user's own server. A signed
- * `smirk-rotate-v1` message bound to the attacker's key is enough for the
- * server's legacy merge to move the user's handle, npub and tips to the
- * attacker's account.
+ * rotation proof (`smirk-auth-rotate-v2|<api>|<key hash>|<ts>`; servers before
+ * `legacy_merge_v2` took `smirk-rotate-v1|...`), and whatever the server adds
+ * next. Each is predictable to an outsider, so a connected site that gets one
+ * signed can replay it to the user's own server. A signed rotation message
+ * bound to the attacker's key is enough for the server's legacy merge to move
+ * the user's handle, npub and tips to the attacker's account. (The v2 proof
+ * also starts with `smirk-auth-`, which the shipped v0.3.0 signer refuses.)
  *
  * So the whole `smirk-` namespace is reserved, not a list of known prefixes: a
  * list missed `smirk-rotate-` once, and a new server proof should not depend on

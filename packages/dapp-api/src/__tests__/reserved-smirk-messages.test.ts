@@ -46,10 +46,18 @@ function recordingApproval(): { handler: ApprovalHandler; seen: ApprovalRequest[
   };
 }
 
-const ROTATION = `smirk-rotate-v1|https://api.smirk.cash/api/v1|${'ab'.repeat(32)}|${Math.floor(Date.now() / 1000)}`;
+const NOW = Math.floor(Date.now() / 1000);
+/** The rotation proof servers accept (v2), and the one they no longer do. */
+const ROTATION = `smirk-auth-rotate-v2|https://api.smirk.cash/api/v1|${'ab'.repeat(32)}|${NOW}`;
+const ROTATION_V1 = `smirk-rotate-v1|https://api.smirk.cash/api/v1|${'ab'.repeat(32)}|${NOW}`;
 
-for (const method of ['signIn', 'signMessage'] as const) {
-  test(`${method} refuses a rotation proof without prompting`, async () => {
+for (const [method, message] of [
+  ['signIn', ROTATION],
+  ['signMessage', ROTATION],
+  ['signIn', ROTATION_V1],
+  ['signMessage', ROTATION_V1],
+] as const) {
+  test(`${method} refuses a rotation proof without prompting: ${message.slice(0, 20)}`, async () => {
     const { handler, seen } = recordingApproval();
     const dispatch = createWalletHandler({
       provider,
@@ -57,7 +65,7 @@ for (const method of ['signIn', 'signMessage'] as const) {
       approval: handler,
     });
     const resp = await dispatch(
-      { type: 'SMIRK_REQUEST', v: PROTOCOL_VERSION, id: 1, method, params: { message: ROTATION, assets: ['btc'] } },
+      { type: 'SMIRK_REQUEST', v: PROTOCOL_VERSION, id: 1, method, params: { message, assets: ['btc'] } },
       ORIGIN,
     );
     assert.equal(resp.error?.code, 'INVALID_PARAMS');
@@ -67,7 +75,7 @@ for (const method of ['signIn', 'signMessage'] as const) {
 }
 
 test('the namespace is the whole smirk- prefix, case- and padding-insensitive, and nothing else', () => {
-  for (const m of [ROTATION, 'smirk-auth-1', '  SMIRK-auth-1', '\nsmirk-next-proof']) {
+  for (const m of [ROTATION, ROTATION_V1, 'smirk-auth-1', '  SMIRK-auth-1', '\nsmirk-next-proof']) {
     assert.equal(isReservedSmirkMessage(m), true, m);
   }
   for (const m of ['Smirk Authentication Challenge\nNonce: 00', 'login to smirk-example.com', 'smirk', '', 42]) {

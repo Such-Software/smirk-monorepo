@@ -20,6 +20,7 @@ import {
   legacyBtcRotationProof,
   mergeLegacyIdentityAfterSignIn,
   mnemonicToSeed,
+  ROTATION_PROOF_PREFIX,
   rotationMessage,
 } from '../index';
 
@@ -40,8 +41,21 @@ test('rotation message matches the backend format byte for byte', () => {
   const hash = bytesToHex(sha256(new TextEncoder().encode(newKey)));
   assert.equal(
     rotationMessage(`${API}/`, newKey, 1_790_000_000),
-    `smirk-rotate-v1|${API}|${hash}|1790000000`,
+    `smirk-auth-rotate-v2|${API}|${hash}|1790000000`,
   );
+});
+
+test('no shipped wallet signs a rotation proof for a website', () => {
+  // The shipped v0.3.0 dapp signer refuses exactly this pattern and nothing
+  // else; the v1 proof (`smirk-rotate-v1|...`) slipped past it, so any site a
+  // v0.3.0 user approved a signature for could obtain one.
+  const SHIPPED_V030_REFUSAL = /^\s*smirk-auth-/i;
+  const message = rotationMessage(API, '02' + '22'.repeat(32), 1_790_000_000);
+  assert.match(message, SHIPPED_V030_REFUSAL);
+  assert.ok(message.startsWith(ROTATION_PROOF_PREFIX));
+  assert.doesNotMatch(message, /smirk-rotate-v1/);
+  // Never the login message (`smirk-auth-` and an integer).
+  assert.doesNotMatch(message, /^smirk-auth-\d+$/);
 });
 
 test('the proof is made by the pre-v0.3 m/44 key and verifies under it', () => {

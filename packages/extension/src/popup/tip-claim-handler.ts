@@ -18,11 +18,20 @@ import { authorizeOperation, assertOperationSession } from './operation-auth';
  *                  JSON metadata, not a key)
  *   4. `api.confirmTipSweep(tipId, txid, keyImages)`: reports the sweep.
  *      The backend settles the tip to 'claimed' once the chain bears the
- *      report out. XMR/WOW reports carry the key image of each tip output
- *      the sweep spent, with a proof only the tip's spend key can make, so
- *      the backend settles on the real spend and never on a ring decoy.
- *      Best-effort: if it fails the funds are already swept; user just
- *      sees the tip stuck in 'claiming'.
+ *      report out. Every XMR/WOW report carries the key image of each tip
+ *      output the sweep spent, with a proof only the tip's spend key can
+ *      make: the backend settles an XMR/WOW tip on nothing else, so a claim
+ *      that cannot be proven is not sent at all. Best-effort: if the report
+ *      fails the funds are already swept; user just sees the tip stuck in
+ *      'claiming'.
+ *
+ * **A claim an older wallet sent.** v0.3.0 reported its XMR/WOW sweep by
+ * txid alone, which the backend now keeps but never settles on, and stopped
+ * the light-wallet server scanning the tip address right after. Reopening
+ * such a tip, `/claim` returns the sweep this wallet reported
+ * (`reported_sweep_txid`); when it paid this wallet, the claim proves that
+ * sweep's key images and reports it again instead of building a second sweep
+ * the network would refuse. The user sees "Claim sent, confirming".
  *
  * **Which key decrypts.** Tips used to be encrypted to the recipient's BTC
  * pubkey whatever the asset, on the reasoning that every Smirk wallet has one.
@@ -117,9 +126,14 @@ export interface ClaimResult {
    *  the user received without a second fetch. */
   amountAtomic?: bigint;
   /** XMR/WOW tip claims: the key image of each tip output the sweep spent,
-   *  with its proof, for the sweep report. Absent when no proof could be
-   *  made (the report then goes without one, as v0.3.0's did). */
+   *  with its proof, for the sweep report. Always present on an XMR/WOW tip
+   *  claim: one that cannot be proven fails before anything is signed. */
   keyImages?: TipSweepKeyImage[];
+  /** The claim was sent earlier (by this wallet, possibly by an older version
+   *  of it, without a proof) and is proven now: the funds already moved to
+   *  this wallet, and the tip settles once the network confirms. Shown as
+   *  "Claim sent, confirming", never as an error. */
+  confirming?: boolean;
 }
 export interface ClaimError {
   ok: false;
@@ -149,7 +163,7 @@ export async function claimSocialTip(
   if (claim.error || !claim.data) {
     return { ok: false, error: claim.error ?? 'Backend rejected claim' };
   }
-  const { encrypted_key, tip_address } = claim.data;
+  const { encrypted_key, tip_address, reported_sweep_txid } = claim.data;
   if (!encrypted_key) {
     return { ok: false, error: 'Tip has no encrypted key — cannot decrypt' };
   }
@@ -180,7 +194,7 @@ export async function claimSocialTip(
         break;
       case 'xmr':
       case 'wow':
-        sweep = await sweepXmrWow(asset, decrypted, tip_address, wallet, tipId);
+        sweep = await sweepXmrWow(asset, decrypted, tip_address, wallet, tipId, reported_sweep_txid ?? undefined);
         break;
       case 'grin':
         sweep = await sweepGrin(decrypted, wallet, userId);
@@ -556,6 +570,7 @@ export async function claimPublicTip(
   if (claim.error || !claim.data) {
     return { ok: false, error: claim.error ?? 'Backend rejected claim' };
   }
+  const earlierSweep = claim.data.reported_sweep_txid ?? undefined;
 
   // Step 4: per-asset sweep, identical to the targeted flow.
   const asset = t.asset as ClaimAsset;
@@ -568,7 +583,7 @@ export async function claimPublicTip(
         break;
       case 'xmr':
       case 'wow':
-        sweep = await sweepXmrWow(asset, decrypted, t.tip_address, wallet, tipId);
+        sweep = await sweepXmrWow(asset, decrypted, t.tip_address, wallet, tipId, earlierSweep);
         break;
       case 'grin':
         sweep = await sweepGrin(decrypted, wallet, userId);
@@ -626,6 +641,7 @@ export async function claimPublicTip(
     txid: sweep.txid,
     assetId: asset,
     amountAtomic: BigInt(t.amount),
+    ...(sweep.confirming ? { confirming: true } : {}),
   } satisfies ClaimResult;
 }
 
@@ -725,8 +741,16 @@ export interface SweepOptions {
   /**
    * XMR/WOW tip claims: prove, for the tip with this id, the key image of each
    * output the sweep spends (returned as `keyImages` for the sweep report).
+   * Nothing is signed when a proof cannot be made: the backend settles an
+   * XMR/WOW tip on nothing else.
    */
   proveForTipId?: string;
+  /**
+   * XMR/WOW tip claims: the sweep this wallet already reported for the tip.
+   * When it paid this wallet, its key images are proven and it is returned
+   * (`confirming`) instead of building a second sweep.
+   */
+  earlierSweepTxid?: string;
 }
 
 /** A sweep's outcome, with the amounts that actually moved on success. */
@@ -878,6 +902,9 @@ async function sweepXmrWow(
   /** The claimed tip, whose sweep report gets key-image proofs. Absent for a
    *  clawback, which reports nothing. */
   tipId?: string,
+  /** The sweep this wallet already reported for the tip (`/claim`'s
+   *  `reported_sweep_txid`). */
+  earlierSweepTxid?: string,
 ): Promise<ClaimOutcome> {
   // Smirk's tip view key derivation. Matches sender side exactly so
   // the LWS-registered tip address is the same one we now scan.
@@ -885,6 +912,7 @@ async function sweepXmrWow(
   return sweepCryptonoteKeys(asset, tipSpendKey, tipViewKey, tipAddress, wallet, {
     deactivateSource: true,
     ...(tipId ? { proveForTipId: tipId } : {}),
+    ...(tipId && earlierSweepTxid ? { earlierSweepTxid } : {}),
   });
 }
 
@@ -927,6 +955,21 @@ export async function sweepCryptonoteKeys(
       ok: false,
       error: 'No unspent outputs at tip address — may already be claimed',
     };
+  }
+
+  // A claim this wallet already sent (an older version reported it without a
+  // proof): prove that sweep rather than build a second one of spent outputs.
+  if (opts.proveForTipId && opts.earlierSweepTxid) {
+    const earlier = await provenEarlierSweep(
+      asset,
+      opts.earlierSweepTxid,
+      outputs,
+      viewKeyHex,
+      spendKeyHex,
+      opts.proveForTipId,
+      wallet,
+    );
+    if (earlier) return earlier;
   }
 
   // Filter out outputs LWS already flags as spent against the tip's
@@ -972,6 +1015,23 @@ export async function sweepCryptonoteKeys(
       ok: false,
       error: 'All tip outputs already spent on-chain — nothing to sweep',
     };
+  }
+
+  // Every XMR/WOW tip sweep report carries its proofs, and they are made
+  // before the user is asked or anything is signed: a sweep that cannot be
+  // proven would move the funds while the tip stayed unsettled.
+  let keyImages: TipSweepKeyImage[] | undefined;
+  if (opts.proveForTipId) {
+    try {
+      keyImages = proveTipKeyImages(viewKeyHex, spendKeyHex, spendable, opts.proveForTipId);
+    } catch (e) {
+      return {
+        ok: false,
+        error: `Could not prove this tip's outputs, so nothing was sent: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
+    }
   }
 
   // Older-address recovery: leave outputs that are not unlocked yet. Signing
@@ -1062,10 +1122,6 @@ export async function sweepCryptonoteKeys(
   }
   const rings = ringsResult.rings;
 
-  const keyImages = opts.proveForTipId
-    ? proveTipKeyImages(viewKeyHex, spendKeyHex, spendable, opts.proveForTipId)
-    : undefined;
-
   const inputs = spendable.map((out, i) => ({
     output: {
       amount: out.amount,
@@ -1137,40 +1193,111 @@ export async function sweepCryptonoteKeys(
   };
 }
 
+/** Most key images one sweep report carries (the backend reads the first 16). */
+export const MAX_REPORTED_KEY_IMAGES = 16;
+
 /**
  * The key image of each output a tip sweep spends, with the proof (bound to
- * `tipId`) that it is that output's, for the sweep report. The backend settles
- * the tip on the transaction that spends one of them, which a ring decoy never
- * does. Best effort: a proof that cannot be made is left out (and logged), so
- * the claim itself never fails on it; with none, the report goes without, as
- * v0.3.0's did.
+ * `tipId`) that it is that output's, for the sweep report. The backend
+ * settles an XMR/WOW tip only on such proofs, once the outputs proven spent
+ * carry the tip's amount, and never on a ring decoy.
+ *
+ * Strict: a proof that cannot be made throws, and the caller sends nothing.
+ * At most {@link MAX_REPORTED_KEY_IMAGES}, largest outputs first, so dust
+ * someone sent to the public tip address never crowds out the funding.
  */
 export function proveTipKeyImages(
   viewKeyHex: string,
   spendKeyHex: string,
-  outputs: ReadonlyArray<{ tx_pub_key: string; index: number; public_key: string }>,
+  outputs: ReadonlyArray<{ tx_pub_key: string; index: number; public_key: string; amount?: string }>,
   tipId: string,
-): TipSweepKeyImage[] | undefined {
-  const proofs: TipSweepKeyImage[] = [];
-  for (const out of outputs) {
+): TipSweepKeyImage[] {
+  const atomic = (o: { amount?: string }) => {
     try {
-      proofs.push(
-        parseWasmResult<TipSweepKeyImage>(
-          wasmMonero.proveTipKeyImage(
-            viewKeyHex,
-            spendKeyHex,
-            out.tx_pub_key,
-            out.index,
-            out.public_key,
-            tipId,
-          ),
-        ),
-      );
-    } catch (e) {
-      console.warn('[tip-claim xmr/wow] key-image proof failed; reporting without it', e);
+      return BigInt(o.amount ?? '0');
+    } catch {
+      return 0n;
     }
+  };
+  const largestFirst = [...outputs]
+    .sort((a, b) => {
+      const d = atomic(b) - atomic(a);
+      return d > 0n ? 1 : d < 0n ? -1 : 0;
+    })
+    .slice(0, MAX_REPORTED_KEY_IMAGES);
+  if (largestFirst.length === 0) throw new Error('no tip outputs to prove');
+  return largestFirst.map((out) =>
+    parseWasmResult<TipSweepKeyImage>(
+      wasmMonero.proveTipKeyImage(
+        viewKeyHex,
+        spendKeyHex,
+        out.tx_pub_key,
+        out.index,
+        out.public_key,
+        tipId,
+      ),
+    ),
+  );
+}
+
+/**
+ * The sweep this wallet already sent for a tip, proven, when it paid this
+ * wallet; `null` otherwise (the caller then sweeps as usual).
+ *
+ * v0.3.0 reported its sweep by txid alone and stopped the light-wallet server
+ * scanning the tip address right after, so the server may still list the tip
+ * outputs as unspent: a second sweep would only be refused as a double spend.
+ * The backend tells this wallet which sweep it reported; this wallet's own
+ * history shows whether that sweep paid it. If so, its key images are proven
+ * for the tip outputs and it is reported again, which settles the tip to this
+ * wallet once the network confirms.
+ */
+async function provenEarlierSweep(
+  asset: 'xmr' | 'wow',
+  txid: string,
+  outputs: ReadonlyArray<{ tx_pub_key: string; index: number; public_key: string; amount: string }>,
+  tipViewKeyHex: string,
+  tipSpendKeyHex: string,
+  tipId: string,
+  wallet: UnlockedWallet,
+): Promise<SweepOutcome | null> {
+  const ownAddress = wallet.addresses[asset];
+  const ownKeys = wallet.keys?.[asset];
+  if (!ownAddress || !ownKeys) return null;
+  const history = await chainProviders
+    .lws(asset)
+    .getHistory(ownAddress, bytesToHex(ownKeys.privateViewKey));
+  if (history.error || !history.data) return null;
+  const wanted = txid.toLowerCase();
+  const paid = history.data.transactions.find((t) => {
+    try {
+      return t.txid.toLowerCase() === wanted && BigInt(t.total_received) > 0n;
+    } catch {
+      return false;
+    }
+  });
+  if (!paid) return null;
+  let keyImages: TipSweepKeyImage[];
+  try {
+    keyImages = proveTipKeyImages(tipViewKeyHex, tipSpendKeyHex, outputs, tipId);
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Could not prove this tip's outputs, so the claim was not sent: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    };
   }
-  return proofs.length > 0 ? proofs : undefined;
+  const received = BigInt(paid.total_received);
+  return {
+    ok: true,
+    txid: wanted,
+    assetId: asset,
+    amountAtomic: received,
+    keyImages,
+    confirming: true,
+    summary: { amountAtomic: received, feeAtomic: 0n, unsettledAtomic: 0n },
+  };
 }
 
 /**

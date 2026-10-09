@@ -88,6 +88,11 @@ export interface InboxTipItem {
   memo?: string;
   /** ISO time after which the sender may reclaim. */
   expiresAt?: string;
+  /** This wallet's claim was sent and proven, and the tip settles once the
+   *  network confirms: shown as "Claim sent, confirming", not as Claim. Set
+   *  for an XMR/WOW claim an older wallet version reported without a proof,
+   *  once this wallet proved it on reopening the tip. */
+  confirming?: boolean;
 }
 
 export interface InboxTabProps {
@@ -590,15 +595,30 @@ function TipClaimableRow({
             {timeAgo(tip.createdAt)}
           </div>
         </div>
-        <ActionButton
-          label={busy ? 'Claiming…' : 'Claim'}
-          icon={busy ? '⋯' : '✓'}
-          onClick={() => void handleClaim()}
-          disabled={busy || !onClaim}
-          testid="tip-claim-btn"
-        />
+        {tip.confirming ? (
+          <div
+            data-testid="tip-claim-confirming"
+            style={{ fontSize: 11, fontWeight: 600, color: 'var(--smirk-fg-muted)', textAlign: 'right' }}
+          >
+            Claim sent, confirming
+          </div>
+        ) : (
+          <ActionButton
+            label={busy ? 'Claiming…' : 'Claim'}
+            icon={busy ? '⋯' : '✓'}
+            onClick={() => void handleClaim()}
+            disabled={busy || !onClaim}
+            testid="tip-claim-btn"
+          />
+        )}
       </div>
       <TipNote tip={tip} />
+      {tip.confirming && (
+        <div style={{ fontSize: 10, color: 'var(--smirk-fg-muted)', marginTop: 2, lineHeight: 1.4 }}>
+          The funds already reached your wallet. The tip settles once the network confirms the
+          transfer.
+        </div>
+      )}
       {/* CryptoNote (XMR/WOW) sweep involves WASM ring-sig + key-image
           computation; total wall time is typically 5-10s on first
           claim. Without this hint, the static "Claiming…" label looks

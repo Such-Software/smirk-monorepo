@@ -9,10 +9,17 @@
  * must treat it as a new identity and the old handle, tips and premium stay on
  * the old row.
  *
- * The proof is the backend's derivation-rotation proof (`smirk-rotate-v1`),
- * signed with the OLD key and presented with that key. The backend accepts the
- * key only when its hash is exactly the row's on-file `pubkey_hash`, and only for
- * the row located by this wallet's seed fingerprint.
+ * The proof is the backend's derivation-rotation proof
+ * (`smirk-auth-rotate-v2|...`, {@link rotationMessage}), signed with the OLD key
+ * and presented with that key. The backend accepts the key only when its hash is
+ * exactly the row's on-file `pubkey_hash`, and only for the row located by this
+ * wallet's seed fingerprint.
+ *
+ * It starts with `smirk-auth-` on purpose: that is the one prefix the shipped
+ * v0.3.0 website signer refuses, so no website can phish a v0.3.0 user into
+ * signing it. The v1 format (`smirk-rotate-v1|...`) was outside that prefix,
+ * which made every v0.3.0 wallet a rotation-proof oracle; servers that
+ * advertise `legacy_merge_v2` accept only v2.
  *
  * It needs the seed, which exists only after a fresh password unlock (import
  * included). A grace-session unlock has no seed and simply sends no proof: a
@@ -22,9 +29,10 @@
  * It also needs a server that advertises `features.legacy_merge_v2`
  * ({@link legacyMergeAllowed}). An older server merges any unanchored row whose
  * BTC key row matches the old key, and any session holder can write that row
- * with `POST /keys`; it also accepts a v0.3 row as "legacy". Sending the proof
- * there would let a planted row fold into the user's account on their next
- * unlock. Without the flag the wallet signs in exactly as v0.3.0 did.
+ * with `POST /keys`; it also accepts a v0.3 row as "legacy", and verifies only
+ * the v1 proof. Sending a proof there would let a planted row fold into the
+ * user's account on their next unlock. Without the flag the wallet signs in
+ * exactly as v0.3.0 did.
  */
 
 import { sha256 } from '@noble/hashes/sha256';
@@ -47,10 +55,14 @@ export async function legacyMergeAllowed(
 /** BIP44 coin type for Bitcoin. */
 const BTC_COIN_TYPE = 0;
 
+/** Prefix of the v2 rotation proof, the only one a `legacy_merge_v2` server accepts. */
+export const ROTATION_PROOF_PREFIX = 'smirk-auth-rotate-v2|';
+
 /**
  * The message a rotation proof signs. Must match the backend's
- * `rotation_message`: the instance's canonical API base without a trailing `/`,
- * then `hex(SHA256(new BTC public key hex))`, then the signed timestamp.
+ * `rotation_proof_message`: {@link ROTATION_PROOF_PREFIX}, the instance's
+ * canonical API base without a trailing `/`, `hex(SHA256(new BTC public key
+ * hex))`, then the signed timestamp, `|`-separated.
  */
 export function rotationMessage(
   apiBase: string,
@@ -58,7 +70,7 @@ export function rotationMessage(
   signedTimestamp: number,
 ): string {
   const pubkeyHash = bytesToHex(sha256(new TextEncoder().encode(newBtcPublicKeyHex)));
-  return `smirk-rotate-v1|${apiBase.replace(/\/+$/, '')}|${pubkeyHash}|${signedTimestamp}`;
+  return `${ROTATION_PROOF_PREFIX}${apiBase.replace(/\/+$/, '')}|${pubkeyHash}|${signedTimestamp}`;
 }
 
 /**
