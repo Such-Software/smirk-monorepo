@@ -52,7 +52,7 @@ longer the whole of it.
     Full Monero and Wownero light-wallet support, with history built only from your own outputs. Grin also uses our new open-source light-wallet system backend to offer seamless usage without having to wait on long wallet syncs.
 
     SWAP BETWEEN CHAINS
-    Swap between supported coins inside the wallet through Trocador, THORChain or, where your wallet server offers it, NonLogs. Before you confirm you see the estimate, the provider's fees in the coin they are charged in, and any price limit the swap carries. Swap providers are third parties: none is contacted until you choose it.
+    Swap between supported coins inside the wallet through Trocador, THORChain or, where your wallet server offers it, NonLogs. Before you confirm you see the estimate, the provider's fees in the coin they are charged in, any Smirk swap fee as its own line (at most 1%), and any price limit the swap carries. Swap providers are third parties: none is contacted until you choose it.
 
     A NOSTR IDENTITY FROM THE SAME SEED
     Your Nostr key comes from your wallet seed, so your identity is restored with your backup. Use it on Nostr sites through the built-in NIP-07 signer, claim a readable name@domain handle, keep separate burner identities, or import an nsec you already have.
@@ -196,6 +196,11 @@ so a reviewer watching the network sees nothing undeclared:
   public gateway `gateway.liquify.com`, only after the user taps the THORChain
   card: pool and vault lookups, then pair and amount, then the receive address
   (and a Monero refund address) on confirm, and the deposit txid for status.
+  When the wallet server advertises an affiliate (`swaps.thorchain.affiliate`),
+  the quote names that THORName with a fee capped at 100 basis points, shown to
+  the user as its own "Smirk fee" line; the name is first looked up at the same
+  gateway (`/thorchain/thorname/<name>`, `/thorchain/lastblock`) and dropped if
+  it does not exist or has expired.
 - **NonLogs** (`packages/extension/src/popup/nonlogs.ts`), brokered by the wallet
   server's `/swaps/nonlogs/*` and shown only when that server enables it: pair,
   amount, payout and refund addresses pass through the server to NonLogs under

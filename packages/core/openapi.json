@@ -5733,6 +5733,24 @@
           }
         }
       },
+      "ThorchainAffiliateCapability": {
+        "type": "object",
+        "description": "A THORName and the fee, in basis points (100 = 1%), the wallet adds to\nTHORChain quotes.",
+        "required": [
+          "name",
+          "bps"
+        ],
+        "properties": {
+          "bps": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "ThorchainSwapCapability": {
         "type": "object",
         "description": "THORChain swap policy the wallet follows. `enabled: false` turns THORChain\noff; an asset set to `off` hides that asset; anything absent means `auto`:\nTHORChain's own pools and halt flags decide.",
@@ -5740,6 +5758,17 @@
           "enabled"
         ],
         "properties": {
+          "affiliate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ThorchainAffiliateCapability",
+                "description": "The operator's THORChain affiliate. Omitted when none is configured.\nAdvisory: the wallet caps the fee and checks on THORChain that the name\nexists and has not expired, and quotes without an affiliate otherwise."
+              }
+            ]
+          },
           "assets": {
             "type": [
               "object",

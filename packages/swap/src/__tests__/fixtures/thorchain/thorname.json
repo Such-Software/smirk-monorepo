@@ -1,0 +1,57 @@
+{
+  "_meta": {
+    "recorded": "2026-10-09 from https://gateway.liquify.com/chain/thorchain_api (GET /thorchain/thorname/sw, /thorchain/thorname/smirk, /thorchain/lastblock)",
+    "note": "thorname_expired is synthesized from thorname_existing: no expired THORName was at hand, so its name and expire_block_height were edited to sit 1000 blocks before the recorded lastblock height.",
+    "thorchain_height": 28173420
+  },
+  "thorname_existing": {
+    "name": "sw",
+    "expire_block_height": 37079825,
+    "owner": "thor18w0hsdru75ug0x4uvamgjn6ghlu43mr4dcypq9",
+    "preferred_asset": ".",
+    "preferred_asset_swap_threshold_rune": "0",
+    "affiliate_collector_rune": "0",
+    "aliases": [
+      {
+        "chain": "THOR",
+        "address": "thor18w0hsdru75ug0x4uvamgjn6ghlu43mr4dcypq9"
+      }
+    ]
+  },
+  "thorname_missing": {
+    "_http": 400,
+    "body": {
+      "code": 3,
+      "message": "fail to fetch THORName: 2 errors occurred:\n\t* internal error\n\t* THORName doesn't exist: smirk\n\n: invalid request",
+      "details": []
+    }
+  },
+  "thorname_expired": {
+    "name": "smirkold",
+    "expire_block_height": 28172420,
+    "owner": "thor18w0hsdru75ug0x4uvamgjn6ghlu43mr4dcypq9",
+    "preferred_asset": ".",
+    "preferred_asset_swap_threshold_rune": "0",
+    "affiliate_collector_rune": "0",
+    "aliases": [
+      {
+        "chain": "THOR",
+        "address": "thor18w0hsdru75ug0x4uvamgjn6ghlu43mr4dcypq9"
+      }
+    ]
+  },
+  "lastblock": [
+    {
+      "chain": "AVAX",
+      "last_observed_in": 97145076,
+      "last_signed_out": 28173412,
+      "thorchain": 28173420
+    },
+    {
+      "chain": "BASE",
+      "last_observed_in": 52391609,
+      "last_signed_out": 28173412,
+      "thorchain": 28173420
+    }
+  ]
+}

@@ -114,6 +114,33 @@ export const DEFAULT_ASSET_POLICY: Readonly<Record<ThorchainAsset, ThorchainAsse
   xmr: 'off',
 };
 
+/** A THORName credited as affiliate on a swap, and its fee in basis points. */
+export interface ThorchainAffiliate {
+  name: string;
+  bps: number;
+}
+
+/**
+ * The most this wallet charges as an affiliate on a THORChain swap, in basis
+ * points (100 = 1%). Applied to whatever the operator configures: a higher
+ * figure from a wallet server is cut to this, never passed through.
+ */
+export const MAX_AFFILIATE_BPS = 100;
+
+/**
+ * Which affiliate a wallet should use, given what its server advertises.
+ * A server that sends a THORChain policy decides, including by sending no
+ * affiliate (none). Only a server that sends no THORChain policy at all (an
+ * older or unreachable one) leaves the choice to the build's fallback.
+ */
+export function serverAffiliate(
+  thorchainCapability: { affiliate?: ThorchainAffiliate | null } | null | undefined,
+  buildFallback: ThorchainAffiliate | undefined,
+): ThorchainAffiliate | undefined {
+  if (!thorchainCapability) return buildFallback;
+  return thorchainCapability.affiliate ?? undefined;
+}
+
 export interface ThorchainSwapOptions {
   /**
    * Thornode REST base URL. Defaults to a public gateway. Quotes and vault
@@ -124,10 +151,19 @@ export interface ThorchainSwapOptions {
   /** `fetch` impl. Defaults to `globalThis.fetch`. Injectable for tests. */
   fetch?: typeof fetch;
   /**
-   * Affiliate THORName and fee in basis points. Off unless both are set: the
-   * name must be registered on THORChain first, or quotes fail.
+   * Affiliate THORName and fee in basis points, fixed for this instance. Off
+   * unless both are set. Superseded by `affiliateSource` when that is given.
    */
-  affiliate?: { name: string; bps: number };
+  affiliate?: ThorchainAffiliate;
+  /**
+   * Where the affiliate comes from at quote time, normally the wallet
+   * server's `/capabilities`. Re-read on every quote, so an operator can set
+   * or change it without a client release. Whatever it returns, the fee is cut
+   * to {@link MAX_AFFILIATE_BPS}, and the name is used only after THORChain
+   * confirms it exists and has not expired; otherwise the quote goes ahead with
+   * no affiliate rather than failing.
+   */
+  affiliateSource?: () => ThorchainAffiliate | undefined | Promise<ThorchainAffiliate | undefined>;
   /**
    * Price protection written into the memo as a limit, in basis points below
    * the quoted output. THORChain refunds instead of filling worse than this.
@@ -177,6 +213,17 @@ export interface ThorchainQuoteData {
   /** Fees in the destination asset's atomic units. */
   fees: { total: string; affiliate: string; outbound: string; liquidity: string };
   toleranceBps: number;
+  /** The affiliate this quote names, when one was applied. */
+  affiliate?: ThorchainAffiliate;
+}
+
+interface ThorName {
+  name?: string;
+  expire_block_height?: number;
+}
+
+interface ThorLastBlock {
+  thorchain?: number;
 }
 
 interface ThorPool {
@@ -234,6 +281,8 @@ export class ThorchainSwap implements Swap {
   private lastRequestAt = Number.NEGATIVE_INFINITY;
   private queue: Promise<unknown> = Promise.resolve();
   private cached: { at: number; value: ThorchainAvailability } | null = null;
+  /** THORName checks, kept for this instance's life (one popup session). */
+  private readonly thornames = new Map<string, Promise<boolean>>();
 
   constructor(private readonly opts: ThorchainSwapOptions = {}) {
     this.base = (opts.thornodeUrl ?? DEFAULT_THORNODE_URL).replace(/\/+$/, '');
@@ -338,8 +387,8 @@ export class ThorchainSwap implements Swap {
     // refund address there pushes the memo past 80 bytes. Monero has no
     // visible sender, so it is the one chain that must name one.
     if (fromA === 'xmr') q.set('refund_address', req.refundAddress!);
-    const aff = this.opts.affiliate;
-    if (aff && aff.bps > 0) {
+    const aff = await this.liveAffiliate();
+    if (aff) {
       q.set('affiliate', aff.name);
       q.set('affiliate_bps', String(aff.bps));
     }
@@ -373,6 +422,7 @@ export class ThorchainSwap implements Swap {
         destination: req.toAddress,
         ...(fromA === 'xmr' ? { refundAddress: req.refundAddress! } : {}),
         maxBytes: SPEC[fromA].memoMaxBytes,
+        affiliate: aff ?? null,
       });
     }
 
@@ -399,6 +449,7 @@ export class ThorchainSwap implements Swap {
         liquidity: fromThorUnits(raw.fees?.liquidity ?? '0', toDec),
       },
       toleranceBps: this.toleranceBps,
+      ...(aff ? { affiliate: aff } : {}),
     };
     return {
       fromAsset: from,
@@ -470,6 +521,59 @@ export class ThorchainSwap implements Swap {
       return { state: 'pending', reason: 'awaiting_deposit' };
     }
     return mapStatus(await this.get<ThorTxStatus>(`/thorchain/tx/status/${txid.toUpperCase()}`));
+  }
+
+  /**
+   * The affiliate to name on this quote, or none. The source is re-read every
+   * time; the fee is cut to {@link MAX_AFFILIATE_BPS}; and the name is used
+   * only once THORChain says it exists and has not expired. Anything else
+   * quotes without an affiliate: a fee is never a reason for a swap to fail.
+   */
+  private async liveAffiliate(): Promise<ThorchainAffiliate | undefined> {
+    let cand: ThorchainAffiliate | undefined;
+    try {
+      cand = this.opts.affiliateSource ? await this.opts.affiliateSource() : this.opts.affiliate;
+    } catch {
+      return undefined;
+    }
+    if (!cand) return undefined;
+    const name = typeof cand.name === 'string' ? cand.name.trim() : '';
+    if (!/^[a-z0-9._+-]{1,30}$/i.test(name)) return undefined;
+    if (!Number.isInteger(cand.bps) || cand.bps <= 0) return undefined;
+    const bps = Math.min(cand.bps, MAX_AFFILIATE_BPS);
+    return (await this.thornameLive(name)) ? { name, bps } : undefined;
+  }
+
+  /**
+   * True when THORChain has `name` registered and unexpired. A definite
+   * answer (exists, missing, expired) is kept for this instance; a failed
+   * lookup is not, and counts as "not now" so the quote goes ahead plain.
+   */
+  private thornameLive(name: string): Promise<boolean> {
+    const key = name.toLowerCase();
+    const known = this.thornames.get(key);
+    if (known) return known;
+    const check = (async (): Promise<boolean> => {
+      let record: ThorName;
+      try {
+        record = await this.get<ThorName>(`/thorchain/thorname/${encodeURIComponent(name)}`);
+      } catch (e) {
+        if (e instanceof Error && /doesn't exist|does not exist|not found/i.test(e.message)) return false;
+        throw e;
+      }
+      if (typeof record.expire_block_height !== 'number') return false;
+      const blocks = await this.get<ThorLastBlock[]>('/thorchain/lastblock');
+      const height = Array.isArray(blocks)
+        ? Math.max(0, ...blocks.map((b) => (typeof b.thorchain === 'number' ? b.thorchain : 0)))
+        : 0;
+      return height > 0 && record.expire_block_height > height;
+    })();
+    const kept = check.catch(() => {
+      this.thornames.delete(key);
+      return false;
+    });
+    this.thornames.set(key, kept);
+    return kept;
   }
 
   private async get<T>(path: string): Promise<T> {
@@ -547,7 +651,18 @@ function assess(
  */
 export function assertMemo(
   memo: string,
-  want: { toAsset: ThorchainAsset; destination: string; refundAddress?: string; maxBytes: number },
+  want: {
+    toAsset: ThorchainAsset;
+    destination: string;
+    refundAddress?: string;
+    maxBytes: number;
+    /**
+     * The affiliate this wallet asked for, or `null` for none. When given, the
+     * memo must name exactly it, so a tampered response cannot add a fee or
+     * redirect one. Omitted: the affiliate fields are not checked.
+     */
+    affiliate?: ThorchainAffiliate | null;
+  },
 ): void {
   const bytes = new TextEncoder().encode(memo).length;
   if (bytes > want.maxBytes) {
@@ -575,6 +690,17 @@ export function assertMemo(
   }
   if (!parts[3] || !/^\d+/.test(parts[3])) {
     throw swapError('network_error', 'The swap memo carries no price limit.');
+  }
+  if (want.affiliate === undefined) return;
+  const [affName, affBps] = [parts[4] ?? '', parts[5] ?? ''];
+  if (want.affiliate === null) {
+    if (affName !== '' || affBps !== '') {
+      throw swapError('network_error', 'The swap memo adds an affiliate fee this wallet did not ask for.');
+    }
+    return;
+  }
+  if (affName.toLowerCase() !== want.affiliate.name.toLowerCase() || affBps !== String(want.affiliate.bps)) {
+    throw swapError('network_error', 'The swap memo names a different affiliate fee than this wallet asked for.');
   }
 }
 

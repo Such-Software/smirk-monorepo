@@ -18,10 +18,11 @@ interface ImportMetaEnv {
    */
   readonly VITE_TROCADOR_API_KEY?: string;
   /**
-   * THORChain affiliate THORName and fee in basis points, set at build time.
-   * Public values (the name is registered on chain). Unset or zero means no
-   * affiliate fee; a name that is not registered on THORChain makes every
-   * quote fail, so set it only after registering.
+   * Build-time FALLBACK for the THORChain affiliate THORName and fee in basis
+   * points, used only when the wallet server sends no THORChain policy at all.
+   * The normal source is the server's `swaps.thorchain.affiliate`. Either way
+   * the fee is capped at 100 bps, and a name THORChain does not have (or has
+   * expired) is dropped from the quote rather than failing it.
    */
   readonly VITE_THORCHAIN_AFFILIATE?: string;
   readonly VITE_THORCHAIN_AFFILIATE_BPS?: string;

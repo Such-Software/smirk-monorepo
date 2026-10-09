@@ -52,7 +52,10 @@ it sees your IP address.
   and amount; confirming sends your receive address and, for a Monero deposit,
   your refund address; status checks send the deposit's transaction id. This
   does not pass through your wallet server. The swap instruction, including
-  those addresses, is also written into the deposit transaction itself.
+  those addresses, is also written into the deposit transaction itself. When
+  your wallet server sets one, a Smirk swap fee (at most 1%, shown on the quote
+  as its own line) is credited to the server operator's THORChain name; the
+  wallet first looks that name up on THORChain through the same gateway.
 - **NonLogs**, only when your wallet server offers it: the pair, amount, payout
   address and refund address pass through your wallet server to NonLogs, which
   keeps them under the server operator's NonLogs account. Your IP address does
