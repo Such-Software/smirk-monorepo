@@ -28,7 +28,7 @@
 
 import { grinKeySource, grinSlatepackSecret } from './session-signing';
 import { render } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   LEGACY_WALLET_KEY,
   SESSION_CACHE_KEY,
@@ -831,6 +831,15 @@ function App() {
     tips: InboxTipItem[];
     error: string | null;
   }>({ tips: [], error: null });
+  // Tips whose claim this wallet sent and proved during this session, still
+  // `claiming` until the network confirms: a claim an older version of the
+  // wallet reported by txid alone, proven on reopening. The inbox lists them
+  // as "Claim sent, confirming" rather than offering Claim again.
+  const [confirmingTipIds, setConfirmingTipIds] = useState<ReadonlySet<string>>(() => new Set());
+  const inboxTips = useMemo(
+    () => tipInbox.tips.map((t) => (confirmingTipIds.has(t.tipId) ? { ...t, confirming: true } : t)),
+    [tipInbox.tips, confirmingTipIds],
+  );
 
   // Escape hatch out of the bootstrap error screen, into the backend picker.
   // That screen replaces the whole UI, so when a bootstrap fails against an
@@ -2005,13 +2014,20 @@ function App() {
       ? await claimPublicTip(walletState.wallet, userId, item.tipId, item.claimKey)
       : await claimSocialTip(walletState.wallet, userId, item.tipId, item.assetId);
     if (!outcome.ok) throw new Error(outcome.error);
-    // Optimistically drop the row from the local cache so the user
-    // gets immediate feedback that the tip is gone. Next 30s tick
-    // will re-fetch authoritatively.
-    setTipInbox((s) => ({
-      ...s,
-      tips: s.tips.filter((t) => t.tipId !== item.tipId),
-    }));
+    if (outcome.confirming) {
+      // A claim sent earlier, proven now: the funds are already here and the
+      // tip stays `claiming` until the network confirms. Keep the row, as
+      // "Claim sent, confirming", so it never offers a second claim.
+      setConfirmingTipIds((s) => new Set(s).add(item.tipId));
+    } else {
+      // Optimistically drop the row from the local cache so the user
+      // gets immediate feedback that the tip is gone. Next 30s tick
+      // will re-fetch authoritatively.
+      setTipInbox((s) => ({
+        ...s,
+        tips: s.tips.filter((t) => t.tipId !== item.tipId),
+      }));
+    }
     // Auto-unhide the asset if the user had hidden it. Claiming money
     // is an explicit "I want to see this" signal; leaving the swept
     // funds invisible because the user hid the asset weeks ago would
@@ -2108,7 +2124,7 @@ function App() {
           label: 'Smirk Wallet',
           iconUrl: chrome.runtime.getURL('icons/favicon-16.png'),
         }}
-        tabBadges={{ inbox: grinInbox.items.length + tipInbox.tips.length }}
+        tabBadges={{ inbox: grinInbox.items.length + inboxTips.filter((t) => !t.confirming).length }}
         headerActions={
           session && !session.error ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2127,7 +2143,7 @@ function App() {
               wallet={walletState.wallet}
               session={session}
               caps={caps}
-              tips={tipInbox.tips}
+              tips={inboxTips}
               onRefresh={handleRefresh}
               nostrLinkPrompt={nostrLinkPrompt}
               confirmNostrLink={confirmNostrLink}
@@ -2162,7 +2178,7 @@ function App() {
               wallet={walletState.wallet}
               userId={session?.bootstrap?.userId ?? ''}
               inbox={grinInbox}
-              tips={tipInbox.tips}
+              tips={inboxTips}
               onRefresh={refreshGrinInbox}
               onClaimTip={onClaimTipHandler}
             />
@@ -3206,9 +3222,12 @@ function HomeRouter({
             });
           }
           void onRefresh();
-          const success: { ok: true; assetId?: string; amountAtomic?: bigint } = { ok: true };
+          const success: { ok: true; assetId?: string; amountAtomic?: bigint; confirming?: boolean } = {
+            ok: true,
+          };
           if (claimedAssetId !== undefined) success.assetId = claimedAssetId;
           if (claimedAmount !== undefined) success.amountAtomic = claimedAmount;
+          if (outcome.confirming) success.confirming = true;
           return success;
         }}
         onExit={() => void navigate('inbox')}
@@ -3643,7 +3662,7 @@ function HomeRouter({
           })()}
           {(() => {
             const claimable = tips.filter(
-              (t) => t.fundingConfirmations >= t.confirmationsRequired,
+              (t) => !t.confirming && t.fundingConfirmations >= t.confirmationsRequired,
             );
             if (claimable.length === 0) return null;
             const single = claimable.length === 1 ? claimable[0] : undefined;

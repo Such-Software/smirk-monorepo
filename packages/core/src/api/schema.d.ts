@@ -858,19 +858,27 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Report the current claimer's broadcast sweep. RECORD, not settle: the tip
-         *     stays `claiming` and the reconciler settles it to `claimed` only once the
-         *     chain bears the report out at depth.
-         * @description Only the tip's current claimer (whoever last claimed it) may report, so a
-         *     report from someone who never claimed cannot stand in the real claimer's
-         *     way. The one exception is an XMR/WOW report proving the key image of one of
-         *     the tip's own outputs (see [`SweepKeyImage`]): only the tip's spend key
-         *     makes that proof, so a later claim by someone else does not silence it.
-         *     Anyone else gets 403. Each reporter keeps its own report: a later report
-         *     replaces the caller's earlier one unless the chain already showed the
-         *     earlier one spending the tip, and never touches anyone else's. Idempotent.
-         *     A key-image proof that does not verify is a 400, as is a tip that is not
-         *     being claimed.
+         * Report the caller's broadcast sweep. RECORD, not settle: the tip stays
+         *     `claiming` and the reconciler settles it to `claimed` only once the chain
+         *     bears the report out at depth.
+         * @description XMR/WOW settle ONLY on a key-image proof (see [`SweepKeyImage`]). A report
+         *     without one, which is all v0.3.0 can send, is kept for the operator and the
+         *     claimer but never settles the tip, so a reported decoy can never end
+         *     clawback. Its answer is the same for every such report, `{sweep_txid: <the
+         *     txid just reported>, status}`: it never says whether the transaction
+         *     touched the tip, so it is no oracle for finding the tip's output. The
+         *     claimer finalises it by reporting the same transaction with its key
+         *     images (v0.3.1 does on reopening the tip).
+         *
+         *     A report without a proof comes only from the tip's current claimer
+         *     (whoever last claimed it). A report with one comes from the current
+         *     claimer, or from anyone whose proof is for one of the tip's own outputs:
+         *     only the tip's spend key makes that proof, so a later claim by someone else
+         *     does not silence it. Anyone else gets 403. Each reporter keeps its own
+         *     report: a later report replaces the caller's earlier one unless the chain
+         *     already showed the earlier one spending the tip, and never touches anyone
+         *     else's. Idempotent. A key-image proof that does not verify is a 400, as is
+         *     a tip that is not being claimed.
          */
         post: operations["confirm_sweep"];
         delete?: never;
@@ -1687,6 +1695,14 @@ export interface components {
              *     if the tip stored none. Useless without the claim key.
              */
             encrypted_key?: string | null;
+            /**
+             * @description The sweep THIS caller already reported for this tip, if any; never
+             *     anyone else's. An XMR/WOW claim an older wallet reported by txid alone
+             *     settles only once proven: a v0.3.1 wallet reopening the tip proves and
+             *     re-reports this transaction (it pays that wallet) instead of building a
+             *     new sweep of outputs that are already spent.
+             */
+            reported_sweep_txid?: string | null;
             success: boolean;
             tip_address?: string | null;
         };
@@ -1697,11 +1713,14 @@ export interface components {
         /** @description Report the current claimer's broadcast sweep transaction. */
         ConfirmSweepRequest: {
             /**
-             * @description XMR/WOW only, from wallets that can prove them: for each tip output the
-             *     sweep spent, its key image and the proof that the key image is that
-             *     output's. An XMR/WOW tip with a proven key image settles only on the
-             *     mined transaction that spends it, whichever claimer sent it. Optional:
-             *     a report without it is checked against the light-wallet server alone.
+             * @description XMR/WOW: for each tip output the sweep spent, its key image and the
+             *     proof that the key image is that output's (v0.3.1 and later send it).
+             *     An XMR/WOW tip settles ONLY on a proven key image that the daemon shows
+             *     spent in a mined transaction, whichever claimer sent it. A report
+             *     without one (what v0.3.0 sends) is accepted and kept, but settles
+             *     nothing: its claimer can prove it later by reporting the same
+             *     transaction with its key images. Only the first 16 entries are read;
+             *     a wallet sweeping more outputs sends its largest first.
              */
             key_images?: components["schemas"]["SweepKeyImage"][];
             /** @description The broadcast sweep transaction id. XMR/WOW: 64 hex characters. */
@@ -1710,9 +1729,11 @@ export interface components {
         ConfirmSweepResponse: {
             status: string;
             /**
-             * @description The sweep txid on file for the caller: the one just reported, or the
-             *     caller's earlier report when the chain already showed that one spending
-             *     the tip.
+             * @description The sweep txid on file for the caller: the one just reported, or, for a
+             *     report with a key-image proof, the caller's earlier report when the
+             *     chain already showed that one spending the tip. A report without a
+             *     proof is always answered with its own txid, so the answer says nothing
+             *     about what the reported transaction did.
              */
             sweep_txid?: string | null;
         };
@@ -1822,15 +1843,17 @@ export interface components {
              * @description Derivation-rotation proof: BIP-137 base64 signature under the BTC key
              *     ALREADY ON FILE for the user identified by `seed_fingerprint`, over the
              *     DEDICATED rotation message
-             *     `smirk-rotate-v1|{public_api_url}|{pubkey_hash}|{signed_timestamp}`, where
+             *     `smirk-auth-rotate-v2|{public_api_url}|{pubkey_hash}|{signed_timestamp}`, where
              *     `public_api_url` is this instance's canonical API base with any trailing
              *     `/` removed and `pubkey_hash` is `hex(SHA256(submitted btc public_key))`.
              *     It is deliberately NOT the login message: a captured login signature must
              *     be useless as a rotation proof, and a proof minted for one instance must
-             *     not verify on another. Required to re-point an existing user row; without
-             *     it (or if it does not verify against the stored key) a fingerprint match is
-             *     treated as a brand-new identity and the existing row is never touched. See
-             *     [`extension_register`].
+             *     not verify on another. It starts with `smirk-auth-` so that no shipped
+             *     wallet's website signer will produce it; the v1 format
+             *     (`smirk-rotate-v1|...`) is refused. Required to re-point an existing user
+             *     row; without it (or if it does not verify against the stored key) a
+             *     fingerprint match is treated as a brand-new identity and the existing row
+             *     is never touched. See [`extension_register`].
              */
             rotation_signature?: string | null;
             /**
@@ -1873,6 +1896,16 @@ export interface components {
             grin_lws: boolean;
             /** @description Grin async slatepack relay mailbox. */
             grin_relay: boolean;
+            /**
+             * @description The hardened legacy merge: `/auth/legacy-merge` and the rotation fields
+             *     of `/auth/extension` accept only the v2 rotation proof
+             *     (`smirk-auth-rotate-v2|...`, which no shipped wallet's website signer
+             *     produces), and pick a merge source only by a proven key. A wallet sends
+             *     a rotation proof or a merge request only to a server that says true here;
+             *     an older server accepted the v1 proof a website could phish. Needs the
+             *     canonical `PUBLIC_API_URL` the proof binds to.
+             */
+            legacy_merge_v2: boolean;
             /** @description Nostr-native identity (NIP-98 login/link, NIP-05 directory). */
             nostr_identity: boolean;
             /**
@@ -2152,7 +2185,9 @@ export interface components {
             previous_public_key: string;
             /**
              * @description BIP-137 signature under `previous_public_key` over
-             *     `smirk-rotate-v1|{public_api_url}|{hex(SHA256(btc_public_key))}|{signed_timestamp}`.
+             *     `smirk-auth-rotate-v2|{public_api_url}|{hex(SHA256(btc_public_key))}|{signed_timestamp}`.
+             *     The v1 format (`smirk-rotate-v1|...`) is refused: a shipped wallet's
+             *     website signer would produce it for any site that asked.
              */
             rotation_signature: string;
             /**
@@ -4255,7 +4290,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Sweep report recorded */
+            /** @description Sweep report accepted (recorded; for XMR/WOW without a proof, possibly not kept, with the same answer) */
             200: {
                 headers: {
                     [name: string]: unknown;

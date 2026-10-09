@@ -51,7 +51,8 @@ import {
  * the wallet's OWN server accepts. Every such proof starts with `smirk-`:
  * `POST /auth/extension` verifies a BIP-137 signature over `smirk-auth-<ts>`,
  * and the legacy merge (`POST /auth/legacy-merge`, and the rotation fields of
- * `/auth/extension`) accepts `smirk-rotate-v1|<api>|<key hash>|<ts>` as proof
+ * `/auth/extension`) accepts `smirk-auth-rotate-v2|<api>|<key hash>|<ts>`
+ * (`smirk-rotate-v1|...` on servers before `legacy_merge_v2`) as proof
  * that a row belongs to the key that signed it. Both are predictable, so a
  * connected site (which already holds the btc pubkey from `connect()`) could
  * have the user approve one and replay it: a sign-in for the user's account,

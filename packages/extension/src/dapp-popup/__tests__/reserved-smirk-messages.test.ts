@@ -2,12 +2,13 @@
  * A website must not get a Smirk server proof signed through `signIn` or
  * `signMessage`.
  *
- * The legacy merge accepts `smirk-rotate-v1|<api>|<sha256(new key)>|<ts>`,
- * signed with a BTC key, as proof that the row registered under that key may be
- * folded into the account holding the new key. The message is predictable, so a
- * site that names ITS OWN key as the new one and gets the user to approve a
- * "sign in" could replay the signature to `/auth/legacy-merge` and take the
- * user's handle, npub and tips. Only `smirk-auth-` was refused before.
+ * The legacy merge accepts `smirk-auth-rotate-v2|<api>|<sha256(new key)>|<ts>`
+ * (`smirk-rotate-v1|...` on older servers), signed with a BTC key, as proof
+ * that the row registered under that key may be folded into the account
+ * holding the new key. The message is predictable, so a site that names ITS
+ * OWN key as the new one and gets the user to approve a "sign in" could replay
+ * the signature to `/auth/legacy-merge` and take the user's handle, npub and
+ * tips. Only `smirk-auth-` was refused before; now every `smirk-` message is.
  *
  * These run the real executor every platform shares (the extension's approval
  * popup and the desktop BrowseTab) with a real unlocked wallet.
