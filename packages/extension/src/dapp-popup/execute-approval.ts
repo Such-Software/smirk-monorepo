@@ -26,10 +26,11 @@ import {
   type SessionState,
   type UnlockedWallet,
 } from '@smirk/core';
-import type {
-  ApprovalRequest,
-  ApprovalResult as DappApprovalResult,
-  SmirkAsset,
+import {
+  websiteChallengeOriginRefusal,
+  type ApprovalRequest,
+  type ApprovalResult as DappApprovalResult,
+  type SmirkAsset,
 } from '@such-software/smirk-dapp-api';
 import type { ApprovalApproval } from '@smirk/ui';
 import {
@@ -102,6 +103,17 @@ export interface ExecuteApprovalDeps {
 }
 
 /**
+ * A Smirk website sign-in challenge signs only for the website it names: the
+ * server trades the signature for a full session, so a site that got another
+ * site's challenge signed could sign in as the user. Checked here as well as
+ * in the dapp handler, because every platform's approval runs through here.
+ */
+function refuseForeignWebsiteChallenge(message: string, requestingOrigin: string): void {
+  const refusal = websiteChallengeOriginRefusal(message, requestingOrigin);
+  if (refusal) throw new Error(refusal);
+}
+
+/**
  * Run the approval. Returns the result to pass back to the dapp-api
  * `ApprovalHandler`. Throws only on programmer errors (e.g., the
  * `approval.kind` and `request.kind` disagree); operational failures
@@ -141,6 +153,7 @@ export async function executeApproval(
       if (request.kind !== 'signMessage') {
         throw new Error('Pending request kind mismatch (expected signMessage)');
       }
+      refuseForeignWebsiteChallenge(request.message, request.origin.origin);
       const result = signMessageWithUnlocked(
         deps.wallet,
         request.message,
@@ -153,6 +166,7 @@ export async function executeApproval(
       if (request.kind !== 'signIn') {
         throw new Error('Pending request kind mismatch (expected signIn)');
       }
+      refuseForeignWebsiteChallenge(request.message, request.origin.origin);
       const result = signMessageWithUnlocked(
         deps.wallet,
         request.message,

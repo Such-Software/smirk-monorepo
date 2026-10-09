@@ -54,12 +54,12 @@ function attackerRotation(): string {
   return rotationMessage(API, attackerKey, Math.floor(Date.now() / 1000));
 }
 
-function signInRequest(message: string): ApprovalRequest {
-  return { kind: 'signIn', origin: ORIGIN, message, requestedAssets: ['btc'], alreadyConnected: false } as unknown as ApprovalRequest;
+function signInRequest(message: string, origin = ORIGIN): ApprovalRequest {
+  return { kind: 'signIn', origin, message, requestedAssets: ['btc'], alreadyConnected: false } as unknown as ApprovalRequest;
 }
 
-function signMessageRequest(message: string): ApprovalRequest {
-  return { kind: 'signMessage', origin: ORIGIN, message, assets: ['btc', 'ltc', 'xmr'] } as unknown as ApprovalRequest;
+function signMessageRequest(message: string, origin = ORIGIN): ApprovalRequest {
+  return { kind: 'signMessage', origin, message, assets: ['btc', 'ltc', 'xmr'] } as unknown as ApprovalRequest;
 }
 
 const RESERVED = [
@@ -85,10 +85,30 @@ for (const message of RESERVED) {
   });
 }
 
+const SMIRK_CASH_CHALLENGE = 'Smirk Authentication Challenge\nNonce: 00\nOrigin: https://smirk.cash\nTimestamp: 1';
+
+test("a website never gets another site's Smirk sign-in challenge signed", async () => {
+  // The server trades this signature for a full session, so a site that got
+  // smirk.cash's challenge signed could sign in to the server as the user.
+  await assert.rejects(
+    executeApproval(signInRequest(SMIRK_CASH_CHALLENGE), { kind: 'signIn' } as ApprovalApproval, deps),
+    /only sign in to Smirk as itself/,
+  );
+  await assert.rejects(
+    executeApproval(signMessageRequest(SMIRK_CASH_CHALLENGE), { kind: 'signMessage' } as ApprovalApproval, deps),
+    /only sign in to Smirk as itself/,
+  );
+});
+
 test('an ordinary sign-in challenge still signs, with the real BTC key', async () => {
-  // The smirk.cash website's own challenge shape, which is outside the namespace.
-  const message = 'Smirk Authentication Challenge\nNonce: 00\nOrigin: https://smirk.cash\nTimestamp: 1';
-  const out = await executeApproval(signInRequest(message), { kind: 'signIn' } as ApprovalApproval, deps);
+  // The smirk.cash website's own challenge, asked for by smirk.cash: outside
+  // the reserved namespace, and naming the site that asks.
+  const message = SMIRK_CASH_CHALLENGE;
+  const out = await executeApproval(
+    signInRequest(message, { origin: 'https://smirk.cash' }),
+    { kind: 'signIn' } as ApprovalApproval,
+    deps,
+  );
   assert.equal(out.kind, 'signIn');
   const sig = out.kind === 'signIn' && out.approved ? out.result.signatures.find((s) => s.asset === 'btc') : undefined;
   assert.ok(sig, 'a BTC signature is returned');
