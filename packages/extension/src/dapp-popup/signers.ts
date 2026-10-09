@@ -42,6 +42,7 @@ import {
 import {
   isReservedSmirkMessage,
   RESERVED_SMIRK_MESSAGE_REFUSAL,
+  signableMessageRefusal,
   type SmirkAsset,
   type SmirkSignResult,
 } from '@such-software/smirk-dapp-api';
@@ -71,6 +72,12 @@ export function signMessageWithUnlocked(
   message: string,
   assets: SmirkAsset[],
 ): SmirkSignResult {
+  // Before any other check: the type says string, but the value came from a
+  // page through JSON. Anything else would pass the checks below and then be
+  // turned into text by the encoders (`['smirk-auth-1']` signs as
+  // `'smirk-auth-1'`).
+  const unsignable = signableMessageRefusal(message);
+  if (unsignable) throw new Error(unsignable);
   if (isReservedSmirkMessage(message)) {
     throw new Error(RESERVED_SMIRK_MESSAGE_REFUSAL);
   }

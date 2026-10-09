@@ -20,9 +20,31 @@
  */
 const RESERVED_SMIRK_MESSAGE = /^\s*smirk-/i;
 
-/** True when `message` is in the reserved `smirk-` namespace. */
+/**
+ * Why `message` cannot be signed at all, or `null` when it is a non-empty
+ * string. Every signing entry point asks this FIRST, before any other check.
+ *
+ * A page chooses the message, and the wire, the stored approval and the prompt
+ * all pass a JSON value through unchanged. A guard that tested only strings let
+ * any other value through, and the signer then turned it into text when it
+ * encoded the message: `['smirk-auth-1']` signs exactly as `'smirk-auth-1'`.
+ * So nothing but a primitive string is ever a message (a `String` object is
+ * not one either).
+ */
+export function signableMessageRefusal(message: unknown): string | null {
+  if (typeof message !== 'string') {
+    return `Refusing to sign: the message must be text, not ${message === null ? 'null' : typeof message}.`;
+  }
+  if (message.length === 0) return 'Refusing to sign an empty message.';
+  return null;
+}
+
+/**
+ * True when `message` is in the reserved `smirk-` namespace, or is not a
+ * string at all (fail closed: anything that is not text is never signed).
+ */
 export function isReservedSmirkMessage(message: unknown): boolean {
-  return typeof message === 'string' && RESERVED_SMIRK_MESSAGE.test(message);
+  return typeof message !== 'string' || RESERVED_SMIRK_MESSAGE.test(message);
 }
 
 /** The refusal shown to the page, with the reason. */
@@ -52,11 +74,13 @@ function normalizeOrigin(origin: string): string {
  * Why the wallet refuses to sign `message` for `requestingOrigin`, or `null`.
  *
  * Refuses a Smirk website sign-in challenge unless it names exactly one
- * origin and that origin is the requesting site. Any other message is not
- * this function's business (`null`).
+ * origin and that origin is the requesting site. Any other text is not this
+ * function's business (`null`). Anything that is not text is refused (fail
+ * closed): the signer would turn it into text that could be a challenge.
  */
 export function websiteChallengeOriginRefusal(message: unknown, requestingOrigin: string): string | null {
-  if (typeof message !== 'string' || !WEBSITE_CHALLENGE.test(message)) return null;
+  if (typeof message !== 'string') return signableMessageRefusal(message);
+  if (!WEBSITE_CHALLENGE.test(message)) return null;
   const named = [...message.matchAll(/^\s*origin:[ \t]*(\S*)[ \t]*$/gim)].map((m) => m[1] ?? '');
   if (named.length !== 1 || !named[0]) {
     return 'Refusing to sign a Smirk sign-in challenge that does not name exactly one website.';

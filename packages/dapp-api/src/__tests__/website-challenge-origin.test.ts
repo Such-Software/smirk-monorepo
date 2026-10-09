@@ -86,7 +86,12 @@ test('a Smirk challenge binds to exactly one origin; other messages are not its 
     ),
     'a challenge naming two sites',
   );
-  for (const m of ['Sign in to example.com\nOrigin: https://smirk.cash', 'hello', 42, undefined]) {
-    assert.equal(websiteChallengeOriginRefusal(m, 'https://attacker.example'), null, String(m));
+  for (const m of ['Sign in to example.com\nOrigin: https://smirk.cash', 'hello']) {
+    assert.equal(websiteChallengeOriginRefusal(m, 'https://attacker.example'), null, m);
+  }
+  // Anything that is not text is refused outright (fail closed): a signer
+  // would turn `[challenge]` into the challenge itself.
+  for (const m of [[challenge('https://smirk.cash')], 42, undefined, null, { toString: () => 'x' }]) {
+    assert.ok(websiteChallengeOriginRefusal(m, 'https://attacker.example'), String(m));
   }
 });

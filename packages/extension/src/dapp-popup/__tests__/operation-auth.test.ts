@@ -19,7 +19,8 @@ for (const kind of ['signMessage', 'signNostrEvent', 'appEncKey', 'appSealOpen',
       async ensureWasmInit() { initialized = true; },
       assertOperationSession() {},
     } as unknown as ExecuteApprovalDeps;
-    const request = { kind, origin: { origin: 'https://example.test' }, sessionCovered: true, firstGrant: false } as unknown as ApprovalRequest;
+    // A signable message, so the operation authorization is what stops it.
+    const request = { kind, origin: { origin: 'https://example.test' }, message: 'hello', sessionCovered: true, firstGrant: false } as unknown as ApprovalRequest;
     await assert.rejects(executeApproval(request, { kind } as ApprovalApproval, deps), /canceled/);
     assert.equal(requested, 'sign');
     assert.equal(initialized, false, 'canceled authorization must stop before private-key work');
