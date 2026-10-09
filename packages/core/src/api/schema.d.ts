@@ -417,6 +417,15 @@ export interface paths {
          * @description The challenge is stored in `state.web_challenges` keyed by its own nonce and
          *     expires shortly (see [`WebChallenge`]). The returned `challenge` message is
          *     what the wallet signs; `challenge_id` is the nonce to present at verify.
+         *
+         *     Only this instance's own websites may ask
+         *     ([`crate::config::IdentityConfig::website_auth_origins`]). A verified
+         *     challenge is a full session, and every shipped wallet's website signer signs
+         *     the challenge for whichever site asks it to. A challenge issued for any
+         *     origin let every site a user signed in to with Smirk fetch one under its own
+         *     name, have the user approve an ordinary-looking sign-in, and replay the
+         *     signature here to sign in as them. (v0.3.1 wallets also refuse to sign a
+         *     challenge naming an origin other than the site asking.)
          */
         post: operations["website_challenge"];
         delete?: never;
@@ -3445,7 +3454,7 @@ export interface operations {
                     "application/json": components["schemas"]["WebsiteChallengeResponse"];
                 };
             };
-            /** @description Invalid origin */
+            /** @description Invalid origin, or an origin that is not one of this instance's websites */
             400: {
                 headers: {
                     [name: string]: unknown;

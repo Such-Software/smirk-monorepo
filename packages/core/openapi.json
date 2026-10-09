@@ -454,7 +454,7 @@
           "auth"
         ],
         "summary": "Issue a website-auth challenge bound to the requesting origin.",
-        "description": "The challenge is stored in `state.web_challenges` keyed by its own nonce and\nexpires shortly (see [`WebChallenge`]). The returned `challenge` message is\nwhat the wallet signs; `challenge_id` is the nonce to present at verify.",
+        "description": "The challenge is stored in `state.web_challenges` keyed by its own nonce and\nexpires shortly (see [`WebChallenge`]). The returned `challenge` message is\nwhat the wallet signs; `challenge_id` is the nonce to present at verify.\n\nOnly this instance's own websites may ask\n([`crate::config::IdentityConfig::website_auth_origins`]). A verified\nchallenge is a full session, and every shipped wallet's website signer signs\nthe challenge for whichever site asks it to. A challenge issued for any\norigin let every site a user signed in to with Smirk fetch one under its own\nname, have the user approve an ordinary-looking sign-in, and replay the\nsignature here to sign in as them. (v0.3.1 wallets also refuse to sign a\nchallenge naming an origin other than the site asking.)",
         "operationId": "website_challenge",
         "requestBody": {
           "content": {
@@ -478,7 +478,7 @@
             }
           },
           "400": {
-            "description": "Invalid origin"
+            "description": "Invalid origin, or an origin that is not one of this instance's websites"
           }
         }
       }

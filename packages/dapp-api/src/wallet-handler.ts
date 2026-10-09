@@ -29,7 +29,11 @@ import {
   OriginPermissionStore,
 } from './permissions';
 import { WalletProvider } from './provider';
-import { isReservedSmirkMessage, RESERVED_SMIRK_MESSAGE_REFUSAL } from './reserved-messages';
+import {
+  isReservedSmirkMessage,
+  RESERVED_SMIRK_MESSAGE_REFUSAL,
+  websiteChallengeOriginRefusal,
+} from './reserved-messages';
 import {
   ALL_ASSETS,
   APP_ENC_SCHEME,
@@ -188,6 +192,8 @@ async function dispatchInner<M extends SmirkMethod>(
       if (isReservedSmirkMessage(params?.message)) {
         throw new HandlerError('INVALID_PARAMS', RESERVED_SMIRK_MESSAGE_REFUSAL);
       }
+      const foreignChallenge = websiteChallengeOriginRefusal(params?.message, origin.origin);
+      if (foreignChallenge) throw new HandlerError('INVALID_PARAMS', foreignChallenge);
       // Always prompt per-signature. Signatures are auth credentials
       // for the receiving service; auto-signing every request would
       // let a connected origin impersonate the user without a refresh
@@ -223,6 +229,8 @@ async function dispatchInner<M extends SmirkMethod>(
       if (isReservedSmirkMessage(params.message)) {
         throw new HandlerError('INVALID_PARAMS', RESERVED_SMIRK_MESSAGE_REFUSAL);
       }
+      const foreignSignIn = websiteChallengeOriginRefusal(params.message, origin.origin);
+      if (foreignSignIn) throw new HandlerError('INVALID_PARAMS', foreignSignIn);
       const requestedAssets = normalizeAssets(params.assets);
       const existing = await deps.permissions.get(origin.origin);
       const alreadyConnected = hasAssetsAuthorized(existing, requestedAssets);
