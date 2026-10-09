@@ -1,6 +1,6 @@
 import { nativeFetch } from '../native-fetch';
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { TrocadorSwap, type ThorchainQuoteData, type NonlogsQuoteData } from '@smirk/swap';
+import { TrocadorSwap, type NonlogsQuoteData } from '@smirk/swap';
 import { api, type UnlockedWallet } from '@smirk/core';
 import {
   SwapTab,
@@ -19,7 +19,7 @@ import { validateAddress } from '../address';
 import { resolveIcon } from '../icons';
 import { store } from '../singletons';
 import type { WalletSession } from '../types';
-import { thorchainSwap } from '../thorchain';
+import { confirmThorchainSwap, thorchainGatewayHost, thorchainQuoteSummary, thorchainSwap } from '../thorchain';
 import { nonlogsOffered, nonlogsSwap, ownAddressesOnly } from '../nonlogs';
 import { findSwapDeposit, journalKeyFor, recordSend } from '../send-journal';
 
@@ -83,8 +83,10 @@ export function SwapRouter({
   }, [apiKey, webhookUrl]);
 
   // THORChain needs no key. Which pairs it offers is decided live, from
-  // THORChain's pools and halt flags plus our backend's policy, every time
-  // this screen opens: XMR appears on its own once THORChain lists it.
+  // THORChain's pools and halt flags plus our backend's policy (XMR only when
+  // the backend opens it). It answers from a public gateway, a third party,
+  // so nothing is asked until the user taps the THORChain card or resumes a
+  // THORChain swap: opening the Swap tab sends no request there.
   const thor = useMemo(() => {
     try {
       return { swap: thorchainSwap(), error: null as string | null };
@@ -92,17 +94,23 @@ export function SwapRouter({
       return { swap: null, error: e instanceof Error ? e.message : 'THORChain is unavailable in this app.' };
     }
   }, []);
+  const thorAsk = `Tap to check whether THORChain is live. This asks its public gateway (${thorchainGatewayHost()}), which sees your IP address.`;
+  const [thorCheck, setThorCheck] = useState(0);
+  const [thorChecking, setThorChecking] = useState(false);
   const [thorPairs, setThorPairs] = useState<{ from: string[]; to: string[]; reason?: string }>({
     from: [],
     to: [],
-    reason: 'Checking THORChain…',
+    reason: thorAsk,
   });
   useEffect(() => {
     if (!thor.swap) {
       setThorPairs({ from: [], to: [], reason: thor.error ?? 'Unavailable.' });
       return;
     }
+    if (thorCheck === 0) return; // Not asked: no request leaves the wallet.
     let alive = true;
+    setThorChecking(true);
+    setThorPairs({ from: [], to: [], reason: 'Checking THORChain…' });
     thor.swap
       .availablePairs()
       .then((pairs) => {
@@ -112,67 +120,46 @@ export function SwapRouter({
         setThorPairs(
           usable.length > 0
             ? { from: [...new Set(usable.map((p) => p.from))], to: [...new Set(usable.map((p) => p.to))] }
-            : { from: [], to: [], reason: 'THORChain has no live pair for this wallet right now.' },
+            : { from: [], to: [], reason: 'THORChain has no live pair for this wallet right now. Tap to check again.' },
         );
       })
       .catch((e: unknown) => {
-        if (alive) setThorPairs({ from: [], to: [], reason: e instanceof Error ? e.message : 'THORChain is unreachable.' });
+        if (alive) {
+          setThorPairs({
+            from: [],
+            to: [],
+            reason: `${e instanceof Error ? e.message : 'THORChain is unreachable.'} Tap to check again.`,
+          });
+        }
+      })
+      .finally(() => {
+        if (alive) setThorChecking(false);
       });
     return () => {
       alive = false;
     };
-  }, [thor, wallet]);
+  }, [thor, wallet, thorCheck]);
 
+  const thorLive = thorPairs.from.length > 0 && thorPairs.to.length > 0;
   const thorHandlers: ThorchainHandlers | undefined = thor.swap
     ? {
         fromAssets: thorPairs.from,
         toAssets: thorPairs.to,
         ...(thorPairs.reason ? { unavailableReason: thorPairs.reason } : {}),
+        ...(!thorLive && !thorChecking ? { onCheck: () => setThorCheck((n) => n + 1) } : {}),
         onQuote: async (req) => {
           // Indicative: no destination yet, so no memo. Confirm quotes again
           // with the real destination, and that is the quote that is sent.
           const q = await thor.swap!.quote({ fromAsset: req.fromAsset, toAsset: req.toAsset, fromAmount: req.fromAmountAtomic });
-          return {
-            tradeId: '',
-            fromAsset: q.fromAsset,
-            toAsset: q.toAsset,
-            fromAmountAtomic: q.fromAmount,
-            toAmountEstimateAtomic: q.toAmountEstimate,
-            feeEstimateAtomic: q.feeEstimate,
-            provider: 'thorchain',
-            etaSeconds: q.etaSeconds,
-            expiresAtMs: q.expiresAt.getTime(),
-            providerData: q.implementationData,
-          };
+          return thorchainQuoteSummary(q);
         },
-        onConfirm: async ({ quote, toAddress }) => {
-          // The refund address is always the wallet's own: THORChain cannot
-          // see a Monero sender, and a typo here would lose a refund.
-          const ownRefund = (wallet.addresses as unknown as Record<string, string | undefined>)[quote.fromAsset];
-          if (quote.fromAsset === 'xmr' && !ownRefund) throw new Error('This wallet has no XMR address for a refund.');
-          const fresh = await thor.swap!.quote({
-            fromAsset: quote.fromAsset,
-            toAsset: quote.toAsset,
-            fromAmount: quote.fromAmountAtomic,
+        onConfirm: ({ quote, toAddress }) =>
+          confirmThorchainSwap({
+            swap: thor.swap!,
+            quote,
             toAddress,
-            ...(quote.fromAsset === 'xmr' ? { refundAddress: ownRefund! } : {}),
-          });
-          const started = await thor.swap!.start({ quote: fresh, toAddress });
-          const data = fresh.implementationData as ThorchainQuoteData;
-          const sw: SwapInFlight = {
-            id: started.id,
-            fromAsset: fresh.fromAsset,
-            toAsset: fresh.toAsset,
-            fromAmountAtomic: fresh.fromAmount,
-            toAmountEstimateAtomic: fresh.toAmountEstimate,
-            depositAddress: started.depositAddress,
-            provider: 'thorchain',
-            ...(started.memo ? { memo: started.memo } : {}),
-            depositBeforeMs: data.expiresAtMs,
-            state: { state: 'pending', reason: 'awaiting_deposit' },
-          };
-          return sw;
-        },
+            ownAddress: (asset) => (wallet.addresses as unknown as Record<string, string | undefined>)[asset],
+          }),
         onFetchStatus: async (id) => {
           const st = await store.load();
           const cur = (st.wizards[THORCHAIN_WIZARD_ID]?.fields as { inFlight?: SwapInFlight } | undefined)?.inFlight;
@@ -352,7 +339,8 @@ export function SwapRouter({
   };
 
   // WOW and GRIN: live DEX prices from our Neroswap aggregator for the
-  // link-out panel. Best-effort; the panel lists venues without them.
+  // link-out panel. Best-effort; the panel lists venues without them, and
+  // asks for prices only when the user taps for them.
   const loadTradePrices = useMemo(
     () => async (): Promise<Array<{ pair: string; bestBid: number | null; bestAsk: number | null }>> => {
       let transport: typeof fetch | undefined;

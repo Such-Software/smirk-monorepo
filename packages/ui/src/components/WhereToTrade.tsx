@@ -8,9 +8,14 @@
  *
  * Strictly presentational: the consumer supplies prices (best-effort; the
  * panel renders without them) and nothing here moves funds.
+ *
+ * Prices load only when the user taps for them. They come from neroswap.com,
+ * a third party as far as the network can tell, and opening the Swap tab is
+ * not consent to contact one: a mount-time fetch told Neroswap's CDN the
+ * user's IP every time the tab (or a popup reopened onto it) rendered.
  */
 
-import { useEffect, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 
 export interface TradeVenue {
   name: string;
@@ -55,24 +60,31 @@ export interface TradePairPrice {
 }
 
 export interface WhereToTradeProps {
-  /** Best-effort live prices. Omit, or reject, and the panel still renders. */
+  /** Best-effort live prices, fetched only on the user's tap. Omit, or
+   *  reject, and the panel still renders. */
   loadPrices?: () => Promise<TradePairPrice[]>;
   /** Where "compare prices" links to. */
   compareHref?: string;
 }
 
+type PriceState = 'idle' | 'loading' | 'loaded' | 'failed';
+
 export function WhereToTrade({ loadPrices, compareHref = 'https://neroswap.com' }: WhereToTradeProps) {
   const [prices, setPrices] = useState<TradePairPrice[] | null>(null);
-  useEffect(() => {
-    if (!loadPrices) return;
-    let alive = true;
+  const [state, setState] = useState<PriceState>('idle');
+  const showPrices = () => {
+    if (!loadPrices || state === 'loading') return;
+    setState('loading');
     loadPrices()
-      .then((p) => alive && setPrices(p))
-      .catch(() => alive && setPrices(null));
-    return () => {
-      alive = false;
-    };
-  }, [loadPrices]);
+      .then((p) => {
+        setPrices(p);
+        setState('loaded');
+      })
+      .catch(() => {
+        setPrices(null);
+        setState('failed');
+      });
+  };
 
   const quoted = (prices ?? []).filter((p) => p.bestBid !== null || p.bestAsk !== null);
   return (
@@ -124,6 +136,31 @@ export function WhereToTrade({ loadPrices, compareHref = 'https://neroswap.com' 
           <span style={{ fontSize: 11, color: 'var(--smirk-fg-muted)' }}>{v.note}</span>
         </a>
       ))}
+      {loadPrices && state !== 'loaded' && (
+        <button
+          type="button"
+          onClick={showPrices}
+          disabled={state === 'loading'}
+          data-testid="swap-where-to-trade-show-prices"
+          style={{
+            alignSelf: 'flex-start',
+            padding: '4px 8px',
+            fontSize: 11,
+            background: 'transparent',
+            color: 'inherit',
+            border: '1px solid var(--smirk-border)',
+            borderRadius: 'var(--smirk-radius, 8px)',
+            cursor: state === 'loading' ? 'default' : 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          {state === 'loading'
+            ? 'Loading prices…'
+            : state === 'failed'
+              ? 'Prices unavailable. Try again'
+              : 'Show live DEX prices (asks neroswap.com, which sees your IP address)'}
+        </button>
+      )}
       {quoted.length > 0 && (
         <div style={{ fontSize: 11, color: 'var(--smirk-fg-muted)', display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span>Best DEX prices right now:</span>
