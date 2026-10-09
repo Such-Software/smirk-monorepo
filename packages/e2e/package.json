@@ -1,6 +1,6 @@
 {
   "name": "@smirk/e2e",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Playwright end-to-end suite: drives the real extension (and later desktop) UI against a running backend. The client-release gate.",
   "type": "module",

@@ -420,8 +420,9 @@ export interface paths {
          *
          *     Only this instance's own websites may ask
          *     ([`crate::config::IdentityConfig::website_auth_origins`]). A verified
-         *     challenge is a full session, and every shipped wallet's website signer signs
-         *     the challenge for whichever site asks it to. A challenge issued for any
+         *     challenge is a session (`web` scope, see the module docs), and every
+         *     shipped wallet's website signer signs the challenge for whichever site
+         *     asks it to. A challenge issued for any
          *     origin let every site a user signed in to with Smirk fetch one under its own
          *     name, have the user approve an ordinary-looking sign-in, and replay the
          *     signature here to sign in as them. (v0.3.1 wallets also refuse to sign a
@@ -869,25 +870,24 @@ export interface paths {
         /**
          * Report the caller's broadcast sweep. RECORD, not settle: the tip stays
          *     `claiming` and the reconciler settles it to `claimed` only once the chain
-         *     bears the report out at depth.
-         * @description XMR/WOW settle ONLY on a key-image proof (see [`SweepKeyImage`]). A report
-         *     without one, which is all v0.3.0 can send, is kept for the operator and the
-         *     claimer but never settles the tip, so a reported decoy can never end
-         *     clawback. Its answer is the same for every such report, `{sweep_txid: <the
-         *     txid just reported>, status}`: it never says whether the transaction
-         *     touched the tip, so it is no oracle for finding the tip's output. The
-         *     claimer finalises it by reporting the same transaction with its key
-         *     images (v0.3.1 does on reopening the tip).
+         *     bears the sweep out at depth.
+         * @description BTC/LTC and Grin keep the 45b0143 rule: the first txid recorded on the tip
+         *     row stands (first-recorder-wins), and a later different one is answered
+         *     with the recorded one.
          *
-         *     A report without a proof comes only from the tip's current claimer
-         *     (whoever last claimed it). A report with one comes from the current
-         *     claimer, or from anyone whose proof is for one of the tip's own outputs:
-         *     only the tip's spend key makes that proof, so a later claim by someone else
-         *     does not silence it. Anyone else gets 403. Each reporter keeps its own
-         *     report: a later report replaces the caller's earlier one unless the chain
-         *     already showed the earlier one spending the tip, and never touches anyone
-         *     else's. Idempotent. A key-image proof that does not verify is a 400, as is
-         *     a tip that is not being claimed.
+         *     XMR/WOW settle ONLY on a key-image proof (see [`SweepKeyImage`]) for one of
+         *     the tip's funding outputs whose key image the daemon shows spent by the
+         *     reported, mined transaction. Any signed-in caller may report, the current
+         *     claimer or not, and each keeps one report per tip beside everyone else's.
+         *     Every report is kept and answered the same way, `{sweep_txid: <the txid
+         *     just reported>, status}`: whether it carries a proof, whether the proof is
+         *     for a tip output, and whether the transaction touched the tip never change
+         *     the answer, so it is no oracle for finding the tip's outputs. A report
+         *     without a proof (all v0.3.0 sends) settles nothing; its claimer's v0.3.1
+         *     proves it by reporting the same transaction with its key images.
+         *
+         *     A key-image proof that does not verify for this tip is a 400, as is a tip
+         *     that is not being claimed.
          */
         post: operations["confirm_sweep"];
         delete?: never;
@@ -1719,17 +1719,17 @@ export interface components {
         ClawbackTipResponse: {
             success: boolean;
         };
-        /** @description Report the current claimer's broadcast sweep transaction. */
+        /** @description Report a broadcast sweep transaction. */
         ConfirmSweepRequest: {
             /**
              * @description XMR/WOW: for each tip output the sweep spent, its key image and the
              *     proof that the key image is that output's (v0.3.1 and later send it).
-             *     An XMR/WOW tip settles ONLY on a proven key image that the daemon shows
-             *     spent in a mined transaction, whichever claimer sent it. A report
-             *     without one (what v0.3.0 sends) is accepted and kept, but settles
-             *     nothing: its claimer can prove it later by reporting the same
-             *     transaction with its key images. Only the first 16 entries are read;
-             *     a wallet sweeping more outputs sends its largest first.
+             *     An XMR/WOW tip settles ONLY on a proof for one of its funding outputs
+             *     whose key image the daemon shows spent by this transaction, mined. A
+             *     report without one (what v0.3.0 sends) is kept, but settles nothing:
+             *     its claimer can prove it later by reporting the same transaction with
+             *     its key images. Only the first 16 entries are read; a wallet sweeping
+             *     more outputs sends its largest first.
              */
             key_images?: components["schemas"]["SweepKeyImage"][];
             /** @description The broadcast sweep transaction id. XMR/WOW: 64 hex characters. */
@@ -1738,11 +1738,9 @@ export interface components {
         ConfirmSweepResponse: {
             status: string;
             /**
-             * @description The sweep txid on file for the caller: the one just reported, or, for a
-             *     report with a key-image proof, the caller's earlier report when the
-             *     chain already showed that one spending the tip. A report without a
-             *     proof is always answered with its own txid, so the answer says nothing
-             *     about what the reported transaction did.
+             * @description XMR/WOW: the txid just reported, always, so the answer says nothing
+             *     about what the reported transaction did. BTC/LTC and Grin: the WINNING
+             *     (first-recorded) sweep txid, or `null` if none is recorded.
              */
             sweep_txid?: string | null;
         };
@@ -4309,7 +4307,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Sweep report accepted (recorded; for XMR/WOW without a proof, possibly not kept, with the same answer) */
+            /** @description Sweep report recorded (XMR/WOW: every report is kept and answered alike) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4318,7 +4316,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConfirmSweepResponse"];
                 };
             };
-            /** @description Tips off, a malformed txid or key-image proof, too many reports, or tip not claiming */
+            /** @description Tips off, a malformed txid or key-image proof, or tip not claiming */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4327,13 +4325,6 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The caller is not the tip's current claimer and proved no key image of the tip's outputs */
-            403: {
                 headers: {
                     [name: string]: unknown;
                 };

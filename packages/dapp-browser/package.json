@@ -1,6 +1,6 @@
 {
   "name": "@smirk/dapp-browser",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Embedded browser interfaces, navigation state and test controller. Tauri supplies the desktop implementation; mobile integration is planned.",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@smirk/ui",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Shared Preact wallet components for extension and desktop clients, using the asset registry.",
   "type": "module",
   "main": "./dist/index.js",

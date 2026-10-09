@@ -1,6 +1,6 @@
 {
   "name": "@smirk/wasm",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "TypeScript wrapper around the smirk-wasm WASM crypto bundle. Re-exports every function with proper types and provides a typed initialization flow.",
   "type": "module",
   "main": "./dist/index.js",

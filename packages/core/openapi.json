@@ -454,7 +454,7 @@
           "auth"
         ],
         "summary": "Issue a website-auth challenge bound to the requesting origin.",
-        "description": "The challenge is stored in `state.web_challenges` keyed by its own nonce and\nexpires shortly (see [`WebChallenge`]). The returned `challenge` message is\nwhat the wallet signs; `challenge_id` is the nonce to present at verify.\n\nOnly this instance's own websites may ask\n([`crate::config::IdentityConfig::website_auth_origins`]). A verified\nchallenge is a full session, and every shipped wallet's website signer signs\nthe challenge for whichever site asks it to. A challenge issued for any\norigin let every site a user signed in to with Smirk fetch one under its own\nname, have the user approve an ordinary-looking sign-in, and replay the\nsignature here to sign in as them. (v0.3.1 wallets also refuse to sign a\nchallenge naming an origin other than the site asking.)",
+        "description": "The challenge is stored in `state.web_challenges` keyed by its own nonce and\nexpires shortly (see [`WebChallenge`]). The returned `challenge` message is\nwhat the wallet signs; `challenge_id` is the nonce to present at verify.\n\nOnly this instance's own websites may ask\n([`crate::config::IdentityConfig::website_auth_origins`]). A verified\nchallenge is a session (`web` scope, see the module docs), and every\nshipped wallet's website signer signs the challenge for whichever site\nasks it to. A challenge issued for any\norigin let every site a user signed in to with Smirk fetch one under its own\nname, have the user approve an ordinary-looking sign-in, and replay the\nsignature here to sign in as them. (v0.3.1 wallets also refuse to sign a\nchallenge naming an origin other than the site asking.)",
         "operationId": "website_challenge",
         "requestBody": {
           "content": {
@@ -1317,8 +1317,8 @@
         "tags": [
           "tips"
         ],
-        "summary": "Report the caller's broadcast sweep. RECORD, not settle: the tip stays\n`claiming` and the reconciler settles it to `claimed` only once the chain\nbears the report out at depth.",
-        "description": "XMR/WOW settle ONLY on a key-image proof (see [`SweepKeyImage`]). A report\nwithout one, which is all v0.3.0 can send, is kept for the operator and the\nclaimer but never settles the tip, so a reported decoy can never end\nclawback. Its answer is the same for every such report, `{sweep_txid: <the\ntxid just reported>, status}`: it never says whether the transaction\ntouched the tip, so it is no oracle for finding the tip's output. The\nclaimer finalises it by reporting the same transaction with its key\nimages (v0.3.1 does on reopening the tip).\n\nA report without a proof comes only from the tip's current claimer\n(whoever last claimed it). A report with one comes from the current\nclaimer, or from anyone whose proof is for one of the tip's own outputs:\nonly the tip's spend key makes that proof, so a later claim by someone else\ndoes not silence it. Anyone else gets 403. Each reporter keeps its own\nreport: a later report replaces the caller's earlier one unless the chain\nalready showed the earlier one spending the tip, and never touches anyone\nelse's. Idempotent. A key-image proof that does not verify is a 400, as is\na tip that is not being claimed.",
+        "summary": "Report the caller's broadcast sweep. RECORD, not settle: the tip stays\n`claiming` and the reconciler settles it to `claimed` only once the chain\nbears the sweep out at depth.",
+        "description": "BTC/LTC and Grin keep the 45b0143 rule: the first txid recorded on the tip\nrow stands (first-recorder-wins), and a later different one is answered\nwith the recorded one.\n\nXMR/WOW settle ONLY on a key-image proof (see [`SweepKeyImage`]) for one of\nthe tip's funding outputs whose key image the daemon shows spent by the\nreported, mined transaction. Any signed-in caller may report, the current\nclaimer or not, and each keeps one report per tip beside everyone else's.\nEvery report is kept and answered the same way, `{sweep_txid: <the txid\njust reported>, status}`: whether it carries a proof, whether the proof is\nfor a tip output, and whether the transaction touched the tip never change\nthe answer, so it is no oracle for finding the tip's outputs. A report\nwithout a proof (all v0.3.0 sends) settles nothing; its claimer's v0.3.1\nproves it by reporting the same transaction with its key images.\n\nA key-image proof that does not verify for this tip is a 400, as is a tip\nthat is not being claimed.",
         "operationId": "confirm_sweep",
         "parameters": [
           {
@@ -1343,7 +1343,7 @@
         },
         "responses": {
           "200": {
-            "description": "Sweep report accepted (recorded; for XMR/WOW without a proof, possibly not kept, with the same answer)",
+            "description": "Sweep report recorded (XMR/WOW: every report is kept and answered alike)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1353,13 +1353,10 @@
             }
           },
           "400": {
-            "description": "Tips off, a malformed txid or key-image proof, too many reports, or tip not claiming"
+            "description": "Tips off, a malformed txid or key-image proof, or tip not claiming"
           },
           "401": {
             "description": "Missing or invalid token"
-          },
-          "403": {
-            "description": "The caller is not the tip's current claimer and proved no key image of the tip's outputs"
           }
         },
         "security": [
@@ -3322,7 +3319,7 @@
       },
       "ConfirmSweepRequest": {
         "type": "object",
-        "description": "Report the current claimer's broadcast sweep transaction.",
+        "description": "Report a broadcast sweep transaction.",
         "required": [
           "sweep_txid"
         ],
@@ -3332,7 +3329,7 @@
             "items": {
               "$ref": "#/components/schemas/SweepKeyImage"
             },
-            "description": "XMR/WOW: for each tip output the sweep spent, its key image and the\nproof that the key image is that output's (v0.3.1 and later send it).\nAn XMR/WOW tip settles ONLY on a proven key image that the daemon shows\nspent in a mined transaction, whichever claimer sent it. A report\nwithout one (what v0.3.0 sends) is accepted and kept, but settles\nnothing: its claimer can prove it later by reporting the same\ntransaction with its key images. Only the first 16 entries are read;\na wallet sweeping more outputs sends its largest first."
+            "description": "XMR/WOW: for each tip output the sweep spent, its key image and the\nproof that the key image is that output's (v0.3.1 and later send it).\nAn XMR/WOW tip settles ONLY on a proof for one of its funding outputs\nwhose key image the daemon shows spent by this transaction, mined. A\nreport without one (what v0.3.0 sends) is kept, but settles nothing:\nits claimer can prove it later by reporting the same transaction with\nits key images. Only the first 16 entries are read; a wallet sweeping\nmore outputs sends its largest first."
           },
           "sweep_txid": {
             "type": "string",
@@ -3354,7 +3351,7 @@
               "string",
               "null"
             ],
-            "description": "The sweep txid on file for the caller: the one just reported, or, for a\nreport with a key-image proof, the caller's earlier report when the\nchain already showed that one spending the tip. A report without a\nproof is always answered with its own txid, so the answer says nothing\nabout what the reported transaction did."
+            "description": "XMR/WOW: the txid just reported, always, so the answer says nothing\nabout what the reported transaction did. BTC/LTC and Grin: the WINNING\n(first-recorded) sweep txid, or `null` if none is recorded."
           }
         }
       },
@@ -6188,7 +6185,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Session access token issued by the /auth/* endpoints."
+        "description": "Session access token issued by the /auth/* endpoints. A session from website sign-in (/auth/website/verify) has the web scope: it reaches only GET /auth/me, the tip lists (sent, received, claimable) and GET/POST /users/me/username, and every other authenticated endpoint refuses it with 403."
       }
     }
   },

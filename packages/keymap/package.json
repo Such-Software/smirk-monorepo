@@ -1,6 +1,6 @@
 {
   "name": "@smirk/keymap",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Shared keyboard actions and platform bindings for Smirk extension and desktop clients.",
   "type": "module",

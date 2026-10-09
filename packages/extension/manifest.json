@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Smirk Wallet",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Bitcoin, Litecoin, Monero, Wownero and Grin wallet with Nostr. Your spending keys stay on your device.",
   "permissions": [
     "storage",

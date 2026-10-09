@@ -13,19 +13,59 @@ the public wallet build.
 Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
-## Unreleased v0.3.0 corrections
+## [Unreleased]
 
-These changes are in source review. Signed downloads and store availability
-are verified separately.
+## [0.3.1] - 2026-10-09
+
+Signed downloads and store availability are verified separately from this
+source release.
 
 ### Added
 
+- Transaction details: tap any history entry on any coin to see amount, fee,
+  time, confirmations, transaction id and, for your own sends, the recipient.
+  Monero and Wownero sends also keep their transaction key, shown on request.
+  The record of your sends is stored encrypted on your device.
+- Funds at older Smirk addresses: the wallet now checks the addresses earlier
+  versions used and offers to move anything it finds to your current address
+  in one step. Tips that only the old Smirk server knows about can be claimed
+  from the wallet, including claims that were left unfinished.
+- Tips to a Nostr identity: send a tip to an npub, a name@domain handle or a
+  Smirk username. The claim key is delivered privately over Nostr and only the
+  recipient's wallet can open it. One tip composer replaces the old screens,
+  and each tip has a detail view with its status.
+- Swaps through THORChain for Bitcoin and Litecoin, with the provider's fees
+  and any Smirk swap fee shown before you confirm. Monero swaps through
+  THORChain stay off until our server enables them.
+- Swaps through NonLogs where the wallet server offers them, with an estimate
+  built from the live order book and a warning when an amount would move the
+  price.
+- USD value at the top of each coin's page.
+- Premium plans are named, and payment is detected automatically.
 - Optional password confirmation for sends and signing in Security settings.
   Both settings default off; confirmation preserves the unlock deadline.
 - Approximate USD values on Send amount and review when a price is available.
 
+### Changed
+
+- Signing in to a website takes one approval, and with "lock every time" one
+  password for the whole sign-in.
+- Opening the Swap tab contacts no swap provider until you choose one.
+- The privacy policy and store listing name every third party the wallet can
+  contact.
+
 ### Fixed
 
+- Firefox and privacy-hardened Firefox builds such as LibreWolf: the popup
+  opened in the wide layout and the top buttons could not be clicked.
+- Wallets created before v0.3 can sign in again and keep their existing
+  account, handle and tips.
+- Recipient addresses with unusable public keys are refused before signing.
+- Websites can no longer obtain a signature over messages the Smirk server
+  treats as proof of account ownership, and tip claim keys cannot be read
+  through a website's Nostr access.
+- The build stamp on the About screen is accurate, and the WebAssembly build
+  is reproducible.
 - Desktop swap quotes use the bundled native HTTP transport.
 - Reopening an unlocked wallet restores the scoped keys needed for BTC, LTC,
   Grin, Nostr and app encryption, preserving the selected grace period.
@@ -334,7 +374,8 @@ Smirk-published Electrum proxy for BTC/LTC, Smirk-operated Grin
 node. Trocador swaps are off by default, only activated when
 you tap into the Swap tab.
 
-[Unreleased]: https://github.com/Such-Software/smirk-monorepo/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Such-Software/smirk-monorepo/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Such-Software/smirk-monorepo/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Such-Software/smirk-monorepo/releases/tag/v0.3.0
 
 ## Maintenance checklist
