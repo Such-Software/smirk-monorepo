@@ -16,6 +16,7 @@ import {
   bytesToHex,
   deriveAllKeys,
   deriveLegacyBtcLtcKey,
+  invalidateCapabilities,
   legacyBtcRotationProof,
   mergeLegacyIdentityAfterSignIn,
   mnemonicToSeed,
@@ -25,6 +26,14 @@ import {
 const PHRASE =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 const API = 'https://api.smirk.cash/api/v1';
+
+/** A server's capabilities, as far as the merge gate reads them. */
+function capsWith(legacyMergeV2: boolean | undefined) {
+  invalidateCapabilities();
+  return async () => ({
+    data: { features: legacyMergeV2 === undefined ? {} : { legacy_merge_v2: legacyMergeV2 } } as never,
+  });
+}
 
 test('rotation message matches the backend format byte for byte', () => {
   const newKey = '02' + '11'.repeat(32);
@@ -72,6 +81,7 @@ test('after an npub sign-in, the merge request carries a proof for the v0.3 key'
   const sent: Array<Record<string, unknown>> = [];
   const api = {
     getBaseUrl: () => API,
+    getCapabilities: capsWith(true),
     legacyMerge: async (params: Record<string, unknown>) => {
       sent.push(params);
       return { data: { outcome: 'merged' } };
@@ -95,6 +105,7 @@ test('no seed means no merge request, and a failure never throws', async () => {
   let calls = 0;
   const api = {
     getBaseUrl: () => API,
+    getCapabilities: capsWith(true),
     legacyMerge: async () => {
       calls += 1;
       throw new Error('offline');
@@ -107,4 +118,30 @@ test('no seed means no merge request, and a failure never throws', async () => {
     'failed',
   );
   assert.equal(calls, 1);
+});
+
+test('a server that does not advertise the hardened merge is never sent a merge request', async () => {
+  // An older server (smirk-backend-core 45b0143 and before) folds any
+  // unanchored row whose BTC key row is the old key, and any session can plant
+  // that row; it also takes a v0.3 row for a legacy one. Absent, false, or an
+  // unreadable /capabilities all mean: do not ask.
+  const seed = mnemonicToSeed(PHRASE);
+  const v3 = deriveAllKeys(PHRASE, '', 3);
+  const unreadable = async () => {
+    invalidateCapabilities();
+    throw new Error('offline');
+  };
+  for (const getCapabilities of [capsWith(undefined), capsWith(false), unreadable]) {
+    let calls = 0;
+    const api = {
+      getBaseUrl: () => API,
+      getCapabilities,
+      legacyMerge: async () => {
+        calls += 1;
+        return { data: { outcome: 'merged' } };
+      },
+    };
+    assert.equal(await mergeLegacyIdentityAfterSignIn(api as never, { seed, keys: v3 }), 'skipped');
+    assert.equal(calls, 0);
+  }
 });

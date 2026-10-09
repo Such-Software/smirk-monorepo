@@ -1,13 +1,14 @@
 /**
  * On a backend without npub-native sign-in the popup hands the bootstrap to the
  * offscreen job, which holds no keys. The popup therefore makes the pre-v0.3
- * rotation proof itself, over the same timestamp as the login signature.
+ * rotation proof itself, over the same timestamp as the login signature, and
+ * only for a server that advertises the hardened legacy merge.
  *
  * Fixture: the standard BIP39 test vector phrase, never a real wallet.
  */
 
 import './_chrome-stub';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import {
@@ -27,8 +28,12 @@ import type { JobsPortRequest, JobState } from '../../background/jobs/types';
 const PHRASE =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
-test('the offscreen bootstrap receives a rotation proof made by the pre-v0.3 key', async (t) => {
-  t.mock.method(api, 'getCapabilities', async () => ({ status: 200, data: { features: {} } }) as never);
+/** Run the BTC bootstrap against a server advertising `features`; returns the job inputs. */
+async function bootstrapAgainst(
+  t: TestContext,
+  features: Record<string, unknown>,
+) {
+  t.mock.method(api, 'getCapabilities', async () => ({ status: 200, data: { features } }) as never);
 
   const started: Array<Record<string, unknown>> = [];
   let onMessage: (value: unknown) => void = () => {};
@@ -76,8 +81,11 @@ test('the offscreen bootstrap receives a rotation proof made by the pre-v0.3 key
   const bootstrap = await bootstrapAuthInExtension(api, wallet);
   assert.equal(bootstrap.userId, 'user-1');
   assert.equal(started.length, 1);
+  return { input: started[0]!, seed, keys };
+}
 
-  const input = started[0]!;
+test('the offscreen bootstrap receives a rotation proof made by the pre-v0.3 key', async (t) => {
+  const { input, seed, keys } = await bootstrapAgainst(t, { legacy_merge_v2: true });
   const legacy = deriveLegacyBtcLtcKey(seed, 0);
   assert.equal(input.rotationPublicKey, bytesToHex(legacy.publicKey));
   const sig = Uint8Array.from(atob(String(input.rotationSignature)), (c) => c.charCodeAt(0));
@@ -86,3 +94,13 @@ test('the offscreen bootstrap receives a rotation proof made by the pre-v0.3 key
   );
   assert.ok(secp256k1.verify(sig.slice(1), digest, legacy.publicKey), 'signed by the m/44 key over the login timestamp');
 });
+
+// An older server lets a planted BTC key row fold into this account on the
+// next unlock that carries a proof. Absent or false: sign in as v0.3.0 did.
+for (const features of [{}, { legacy_merge_v2: false }]) {
+  test(`a server advertising ${JSON.stringify(features)} gets no rotation proof`, async (t) => {
+    const { input } = await bootstrapAgainst(t, features);
+    assert.equal('rotationPublicKey' in input, false);
+    assert.equal('rotationSignature' in input, false);
+  });
+}

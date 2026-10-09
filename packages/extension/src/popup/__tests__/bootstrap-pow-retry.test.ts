@@ -14,7 +14,7 @@ import './_chrome-stub';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createChallenge, type Challenge } from 'altcha-lib';
-import { api, deriveAllKeys, mnemonicToSeed, NOSTR_IDENTITY_CONFLICT } from '@smirk/core';
+import { api, deriveAllKeys, invalidateCapabilities, mnemonicToSeed, NOSTR_IDENTITY_CONFLICT } from '@smirk/core';
 import type { UnlockedWallet } from '@smirk/core';
 
 import { bootstrapAuthInExtension } from '../jobs/bootstrap-in-extension';
@@ -82,7 +82,13 @@ function mockBackend(
   const mock = (method: string, impl: (...a: never[]) => unknown): void => {
     t.mock.method(api as unknown as Record<string, () => unknown>, method, impl as () => unknown);
   };
-  mock('getCapabilities', async () => ({ status: 200, data: { features: { nostr_native_auth: true } } }));
+  // A server with the hardened legacy merge, so a known wallet sends its
+  // rotation proof (bootstrap-rotation-job.test.ts covers one without it).
+  invalidateCapabilities();
+  mock('getCapabilities', async () => ({
+    status: 200,
+    data: { features: { nostr_native_auth: true, legacy_merge_v2: true } },
+  }));
   mock('checkRestore', async () => ({
     status: 200,
     data: exists
