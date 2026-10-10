@@ -90,6 +90,7 @@ export {
   TROCADOR_WIZARD_ID,
   THORCHAIN_WIZARD_ID,
   NONLOGS_WIZARD_ID,
+  swapProviderCards,
 } from './components/SwapTab';
 export { WhereToTrade, TRADE_VENUES } from './components/WhereToTrade';
 export type { TradePairPrice, TradeVenue, WhereToTradeProps } from './components/WhereToTrade';
@@ -102,6 +103,7 @@ export type {
   ThorchainHandlers,
   ProviderHandlers,
   BookAnalysisView,
+  ShownProviderCard,
 } from './components/SwapTab';
 
 export { SendWizard } from './components/SendWizard';

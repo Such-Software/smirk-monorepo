@@ -56,6 +56,16 @@ async function affiliate(): Promise<ThorchainAffiliate | undefined> {
   return serverAffiliate(caps?.swaps?.thorchain, buildAffiliate());
 }
 
+/**
+ * Whether this wallet server offers THORChain at all, from its own
+ * `/capabilities` (a first-party read; THORChain itself is not contacted).
+ * No policy, as from an older backend, means offered, as in `policy()`.
+ */
+export async function thorchainOffered(): Promise<boolean> {
+  const caps = await loadCapabilities(api).catch(() => null);
+  return caps?.swaps?.thorchain?.enabled !== false;
+}
+
 /** The popup's THORChain client. Throws if the desktop transport is missing. */
 export function thorchainSwap(): ThorchainSwap {
   if (instance) return instance;

@@ -155,7 +155,12 @@ export interface SwapSummary {
 }
 
 export type SwapKindBadge = 'CEX' | 'DEX';
-export type SwapProviderStatus = 'active' | 'coming_soon' | 'paused';
+/**
+ * `unavailable`: the wallet server offers this provider, but it has no live
+ * pair right now (neutral, listed with the live providers). `paused`: the
+ * wallet server has turned it off (listed last).
+ */
+export type SwapProviderStatus = 'active' | 'unavailable' | 'coming_soon' | 'paused';
 
 export interface SwapTabProps {
   /** Assets the user can swap *from*. Filtered by the consumer to
@@ -251,6 +256,12 @@ export interface ThorchainHandlers {
   /** Shown on the provider card when no pair is live. */
   unavailableReason?: string;
   /**
+   * Whether the wallet server offers this provider (its `/capabilities`
+   * switch). `false` lists it last as paused; `true` or absent lists it with
+   * the live providers, as a tap target or as unavailable right now.
+   */
+  offered?: boolean;
+  /**
    * Ask the provider whether it is live. Opening the Swap tab is not a
    * request to contact a third party, so a provider that answers from its
    * own servers is checked only when the user taps its card (or has already
@@ -301,8 +312,9 @@ interface ProviderCard {
 
 /** Single source of truth for what the user sees on the Swap tab.
  *  Adding a provider is one entry here + (if active) wiring a wizard
- *  branch below. Keep ordering meaningful: actives first within each
- *  category, then coming-soon, then paused. */
+ *  branch below. The order shown is computed by `orderProviders`: live and
+ *  server-offered providers first, then coming-soon, then paused; within a
+ *  tier, the order of this list. */
 const PROVIDERS: ReadonlyArray<ProviderCard> = [
   {
     id: 'trocador',
@@ -330,7 +342,7 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     name: 'Native atomic swaps',
     blurb: 'Adaptor-signature P2P swaps. Grin↔BTC/LTC first, WOW↔XMR after.',
     status: 'coming_soon',
-    statusNote: 'Planned for v0.4.',
+    statusNote: 'In development.',
   },
   {
     id: 'p2p_nostr',
@@ -338,7 +350,7 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     name: 'P2P (Nostr orderbook)',
     blurb: 'Sybil-resistant orderbook on public Nostr relays. NIP-13 PoW + WoT filtering.',
     status: 'coming_soon',
-    statusNote: 'v0.5 — pairs with native atomic swaps for end-to-end P2P.',
+    statusNote: 'In development, together with native atomic swaps.',
   },
   {
     id: 'serai',
@@ -374,6 +386,60 @@ const PROVIDERS: ReadonlyArray<ProviderCard> = [
     ],
   },
 ];
+
+/** A provider card as shown: its status after live state, and the label of
+ *  the small badge beside its name (none for active cards). */
+export type ShownProviderCard = ProviderCard & { badge?: string };
+
+const liveProvider = (h: ProviderHandlers | undefined): boolean =>
+  !!h && h.fromAssets.length > 0 && h.toAssets.length > 0;
+
+const tickerList = (h: ProviderHandlers): string =>
+  [...new Set([...h.fromAssets, ...h.toAssets])].map((a) => a.toUpperCase()).join(', ');
+
+/** Display tier: live and server-offered providers before coming-soon, and
+ *  providers the wallet server turned off last. */
+const TIER: Record<SwapProviderStatus, number> = { active: 0, unavailable: 0, coming_soon: 1, paused: 2 };
+
+/**
+ * The Swap tab's provider cards, in display order. A provider the wallet
+ * server offers is never shown as paused: it is live, a tap target ("Tap to
+ * check", for one that asks a third party only when tapped), or unavailable
+ * right now. Only a provider the server switched off reads as paused, and it
+ * sorts last. Pure, so the order and labels are testable.
+ */
+export function swapProviderCards(
+  thor: ThorchainHandlers | undefined,
+  nl: ProviderHandlers | undefined,
+): ShownProviderCard[] {
+  const shaped = (p: ProviderCard, h: ProviderHandlers | undefined, live: (h: ProviderHandlers) => string, offeredNote: string, offNote: string): ShownProviderCard => {
+    if (liveProvider(h)) return { ...p, status: 'active', blurb: live(h!) };
+    if (!h || h.offered === false) return { ...p, status: 'paused', statusNote: h?.unavailableReason ?? offNote, badge: 'Paused' };
+    if (h.onCheck) return { ...p, status: 'unavailable', checkable: true, statusNote: h.unavailableReason ?? offeredNote, badge: 'Tap to check' };
+    return { ...p, status: 'unavailable', statusNote: h.unavailableReason ?? offeredNote, badge: 'Unavailable now' };
+  };
+  const cards: ShownProviderCard[] = PROVIDERS.map((p) => {
+    if (p.id === 'thorchain') {
+      return shaped(p, thor, (h) => `Cross-chain pools. Live now: ${tickerList(h)}.`, 'No live pair right now.', 'Not available in this app.');
+    }
+    if (p.id === 'nonlogs') {
+      return shaped(
+        p,
+        nl,
+        (h) => `Order-book exchange. Live now: ${tickerList(h)}. Pays your own addresses.`,
+        'No pair for this wallet right now.',
+        'Not offered by this wallet server.',
+      );
+    }
+    if (p.status === 'coming_soon') return { ...p, badge: 'Soon' };
+    if (p.status === 'paused') return { ...p, badge: 'Paused' };
+    return p;
+  });
+  return cards
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => TIER[a.c.status] - TIER[b.c.status] || a.i - b.i)
+    .map(({ c }) => c);
+}
 
 /** Stable wizard id for the THORChain flow. */
 export const THORCHAIN_WIZARD_ID = 'swap-thorchain';
@@ -439,35 +505,12 @@ export function SwapTab(props: SwapTabProps) {
   });
   const thor = props.thorchain;
   const nl = props.nonlogs;
-  const live = (h: ProviderHandlers | undefined) => !!h && h.fromAssets.length > 0 && h.toAssets.length > 0;
-  const tickers = (h: ProviderHandlers) =>
-    [...new Set([...h.fromAssets, ...h.toAssets])].map((a) => a.toUpperCase()).join(', ');
-  const cards: ReadonlyArray<ProviderCard> = PROVIDERS.map((p) => {
-    if (p.id === 'thorchain') {
-      if (live(thor)) return { ...p, status: 'active' as const, blurb: `Cross-chain pools. Live now: ${tickers(thor!)}.` };
-      return {
-        ...p,
-        statusNote: thor?.unavailableReason ?? 'Not available in this app.',
-        ...(thor?.onCheck ? { checkable: true } : {}),
-      };
-    }
-    if (p.id === 'nonlogs') {
-      if (live(nl)) {
-        return {
-          ...p,
-          status: 'active' as const,
-          blurb: `Order-book exchange. Live now: ${tickers(nl!)}. Pays your own addresses.`,
-        };
-      }
-      return { ...p, statusNote: nl?.unavailableReason ?? 'Not offered by this wallet server.' };
-    }
-    return p;
-  });
+  const cards = swapProviderCards(thor, nl);
 
   // A THORChain wizard restored from an earlier session is the user's own
   // choice of provider, so it may ask THORChain, once per mount (a failed
   // check must not loop); the provider list never does.
-  const thorNeedsCheck = thorchain.active && !!thor?.onCheck && !live(thor);
+  const thorNeedsCheck = thorchain.active && !!thor?.onCheck && !liveProvider(thor);
   const thorAutoChecked = useRef(false);
   useEffect(() => {
     if (!thorNeedsCheck || thorAutoChecked.current) return;
@@ -706,9 +749,11 @@ function ProviderRow({
   provider,
   onActivate,
 }: {
-  provider: ProviderCard;
+  provider: ShownProviderCard;
   onActivate?: () => void;
 }) {
+  const badge = provider.badge ?? (provider.status === 'paused' ? 'Paused' : provider.status === 'coming_soon' ? 'Soon' : undefined);
+  const alarming = provider.status === 'paused';
   const interactive = (provider.status === 'active' || !!provider.checkable) && onActivate !== undefined;
   return (
     <button
@@ -747,27 +792,22 @@ function ProviderRow({
           {provider.kind}
         </span>
         <span style={{ fontSize: 13, fontWeight: 600 }}>{provider.name}</span>
-        {provider.status !== 'active' && !provider.checkable && (
+        {provider.status !== 'active' && badge && (
           <span
+            data-testid={`swap-provider-${provider.id}-badge`}
             style={{
               fontSize: 9,
               padding: '2px 6px',
               borderRadius: 4,
-              border: `1px solid ${
-                provider.status === 'paused'
-                  ? 'var(--smirk-negative, #ff6b6b)'
-                  : 'var(--smirk-border)'
-              }`,
-              color:
-                provider.status === 'paused'
-                  ? 'var(--smirk-negative, #ff6b6b)'
-                  : 'var(--smirk-fg-muted)',
+              border: `1px solid ${alarming ? 'var(--smirk-negative, #ff6b6b)' : 'var(--smirk-border)'}`,
+              color: alarming ? 'var(--smirk-negative, #ff6b6b)' : 'var(--smirk-fg-muted)',
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
               fontWeight: 700,
+              whiteSpace: 'nowrap',
             }}
           >
-            {provider.status === 'paused' ? 'Paused' : 'Soon'}
+            {badge}
           </span>
         )}
         {interactive && (

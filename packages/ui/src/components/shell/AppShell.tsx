@@ -202,9 +202,26 @@ interface HeaderProps {
   extra?: ComponentChildren;
 }
 
+/**
+ * Below this header width the wordmark text gives way to the logo alone. At
+ * the 380px popup the brand, the identity chip and three buttons do not fit
+ * with the text, and a wrapped label read as a clipped "Smir / Walle".
+ */
+export const HEADER_WORDMARK_MIN_PX = 460;
+
+const HEADER_STYLES = `
+.smirk-shell-header { container-type: inline-size; container-name: smirk-shell-header; }
+.smirk-brand-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@container smirk-shell-header (max-width: ${HEADER_WORDMARK_MIN_PX - 1}px) {
+  .smirk-brand-mark[data-has-icon="true"] .smirk-brand-label { display: none; }
+}
+`;
+
 function Header({ label, iconUrl, onPopOut, onOpenInTab, onLock, extra }: HeaderProps) {
   return (
     <header
+      class="smirk-shell-header"
+      data-testid="app-shell-header"
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -223,6 +240,7 @@ function Header({ label, iconUrl, onPopOut, onOpenInTab, onLock, extra }: Header
       {/* The brand gives way first. Without minWidth 0 a flex item cannot shrink
           below its content, so a narrow surface pushed the actions past the
           right edge instead, where nothing could click them. */}
+      <style>{HEADER_STYLES}</style>
       <div style={{ minWidth: 0, overflow: 'hidden', flex: '0 1 auto' }}>
         <BrandMark label={label} {...(iconUrl ? { iconUrl } : {})} size={16} />
       </div>
@@ -312,17 +330,25 @@ interface BrandMarkProps {
 
 function BrandMark({ label, iconUrl, size }: BrandMarkProps) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+    <span
+      class="smirk-brand-mark"
+      data-has-icon={iconUrl ? 'true' : 'false'}
+      title={label}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%' }}
+    >
       {iconUrl && (
         <img
           src={iconUrl}
-          alt=""
+          // The text may be hidden at popup width; the logo then names the app.
+          alt={label}
           width={size}
           height={size}
-          style={{ display: 'block' }}
+          style={{ display: 'block', flexShrink: 0 }}
         />
       )}
-      <span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span>
+      <span class="smirk-brand-label" style={{ fontSize: 14, fontWeight: 600 }}>
+        {label}
+      </span>
     </span>
   );
 }

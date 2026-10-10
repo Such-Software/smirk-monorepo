@@ -57,7 +57,7 @@ test.beforeAll(async () => {
 
 async function open(
   page: Page,
-  opts: { firefoxOuterWidth?: number; theme?: string; layout?: 'auto' | 'popup' | 'wide' },
+  opts: { firefoxOuterWidth?: number; theme?: string; layout?: 'auto' | 'popup' | 'wide'; brand?: 'text' },
 ) {
   if (opts.firefoxOuterWidth !== undefined) {
     await page.addInitScript((outer: number) => {
@@ -67,6 +67,7 @@ async function open(
   const url = new URL(pathToFileURL(pageFile).href);
   if (opts.theme) url.searchParams.set('theme', opts.theme);
   if (opts.layout) url.searchParams.set('layout', opts.layout);
+  if (opts.brand) url.searchParams.set('brand', opts.brand);
   await page.goto(url.href);
   await expect(page.getByTestId('app-shell-root')).toBeVisible();
 }
@@ -74,6 +75,44 @@ async function open(
 async function shot(page: Page, name: string) {
   const dir = process.env.LAYOUT_SHOTS_DIR;
   if (dir) await page.screenshot({ path: join(dir, `${test.info().project.name}-${name}.png`) });
+}
+
+/**
+ * The header wordmark is either hidden (the logo alone names the app) or on one
+ * unclipped line, and the brand never reaches the identity chip. The v0.3.1
+ * release candidate wrapped it into a clipped "Smir / Walle" beside the chip.
+ */
+async function expectBrandNeverWrapsOrCollides(page: Page) {
+  const brand = await page.evaluate(() => {
+    const mark = document.querySelector('header .smirk-brand-mark') as HTMLElement | null;
+    const label = document.querySelector('header .smirk-brand-label') as HTMLElement | null;
+    const icon = mark?.querySelector('img') as HTMLElement | null;
+    const chip = document.querySelector('header [aria-label="Switch identity"]') as HTMLElement | null;
+    if (!mark || !label) return null;
+    const shown = getComputedStyle(label).display !== 'none';
+    const lineHeight = parseFloat(getComputedStyle(label).lineHeight) || parseFloat(getComputedStyle(label).fontSize) * 1.4;
+    const lb = label.getBoundingClientRect();
+    const mb = mark.getBoundingClientRect();
+    const cb = chip?.getBoundingClientRect() ?? null;
+    return {
+      shown,
+      oneLine: lb.height <= lineHeight * 1.5,
+      clipped: label.scrollWidth > label.clientWidth + 1 && getComputedStyle(label).textOverflow !== 'ellipsis',
+      iconVisible: !!icon && icon.getBoundingClientRect().width > 0,
+      brandRight: mb.right,
+      chipLeft: cb ? cb.left : null,
+    };
+  });
+  expect(brand, 'the header renders a brand mark').not.toBeNull();
+  if (brand!.shown) {
+    expect(brand!.oneLine, 'a shown wordmark never wraps').toBe(true);
+    expect(brand!.clipped, 'a shown wordmark is never clipped mid-word without an ellipsis').toBe(false);
+  } else {
+    expect(brand!.iconVisible, 'with the wordmark hidden, the logo still names the app').toBe(true);
+  }
+  if (brand!.chipLeft !== null) {
+    expect(brand!.brandRight, 'the brand ends before the identity chip').toBeLessThanOrEqual(brand!.chipLeft + 0.5);
+  }
 }
 
 async function expectCompactLayoutWithClickableHeader(page: Page) {
@@ -103,6 +142,7 @@ async function expectCompactLayoutWithClickableHeader(page: Page) {
     );
     expect(hit, `${label} receives a click at its centre (nothing painted over it)`).toBe(true);
   }
+  await expectBrandNeverWrapsOrCollides(page);
   // The balance card sits below the header, not over it.
   const header = await page.locator('header').boundingBox();
   const card = await page.getByTestId('balance-card').boundingBox();
@@ -186,6 +226,28 @@ test('the popup body is exactly 380x600 whatever the viewport claims', async ({ 
     expect(size, `popup body in a ${viewport.width}px viewport`).toEqual({ w: 380, h: 600 });
     await context.close();
   }
+});
+
+test('at popup width the wordmark gives way to the logo, which stays visible', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 380, height: 600 } });
+  const page = await context.newPage();
+  await open(page, { firefoxOuterWidth: 1440, layout: 'popup' });
+  const state = await page.evaluate(() => ({
+    label: getComputedStyle(document.querySelector('header .smirk-brand-label')!).display,
+    icon: (document.querySelector('header .smirk-brand-mark img') as HTMLElement).getBoundingClientRect().width,
+  }));
+  expect(state.label, 'wordmark text hidden beside the identity chip').toBe('none');
+  expect(state.icon, 'logo visible').toBeGreaterThan(0);
+  await expectCompactLayoutWithClickableHeader(page);
+  await context.close();
+});
+
+test('a brand without a logo keeps its wordmark on one line, never wrapped', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 380, height: 600 } });
+  const page = await context.newPage();
+  await open(page, { firefoxOuterWidth: 1440, layout: 'popup', brand: 'text' });
+  await expectCompactLayoutWithClickableHeader(page);
+  await context.close();
 });
 
 test('a wide window (tab, desktop) still gets the sidebar layout', async ({ browser }) => {

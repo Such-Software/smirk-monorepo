@@ -19,7 +19,7 @@ import { validateAddress } from '../address';
 import { resolveIcon } from '../icons';
 import { store } from '../singletons';
 import type { WalletSession } from '../types';
-import { confirmThorchainSwap, thorchainGatewayHost, thorchainQuoteSummary, thorchainSwap } from '../thorchain';
+import { confirmThorchainSwap, thorchainGatewayHost, thorchainOffered, thorchainQuoteSummary, thorchainSwap } from '../thorchain';
 import { nonlogsOffered, nonlogsSwap, ownAddressesOnly } from '../nonlogs';
 import { findSwapDeposit, journalKeyFor, recordSend } from '../send-journal';
 
@@ -95,6 +95,19 @@ export function SwapRouter({
     }
   }, []);
   const thorAsk = `Tap to check whether THORChain is live. This asks its public gateway (${thorchainGatewayHost()}), which sees your IP address.`;
+  // The wallet server's own switch for THORChain, read from our backend (a
+  // first-party request), so the card can sit with the live providers or,
+  // when the server turned THORChain off, last as paused.
+  const [thorOffered, setThorOffered] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    void thorchainOffered().then((v) => {
+      if (alive) setThorOffered(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [thorCheck, setThorCheck] = useState(0);
   const [thorChecking, setThorChecking] = useState(false);
   const [thorPairs, setThorPairs] = useState<{ from: string[]; to: string[]; reason?: string }>({
@@ -146,7 +159,11 @@ export function SwapRouter({
         fromAssets: thorPairs.from,
         toAssets: thorPairs.to,
         ...(thorPairs.reason ? { unavailableReason: thorPairs.reason } : {}),
-        ...(!thorLive && !thorChecking ? { onCheck: () => setThorCheck((n) => n + 1) } : {}),
+        ...(thorOffered === false
+          ? { offered: false, unavailableReason: 'Turned off by this wallet server.' }
+          : !thorLive && !thorChecking
+            ? { onCheck: () => setThorCheck((n) => n + 1) }
+            : {}),
         onQuote: async (req) => {
           // Indicative: no destination yet, so no memo. Confirm quotes again
           // with the real destination, and that is the quote that is sent.
@@ -205,7 +222,7 @@ export function SwapRouter({
   // NonLogs key). Coins are the ones NonLogs lists as swappable now that
   // this wallet holds; any listed coin swaps to any other.
   const nonlogs = useMemo(() => nonlogsSwap(), []);
-  const [nlAssets, setNlAssets] = useState<{ assets: string[]; reason?: string }>({
+  const [nlAssets, setNlAssets] = useState<{ assets: string[]; reason?: string; offered?: boolean }>({
     assets: [],
     reason: 'Checking NonLogs…',
   });
@@ -214,7 +231,7 @@ export function SwapRouter({
     void (async () => {
       try {
         if (!(await nonlogsOffered())) {
-          if (alive) setNlAssets({ assets: [], reason: 'Not offered by this wallet server.' });
+          if (alive) setNlAssets({ assets: [], reason: 'Not offered by this wallet server.', offered: false });
           return;
         }
         const listed = await nonlogs.availableAssets();
@@ -239,6 +256,7 @@ export function SwapRouter({
     fromAssets: nlAssets.assets,
     toAssets: nlAssets.assets,
     ...(nlAssets.reason ? { unavailableReason: nlAssets.reason } : {}),
+    ...(nlAssets.offered === false ? { offered: false } : {}),
     onQuote: async (req) => {
       const q = await nonlogs.quote({ fromAsset: req.fromAsset, toAsset: req.toAsset, fromAmount: req.fromAmountAtomic });
       const data = q.implementationData as NonlogsQuoteData;
