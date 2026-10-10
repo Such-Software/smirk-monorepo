@@ -153,6 +153,61 @@ export interface PublishResult {
 }
 
 /**
+ * The ids of every kind-1059 wrap `relayUrl` returns for `#p` = the recipient,
+ * read until EOSE. Read only: proves a published wrap is retrievable the way
+ * the recipient's Inbox asks for it, and (compared before and after a send)
+ * that a delivery reached that relay. NIP-59 backdates `created_at`, so ids,
+ * not timestamps, identify new wraps.
+ */
+export async function queryWrapIds(
+  relayUrl: string,
+  recipientPubkeyHex: string,
+  options: { ids?: string[]; timeoutMs?: number } = {},
+): Promise<Set<string>> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  // With `ids` the relay answers for exactly those wraps, AND-ed with the #p
+  // filter, so a busy inbox past the relay's result limit cannot hide them.
+  const filter: Record<string, unknown> = { kinds: [1059], '#p': [recipientPubkeyHex] };
+  if (options.ids?.length) filter.ids = options.ids;
+  if (!/^wss?:\/\//.test(relayUrl)) throw new Error('the forge reads only over ws:// or wss://');
+  if (!/^[0-9a-f]{64}$/.test(recipientPubkeyHex)) throw new Error('the recipient must be an x-only hex pubkey');
+  const sub = `c-tips-${randomUUID().slice(0, 8)}`;
+  return new Promise<Set<string>>((resolve, reject) => {
+    const ids = new Set<string>();
+    const socket = new WebSocket(relayUrl);
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket.send(JSON.stringify(['CLOSE', sub]));
+        socket.close();
+      } catch {
+        /* already closed */
+      }
+      fn();
+    };
+    const timer = setTimeout(() => finish(() => reject(new Error(`relay ${relayUrl} did not finish the query in time`))), timeoutMs);
+    socket.onopen = () => socket.send(JSON.stringify(['REQ', sub, filter]));
+    socket.onmessage = (message) => {
+      let frame: unknown;
+      try {
+        frame = JSON.parse(String(message.data));
+      } catch {
+        return;
+      }
+      if (!Array.isArray(frame) || frame[1] !== sub) return;
+      if (frame[0] === 'EVENT' && typeof (frame[2] as { id?: unknown })?.id === 'string') ids.add((frame[2] as { id: string }).id);
+      else if (frame[0] === 'EOSE') finish(() => resolve(ids));
+      else if (frame[0] === 'CLOSED') finish(() => reject(new Error(`relay ${relayUrl} closed the query: ${String(frame[2] ?? '')}`)));
+    };
+    socket.onerror = () => finish(() => reject(new Error(`could not connect to relay ${relayUrl}`)));
+    socket.onclose = () => finish(() => reject(new Error(`relay ${relayUrl} closed before EOSE`)));
+  });
+}
+
+/**
  * Publish one wrap to `relayUrl` and wait for the relay's OK. The caller decides
  * the target: only the first-party relay the backend under test advertises,
  * and a non-local relay only behind the live lane's explicit write gates.

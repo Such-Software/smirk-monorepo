@@ -1,7 +1,12 @@
 // Offline proof that the forge builds the attacks the live forged-wrap scenario
-// relies on, and that the wallet's own Inbox rule (rebuild from the backend
-// record, keep a candidate only if its claim key opens the sealed tip key)
-// drops them without shadowing the genuine tip. No relay, no backend, no funds.
+// relies on: each is a valid PoW gift wrap that bob's real reader
+// (@smirk/core readNpubTips) opens and keeps as a candidate, and whose claim key
+// the app's own check (@smirk/core verifyNpubTipKey) rejects. The Inbox's
+// selection rule itself (popup/index.tsx fetchPersonTipInbox: rebuild from the
+// backend record, keep only a candidate whose key verifies) is not copied here;
+// the live Inbox test exercises it in the release build, after proving the relay
+// serves both forgeries to bob and that his Inbox queried for them. No relay,
+// no backend, no funds.
 //
 //   node --import tsx --test packages/e2e/fixtures/C-tips-forge.test.mjs
 import { test } from 'node:test';
@@ -48,20 +53,6 @@ function genuineTip() {
   return { tipId: randomUUID(), claimKey: fragment.encoded, encryptedKeyHex };
 }
 
-/** The wallet's Inbox rule (popup/index.tsx fetchPersonTipInbox), per tip id. */
-function inboxPick(received, encryptedKeyByTip) {
-  const byTip = new Map();
-  for (const t of received) byTip.set(t.tipId, [...(byTip.get(t.tipId) ?? []), t]);
-  const rows = [];
-  for (const [tipId, candidates] of byTip) {
-    const encrypted = encryptedKeyByTip.get(tipId);
-    if (!encrypted) continue; // the backend does not know this tip
-    const genuine = candidates.find((c) => verifyNpubTipKey(encrypted, c.claimKey));
-    if (genuine) rows.push(genuine);
-  }
-  return rows;
-}
-
 test('a reused-tip-id forgery is a valid PoW gift wrap that opens but cannot claim, and never shadows the genuine tip', async () => {
   const alice = generateBurnerIdentity();
   const bob = generateBurnerIdentity();
@@ -100,15 +91,17 @@ test('a reused-tip-id forgery is a valid PoW gift wrap that opens but cannot cla
   assert.ok(forgedCandidate, 'the forged wrap opens for the recipient');
   assert.equal(verifyNpubTipKey(tip.encryptedKeyHex, forgedCandidate.claimKey), false, 'its key cannot open the tip');
 
-  const rows = inboxPick(received, new Map([[tip.tipId, tip.encryptedKeyHex]]));
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].counterpartyHex, alice.pubkeyHex, 'the genuine sender wins');
-  assert.equal(rows[0].memo, 'genuine message');
-  assert.equal(rows.some((r) => r.memo === 'forged marker'), false);
+  // The core facts the app's rule stands on: the genuine candidate's key opens
+  // the backend's sealed key, the forged one's does not, and the reader keeps
+  // both (keyed by tip id AND claim key), so the forgery cannot shadow it.
+  const genuineCandidate = sameId.find((t) => t.counterpartyHex === alice.pubkeyHex);
+  assert.ok(genuineCandidate, 'the genuine wrap survives beside the forgery');
+  assert.equal(verifyNpubTipKey(tip.encryptedKeyHex, genuineCandidate.claimKey), true, 'the genuine key opens the tip');
+  assert.equal(genuineCandidate.memo, 'genuine message');
   for (const id of [alice, bob]) id.privateKey.fill(0);
 });
 
-test('an unknown-tip-id forgery names a fresh id the Inbox drops for want of a backend record', async () => {
+test('an unknown-tip-id forgery names a fresh id whose key opens no real tip', async () => {
   const bob = generateBurnerIdentity();
   const known = genuineTip();
   const forged = forgeTipWrap({
@@ -122,7 +115,8 @@ test('an unknown-tip-id forgery names a fresh id the Inbox drops for want of a b
   assert.notEqual(forged.tipId, known.tipId);
   const { received } = await readNpubTips(memoryIO(bob, [forged.event]));
   assert.equal(received.length, 1, 'the wrap opens');
-  assert.equal(inboxPick(received, new Map([[known.tipId, known.encryptedKeyHex]])).length, 0);
+  assert.equal(received[0].tipId, forged.tipId, 'it names the fresh id, which the live test proves the backend does not know');
+  assert.equal(verifyNpubTipKey(known.encryptedKeyHex, received[0].claimKey), false, 'its key opens no real tip either');
   bob.privateKey.fill(0);
 });
 

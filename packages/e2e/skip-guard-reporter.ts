@@ -70,15 +70,38 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
  * selected (at least one), for a lane where each test must run and a
  * `--grep` subset is a legitimate run.
  */
+const DEFAULT_MIN_EXECUTED = 21;
+
 function minExecuted(selected: number): number {
   if (process.env.E2E_MIN_EXECUTED === 'selected') return Math.max(1, selected);
-  return Number(process.env.E2E_MIN_EXECUTED ?? 21);
+  return Number(process.env.E2E_MIN_EXECUTED ?? DEFAULT_MIN_EXECUTED);
+}
+
+/**
+ * Options a lane config may pass (`['./skip-guard-reporter.ts', { ... }]`):
+ * `expectedReasonPrefixes` excuses skips whose own reason starts with one of
+ * them, for a lane whose operator chose the skip explicitly (an optional
+ * rehearsal, an acknowledged gap). Every such skip is still listed at the end.
+ */
+export interface SkipGuardOptions {
+  expectedReasonPrefixes?: string[];
+}
+
+/** A skip's own reason, shortened: skip reasons are authored text, never values. */
+function skipReason(test: TestCase, result: TestResult): string {
+  const annotation = [...(result.annotations ?? []), ...test.annotations].find((a) => a.type === 'skip');
+  return (annotation?.description ?? '').replace(/\s+/g, ' ').slice(0, 200);
 }
 
 export default class SkipGuardReporter implements Reporter {
-  private skipped: { title: string; file: string }[] = [];
+  private skipped: { title: string; file: string; reason: string }[] = [];
   private executed = 0;
   private selected = 0;
+  private readonly prefixes: string[];
+
+  constructor(options: SkipGuardOptions = {}) {
+    this.prefixes = options.expectedReasonPrefixes ?? [];
+  }
 
   onBegin(_config: FullConfig, suite: Suite): void {
     this.selected = suite.allTests().length;
@@ -86,23 +109,31 @@ export default class SkipGuardReporter implements Reporter {
 
   onTestEnd(test: TestCase, result: TestResult): void {
     if (result.status === 'skipped') {
-      this.skipped.push({ title: test.title, file: test.location.file });
+      this.skipped.push({ title: test.title, file: test.location.file, reason: skipReason(test, result) });
     } else {
       this.executed += 1;
     }
   }
 
   async onEnd(result: FullResult): Promise<{ status: FullResult['status'] } | void> {
+    const byReason = (s: { reason: string }) => this.prefixes.some((p) => s.reason.startsWith(p));
     const unexpected = this.skipped.filter(
-      (s) => !EXPECTED_SKIPS.some((e) => s.file.includes(e.match)),
+      (s) => !EXPECTED_SKIPS.some((e) => s.file.includes(e.match)) && !byReason(s),
     );
+    const chosen = this.skipped.filter((s) => byReason(s));
+    if (chosen.length) {
+      console.log(
+        `[skip-guard] ${chosen.length} skip(s) the operator chose (not evidence):\n` +
+          chosen.map((s) => `    - ${s.title}: ${s.reason}`).join('\n'),
+      );
+    }
 
     const problems: string[] = [];
 
     if (unexpected.length) {
       problems.push(
         `${unexpected.length} spec(s) skipped without an expected reason:\n` +
-          unexpected.map((s) => `    - ${s.title}`).join('\n') +
+          unexpected.map((s) => `    - ${s.title}${s.reason ? `: ${s.reason}` : ''}`).join('\n') +
           `\n  A skip is not a pass. Either fix the environment (see\n` +
           `  docs/private/E2E_ENV.md, usually missing smoke mnemonics or an\n` +
           `  unreachable node) or add the spec to EXPECTED_SKIPS with a reason.`,

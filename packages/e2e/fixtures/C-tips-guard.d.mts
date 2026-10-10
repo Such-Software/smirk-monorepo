@@ -16,12 +16,17 @@ export interface CTipsRules {
   readonly markAttribute: string;
 }
 export const C_TIPS_RULES: CTipsRules;
-export const MASK_SELECTOR: string;
+export function maskSelectorFor(nonce: string): string;
 
+export interface CTipsSurveyInput {
+  rules: CTipsRules;
+  nonce: string | null;
+  mode: 'scan' | 'mark' | 'verify';
+}
 export type CTipsSurvey =
-  | { card: 'phrase'; masked: 0; segments: string[] }
-  | { card: null; masked: number; signature: string; segments: string[] };
-export function cTipsSurvey(rules: CTipsRules): CTipsSurvey;
+  | { card: 'phrase'; masked: 0; unmarked: 0; signature: ''; segments: string[] }
+  | { card: null; masked: number; unmarked: number; signature: string; segments: string[] };
+export function cTipsSurvey(input: CTipsSurveyInput): CTipsSurvey;
 
 export interface KnownSecrets {
   exact?: readonly string[];

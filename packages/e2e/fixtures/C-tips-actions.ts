@@ -4,14 +4,18 @@
  *
  * Every tap goes through the guarded footage helpers (tap, fill, secretFill,
  * settled, result), so the dead-air policy and the capture guard apply to each
- * step. Claim links are carried in memory as SecretLink values: they are typed
- * only inside a secret scope, never printed, and their fragments are registered
- * with the canary the moment they are read.
+ * step: a still screen before each tap, a held settled screen after it, and a
+ * long hold on each key result. Claim links are carried in memory as SecretLink
+ * values: they are typed only inside a secret scope, never printed, and their
+ * fragments are registered with the canary the moment they are read. Every tip
+ * is written to the lane's ledger as soon as its id is known, so a failure
+ * later in the run never strands it (see C-tips-ledger.ts).
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import { BACKEND_URL } from './extension.js';
-import type { LiveWallet, TipLane } from './C-tips-live.js';
-import { walletPassword } from './C-tips-live.js';
+import type { LiveWallet, TipLane, WalletName } from './C-tips-live.js';
+import { rescueMode, walletPassword } from './C-tips-live.js';
+import { SETTLED_STATUSES, type LedgerTip } from './C-tips-ledger.js';
 import { TIP_LINK_SOURCE } from './C-tips-guard.mjs';
 
 export type TipAsset = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
@@ -22,14 +26,14 @@ export const DISPLAY_DECIMALS: Record<TipAsset, number> = { btc: 8, ltc: 4, xmr:
 export const TICKER: Record<TipAsset, string> = { btc: 'BTC', ltc: 'LTC', xmr: 'XMR', wow: 'WOW', grin: 'GRIN' };
 /**
  * Headroom over the tip amount a sender needs for network fees. A wallet short
- * of amount + margin skips that tip with a reason instead of failing.
+ * of amount + margin skips that tip with a reason (a top-up request).
  */
 export const FEE_MARGIN: Record<TipAsset, string> = {
   btc: '0.00005',
-  ltc: '0.001',
-  xmr: '0.001',
+  ltc: '0.0005',
+  xmr: '0.0005',
   wow: '0.5',
-  grin: '0.1',
+  grin: '0.05',
 };
 /** The backend's confirmation gate before a link goes live (XMR 10, WOW 4, GRIN about 10). */
 export const CONFIRMING_ASSETS: readonly TipAsset[] = ['xmr', 'wow', 'grin'];
@@ -79,20 +83,20 @@ export class SecretLink {
 }
 
 export interface CreatedTip {
+  /** The plan key in the ledger. */
+  readonly key: string;
   readonly tipId: string;
   readonly asset: TipAsset;
   readonly amount: string;
   readonly amountAtomic: bigint;
   readonly sender: LiveWallet;
-  /** Recipient for a person tip (bob), absent for a link tip. */
+  /** Recipient for a person tip, absent for a link tip. */
   readonly recipient?: LiveWallet;
-  /** What the composer showed as the recipient ("npub1…" or "bob@smirk.cash"). */
+  /** What the composer showed as the recipient ("npub1…", "@bob" or "bob@smirk.cash"). */
   readonly recipientDisplay?: string;
   readonly memo?: string;
   readonly expiryDays: 1 | 7 | 30;
   readonly submittedAtMs: number;
-  /** The live link (BTC/LTC link tips at once; XMR/WOW/GRIN once confirmed; a failed delivery's fallback). */
-  link: SecretLink | null;
 }
 
 export interface Holdings {
@@ -108,6 +112,30 @@ export interface Holdings {
   locked: bigint;
 }
 
+/** A ledger record as a live tip, with this session's wallets. */
+export function tipFromLedger(lane: TipLane, record: LedgerTip): CreatedTip {
+  const recipient = record.recipient ? lane.wallets.get(record.recipient) : undefined;
+  return {
+    key: record.key,
+    tipId: record.tipId,
+    asset: record.asset,
+    amount: record.amount,
+    amountAtomic: toAtomic(record.asset, record.amount),
+    sender: lane.wallet(record.sender),
+    ...(recipient ? { recipient } : {}),
+    ...(record.recipientDisplay ? { recipientDisplay: record.recipientDisplay } : {}),
+    ...(record.memo ? { memo: record.memo } : {}),
+    expiryDays: record.expiryDays,
+    submittedAtMs: record.submittedAtMs,
+  };
+}
+
+/** The tip an earlier test created under `key`, or null (the caller skips with its reason). */
+export function ledgerTip(lane: TipLane, key: string): CreatedTip | null {
+  const record = lane.ledger.tip(key);
+  return record ? tipFromLedger(lane, record) : null;
+}
+
 // ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
@@ -121,12 +149,35 @@ export async function ensureUnlocked(lane: TipLane, w: LiveWallet): Promise<void
     await w.page.getByTestId('lockscreen-unlock-btn').click({ timeout: 60_000 });
     await expect(lock).toHaveCount(0, { timeout: 60_000 });
   });
+  await lane.footage.settled(w.page, 'Unlocked');
 }
 
-/** Confirm an operation password prompt, if the wallet policy asks for one. */
-export async function confirmIfAsked(lane: TipLane, w: LiveWallet): Promise<void> {
+/**
+ * After a send-class tap: confirm the operation password prompt if the wallet
+ * policy shows one, else return as soon as `next` (the operation's own outcome)
+ * appears. No fixed window: the prompt and the outcome are both conditions.
+ */
+export async function confirmIfAsked(
+  lane: TipLane,
+  w: LiveWallet,
+  next: Locator | (() => Promise<boolean>),
+  timeoutMs = 10 * MINUTE,
+): Promise<void> {
   const prompt = w.page.getByTestId('operation-password');
-  const asked = await prompt.waitFor({ state: 'visible', timeout: 4_000 }).then(() => true, () => false);
+  const reached = typeof next === 'function' ? next : () => next.first().isVisible().catch(() => false);
+  let asked = false;
+  await expect
+    .poll(
+      async () => {
+        if (await prompt.isVisible().catch(() => false)) {
+          asked = true;
+          return true;
+        }
+        return reached();
+      },
+      { timeout: timeoutMs, intervals: [250], message: 'neither a password prompt nor the outcome appeared' },
+    )
+    .toBe(true);
   if (!asked) return;
   await lane.footage.secret(w.page, 'Confirm with the wallet password', async () => {
     await prompt.fill(walletPassword(w), { timeout: 60_000 });
@@ -146,7 +197,6 @@ export async function tabRoot(lane: TipLane, w: LiveWallet, tab: 'home' | 'inbox
 export async function openInbox(lane: TipLane, w: LiveWallet): Promise<void> {
   await tabRoot(lane, w, 'inbox');
   await expect(w.page.getByTestId('inbox-tab')).toBeVisible({ timeout: 30_000 });
-  await lane.footage.settled(w.page, 'Inbox');
 }
 
 /** Settings > Sent tips. Settings' root is carded by the strict guard while passing through. */
@@ -156,17 +206,14 @@ export async function openSentTips(lane: TipLane, w: LiveWallet): Promise<void> 
   // The Sent tips header's refresh control: Settings' root has none.
   await expect(w.page.getByRole('button', { name: '⟳' })).toBeVisible({ timeout: 30_000 });
   await expect(w.page.getByTestId('settings-sent-tips-nav')).toHaveCount(0);
-  await lane.footage.settled(w.page, 'Sent tips list');
 }
 
 export async function refreshSentTips(lane: TipLane, w: LiveWallet): Promise<void> {
   await lane.footage.tap(w.page.getByRole('button', { name: '⟳' }), 'Refresh Sent tips');
-  await lane.footage.settled(w.page, 'Sent tips refreshed');
 }
 
 export async function refreshInbox(lane: TipLane, w: LiveWallet): Promise<void> {
   await lane.footage.tap(w.page.getByTestId('inbox-tab').getByRole('button', { name: 'Refresh' }), 'Refresh the Inbox');
-  await lane.footage.settled(w.page, 'Inbox refreshed');
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +242,9 @@ export async function readHoldings(w: LiveWallet, asset: TipAsset): Promise<Hold
   return { available, pending, locked, total: available + (pending > 0n ? pending : 0n) + locked };
 }
 
-/** Show Home, let it settle, read a row, and hold the balances on screen. */
+/** Show Home (each tap holds the settled screen), read a row, and hold the balances on screen. */
 export async function showHoldings(lane: TipLane, w: LiveWallet, asset: TipAsset, label: string): Promise<Holdings> {
   await tabRoot(lane, w, 'home');
-  await lane.footage.settled(w.page, 'Home balances');
   const holdings = await readHoldings(w, asset);
   await lane.footage.result(w.page, label);
   return holdings;
@@ -219,7 +265,6 @@ export async function waitForHoldings(
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     await tabRoot(lane, w, 'home');
-    await lane.footage.settled(w.page, 'Home balances');
     const holdings = await readHoldings(w, asset);
     if (ok(holdings)) {
       await lane.footage.result(w.page, label);
@@ -248,9 +293,9 @@ export interface PublicTipState {
   encryptedKey: string | null;
 }
 
-/** GET /tips/social/:id/public. Null for an unknown tip. Values are never logged. */
-export async function publicTip(tipId: string): Promise<PublicTipState | null> {
-  const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/tips/social/${encodeURIComponent(tipId)}/public`, {
+/** GET /tips/social/:id/public on `base` (default: the backend under test). Null for an unknown tip. */
+export async function publicTip(tipId: string, base: string = BACKEND_URL): Promise<PublicTipState | null> {
+  const res = await fetch(`${base.replace(/\/$/, '')}/tips/social/${encodeURIComponent(tipId)}/public`, {
     signal: AbortSignal.timeout(20_000),
   });
   if (res.status === 404) return null;
@@ -298,6 +343,11 @@ export async function waitForPublicTip(
   }
 }
 
+/** Past the confirmation gate and still unclaimed. */
+export function pastGate(s: PublicTipState): boolean {
+  return s.fundingConfirmations >= s.confirmationsRequired && s.status === 'pending';
+}
+
 /** The TipDetailSheet phase a pending tip's public record implies (tipTimeline's rule). */
 export function pendingPhase(state: PublicTipState): 'confirming' | 'claimable' {
   return state.fundingConfirmations >= Math.max(1, state.confirmationsRequired) ? 'claimable' : 'confirming';
@@ -318,12 +368,25 @@ export function expectConfirmationsRose(samples: PublicTipState[]): void {
 // Composer
 // ---------------------------------------------------------------------------
 
+export interface RecipientEntry {
+  /** What to type: an npub, `name@domain`, `@name` or a bare `name`. */
+  text: string;
+  /** What the composer shows for it: the short npub, `name@domain` or `@name`. */
+  display: string;
+}
+
 export interface TipPlan {
+  /** The ledger key: `link:<plan>` or `npub:<plan>`. */
+  key: string;
   asset: TipAsset;
   /** Decimal amount in the asset's unit. */
   amount: string;
-  /** For a person tip: the recipient wallet and what to type (npub or handle). */
-  recipient?: { wallet: LiveWallet; text: string; display: string };
+  /**
+   * For a person tip: the recipient wallet and what to type. `alsoResolve`
+   * entries are typed first and must resolve to the same person (another form
+   * of the same name), then replaced by `entry`.
+   */
+  recipient?: { wallet: LiveWallet; entry: RecipientEntry; alsoResolve?: RecipientEntry[] };
   memo?: string;
   expiryDays?: 1 | 7 | 30;
   /** A person tip whose delivery the harness blocks: expect the warning and fallback link. */
@@ -338,7 +401,7 @@ async function readAvailable(page: Page, asset: TipAsset): Promise<bigint | null
   return match ? toAtomic(asset, match[1]!) : null;
 }
 
-/** Open the composer with `asset` selected. */
+/** Open the composer with `asset` selected. Each step holds its screen. */
 async function openComposer(lane: TipLane, w: LiveWallet, asset: TipAsset): Promise<void> {
   await tabRoot(lane, w, 'home');
   await lane.footage.tap(w.page.getByTestId('home-action-tip'), 'Open the tip composer');
@@ -352,6 +415,7 @@ async function openComposer(lane: TipLane, w: LiveWallet, asset: TipAsset): Prom
  * Wait until the composer's spendable balance covers amount + fee headroom:
  * CryptoNote and Grin change stays locked for blocks after each send. Returns
  * false when the wallet's whole holding is short, so the caller can skip.
+ * Leaves the composer open on the right asset.
  */
 export async function waitForSpendable(
   lane: TipLane,
@@ -362,7 +426,6 @@ export async function waitForSpendable(
 ): Promise<boolean> {
   const need = toAtomic(asset, amount) + toAtomic(asset, FEE_MARGIN[asset]);
   await tabRoot(lane, w, 'home');
-  await lane.footage.settled(w.page, 'Home balances');
   const holdings = await readHoldings(w, asset);
   if (holdings.total < need) return false;
   const deadline = Date.now() + timeoutMs;
@@ -383,22 +446,35 @@ export async function browserDate(page: Page, ms: number): Promise<string> {
   return page.evaluate((t) => new Date(t).toLocaleDateString(), ms);
 }
 
+async function typeRecipient(lane: TipLane, page: Page, entry: RecipientEntry): Promise<void> {
+  await lane.footage.fill(page.getByTestId('tip-recipient-input'), entry.text, 'Type the recipient');
+  // The hint names exactly who can claim: resolution happened, to this display form.
+  await expect(page.getByTestId('tip-recipient-hint')).toContainText(`Only ${entry.display} can claim`, {
+    timeout: 60_000,
+  });
+}
+
 /**
  * Compose and submit a tip from `w`. Asserts the composer's affordances, the
  * success screen, the masked link or its pending state, and the backend's
  * public record. The composer must already be open on the right asset
- * (waitForSpendable leaves it there).
+ * (waitForSpendable leaves it there). The tip enters the ledger the moment the
+ * backend names its id.
  */
 export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): Promise<CreatedTip> {
+  if (rescueMode()) throw new Error('a rescue run settles earlier tips and never creates one');
   const page = w.page;
   const person = plan.recipient;
   lane.footage.chapter(plan.label);
 
   if (person) {
-    await lane.footage.fill(page.getByTestId('tip-recipient-input'), person.text, 'Type the recipient');
-    await expect(page.getByTestId('tip-recipient-hint')).toContainText(`Only ${person.display} can claim`, {
-      timeout: 60_000,
-    });
+    for (const entry of person.alsoResolve ?? []) {
+      await typeRecipient(lane, page, entry);
+      // Clear between forms, so the next hint cannot be the previous one still showing.
+      await lane.footage.fill(page.getByTestId('tip-recipient-input'), '', 'Clear the recipient');
+      await expect(page.getByTestId('tip-recipient-hint')).toContainText('link anyone can claim');
+    }
+    await typeRecipient(lane, page, person.entry);
     const memo = page.getByTestId('tip-memo-input');
     await expect(memo).toBeVisible();
     if (plan.memo) await lane.footage.fill(memo, plan.memo, 'Write a message for the recipient');
@@ -419,24 +495,45 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
   const submit = page.getByTestId('tip-submit-btn');
   await expect(submit).toBeEnabled({ timeout: 30_000 });
   // The submit button names who the tip goes to.
-  await expect(submit).toHaveText(person ? `Send to ${person.display}` : 'Create tip link');
-  await lane.footage.settled(page, 'Composer filled in');
+  await expect(submit).toHaveText(person ? `Send to ${person.entry.display}` : 'Create tip link');
+  await lane.footage.result(page, 'Composer filled in');
 
-  // The create call's response names the tip id; the success screen shows a prefix.
+  const submittedAtMs = Date.now();
+  const record = (tipId: string): void =>
+    lane.ledger.record({
+      key: plan.key,
+      tipId,
+      asset: plan.asset,
+      amount: plan.amount,
+      sender: w.name,
+      ...(person ? { recipient: person.wallet.name, recipientDisplay: person.entry.display } : {}),
+      ...(plan.memo && person ? { memo: plan.memo } : {}),
+      expiryDays,
+      submittedAtMs,
+    });
+  // The create call's response names the tip id; record it before anything
+  // else can fail, so the funds are never untracked.
   const created = w.context
     .waitForEvent('response', {
       predicate: (r) => r.request().method() === 'POST' && /\/tips\/social$/.test(new URL(r.url()).pathname),
       timeout: 10 * MINUTE,
     })
     .then((r) => r.json() as Promise<{ tip_id?: string }>)
-    .then((body) => (typeof body.tip_id === 'string' ? body.tip_id : null), () => null);
-  const submittedAtMs = Date.now();
-  await lane.footage.tap(submit, person ? 'Send the tip' : 'Create the tip link');
-  await confirmIfAsked(lane, w);
-
+    .then(
+      (body) => {
+        const id = typeof body.tip_id === 'string' ? body.tip_id : null;
+        if (id) record(id);
+        return id;
+      },
+      () => null,
+    );
+  await lane.footage.tap(submit, person ? 'Send the tip' : 'Create the tip link', { settle: false });
   const heading = page.getByTestId('tip-success-heading');
-  await expect(heading.or(page.getByTestId('tip-error'))).toBeVisible({ timeout: 10 * MINUTE });
-  await expect(page.getByTestId('tip-error'), 'the tip was refused').toHaveCount(0);
+  const refused = page.getByTestId('tip-error');
+  await confirmIfAsked(lane, w, heading.or(refused));
+
+  await expect(heading.or(refused)).toBeVisible({ timeout: 10 * MINUTE });
+  await expect(refused, 'the tip was refused').toHaveCount(0);
   await expect(heading).toHaveText(person ? 'Tip sent' : 'Tip link created');
   await expect(page.locator('#root')).toContainText(`${plan.amount} ${TICKER[plan.asset]}`);
   const prefix = ((await page.getByTestId('tip-id-label').textContent()) ?? '').match(/[0-9a-f-]{12}/i)?.[0] ?? '';
@@ -453,7 +550,7 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
     await expect(shareUrl).toBeVisible();
     link = await readLink(lane, shareUrl, prefix);
   } else if (person) {
-    await expect(page.getByTestId('tip-success-detail')).toContainText(`Delivered privately to ${person.display}`);
+    await expect(page.getByTestId('tip-success-detail')).toContainText(`Delivered privately to ${person.entry.display}`);
     await expect(page.getByTestId('tip-delivery-warning')).toHaveCount(0);
     // A delivered person tip never shows its link.
     await expect(page.getByTestId('tip-share-url')).toHaveCount(0);
@@ -473,32 +570,25 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
   await lane.footage.tap(page.getByTestId('tip-success-done-btn'), 'Done');
 
   const tipId = (await created) ?? (await findTipIdByPrefix(lane, w, prefix));
+  record(tipId);
   expect(tipId.startsWith(prefix), 'the created tip is the one on the success screen').toBe(true);
-  if (link) expect(link.reveal().includes(`/tip/${tipId}#`), 'the link names this tip').toBe(true);
+  if (link) {
+    expect(link.reveal().includes(`/tip/${tipId}#`), 'the link names this tip').toBe(true);
+    lane.links.set(tipId, link);
+  }
 
-  const record = await waitForPublicTip(
+  const samples = await waitForPublicTip(
     tipId,
     (s) => s.status === 'pending' || s.status === 'pending_confirmation',
     5 * MINUTE,
     'funded',
   );
-  const state = record.at(-1)!;
+  const state = samples.at(-1)!;
   expect(state.asset).toBe(plan.asset);
   expect(BigInt(state.amount)).toBe(toAtomic(plan.asset, plan.amount));
   expect(state.isPublic, 'every tip is funded as a link tip').toBe(true);
 
-  return {
-    tipId,
-    asset: plan.asset,
-    amount: plan.amount,
-    amountAtomic: toAtomic(plan.asset, plan.amount),
-    sender: w,
-    ...(person ? { recipient: person.wallet, recipientDisplay: person.display } : {}),
-    ...(plan.memo && person ? { memo: plan.memo } : {}),
-    expiryDays,
-    submittedAtMs,
-    link,
-  };
+  return tipFromLedger(lane, lane.ledger.tip(plan.key)!);
 }
 
 /** Read a claim link out of an element into memory; the frame masks it meanwhile. */
@@ -532,8 +622,8 @@ function escapeRegExp(text: string): string {
  * gift-wrap copy, else the label the composer showed; "link" for a link tip.
  */
 export function recipientPattern(tip: CreatedTip): RegExp {
-  if (!tip.recipient) return /→ link/;
-  const options = [tip.recipient.shortNpub, tip.recipientDisplay ?? tip.recipient.shortNpub].map(escapeRegExp);
+  if (!tip.recipientDisplay) return /→ link/;
+  const options = [tip.recipientDisplay, ...(tip.recipient ? [tip.recipient.shortNpub] : [])].map(escapeRegExp);
   return new RegExp(`(${options.join('|')})`);
 }
 
@@ -551,6 +641,7 @@ export async function openSentDetail(lane: TipLane, w: LiveWallet, tip: CreatedT
   await expect(card).toBeVisible({ timeout: 2 * MINUTE });
   const detail = w.page.getByTestId(`tip-detail-${tip.tipId}`);
   if (!(await detail.isVisible().catch(() => false))) {
+    await card.scrollIntoViewIfNeeded();
     await lane.footage.tap(card.getByTestId('sent-tip-toggle'), 'Open the tip details');
   }
   await expect(detail).toBeVisible();
@@ -583,14 +674,14 @@ export async function expectSentDetail(
   if (phase === 'claimed') await expect(timeline).toContainText('Claimed');
   if (phase === 'reclaimed') await expect(timeline).toContainText(/Reclaimed\s*returned to the sender/);
   await expect(detail).toContainText(TICKER[tip.asset]);
-  await expect(detail).toContainText(tip.recipient ? recipientPattern(tip) : /to link/);
+  await expect(detail).toContainText(tip.recipientDisplay ? recipientPattern(tip) : /to link/);
   if (tip.memo) await expect(detail.getByTestId('tip-detail-memo')).toContainText(tip.memo);
   await expect(detail).toContainText('Created');
   await expect(detail).toContainText('Tip id');
   await expect(detail).toContainText(tip.tipId);
   // A link tip's reclaim date lives in the local key backup, which a reclaim
   // deletes; a person tip's lives in the sender's own gift-wrap copy.
-  if (phase !== 'reclaimed' || tip.recipient) {
+  if (phase !== 'reclaimed' || tip.recipientDisplay) {
     await expect(detail).toContainText('Reclaimable');
     await expect(detail).toContainText(await reclaimDate(w.page, tip));
   }
@@ -604,12 +695,15 @@ const BADGE: Record<string, RegExp> = {
   claiming: /Claiming/i,
   claimed: /Claimed/i,
   clawed_back: /Clawed back/i,
+  funding_mismatch: /Underfunded/i,
+  cancelled: /Cancelled/i,
 };
 
 /** A Sent tips row: ticker, recipient, status badge and, while reclaimable, the date. */
 export async function expectSentRow(lane: TipLane, w: LiveWallet, tip: CreatedTip, status: string): Promise<void> {
   const card = sentCard(w, tip);
   await expect(card).toBeVisible({ timeout: 2 * MINUTE });
+  await card.scrollIntoViewIfNeeded();
   await expect(card).toContainText(`${TICKER[tip.asset]} →`);
   await expect(card).toContainText(recipientPattern(tip));
   await expect(card.getByTestId('sent-tip-status-badge')).toHaveText(BADGE[status] ?? new RegExp(status));
@@ -617,6 +711,27 @@ export async function expectSentRow(lane: TipLane, w: LiveWallet, tip: CreatedTi
     await expect(card).toContainText(`reclaimable ${await reclaimDate(w.page, tip)}`);
   }
   await lane.footage.result(w.page, 'Sent tips row');
+}
+
+/**
+ * The claim link of a live link tip: from this session's memory, else re-read
+ * from the sender's Sent tips detail (a restarted worker lost its memory).
+ */
+export async function ensureLink(lane: TipLane, tip: CreatedTip): Promise<SecretLink> {
+  const known = lane.links.get(tip.tipId);
+  if (known) return known;
+  const w = tip.sender;
+  await openSentTips(lane, w);
+  const card = sentCard(w, tip);
+  await openSentDetail(lane, w, tip);
+  await expect(card.getByTestId('sent-tip-copy-link-btn')).toBeVisible({ timeout: 2 * MINUTE });
+  // The link panel has no test id: the deepest element holding the link.
+  const holder = card.locator('div').filter({ hasText: new RegExp(TIP_LINK_SOURCE) }).last();
+  const link = await readLink(lane, holder, tip.tipId);
+  lane.links.set(tip.tipId, link);
+  await lane.footage.result(w.page, 'The link is live (masked)');
+  await closeSentDetail(lane, w, tip);
+  return link;
 }
 
 /**
@@ -638,22 +753,12 @@ export async function waitForLiveLink(lane: TipLane, tip: CreatedTip, timeoutMs:
     await expectSentRow(lane, w, tip, first.status);
     await expectSentDetail(lane, w, tip, 'confirming');
   }
-  const samples = await waitForPublicTip(
-    tip.tipId,
-    (s) => s.fundingConfirmations >= s.confirmationsRequired && s.status === 'pending',
-    timeoutMs,
-    'its confirmation gate',
-  );
+  const samples = await waitForPublicTip(tip.tipId, pastGate, timeoutMs, 'its confirmation gate');
   expectConfirmationsRose(first ? [first, ...samples] : samples);
   await refreshSentTips(lane, w);
   await expect(card.getByTestId('sent-tip-status-badge')).toHaveText(/Pending claim/i, { timeout: 5 * MINUTE });
-  await openSentDetail(lane, w, tip);
-  await expect(card.getByTestId('sent-tip-copy-link-btn')).toBeVisible({ timeout: 2 * MINUTE });
-  // The link panel has no test id: the deepest element holding the link.
-  const holder = card.locator('div').filter({ hasText: new RegExp(TIP_LINK_SOURCE) }).last();
-  tip.link = await readLink(lane, holder, tip.tipId);
-  await lane.footage.result(w.page, 'The link is live (masked)');
-  await closeSentDetail(lane, w, tip);
+  lane.links.delete(tip.tipId);
+  await ensureLink(lane, tip);
 }
 
 // ---------------------------------------------------------------------------
@@ -663,6 +768,15 @@ export async function waitForLiveLink(lane: TipLane, tip: CreatedTip, timeoutMs:
 export interface SweepReport {
   sweepTxid: boolean;
   keyImages: number;
+}
+
+/**
+ * A sweep txid as the claim reports it: a 32-byte hash (64 hex) for BTC, LTC,
+ * XMR and WOW; for GRIN the kernel excess, a 33-byte commitment (66 hex),
+ * which tip-claim-handler.ts sweepGrin reports in place of a txid.
+ */
+export function sweepTxidShape(asset: TipAsset): RegExp {
+  return asset === 'grin' ? /^[0-9a-f]{66}$/i : /^[0-9a-f]{64}$/i;
 }
 
 /**
@@ -687,7 +801,7 @@ function watchSweepReport(w: LiveWallet, tip: CreatedTip): Promise<SweepReport |
             /^[0-9a-f]{128}$/.test(String(image.proof)),
         );
         return {
-          sweepTxid: /^[0-9a-f]{64}$/i.test(String(body.sweep_txid)),
+          sweepTxid: sweepTxidShape(tip.asset).test(String(body.sweep_txid)),
           keyImages: wellFormed ? images.length : -1,
         };
       },
@@ -697,7 +811,7 @@ function watchSweepReport(w: LiveWallet, tip: CreatedTip): Promise<SweepReport |
 
 function expectSweepReport(tip: CreatedTip, report: SweepReport | null): void {
   expect(report, 'the claim reported its sweep to the backend').not.toBeNull();
-  expect(report!.sweepTxid, 'the sweep report carries a txid').toBe(true);
+  expect(report!.sweepTxid, 'the sweep report carries a txid of the coin\'s shape').toBe(true);
   expect(report!.keyImages, 'every reported key image is well formed').toBeGreaterThanOrEqual(0);
   if (tip.asset === 'xmr' || tip.asset === 'wow') {
     expect(report!.keyImages, 'an XMR/WOW claim reports the key image it spends').toBeGreaterThan(0);
@@ -709,20 +823,20 @@ function expectSweepReport(tip: CreatedTip, report: SweepReport | null): void {
  * behind a redaction card and stays masked in the box.
  */
 export async function claimLink(lane: TipLane, w: LiveWallet, tip: CreatedTip): Promise<void> {
-  if (!tip.link) throw new Error('this tip has no live link to claim yet');
+  const link = await ensureLink(lane, tip);
   lane.footage.chapter(`Claim a ${TICKER[tip.asset]} link`);
   await openInbox(lane, w);
   await lane.footage.tap(w.page.getByTestId('inbox-paste-tip-link-btn'), 'Paste a tip link');
-  await lane.footage.secretFill(w.page.getByTestId('paste-tip-input'), tip.link.reveal(), 'Paste the tip link');
-  await lane.footage.settled(w.page, 'Link pasted (masked)');
+  await lane.footage.secretFill(w.page.getByTestId('paste-tip-input'), link.reveal(), 'Paste the tip link');
+  await lane.footage.result(w.page, 'Link pasted (masked)');
   const report = watchSweepReport(w, tip);
   const success = w.page.getByTestId('paste-tip-success');
   const error = w.page.getByTestId('paste-tip-error');
   // A light-wallet server can trail the chain by a block: retry the documented
   // way (the backend's claim is idempotent for the same claimer).
   for (let attempt = 1; ; attempt++) {
-    await lane.footage.tap(w.page.getByTestId('paste-tip-claim-btn'), 'Claim');
-    await confirmIfAsked(lane, w);
+    await lane.footage.tap(w.page.getByTestId('paste-tip-claim-btn'), 'Claim', { settle: false });
+    await confirmIfAsked(lane, w, success.or(error));
     await expect(success.or(error)).toBeVisible({ timeout: 10 * MINUTE });
     if (await success.isVisible()) break;
     if (attempt >= 5) throw new Error(`the ${TICKER[tip.asset]} link claim kept failing`);
@@ -767,6 +881,7 @@ export async function expectInboxTip(
   // A pending row has no test id of its own: it is the note's parent.
   const claimableNow = await row.isVisible().catch(() => false);
   const holder = claimableNow ? row : note.locator('xpath=..');
+  await holder.scrollIntoViewIfNeeded();
   await expect(holder).toContainText(TICKER[tip.asset]);
   await expect(holder).toContainText(`from ${tip.sender.shortNpub}`);
   if (tip.memo) await expect(note).toContainText(`“${tip.memo}”`);
@@ -776,15 +891,24 @@ export async function expectInboxTip(
   return holder;
 }
 
-async function claimOutcome(row: Locator, timeoutMs: number): Promise<'gone' | 'confirming' | 'error'> {
+type ClaimOutcome = 'gone' | 'confirming' | 'error';
+
+async function claimOutcome(row: Locator): Promise<ClaimOutcome | null> {
+  if (!(await row.isVisible().catch(() => false))) return 'gone';
+  if (await row.getByTestId('tip-claim-confirming').isVisible().catch(() => false)) return 'confirming';
+  if (await row.getByTestId('tip-claim-error').isVisible().catch(() => false)) return 'error';
+  return null;
+}
+
+/** Poll a claimed row until it settles one way or another; a timeout counts as an error. */
+async function awaitClaimOutcome(row: Locator, timeoutMs: number): Promise<ClaimOutcome> {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!(await row.isVisible().catch(() => false))) return 'gone';
-    if (await row.getByTestId('tip-claim-confirming').isVisible().catch(() => false)) return 'confirming';
-    if (await row.getByTestId('tip-claim-error').isVisible().catch(() => false)) return 'error';
+  for (;;) {
+    const outcome = await claimOutcome(row);
+    if (outcome) return outcome;
+    if (Date.now() > deadline) return 'error';
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  return 'error';
 }
 
 /** Claim a person tip from the recipient's Inbox. */
@@ -793,9 +917,9 @@ export async function claimFromInbox(lane: TipLane, w: LiveWallet, tip: CreatedT
   const row = await expectInboxTip(lane, w, tip, { claimable: true, timeoutMs: 10 * MINUTE });
   const report = watchSweepReport(w, tip);
   for (let attempt = 1; ; attempt++) {
-    await lane.footage.tap(row.getByTestId('tip-claim-btn'), 'Claim');
-    await confirmIfAsked(lane, w);
-    if ((await claimOutcome(row, 10 * MINUTE)) !== 'error') break;
+    await lane.footage.tap(row.getByTestId('tip-claim-btn'), 'Claim', { settle: false });
+    await confirmIfAsked(lane, w, async () => (await claimOutcome(row)) !== null);
+    if ((await awaitClaimOutcome(row, 10 * MINUTE)) !== 'error') break;
     if (attempt >= 5) throw new Error(`the ${TICKER[tip.asset]} Inbox claim kept failing`);
     await lane.footage.result(w.page, 'Claim not ready yet, retrying');
     await w.page.waitForTimeout(2 * MINUTE);
@@ -841,28 +965,38 @@ export async function expectDebited(
   );
 }
 
-/** Settled on the backend: claimed (the sweep is borne out on chain). */
+/** Settled on the backend: claimed (the sweep is borne out on chain) or clawed back. */
 export async function waitForSettled(tip: CreatedTip, status: 'claimed' | 'clawed_back', timeoutMs: number): Promise<void> {
   await waitForPublicTip(tip.tipId, (s) => s.status === status, timeoutMs, status);
 }
 
 // ---------------------------------------------------------------------------
-// Clawback
+// Clawback and rescue
 // ---------------------------------------------------------------------------
 
-/** Reclaim an unclaimed tip from Sent tips, then watch the backend settle it. */
-export async function reclaim(lane: TipLane, tip: CreatedTip): Promise<void> {
+/** Statuses a sender may reclaim from (SentTipsScreen isClawbackable, backend clawback filter). */
+const RECLAIMABLE: ReadonlySet<string> = new Set(['pending', 'pending_confirmation', 'claiming', 'funding_mismatch', 'cancelled']);
+
+/**
+ * Reclaim an unclaimed tip from Sent tips, then watch the backend settle it.
+ * `expectStatus` pins the status the scenario expects first (the clawback
+ * tests use 'pending'); the rescue accepts any reclaimable status.
+ */
+export async function reclaim(lane: TipLane, tip: CreatedTip, expectStatus: string | null = 'pending'): Promise<void> {
   const w = tip.sender;
   lane.footage.chapter(`Reclaim a ${TICKER[tip.asset]} tip`);
   const state = await publicTip(tip.tipId);
-  expect(state?.status, 'only a pending, unclaimed tip is reclaimed here').toBe('pending');
+  if (expectStatus) expect(state?.status, 'the tip is in the state this reclaim expects').toBe(expectStatus);
+  expect(RECLAIMABLE.has(state?.status ?? ''), 'the tip is reclaimable').toBe(true);
   await openSentTips(lane, w);
-  await expectSentRow(lane, w, tip, 'pending');
-  await expectSentDetail(lane, w, tip, pendingPhase(state!));
+  await expectSentRow(lane, w, tip, state!.status);
+  if (state!.status === 'pending') await expectSentDetail(lane, w, tip, pendingPhase(state!));
   const detail = await openSentDetail(lane, w, tip);
-  await lane.footage.tap(detail.getByTestId('sent-tip-clawback-btn'), 'Cancel and reclaim');
-  await confirmIfAsked(lane, w);
   const message = sentCard(w, tip).getByTestId('sent-tip-row-message');
+  await lane.footage.tap(detail.getByTestId('sent-tip-clawback-btn'), 'Cancel and reclaim', { settle: false });
+  // "Reclaiming…" shows before any password prompt: wait for the outcome itself.
+  const settledMessage = async () => /Reclaimed|Error/.test((await message.textContent().catch(() => null)) ?? '');
+  await confirmIfAsked(lane, w, settledMessage, 15 * MINUTE);
   await expect(message).toContainText(/Reclaimed|Error/, { timeout: 15 * MINUTE });
   await expect(message, 'the reclaim sweep failed').not.toContainText('Error');
   await lane.footage.result(w.page, 'Tip reclaimed');
@@ -870,4 +1004,75 @@ export async function reclaim(lane: TipLane, tip: CreatedTip): Promise<void> {
   await refreshSentTips(lane, w);
   await expectSentRow(lane, w, tip, 'clawed_back');
   await expectSentDetail(lane, w, tip, 'reclaimed');
+}
+
+export interface RescueOutcome {
+  key: string;
+  asset: TipAsset;
+  sender: WalletName;
+  /** The final status, or the last one seen when the tip could not be settled. */
+  status: string;
+  action: 'already settled' | 'settled by its claim' | 'reclaimed' | 'failed';
+}
+
+/**
+ * Settle one ledger tip that still holds funds: wait for an in-flight claim to
+ * settle, wait out a confirmation gate (a CryptoNote or Grin sweep needs the
+ * funding confirmed), then reclaim it to its sender. Never throws for one tip:
+ * the caller asserts on every outcome together.
+ */
+export async function rescueTip(lane: TipLane, tip: CreatedTip): Promise<RescueOutcome> {
+  const base = { key: tip.key, asset: tip.asset, sender: tip.sender.name };
+  try {
+    let state = await publicTip(tip.tipId);
+    if (!state) return { ...base, status: 'unknown to the backend', action: 'failed' };
+    if (SETTLED_STATUSES.has(state.status)) return { ...base, status: state.status, action: 'already settled' };
+    if (state.status === 'claiming') {
+      // A claim is in flight: give its sweep time to settle before reclaiming.
+      const samples = await waitForPublicTip(tip.tipId, (s) => s.status !== 'claiming', 45 * MINUTE, 'leave claiming').catch(
+        () => null,
+      );
+      state = samples?.at(-1) ?? (await publicTip(tip.tipId));
+      if (state && SETTLED_STATUSES.has(state.status)) return { ...base, status: state.status, action: 'settled by its claim' };
+    }
+    if (state && state.status === 'pending_confirmation' && CONFIRMING_ASSETS.includes(tip.asset)) {
+      const samples = await waitForPublicTip(tip.tipId, (s) => s.status !== 'pending_confirmation', 150 * MINUTE, 'its gate');
+      state = samples.at(-1)!;
+    }
+    if (!state || !RECLAIMABLE.has(state.status)) return { ...base, status: state?.status ?? 'unknown', action: 'failed' };
+    await reclaim(lane, tip, null);
+    return { ...base, status: 'clawed_back', action: 'reclaimed' };
+  } catch {
+    const last = await publicTip(tip.tipId).catch(() => null);
+    return { ...base, status: last?.status ?? 'unknown', action: 'failed' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+/**
+ * Claim and link a Smirk handle for `w` through Settings > Nostr. A public,
+ * durable production write: callers run it only on the operator's explicit
+ * E2E_CLAIM_BOB_HANDLE opt-in.
+ */
+export async function claimHandle(lane: TipLane, w: LiveWallet, name: string): Promise<void> {
+  lane.footage.chapter('Claim a Smirk handle');
+  await tabRoot(lane, w, 'settings');
+  await lane.footage.tap(w.page.getByTestId('settings-nostr-nav'), 'Open the Nostr identity');
+  const handle = w.page.getByTestId('nostr-handle');
+  if (!(await handle.isVisible().catch(() => false))) {
+    await lane.footage.fill(w.page.getByTestId('nostr-claim-handle-input'), name, 'Type the handle to claim');
+    await lane.footage.tap(w.page.getByTestId('nostr-claim-handle-btn'), 'Claim this handle', { settle: false });
+    await confirmIfAsked(lane, w, handle.or(w.page.getByTestId('nostr-claim-handle-error')));
+    await expect(w.page.getByTestId('nostr-claim-handle-error'), 'the handle claim was refused').toHaveCount(0);
+    await expect(handle).toBeVisible({ timeout: 2 * MINUTE });
+  }
+  if (!/verified/i.test((await handle.textContent()) ?? '')) {
+    await lane.footage.tap(w.page.getByTestId('nostr-link-btn'), 'Link this identity to the handle', { settle: false });
+    await confirmIfAsked(lane, w, async () => /verified/i.test((await handle.textContent()) ?? ''), 5 * MINUTE);
+    await expect(handle).toContainText(/verified/i, { timeout: 2 * MINUTE });
+  }
+  await lane.footage.result(w.page, 'Handle verified');
 }

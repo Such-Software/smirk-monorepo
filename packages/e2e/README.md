@@ -109,6 +109,47 @@ background traffic is not necessarily visible to page listeners. Use the
 scenario's actual application or backend evidence. A rendered zero balance alone
 does not prove authentication or scan completeness.
 
+## C-tips live lane
+
+`C-tips.live.config.ts` runs `tests/live/c-targeted-tips` and `c-tips` against a
+real backend with the alice, bob and carol demo wallets: link tips, person tips by
+npub, `@name`, `name` and `name@domain`, federated tips (a foreign NIP-05 domain
+and a second backend), forged gift wraps, a blocked delivery, claims, clawbacks
+and settlement on BTC, LTC, XMR, WOW and GRIN. The main config ignores
+`tests/live`. Every gate is closed by default and the global setup prints why it
+refused. The command and every variable are in the config's header.
+
+- **Release binding.** The setup checks the candidate zip's SHA-256 and manifest
+  version, unpacks it into the run's state directory and loads only that.
+- **Funds safety.** Each tip enters `C-tips-state/ledger.json` as soon as the
+  backend names it (ids only, never a link). Tests are independent, a restarted
+  worker reopens the same browser profiles, and each file ends with a rescue that
+  reclaims any tip still holding funds. The teardown deletes the profiles only
+  when every tip is claimed or clawed back; otherwise it keeps them and writes
+  `RECOVERY.md` with the rescue command.
+- **Skips.** Only an optional rehearsal, an acknowledged gap
+  (`E2E_LIVE_ACK_GAPS=federation`) or a rescue run may skip. Any other skip, such
+  as a demo wallet that needs a top-up, fails the run with its reason.
+- **Video.** `FOOTAGE=guarded` is required, so the run cannot finish unrecorded.
+  Each hold must keep the recorded frame unchanged for 6 s before a tap, 12 s on a
+  settled screen and 25 s on a key result. A changing screen restarts the hold.
+  The teardown runs `scripts/C-tips-encode.mjs`, which writes per-wallet and
+  side-by-side MP4s in real time and checks every hold against the encoded
+  frames. Do not run `process-footage.mjs` on this footage: it trims dead air.
+- **Capture policy.** The recorder is a new capture lane over live wallet
+  sessions. Recovery phrases, password fields and protected screens become
+  cards. Claim links and key material are masked, and a frame whose mask target
+  changed during capture is dropped. This still conflicts with the
+  no-capture-lane statement in `capture-policy.mjs` and `fixtures/footage.ts`.
+  The owner must sign off before its output is used.
+
+Offline checks (no wallet, no funds):
+
+```sh
+node --import tsx --test fixtures/C-tips-guard.test.mjs fixtures/C-tips-encode.test.mjs \
+  fixtures/C-tips-forge.test.mjs fixtures/C-tips-lane.test.mjs
+```
+
 ## Release evidence checklist
 
 - [ ] Record the exact client/backend source, build and scenario selection.

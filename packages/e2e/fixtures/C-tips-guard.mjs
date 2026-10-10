@@ -9,15 +9,22 @@
  *             screen, Settings' root and any password field, becomes a card.
  *             Phrase surfaces and any unmasked known secret also become cards.
  *   - masked: the frame is kept with masks painted over tip claim links (the
- *             success screen's link, the Tips sent link panel, which has no test
+ *             success screen's link, the Sent tips link panel, which has no test
  *             id, and a filled paste box), a revealed tx key or nsec, and any
  *             password field.
  *   - clean:  nothing to hide.
  *
- * `cTipsSurvey` runs inside the page and must stay self-contained. It marks the
- * elements to mask with an attribute and returns the visible text that is NOT
- * masked, so the known-secret canary (`findLeak`) runs in Node and the secrets
- * themselves never enter the page.
+ * `cTipsSurvey` runs inside the page and must stay self-contained. It finds the
+ * elements to mask and returns the visible text that is NOT masked, so the
+ * known-secret canary (`findLeak`) runs in Node and the secrets themselves
+ * never enter the page.
+ *
+ * Masks that are matched by text (a claim link with no test id) or by state (a
+ * filled paste box) have no stable selector, so the recorder marks them with a
+ * per-capture nonce before the screenshot ('mark') and checks after it
+ * ('verify') that every element the rules select still carries that nonce. A
+ * node the app re-created in between lacks it, so the frame is dropped instead
+ * of kept unmasked. 'scan' only reads: it never touches the page's attributes.
  */
 export { secretSurface, PRIVATE_TEXT } from '../demo/guard.mjs';
 
@@ -45,16 +52,19 @@ export const C_TIPS_RULES = Object.freeze({
   markAttribute: 'data-c-tips-mask',
 });
 
-/** Locator selector for everything `cTipsSurvey` marked. */
-export const MASK_SELECTOR = `[${C_TIPS_RULES.markAttribute}]`;
+/** Locator selector for the elements one capture marked with `nonce`. */
+export function maskSelectorFor(nonce) {
+  if (!/^[0-9a-f]{8,64}$/.test(nonce)) throw new Error('a mask nonce is lowercase hex');
+  return `[${C_TIPS_RULES.markAttribute}="${nonce}"]`;
+}
 
 /**
- * In-page survey. Marks mask targets and returns the unmasked visible text.
- * Returns `{ card }` instead when a phrase surface is visible.
+ * In-page survey. `mode` is 'scan' (read only), 'mark' (clear old marks, then
+ * mark every target with `nonce`) or 'verify' (read only; count targets that do
+ * not carry `nonce`). Returns `{ card }` instead when a phrase surface is visible.
  */
-export function cTipsSurvey(rules) {
+export function cTipsSurvey({ rules, nonce, mode }) {
   const attr = rules.markAttribute;
-  for (const el of document.querySelectorAll(`[${attr}]`)) el.removeAttribute(attr);
   const visible = (element) => {
     const box = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -62,32 +72,40 @@ export function cTipsSurvey(rules) {
   };
   const cardId = new RegExp(rules.cardTestId);
   const phrase = [...document.querySelectorAll('[data-testid]')].find((el) => cardId.test(el.dataset.testid ?? '') && visible(el));
-  if (phrase) return { card: 'phrase', masked: 0, segments: [] };
+  if (phrase) return { card: 'phrase', masked: 0, unmarked: 0, signature: '', segments: [] };
 
-  const mark = (el) => el.setAttribute(attr, '1');
+  const targets = new Set();
   for (const selector of rules.maskSelectors) {
-    for (const el of document.querySelectorAll(selector)) if (visible(el)) mark(el);
+    for (const el of document.querySelectorAll(selector)) if (visible(el)) targets.add(el);
   }
   for (const id of rules.maskWhenFilled) {
     for (const el of document.querySelectorAll(`[data-testid="${id}"]`)) {
-      if ('value' in el && el.value) mark(el);
+      if ('value' in el && el.value) targets.add(el);
     }
   }
   const link = new RegExp(rules.tipLink);
   // The deepest element whose text holds a claim link: its parent's text holds
-  // it too, so marking only the deepest keeps the mask tight.
+  // it too, so taking only the deepest keeps the mask tight.
   for (const el of document.body ? document.body.querySelectorAll('*') : []) {
     if (!link.test(el.textContent ?? '')) continue;
     if ([...el.children].some((child) => link.test(child.textContent ?? ''))) continue;
-    mark(el);
+    targets.add(el);
   }
   for (const el of document.querySelectorAll('input, textarea')) {
-    if (link.test(el.value ?? '')) mark(el);
+    if (link.test(el.value ?? '')) targets.add(el);
   }
 
-  const masked = (node) => {
-    const el = node.nodeType === 1 ? node : node.parentElement;
-    return !!el && !!el.closest(`[${attr}]`);
+  if (mode === 'mark') {
+    for (const el of document.querySelectorAll(`[${attr}]`)) el.removeAttribute(attr);
+    for (const el of targets) el.setAttribute(attr, nonce);
+  }
+  const unmarked = mode === 'verify' ? [...targets].filter((el) => el.getAttribute(attr) !== nonce).length : 0;
+
+  const covered = (node) => {
+    for (let el = node.nodeType === 1 ? node : node.parentElement; el; el = el.parentElement) {
+      if (targets.has(el)) return true;
+    }
+    return false;
   };
   const segments = [];
   if (document.body) {
@@ -96,18 +114,19 @@ export function cTipsSurvey(rules) {
       const text = node.nodeValue;
       if (!text || !text.trim()) continue;
       const parent = node.parentElement;
-      if (!parent || !visible(parent) || masked(node)) continue;
+      if (!parent || !visible(parent) || covered(node)) continue;
       segments.push(text);
     }
   }
   for (const el of document.querySelectorAll('input, textarea')) {
-    if (el.value && visible(el) && !masked(el)) segments.push(el.value);
+    if (el.value && visible(el) && !covered(el)) segments.push(el.value);
   }
-  const boxes = [...document.querySelectorAll(`[${attr}]`)].map((el) => {
+  const ordered = [...targets].sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  const boxes = ordered.map((el) => {
     const r = el.getBoundingClientRect();
     return `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`;
   });
-  return { card: null, masked: boxes.length, signature: boxes.join(';'), segments };
+  return { card: null, masked: targets.size, unmarked, signature: boxes.join(';'), segments };
 }
 
 const NSEC_OR_XPRV = /(nsec1[02-9ac-hj-np-z]{20,}|[xtyz]prv[1-9A-HJ-NP-Za-km-z]{20,})/;

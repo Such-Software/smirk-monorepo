@@ -1,0 +1,11 @@
+type Env = Record<string, string | undefined>;
+export const DEFAULT_RUN_LABEL: string;
+export const OWNER_POLICY: Readonly<{ tap: number; settled: number; result: number }>;
+export function runLabel(env?: Env): string;
+export function runRoot(env?: Env): string;
+export function footageRoot(env?: Env): string;
+export function stateDir(env?: Env): string;
+export function invocationId(env?: Env): string;
+export function rawRoot(env?: Env): string;
+export function videoRoot(env?: Env): string;
+export function privateDir(path: string): string;
