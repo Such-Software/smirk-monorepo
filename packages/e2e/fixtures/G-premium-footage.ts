@@ -20,7 +20,9 @@
  * checked so a value or URL cannot slip into a caption.
  *
  * Recording is opt-in (FOOTAGE=guarded). Without it the helpers still run the
- * guard and keep the flow human-paced, but write nothing and skip the holds.
+ * guard and keep the flow human-paced, but write nothing and shorten the holds.
+ * `observe` is the exception: its length is part of what a spec checks (nothing
+ * else happens for 40 s; a payment settles), so it waits the same either way.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -159,7 +161,18 @@ interface Track {
   inflight?: Promise<void> | undefined;
 }
 
-export interface Hold { kind: HoldKind; label: string; track: string; from: number; to: number; ms: number }
+export interface Hold {
+  kind: HoldKind;
+  label: string;
+  track: string;
+  from: number;
+  to: number;
+  ms: number;
+  /** Set on a tap whose pause came after it: a recorded policy exception. */
+  after?: true;
+}
+/** Where the run departed from the order of the policy, and why. */
+export interface PolicyException { label: string; track: string; at: number; rule: 'pause-after-tap' }
 export interface Mark { label: string; wallet: string; at: number }
 
 interface Inspection { kind: FrameVerdictKind; filledSecret: boolean }
@@ -183,6 +196,7 @@ export class GuardedFootage {
   #evidence: Record<string, string | number | boolean> = {};
   #secretLabels: string[] = [];
   #secrets: Array<{ label: string; from: number; to: number }> = [];
+  #exceptions: PolicyException[] = [];
   #dropped = 0;
   #closed = false;
   #flushTimer: NodeJS.Timeout | undefined;
@@ -332,8 +346,9 @@ export class GuardedFootage {
     return Date.now() - from;
   }
 
-  #hold(kind: HoldKind, label: string, page: Page, from: number, ms: number): void {
-    if (this.recording) this.#holds.push({ kind, label, track: this.#trackName(page), from, to: Date.now(), ms });
+  #hold(kind: HoldKind, label: string, page: Page, from: number, ms: number, after = false): void {
+    if (!this.recording) return;
+    this.#holds.push({ kind, label, track: this.#trackName(page), from, to: Date.now(), ms, ...(after ? { after: true as const } : {}) });
   }
 
   async #refuseOnSecret(page: Page, label: string): Promise<void> {
@@ -353,6 +368,29 @@ export class GuardedFootage {
     await this.#refuseOnSecret(page, label);
     this.#hold('tap', label, page, from, ms);
     await target.click({ timeout: 60_000 });
+  }
+
+  /**
+   * Policy exception: tap at once, then hold the same pause after the tap.
+   * Only for a control the app takes away on a timer (the send receipt closes
+   * itself after 12 s), where a pause before the tap would lose the screen.
+   * The hold is recorded with `after` and listed as an exception, so the
+   * timeline shows where the order was reversed. Returns false, without
+   * tapping, when the control is already gone.
+   */
+  async tapThenHold(target: Locator, label: string): Promise<boolean> {
+    assertStaticLabel(label);
+    const page = target.page();
+    if (!(await target.isVisible().catch(() => false))) return false;
+    this.focus(page);
+    await this.#refuseOnSecret(page, label);
+    const tapped = await target.click({ timeout: 2_000 }).then(() => true, () => false);
+    if (!tapped) return false;
+    const from = Date.now();
+    const ms = await this.#pause(TAP_PAUSE_MS);
+    this.#hold('tap', label, page, from, ms, true);
+    if (this.recording) this.#exceptions.push({ label, track: this.#trackName(page), at: from, rule: 'pause-after-tap' });
+    return true;
   }
 
   /** Hold, then type non-secret text. A known secret here is a spec bug. */
@@ -397,6 +435,22 @@ export class GuardedFootage {
     const from = Date.now();
     const ms = await this.#pause(RESULT_HOLD_MS);
     this.#hold('result', label, page, from, ms);
+  }
+
+  /**
+   * Watch the screen for a fixed time, recorded or not. For waits that are
+   * themselves the check, such as "nothing else is asked for 40 s" or one
+   * round of waiting for a payment to settle, so neither the assertion nor
+   * the load on the backend depends on FOOTAGE. Recorded as a result hold, at
+   * least RESULT_HOLD_MS long.
+   */
+  async observe(page: Page, ms: number, label: string): Promise<void> {
+    assertStaticLabel(label);
+    if (!Number.isFinite(ms) || ms <= 0) throw new Error('An observation needs a positive duration.');
+    this.focus(page);
+    const from = Date.now();
+    await sleep(this.recording ? Math.max(ms, RESULT_HOLD_MS) : ms);
+    this.#hold('result', label, page, from, Date.now() - from);
   }
 
   /** A chapter and caption: the operation, and the wallet doing it. */
@@ -483,6 +537,7 @@ export class GuardedFootage {
       })),
       focus: this.#focus,
       holds: this.#holds,
+      exceptions: this.#exceptions,
       secrets: this.#secrets,
       marks: this.#marks,
       dropped: this.#dropped,

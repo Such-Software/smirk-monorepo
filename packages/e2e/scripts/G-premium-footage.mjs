@@ -8,7 +8,10 @@
  *
  * Before anything is encoded the timeline is validated, and the run is refused
  * when any frame lacks a guard verdict, a frame file is missing or outside its
- * track, a hold is shorter than policy, or a label is not a static phrase.
+ * track, a hold is shorter than policy, a label is not a static phrase, or a
+ * tap left a screen that got no settled or result hold before the next action
+ * on that window. A tap whose pause came after it (the send receipt closes
+ * itself on a timer) must be listed as a policy exception.
  *
  * Layout (1920x1080): one column per wallet page (alice, bob, carol, in that
  * order), each followed by its window lane, which shows whichever checkout tab
@@ -24,6 +27,9 @@ import { isAbsolute, join, normalize, resolve } from 'node:path';
 
 export const MIN_HOLD_MS = Object.freeze({ tap: 6_000, type: 6_000, close: 6_000, settled: 12_000, result: 25_000 });
 const VERDICTS = new Set(['clean', 'masked', 'card']);
+const ACTIONS = new Set(['tap', 'type', 'close']);
+const HELD = new Set(['settled', 'result']);
+const EXCEPTION_RULES = new Set(['pause-after-tap']);
 const LABEL = /^[A-Za-z][A-Za-z0-9 ,.'()&:+-]{0,79}$/;
 const NAME = /^[a-z]+(-[a-z0-9]+){0,4}$/;
 const WALLET_ORDER = ['alice', 'bob', 'carol'];
@@ -75,6 +81,19 @@ export function validateTimeline(timeline, runDir, exists = existsSync) {
     if (minimum === undefined) problems.push('a hold has an unknown kind');
     else if (!(hold.ms >= minimum)) problems.push(`a ${hold.kind} hold lasted ${hold.ms} ms, under the ${minimum} ms policy`);
     if (!staticLabel(hold.label)) problems.push('a hold has an unsafe label');
+    if (hold.after !== undefined && (hold.after !== true || hold.kind !== 'tap')) problems.push('only a tap may hold after itself');
+  }
+  problems.push(...settledAfterEachTap(timeline.holds ?? [], names));
+  const exceptions = timeline.exceptions ?? [];
+  for (const exception of exceptions) {
+    if (!staticLabel(exception.label) || !EXCEPTION_RULES.has(exception.rule) || !NAME.test(exception.track ?? '')) {
+      problems.push('a policy exception is malformed');
+    }
+  }
+  for (const hold of (timeline.holds ?? []).filter((h) => h.after === true)) {
+    if (!exceptions.some((e) => e.label === hold.label && e.track === hold.track && e.at === hold.from)) {
+      problems.push(`the tap "${hold.label}" held after itself without a recorded exception`);
+    }
   }
   for (const scope of timeline.secrets ?? []) {
     if (!staticLabel(scope.label)) problems.push('a secret scope has an unsafe label');
@@ -83,6 +102,34 @@ export function validateTimeline(timeline, runDir, exists = existsSync) {
     if (!staticLabel(mark.label) || !NAME.test(mark.wallet ?? '')) problems.push('a chapter mark has an unsafe label');
   }
   return [...new Set(problems)];
+}
+
+/**
+ * Every tap changes the screen, so the screen it leads to must be held still
+ * (a settled or result hold) before the next tap, entry or close on the same
+ * window, and before the run ends. Typing does not change the screen; a tap
+ * that holds after itself was taken against a timer, so it is not counted as
+ * skipping the screen before it.
+ */
+export function settledAfterEachTap(holds, tracks) {
+  const problems = [];
+  const byTrack = new Map();
+  for (const hold of [...holds].sort((a, b) => a.from - b.from)) {
+    if (!tracks.has(hold.track)) {
+      problems.push(`the hold "${hold.label}" is on a window the run did not record`);
+      continue;
+    }
+    const pending = byTrack.get(hold.track);
+    if (ACTIONS.has(hold.kind) && pending && hold.after !== true) {
+      problems.push(`${hold.track}: "${pending.label}" led to a screen with no settled hold before "${hold.label}"`);
+    }
+    if (hold.kind === 'tap') byTrack.set(hold.track, hold);
+    else if (HELD.has(hold.kind) || hold.kind === 'close') byTrack.delete(hold.track);
+  }
+  for (const [track, pending] of byTrack) {
+    problems.push(`${track}: "${pending.label}" led to a screen that was never held`);
+  }
+  return problems;
 }
 
 /** A track as contiguous pieces covering [startedAt, end). */

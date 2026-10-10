@@ -48,6 +48,13 @@ const VARIABLE: Readonly<Record<WalletName, string>> = {
 };
 export const WALLET_NAMES: readonly WalletName[] = ['alice', 'bob', 'carol'];
 
+/**
+ * A rate-limited restore check is retried after this long, this many times
+ * (half an hour in all): the backend's window is a rolling hour per address.
+ */
+const RATE_LIMIT_WAIT_MS = 5 * 60_000;
+const RATE_LIMIT_WAITS = 6;
+
 /** Popup-sized pages at device pixels, the same frame as the demo lane. */
 const VIEWPORT = { width: 380, height: 600 } as const;
 const SCALE = 2;
@@ -64,6 +71,27 @@ async function custodyReader(): Promise<ReadWalletPhrase> {
   const loaded = (await import(specifier)) as { readWalletPhrase?: unknown };
   if (typeof loaded.readWalletPhrase !== 'function') throw new Error('demo/capture-demo.mjs no longer exports readWalletPhrase');
   return loaded.readWalletPhrase as ReadWalletPhrase;
+}
+
+/**
+ * A refusal this lane recognised. Its message is static text plus, at most,
+ * the wallet's own on-screen words after the canary has cleared them, so it
+ * may be printed where Playwright's own error text may not.
+ */
+class LaneRefusal extends Error {}
+
+/**
+ * The extension opens its setup tab (`popup.html?ctx=tab`) on install. It is
+ * not part of any scenario, so it is closed before the recorder watches the
+ * context and never gets a window lane. It opens within moments of install;
+ * a build that opens none costs this bounded wait once per wallet.
+ */
+async function closeSetupTab(context: BrowserContext, main: Page): Promise<void> {
+  const isSetup = (other: Page) => other !== main && /\/popup\.html\?ctx=tab\b/.test(other.url());
+  await expect.poll(() => context.pages().some(isSetup), { timeout: 15_000 }).toBe(true).catch(() => undefined);
+  for (const other of context.pages()) {
+    if (isSetup(other)) await other.close().catch(() => {});
+  }
 }
 
 export class LiveWallet {
@@ -176,50 +204,128 @@ export class LiveWallets {
     const extensionId = new URL(worker.url()).host;
     const page = await context.newPage();
     this.#footage.attach(page, { name, wallet: name, role: 'main' });
+    await closeSetupTab(context, page);
+    // Only now: the setup tab must never get a window lane of its own.
     this.#footage.watch(context, name);
     const password = randomBytes(24).toString('base64url');
     this.#footage.canary.addValue(password);
 
-    await this.#footage.secret('Importing a demo wallet', async () => {
-      const words = read(WALLET_FILE, VARIABLE[name]);
-      this.#footage.canary.addPhrase(words);
-      try {
-        await page.goto(`chrome-extension://${extensionId}/popup.html`);
-        await page.getByTestId('onboarding-import-btn').click();
-        await page.getByTestId('onboarding-import-warning-continue').click();
-        for (let i = 0; i < words.length; i++) await page.getByTestId(`onboarding-import-word-${i}`).fill(words[i]!);
-      } finally {
-        words.fill('');
-      }
-      await page.getByTestId('onboarding-import-continue').click();
-      // The wizard fails closed until the backend's sign-up requirements
-      // resolve; its retry rebuilds the step with empty fields. Retry only that
-      // race: any other refusal would spend the wallet's restore budget.
-      const submit = page.getByTestId('onboarding-set-password-submit');
-      for (let attempt = 0; attempt < 4; attempt++) {
-        await page.getByTestId('onboarding-password-input').fill(password);
-        await page.getByTestId('onboarding-password-confirm-input').fill(password);
-        await submit.click();
-        await page.waitForTimeout(3_000);
-        if (!(await submit.isVisible().catch(() => false))) break;
-        if (!/sign-up requirements/.test(await page.locator('#root').innerText())) break;
-        await page.waitForTimeout(5_000);
-      }
-      await page.getByTestId('onboarding-setup-finish-btn').click({ timeout: 60_000 }).catch(() => {});
-      // Proof-of-work may be on: allow a slow first registration.
-      const total = page.getByTestId('home-total-balance');
-      await expect(total).toBeVisible({ timeout: 10 * 60_000 });
-      await expect.poll(async () => (await total.textContent())?.trim() ?? '', {
-        timeout: 5 * 60_000,
-        message: `${name} never loaded a real balance, so the backend never authenticated it`,
-      }).toMatch(/\d/);
-    });
-    // The extension opens its own welcome tab on install. It is not part of
-    // any scenario, and left open it would fill this wallet's window lane.
+    // The suite's reporter withholds error text and its config silences test
+    // output, so a failed import records which stage it reached, and a refusal
+    // the lane recognised records why in the wizard's own words once the
+    // canary has cleared them, in the run's private evidence (and on stderr).
+    let stage = 'opening the import wizard';
+    try {
+      await this.#footage.secret('Importing a demo wallet', () => this.#runImport(name, page, extensionId, password, read, (next) => {
+        stage = next;
+      }));
+    } catch (error) {
+      const said = error instanceof LaneRefusal ? error.message : null;
+      this.#footage.evidence(`import_${name}_stopped_while`, stage);
+      if (said) this.#footage.evidence(`import_${name}_refusal`, said);
+      process.stderr.write(`G-premium: importing ${name} stopped while ${stage}.${said ? ` ${said}` : ''}\n`);
+      throw error;
+    }
+    // Anything else still open (the persistent context's first blank page, a
+    // setup tab that opened late) is not part of any scenario either; a
+    // recorded one ends its window lane here.
     for (const other of context.pages()) {
       if (other !== page) await other.close().catch(() => {});
     }
     return new LiveWallet(name, context, page, extensionId, password, this.#footage);
+  }
+
+  /** The import wizard, run inside the caller's secret scope. */
+  async #runImport(
+    name: WalletName,
+    page: Page,
+    extensionId: string,
+    password: string,
+    read: ReadWalletPhrase,
+    at: (stage: string) => void,
+  ): Promise<void> {
+    at('entering the recovery phrase');
+    const words = read(WALLET_FILE, VARIABLE[name]);
+    this.#footage.canary.addPhrase(words);
+    try {
+      await page.goto(`chrome-extension://${extensionId}/popup.html`);
+      await page.getByTestId('onboarding-import-btn').click();
+      await page.getByTestId('onboarding-import-warning-continue').click();
+      for (let i = 0; i < words.length; i++) await page.getByTestId(`onboarding-import-word-${i}`).fill(words[i]!);
+    } finally {
+      words.fill('');
+    }
+    await page.getByTestId('onboarding-import-continue').click();
+    at('setting the wallet password');
+    // The wizard fails closed until the backend's sign-up requirements
+    // resolve; its retry rebuilds the step with empty fields. Retry only that
+    // race and a rate-limited history check below, which the backend does not
+    // count: any other refusal could spend the wallet's restore budget.
+    const submit = page.getByTestId('onboarding-set-password-submit');
+    const first = page.getByTestId('onboarding-password-input');
+    // "Couldn't reach the backend to check its sign-up requirements", or the
+    // step's own check failing because a rebuild emptied the fields under us.
+    const notYet = page.getByText(/sign-up requirements|Password must be at least|Passwords don't match/);
+    const answer = async (): Promise<'moved' | 'not-yet' | null> => {
+      if (!(await submit.isVisible().catch(() => false))) return 'moved';
+      return (await notYet.isVisible().catch(() => false)) ? 'not-yet' : null;
+    };
+    const submitPassword = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await first.fill(password);
+        await page.getByTestId('onboarding-password-confirm-input').fill(password);
+        // A refusal from the last try stays on screen until the step moves on,
+        // so after one, only a step that has not moved in 30 s is refused again.
+        const stale = await notYet.isVisible().catch(() => false);
+        await submit.click();
+        if (stale) await submit.waitFor({ state: 'hidden', timeout: 30_000 }).catch(() => undefined);
+        // Wait for the wizard's answer, however slowly the requirements or a
+        // returning-wallet check resolve: the step moves on, or it says it cannot yet.
+        await expect.poll(answer, {
+          timeout: 3 * 60_000,
+          message: `${name}'s import never left the password step and never said why`,
+        }).not.toBeNull();
+        if ((await answer()) === 'moved') return;
+        // The wizard re-reads the requirements now, backing off for a few
+        // seconds, and may rebuild the step empty: let that happen first.
+        await expect.poll(async () => (await first.inputValue().catch(() => '')) === '', { timeout: 10_000 })
+          .toBe(true).catch(() => undefined);
+      }
+      throw new LaneRefusal('The wizard could not read the backend sign-up requirements after four tries.');
+    };
+    // Registration runs after the step moves on; a refusal brings the
+    // password step back with the wizard's reason, instead of Home.
+    const finish = page.getByTestId('onboarding-setup-finish-btn');
+    const home = page.getByTestId('home-total-balance');
+    for (let wait = 0; ; wait++) {
+      at('setting the wallet password');
+      await submitPassword();
+      at('registering with the backend');
+      await expect(finish.or(home).or(submit), `${name}'s registration never finished`).toBeVisible({ timeout: 10 * 60_000 });
+      if (!(await submit.isVisible())) break;
+      const said = ((await submit.locator('xpath=preceding-sibling::div[1]').textContent({ timeout: 2_000 }).catch(() => null)) ?? '')
+        .replace(/\s+/g, ' ').trim().slice(0, 160);
+      // Every import asks /auth/check-restore, which the backend allows 30
+      // times an hour per client address; parallel lanes on one machine share
+      // that budget. A refused check is not counted, so waiting it out is free.
+      if (/rate limited/i.test(said) && wait < RATE_LIMIT_WAITS) {
+        this.#footage.evidence(`import_${name}_rate_limit_waits`, wait + 1);
+        at('waiting out the backend restore rate limit');
+        await page.waitForTimeout(RATE_LIMIT_WAIT_MS);
+        continue;
+      }
+      const reason = said && !this.#footage.canary.hit(said, []) ? `"${said}"` : 'a reason the canary withheld';
+      throw new LaneRefusal(`The backend refused the registration; the wizard said ${reason}.`);
+    }
+    if (await finish.isVisible()) await finish.click({ timeout: 60_000 });
+    // Proof-of-work may be on: allow a slow first registration.
+    at('waiting for Home and a real balance');
+    const total = page.getByTestId('home-total-balance');
+    await expect(total).toBeVisible({ timeout: 10 * 60_000 });
+    await expect.poll(async () => (await total.textContent())?.trim() ?? '', {
+      timeout: 5 * 60_000,
+      message: `${name} never loaded a real balance, so the backend never authenticated it`,
+    }).toMatch(/\d/);
   }
 
   async close(): Promise<void> {

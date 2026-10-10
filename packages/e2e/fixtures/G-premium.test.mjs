@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PREMIUM_GUARD, frameVerdict } from './G-premium-guard.mjs';
 import { GuardedFootage, SecretCanary, assertStaticLabel, footageRequested } from './G-premium-footage.ts';
+import { premiumLaneConfig } from './G-premium-config.ts';
 import { captionWindows, planLanes, validateTimeline } from '../scripts/G-premium-footage.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -159,7 +160,7 @@ test('processing refuses unguarded frames, short holds, unsafe labels and stray 
     policy: { tapPauseMs: 6_000, settledHoldMs: 12_000, resultHoldMs: 25_000 },
     tracks: [{ name: 'alice', dir: 'alice', wallet: 'alice', role: 'main', startedAt: 0, endedAt: null,
       segments: [{ from: 0, to: 10, verdict: 'clean', file: 'alice/000000.jpg' }, { from: 10, to: 20, verdict: 'card', card: 'Importing a demo wallet' }] }],
-    holds: [{ kind: 'result', label: 'Premium is active', ms: 25_000 }],
+    holds: [{ kind: 'result', label: 'Premium is active', track: 'alice', from: 5, ms: 25_000 }],
     marks: [{ label: 'Premium purchase', wallet: 'alice', at: 0 }],
   });
   const exists = () => true;
@@ -168,12 +169,13 @@ test('processing refuses unguarded frames, short holds, unsafe labels and stray 
     (t) => { delete t.tracks[0].segments[0].verdict; },
     (t) => { t.tracks[0].segments[0].verdict = 'unchecked'; },
     (t) => { t.holds[0].ms = 24_000; },
-    (t) => { t.holds.push({ kind: 'tap', label: 'Check now', ms: 5_000 }); },
+    (t) => { t.holds.push({ kind: 'tap', label: 'Check now', track: 'alice', from: 1, ms: 5_000 }); },
     (t) => { t.holds[0].label = 'https://pay.example.org/i/x'; },
     (t) => { t.marks[0].label = `tx ${hex}`; },
     (t) => { t.tracks[0].segments[0].file = '../elsewhere.jpg'; },
     (t) => { t.tracks[0].segments[1].file = 'alice/000001.jpg'; },
     (t) => { t.policy.resultHoldMs = 10_000; },
+    (t) => { t.holds[0].track = 'nobody'; },
   ];
   for (const mutate of refusals) {
     const timeline = base();
@@ -181,6 +183,109 @@ test('processing refuses unguarded frames, short holds, unsafe labels and stray 
     assert.notDeepEqual(validateTimeline(timeline, '/run', exists), [], `expected a refusal for ${mutate}`);
   }
   assert.notDeepEqual(validateTimeline(base(), '/run', () => false), [], 'a missing frame file refuses');
+});
+
+test('processing refuses a tap whose screen was never held, and an unrecorded reversal', () => {
+  const tracks = ['alice', 'alice-window-1'].map((dir) => ({
+    name: dir, dir, wallet: 'alice', role: dir === 'alice' ? 'main' : 'secondary', startedAt: 0, endedAt: null,
+    segments: [{ from: 0, to: 10, verdict: 'clean', file: `${dir}/000000.jpg` }],
+  }));
+  let at = 0;
+  const hold = (kind, label, track = 'alice', extra = {}) => {
+    at += 1_000;
+    const ms = { tap: 6_000, type: 6_000, close: 6_000, settled: 12_000, result: 25_000 }[kind];
+    return { kind, label, track, from: at, to: at + ms, ms, ...extra };
+  };
+  const timeline = (holds, exceptions = []) => ({
+    area: 'G-premium', schema: 1, startedAt: 0, endedAt: 600_000,
+    policy: { tapPauseMs: 6_000, settledHoldMs: 12_000, resultHoldMs: 25_000 }, tracks, holds, exceptions, marks: [],
+  });
+  const ok = (holds, exceptions) => validateTimeline(timeline(holds, exceptions), '/run', () => true);
+
+  // Every tap's screen is held before the next action on that window; typing
+  // fills a field on a held screen; another window does not count.
+  assert.deepEqual(ok([
+    hold('tap', 'Send'), hold('settled', 'Recipient entry'), hold('type', 'Enter the address'),
+    hold('tap', 'Continue'), hold('tap', 'Open the checkout', 'alice-window-1'),
+    hold('settled', 'Checkout loaded', 'alice-window-1'), hold('settled', 'Amount entry'),
+    hold('close', 'Close the checkout', 'alice-window-1'),
+  ]), []);
+  // A pause taken after its tap is admitted only with its recorded exception.
+  const sent = hold('tap', 'Send the payment');
+  const kept = hold('tap', 'Keep the receipt on screen', 'alice', { after: true });
+  const shown = hold('result', 'Payment broadcast');
+  const exception = { label: kept.label, track: 'alice', at: kept.from, rule: 'pause-after-tap' };
+  assert.deepEqual(ok([sent, kept, shown], [exception]), []);
+
+  const refusals = [
+    [[hold('tap', 'Go to Home'), hold('tap', 'Back to the top of Home'), hold('settled', 'Home')]],
+    [[hold('tap', 'Send'), hold('type', 'Enter the address'), hold('settled', 'Recipient entry')]],
+    [[hold('settled', 'Feed'), hold('tap', 'Get premium')]],
+    [[hold('tap', 'Open the checkout again', 'alice-window-1'), hold('close', 'Close the checkout', 'alice-window-1')]],
+    [[sent, kept, shown]],
+    [[sent, kept, shown], [{ ...exception, rule: 'whenever' }]],
+    [[hold('settled', 'Feed', 'alice', { after: true })]],
+  ];
+  for (const [holds, exceptions] of refusals) {
+    assert.notDeepEqual(ok(holds, exceptions), [], `expected a refusal for ${holds.map((h) => h.label).join(' then ')}`);
+  }
+});
+
+test('an observation waits its full length unrecorded, and a timed control is tapped at once', async () => {
+  const browser = await chromium.launch({ channel: 'chromium' });
+  try {
+    const page = await browser.newPage();
+    const footage = new GuardedFootage({ recording: false });
+    await page.setContent('<div id="root"><p>Feed</p></div>');
+    let begun = Date.now();
+    await footage.observe(page, 1_500, 'No further automatic checks');
+    assert.ok(Date.now() - begun >= 1_500, 'an unrecorded observation was cut short');
+
+    // The control removes itself on a timer, faster than the usual pause before a tap.
+    await page.setContent(`<div id="root"><button id="stay">Stay on this screen</button></div>
+      <script>
+        document.getElementById('stay').onclick = () => { window.kept = true; };
+        setTimeout(() => document.getElementById('stay')?.remove(), 300);
+      </script>`);
+    begun = Date.now();
+    assert.equal(await footage.tapThenHold(page.getByRole('button', { name: 'Stay on this screen' }), 'Keep the receipt on screen'), true);
+    assert.equal(await page.evaluate(() => window.kept === true), true, 'the timed control was not tapped');
+    await page.waitForTimeout(500);
+    begun = Date.now();
+    assert.equal(await footage.tapThenHold(page.getByRole('button', { name: 'Stay on this screen' }), 'Keep the receipt on screen'), false);
+    assert.ok(Date.now() - begun < 2_500, 'a vanished control must not be waited for');
+    await footage.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('the lane config refuses a purchase that is not pinned, bounded and on its own wallet', () => {
+  const backend = 'https://api.example.org/api/v1';
+  const buy = { E2E_LIVE_MONEY: '1', E2E_PREMIUM_PURCHASE: '1', G_PREMIUM_CHECKOUT_HOST: 'pay.example.net' };
+  const browse = premiumLaneConfig({}, backend);
+  assert.equal(browse.browse, 'carol');
+  assert.equal(browse.purchase, null);
+  const purchase = premiumLaneConfig(buy, backend).purchase;
+  assert.equal(purchase.wallet, 'alice');
+  assert.equal(purchase.checkoutHost, 'pay.example.net');
+  assert.equal(purchase.postApproved, false);
+  assert.equal(premiumLaneConfig({ ...buy, G_PREMIUM_PURCHASE_WALLET: 'bob' }, backend).purchase.wallet, 'bob');
+  for (const env of [
+    { E2E_LIVE_MONEY: '1', E2E_PREMIUM_PURCHASE: '1' },
+    { ...buy, G_PREMIUM_CHECKOUT_HOST: 'https://pay.example.net/' },
+    { ...buy, G_PREMIUM_CHECKOUT_HOST: 'api.example.org' },
+    { ...buy, G_PREMIUM_PURCHASE_WALLET: 'carol' },
+    { ...buy, G_PREMIUM_PURCHASE_WALLET: 'mallory' },
+    { ...buy, G_PREMIUM_MAX_LTC: '0.123456789' },
+    { ...buy, G_PREMIUM_MAX_USD: 'lots' },
+    { E2E_PREMIUM_PURCHASE: '1' },
+    { E2E_PREMIUM_POST: '1' },
+    { G_PREMIUM_BROWSE_WALLET: 'dave' },
+  ]) {
+    assert.throws(() => premiumLaneConfig(env, backend), (error) => !Object.values(env).some((v) => v.length > 3 && error.message.includes(v)),
+      `expected a refusal that echoes no value for ${Object.keys(env).join(', ')}`);
+  }
 });
 
 test('the window lane follows the window acted on most recently', () => {
@@ -209,7 +314,7 @@ test('the live spec acts only through the footage helpers, with static labels', 
   const allowed = code.match(/footage\.(tap|type)\(/g) ?? [];
   assert.equal(direct.length, allowed.length, 'a live spec acts on the page only through footage.tap and footage.type');
   const literal = String.raw`(?:'[^'\n]*'|\w+ === '[^'\n]*' \? '[^'\n]*' : '[^'\n]*')`;
-  for (const call of code.matchAll(/footage\.(tap|type|closePage|settled|result)\(([^;]*?)\);/gs)) {
+  for (const call of code.matchAll(/footage\.(tap|tapThenHold|type|closePage|settled|result|observe)\(([^;]*?)\);/gs)) {
     assert.match(call[2].trim(), new RegExp(`,\\s*${literal}\\s*,?$`), `footage.${call[1]} needs a literal label: ${call[2].slice(0, 60)}`);
   }
   for (const call of code.matchAll(/footage\.(mark|secret)\(\s*([^,]+),/g)) {

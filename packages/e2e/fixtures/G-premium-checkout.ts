@@ -1,13 +1,14 @@
 /**
  * Premium-purchase helpers for the G-premium live lane: the backend's premium
- * capability, the wallet's remembered invoice, the feed's posting state, and
- * reading a Litecoin payment request from the owner's BTCPay checkout.
+ * capability, the wallet's remembered invoice, the feed's posting state,
+ * reading a Litecoin payment request from the owner's BTCPay checkout, and
+ * reading a payment back from the wallet's balance and history.
  *
  * Nothing here prints. The wallet fingerprint that scopes the remembered
  * invoice is resolved inside the extension page and never reaches Node.
  */
 
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { BACKEND_URL } from './extension.js';
 import type { GuardedFootage } from './G-premium-footage.js';
 
@@ -34,11 +35,39 @@ export async function premiumCapabilities(): Promise<PremiumCaps> {
  */
 const PLAN_NAMES: Readonly<Record<string, string>> = { founding: 'Founding member', year: 'Standard', standard: 'Standard' };
 
+export function expectedPlanName(plan: PremiumPlan): string {
+  const fromBackend = plan.label?.trim();
+  if (fromBackend) return fromBackend;
+  const known = PLAN_NAMES[plan.id.trim().toLowerCase()];
+  if (known) return known;
+  const words = plan.id.replace(/[-_]+/g, ' ').trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : 'Plan';
+}
+
 export function expectedPlanLabel(plan: PremiumPlan, currency: string): string {
-  const name = plan.label?.trim() || PLAN_NAMES[plan.id.toLowerCase()] || plan.id;
-  const period = plan.days % 365 === 0 ? (plan.days === 365 ? '1 year' : `${plan.days / 365} years`)
+  const period = plan.days > 0 && plan.days % 365 === 0 ? (plan.days === 365 ? '1 year' : `${plan.days / 365} years`)
     : plan.days === 1 ? '1 day' : `${plan.days} days`;
-  return `${name}, ${period}, ${plan.amount} ${currency}`;
+  return `${expectedPlanName(plan)}, ${period}, ${plan.amount} ${currency}`.trim();
+}
+
+/**
+ * The payment methods the wallet offers, restated from core/src/premium-purchase.ts:
+ * none advertised is one unnamed method (no rail element at all); one is named
+ * "Pays in <assets>"; more than one is a "Pay with" choice, first selected.
+ */
+export function expectedRails(rails: PremiumRail[] | undefined): Array<{ id: string | null; label: string }> {
+  if (!rails || rails.length === 0) return [{ id: null, label: 'Pay' }];
+  return rails.map((rail) => {
+    const assets = rail.assets.map((a) => a.trim().toUpperCase()).filter(Boolean);
+    return { id: rail.id, label: assets.length ? assets.join(' · ') : rail.id };
+  });
+}
+
+/** The cheapest advertised plan: the only one the purchase lane will pay for. */
+export function cheapestPlan(plans: PremiumPlan[]): PremiumPlan {
+  const priced = plans.filter((p) => /^\d+(\.\d+)?$/.test(p.amount) && Number(p.amount) > 0);
+  if (priced.length === 0) throw new Error('The backend advertises no plan with a plain positive price.');
+  return priced.reduce((low, p) => (Number(p.amount) < Number(low.amount) ? p : low));
 }
 
 // ── the wallet's remembered invoice (chrome.storage.local) ──────────────────
@@ -89,11 +118,17 @@ export async function rememberInvoice(page: Page, pending: PendingInvoice): Prom
 
 // ── navigation and feed state ───────────────────────────────────────────────
 
-/** A tab tap restores that tab's last sub-screen; a second tap returns to its root. */
-export async function tabRoot(page: Page, footage: GuardedFootage, tab: 'home' | 'feed', label: string): Promise<void> {
-  const target = page.getByTestId(`nav-tab-${tab}`);
-  await footage.tap(target, label);
-  if (tab === 'home') await footage.tap(target, 'Back to the top of Home');
+/**
+ * The top of Home. A tab tap restores that tab's last sub-screen, so it is
+ * held, then a second tap returns to the root, which is held too.
+ */
+export async function goHome(page: Page, footage: GuardedFootage): Promise<void> {
+  const home = page.getByTestId('nav-tab-home');
+  await footage.tap(home, 'Go to Home');
+  await footage.settled(page, 'Home tab');
+  await footage.tap(home, 'Back to the top of Home');
+  await expect(page.getByTestId('home-total-balance')).toBeVisible({ timeout: 60_000 });
+  await footage.settled(page, 'Top of Home');
 }
 
 export type PostingState = 'composer' | 'needs-premium';
@@ -198,12 +233,53 @@ function findLitecoinUri(value: unknown, depth = 0): LitecoinRequest | null {
   return null;
 }
 
+/** The checkout's own status endpoint for this invoice, on the pinned host only. */
+async function litecoinRequestFromStatus(checkout: Page, checkoutHost: string, invoiceId: string): Promise<LitecoinRequest | null> {
+  const origin = `https://${checkoutHost}`;
+  const id = encodeURIComponent(invoiceId);
+  for (const path of [
+    `/i/${id}/status?paymentMethodId=LTC-CHAIN`,
+    `/i/${id}/status?paymentMethodId=LTC`,
+    `/i/${id}/LTC/status`,
+    `/invoice/status?invoiceId=${id}&paymentMethodId=LTC`,
+  ]) {
+    const res = await checkout.request.get(`${origin}${path}`, { failOnStatusCode: false, timeout: 20_000, maxRedirects: 0 })
+      .catch(() => null);
+    if (!res?.ok()) continue;
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object') continue;
+    // A status for some other invoice is never this invoice's request.
+    if (typeof body.invoiceId === 'string' && body.invoiceId !== invoiceId) {
+      throw new Error('The checkout status endpoint answered for a different invoice; refusing to pay.');
+    }
+    const found = findLitecoinUri(body);
+    if (found) return found;
+  }
+  return null;
+}
+
 /**
  * The Litecoin address and amount the owner's checkout asks for this invoice.
- * First the checkout page itself (choosing Litecoin there if it is not the
- * default), then the checkout's own status endpoint for the same invoice.
+ *
+ * Funds go only to the owner's own BTCPay checkout, so this fails closed: the
+ * checkout must be open on the pinned host, the page itself must show a
+ * Litecoin payment link (choosing Litecoin there if it is not the default),
+ * and the checkout's own status endpoint for the same invoice, asked on the
+ * same pinned host, must name exactly the same address and amount.
  */
-export async function readLitecoinRequest(checkout: Page, footage: GuardedFootage, invoiceId: string): Promise<LitecoinRequest> {
+export async function readLitecoinRequest(
+  checkout: Page,
+  footage: GuardedFootage,
+  invoiceId: string,
+  checkoutHost: string,
+): Promise<LitecoinRequest> {
+  const onPinnedHost = (): void => {
+    const here = new URL(checkout.url());
+    if (here.protocol !== 'https:' || here.host !== checkoutHost) {
+      throw new Error('The checkout is not open on the pinned owner BTCPay host (G_PREMIUM_CHECKOUT_HOST); refusing to read a payment request from it.');
+    }
+  };
+  onPinnedHost();
   const fromPage = async (): Promise<LitecoinRequest | null> => {
     const links = await checkout.locator('a[href^="litecoin:" i]')
       .evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute('href') ?? ''));
@@ -213,8 +289,7 @@ export async function readLitecoinRequest(checkout: Page, footage: GuardedFootag
     }
     return null;
   };
-  let found = await fromPage();
-  if (!found) {
+  if (!(await fromPage())) {
     const choice = checkout.getByRole('link', { name: /^\s*(LTC|Litecoin)\b/i })
       .or(checkout.getByRole('button', { name: /^\s*(LTC|Litecoin)\b/i }))
       .or(checkout.getByRole('tab', { name: /^\s*(LTC|Litecoin)\b/i }))
@@ -223,37 +298,39 @@ export async function readLitecoinRequest(checkout: Page, footage: GuardedFootag
       await footage.tap(choice, 'Choose Litecoin at the checkout');
       await footage.settled(checkout, 'Litecoin chosen at the checkout');
     }
-    const deadline = Date.now() + 30_000;
-    while (!found && Date.now() < deadline) {
-      found = await fromPage();
-      if (!found) await checkout.waitForTimeout(1_000);
-    }
+    await expect.poll(fromPage, {
+      timeout: 30_000,
+      message: 'the checkout page never showed a Litecoin payment link',
+    }).not.toBeNull();
   }
-  if (!found) {
-    const origin = new URL(checkout.url()).origin;
-    const id = encodeURIComponent(invoiceId);
-    for (const path of [
-      `/i/${id}/status?paymentMethodId=LTC-CHAIN`,
-      `/i/${id}/status?paymentMethodId=LTC`,
-      `/i/${id}/LTC/status`,
-      `/invoice/status?invoiceId=${id}&paymentMethodId=LTC`,
-    ]) {
-      const res = await checkout.request.get(`${origin}${path}`, { failOnStatusCode: false, timeout: 20_000 }).catch(() => null);
-      if (!res?.ok()) continue;
-      found = findLitecoinUri(await res.json().catch(() => null));
-      if (found) break;
-    }
+  onPinnedHost();
+  const onPage = await fromPage();
+  if (!onPage) throw new Error('The checkout page shows no Litecoin payment link for this invoice.');
+  const status = await litecoinRequestFromStatus(checkout, checkoutHost, invoiceId);
+  if (!status) {
+    throw new Error("The checkout's own status endpoint gave no Litecoin payment request for this invoice; refusing to pay on the page's word alone.");
   }
-  if (!found) throw new Error('The checkout offered no readable Litecoin payment request for this invoice.');
-  return found;
+  if (status.address !== onPage.address) {
+    throw new Error('The checkout page and its status endpoint name different Litecoin addresses; refusing to pay either.');
+  }
+  if (toLitoshi(status.amount) !== toLitoshi(onPage.amount)) {
+    throw new Error('The checkout page and its status endpoint ask different amounts; refusing to pay either.');
+  }
+  return onPage;
 }
 
 // ── balances ────────────────────────────────────────────────────────────────
 
 export interface AssetBalance { amount: number | null; usd: number | null }
 
-/** A Home asset row: the coin amount and, when prices load, its USD value. */
-export async function readAssetBalance(page: Page, asset: 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin'): Promise<AssetBalance> {
+type AssetId = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
+
+/**
+ * A Home asset row: the coin amount and, when prices load, its USD value. The
+ * row is cut to the asset's display decimals (4 for LTC), never rounded up, so
+ * it can only understate a balance; the asset detail has full precision.
+ */
+export async function readAssetBalance(page: Page, asset: AssetId): Promise<AssetBalance> {
   const amountText = (await page.getByTestId(`asset-row-${asset}-balance`).textContent({ timeout: 60_000 })) ?? '';
   const rowText = (await page.getByTestId(`asset-row-${asset}`).innerText({ timeout: 60_000 })) ?? '';
   const amount = /(\d[\d,]*(?:\.\d+)?)/.exec(amountText.replace(/\s/g, ''));
@@ -262,4 +339,68 @@ export async function readAssetBalance(page: Page, asset: 'btc' | 'ltc' | 'xmr' 
     amount: amount ? Number(amount[1]!.replace(/,/g, '')) : null,
     usd: usd ? Number(usd[1]!.replace(/,/g, '')) : null,
   };
+}
+
+/** The Home row once it shows a number; it shows a dash while loading. */
+export async function waitForAssetBalance(page: Page, asset: AssetId): Promise<{ amount: number; usd: number | null }> {
+  await expect.poll(async () => (await readAssetBalance(page, asset)).amount, {
+    timeout: 5 * 60_000,
+    message: `the ${asset.toUpperCase()} row never showed a balance`,
+  }).not.toBeNull();
+  const read = await readAssetBalance(page, asset);
+  if (read.amount === null) throw new Error(`The ${asset.toUpperCase()} row stopped showing a balance.`);
+  return { amount: read.amount, usd: read.usd };
+}
+
+async function readDetailBalance(page: Page): Promise<string | null> {
+  const text = ((await page.getByTestId('asset-detail-balance').textContent().catch(() => null)) ?? '').replace(/\s+/g, ' ').trim();
+  return /^(\d+(?:\.\d{1,12})?) [A-Z]+$/.exec(text)?.[1] ?? null;
+}
+
+/**
+ * The asset detail's confirmed balance at full precision (8 decimals for LTC),
+ * as the exact decimal it shows, once it shows one (never while hidden).
+ */
+export async function waitForDetailBalance(page: Page): Promise<string> {
+  await expect.poll(() => readDetailBalance(page), {
+    timeout: 5 * 60_000,
+    message: 'the asset detail never showed a balance',
+  }).not.toBeNull();
+  const value = await readDetailBalance(page);
+  if (value === null) throw new Error('The asset detail stopped showing a balance.');
+  return value;
+}
+
+// ── history and activation ──────────────────────────────────────────────────
+
+/** How an activity row shortens a transaction id (AssetDetailScreen truncId). */
+export function shortTxid(txid: string): string {
+  return txid.length <= 14 ? txid : `${txid.slice(0, 6)}…${txid.slice(-6)}`;
+}
+
+/**
+ * The activity row for this transaction on an asset detail. A chain row names
+ * its id through a "Copy transaction ID" control; a still-pending local row
+ * names the recipient instead, so only a row the history reports matches.
+ */
+export function activityRow(page: Page, txid: string): Locator {
+  const id = page.locator('button[aria-label="Copy transaction ID"]', { hasText: shortTxid(txid) });
+  return page.locator('button', { has: id }).first();
+}
+
+/** Where to tap a row so it opens its detail rather than copying its id. */
+export function rowOpener(row: Locator): Locator {
+  return row.locator(':scope > span').first();
+}
+
+/** The `premium_until` an activation answer granted, as epoch ms, or null. */
+export function premiumUntilOf(body: string): number | null {
+  try {
+    const parsed = JSON.parse(body) as { premium_until?: unknown; data?: { premium_until?: unknown } };
+    const until = parsed.premium_until ?? parsed.data?.premium_until;
+    const at = typeof until === 'string' ? Date.parse(until) : Number.NaN;
+    return Number.isFinite(at) ? at : null;
+  } catch {
+    return null;
+  }
 }
