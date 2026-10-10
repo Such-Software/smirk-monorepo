@@ -24,7 +24,12 @@ import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult } fr
  * NOTE: this reporter only runs when it is REGISTERED. Passing `--reporter` overrides are refused by preflight. The private reporter and
  * this skip guard are both required; generic reporters can disclose secrets.
  */
-const EXPECTED_SKIPS: { match: string; reason: string }[] = [
+const EXPECTED_SKIPS: {
+  match: string;
+  reason: string;
+  /** When set, only a skip whose own reason matches is excused; any other skip in that file still fails the run. */
+  skipReason?: RegExp;
+}[] = [
   {
     match: 'feed.spec',
     reason: 'requires a backend advertising the Nostr feed capability',
@@ -48,6 +53,15 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
   {
     match: 'marketing-shots.spec',
     reason: 'legacy capture is closed; wallet secret flows must not produce store artifacts',
+  },
+  // The F-legacy-recovery live lane (F-legacy-recovery.live.config.ts). Its tests
+  // skip only when an owner approval is not given ("opt-in: ") or the fixture
+  // they need does not exist ("no fixture: ", e.g. no stuck old-server claim).
+  // Any other skip there, such as a funder short of coins, is not excused.
+  {
+    match: 'f-legacy-recovery.live.spec',
+    skipReason: /^(opt-in|no fixture): /,
+    reason: 'live lane: an owner approval not given, or a legacy fixture that does not exist',
   },
 ];
 
@@ -109,6 +123,7 @@ export default class SkipGuardReporter implements Reporter {
 
   onTestEnd(test: TestCase, result: TestResult): void {
     if (result.status === 'skipped') {
+      // A runtime `test.skip(condition, reason)` records its reason as a 'skip' annotation.
       this.skipped.push({ title: test.title, file: test.location.file, reason: skipReason(test, result) });
     } else {
       this.executed += 1;
@@ -118,7 +133,9 @@ export default class SkipGuardReporter implements Reporter {
   async onEnd(result: FullResult): Promise<{ status: FullResult['status'] } | void> {
     const byReason = (s: { reason: string }) => this.prefixes.some((p) => s.reason.startsWith(p));
     const unexpected = this.skipped.filter(
-      (s) => !EXPECTED_SKIPS.some((e) => s.file.includes(e.match)) && !byReason(s),
+      (s) =>
+        !EXPECTED_SKIPS.some((e) => s.file.includes(e.match) && (!e.skipReason || e.skipReason.test(s.reason))) &&
+        !byReason(s),
     );
     const chosen = this.skipped.filter((s) => byReason(s));
     if (chosen.length) {

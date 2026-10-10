@@ -2,24 +2,31 @@
 /**
  * Encode the F-legacy-recovery guarded footage into video, at 1.0x.
  *
- * Input: <run>/raw/F-legacy-recovery/<wallet>/timeline.json and its frames,
- * written by fixtures/F-legacy-recovery-footage.ts. Output, beside it in
- * <run>/F-legacy-recovery/ (mode 0700): one MP4 per wallet page and
- * CHAPTERS.md. Nothing is trimmed, sped up or uploaded: every hold the run
- * recorded plays for its full length, and redacted spans play as a static
- * labelled card for exactly as long as they lasted.
+ * Input: every session under <run>/raw/F-legacy-recovery/<wallet>/<session>/
+ * (timeline.json and its frames, written by fixtures/F-legacy-recovery-footage.ts;
+ * one session per wallet import, so a restarted worker or a later invocation
+ * adds a session instead of replacing one). A timeline directly under
+ * <wallet>/ (the earlier layout) is read as one more session. Output, beside
+ * it in <run>/F-legacy-recovery/ (mode 0700): one MP4 per session page, named
+ * <wallet>-<session>[-page-N].mp4, and CHAPTERS.md. Nothing is trimmed, sped up
+ * or uploaded: every hold the run recorded plays for its full length, and
+ * redacted spans play as a static labelled card for exactly as long as they
+ * lasted.
  *
  * Refuses, before encoding anything:
  *   - a frame without a guard verdict (kind clean or mask, with reasons), or a
  *     missing frame file;
  *   - a hold shorter than the owner's policy (pre-tap 6 s, settled 12 s,
  *     result 25 s), or a timeline whose recorded policy is weaker;
+ *   - a step (tap, typed value, toggle, choice, redacted step) without its
+ *     still pause before it, or whose resulting screen was not held before the
+ *     next step began: a screen the run passed through must not flash by;
  *   - a marker label that looks like a value (a URL, a long number or hex).
  *
  * Usage: node packages/e2e/scripts/F-legacy-recovery-encode.mjs [--run <dir>] [--font <ttf>]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -50,13 +57,28 @@ export function auditTimeline(timeline, walletDir) {
     const key = { 'pre-tap': 'tapPauseMs', settled: 'settledHoldMs', result: 'resultHoldMs' }[kind];
     if (!(timeline.policy?.[key] >= min)) problems.push(`recorded policy ${key} is below ${min} ms`);
   }
-  for (const hold of timeline.holds ?? []) {
+  const holds = timeline.holds ?? [];
+  for (const hold of holds) {
     const min = POLICY[hold.kind];
     if (min === undefined) problems.push(`unknown hold kind ${String(hold.kind).slice(0, 20)}`);
     else if (!(hold.plannedMs >= min) || !(hold.until - hold.from >= min - TOLERANCE_MS)) {
       problems.push(`a ${hold.kind} hold lasted ${hold.until - hold.from} ms, below the ${min} ms policy`);
     }
   }
+  if (timeline.policy?.holdAfterEveryStep !== true || !Array.isArray(timeline.steps)) {
+    problems.push('the timeline does not record a held screen after every step');
+  }
+  const steps = timeline.steps ?? [];
+  steps.forEach((step, i) => {
+    const what = `step ${i} (${String(step.kind).slice(0, 10)})`;
+    if (step.kind !== 'secret' && !holds.some((h) => h.kind === 'pre-tap' && h.from >= step.from - TOLERANCE_MS && h.until <= step.until + TOLERANCE_MS)) {
+      problems.push(`${what} had no still pause before it`);
+    }
+    const next = steps[i + 1]?.from ?? Number.POSITIVE_INFINITY;
+    if (!holds.some((h) => (h.kind === 'settled' || h.kind === 'result') && h.from >= step.until - TOLERANCE_MS && h.from < next)) {
+      problems.push(`the screen after ${what} was not held before the next step`);
+    }
+  });
   for (const page of timeline.pages ?? []) {
     for (const frame of page.frames ?? []) {
       if (!['clean', 'mask'].includes(frame.kind) || !Array.isArray(frame.reasons)) {
@@ -83,6 +105,39 @@ export function segments(page, pageDir, cardImage) {
     const end = next ? next.from : e.until + 1_000;
     return { image: e.image, seconds: Math.max(1 / FPS, (end - e.from) / 1000), from: e.from };
   });
+}
+
+/**
+ * Every recorded session, oldest first: <wallet>/<session>/timeline.json, plus
+ * a timeline directly under <wallet>/ from the earlier single-session layout.
+ * Names are path segments the recorder chose (wallet, time, worker, process).
+ */
+export function sessionsUnder(raw) {
+  const out = [];
+  for (const wallet of readdirSync(raw).sort()) {
+    const walletDir = join(raw, wallet);
+    if (!statSync(walletDir).isDirectory()) continue;
+    if (existsSync(join(walletDir, 'timeline.json'))) out.push({ wallet, name: wallet, dir: walletDir });
+    for (const session of readdirSync(walletDir).sort()) {
+      const dir = join(walletDir, session);
+      if (statSync(dir).isDirectory() && existsSync(join(dir, 'timeline.json'))) out.push({ wallet, name: `${wallet}-${session}`, dir });
+    }
+  }
+  return out;
+}
+
+/** Width and height from a JPEG's start-of-frame marker. */
+export function jpegSize(bytes) {
+  let at = 2;
+  while (at + 9 < bytes.length) {
+    if (bytes[at] !== 0xff) throw new Error('not a JPEG frame');
+    const marker = bytes[at + 1];
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return { height: bytes.readUInt16BE(at + 5), width: bytes.readUInt16BE(at + 7) };
+    }
+    at += 2 + bytes.readUInt16BE(at + 2);
+  }
+  throw new Error('JPEG frame has no size');
 }
 
 const pad = (n, w = 2) => String(n).padStart(w, '0');
@@ -130,30 +185,36 @@ function main() {
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { mode: 0o700 });
 
-  const wallets = readdirSync(raw).filter((d) => existsSync(join(raw, d, 'timeline.json')));
-  const timelines = wallets.map((wallet) => ({ wallet, timeline: JSON.parse(readFileSync(join(raw, wallet, 'timeline.json'), 'utf8')) }));
-  const problems = timelines.flatMap(({ wallet, timeline }) => auditTimeline(timeline, join(raw, wallet)).map((p) => `${wallet}: ${p}`));
+  const timelines = sessionsUnder(raw).map((s) => ({ ...s, timeline: JSON.parse(readFileSync(join(s.dir, 'timeline.json'), 'utf8')) }));
+  if (timelines.length === 0) throw new Error('no F-legacy-recovery timeline under this run');
+  const problems = timelines.flatMap(({ name, timeline, dir }) => auditTimeline(timeline, dir).map((p) => `${name}: ${p}`));
   if (problems.length) throw new Error(`refusing to encode:\n  ${problems.join('\n  ')}`);
 
   const escape = (text) => text.replace(/\\/g, '\\\\').replace(/'/g, '’').replace(/:/g, '\\:');
+  // Cards match the page's frame size and pixel format: a change of either
+  // mid-stream re-creates ffmpeg's filter graph, which drops the frames
+  // around it and freezes the caption and clock over a hold.
   const cards = new Map();
-  const cardImage = (label) => {
-    if (!cards.has(label)) {
+  const cardFor = (size) => (label) => {
+    const key = `${size.width}x${size.height}|${label}`;
+    if (!cards.has(key)) {
       const file = join(work, `card-${cards.size}.jpg`);
-      ffmpeg(['-f', 'lavfi', '-i', 'color=c=0x101014:s=760x1200', '-frames:v', '1', '-vf',
-        `drawtext=fontfile='${font}':text='${escape(label)}':fontcolor=0xdddddd:fontsize=34:x=(w-text_w)/2:y=(h-text_h)/2`, file]);
-      cards.set(label, file);
+      ffmpeg(['-f', 'lavfi', '-i', `color=c=0x101014:s=${size.width}x${size.height}`, '-frames:v', '1', '-vf',
+        `drawtext=fontfile='${font}':text='${escape(label)}':fontcolor=0xdddddd:fontsize=${Math.round(size.width / 22)}:x=(w-text_w)/2:y=(h-text_h)/2,format=yuvj420p`, file]);
+      cards.set(key, file);
     }
-    return cards.get(label);
+    return cards.get(key);
   };
 
   const chapters = ['# F-legacy-recovery footage', '', `Run: ${timelines[0]?.timeline.run ?? 'unknown'}`, ''];
-  for (const { wallet, timeline } of timelines) {
+  for (const { wallet, name, dir, timeline } of timelines) {
     timeline.pages.forEach((page, index) => {
-      const list = segments(page, join(raw, wallet, page.dir), cardImage);
+      const first = page.frames?.[0];
+      const size = first ? jpegSize(readFileSync(join(dir, page.dir, first.file))) : { width: 760, height: 1200 };
+      const list = segments(page, join(dir, page.dir), cardFor(size));
       if (list.length === 0) return;
       const start = list[0].from;
-      const concat = join(work, `${wallet}-${index}.txt`);
+      const concat = join(work, `${name}-${index}.txt`);
       const lines = ['ffconcat version 1.0'];
       for (const s of list) lines.push(`file '${s.image}'`, `duration ${s.seconds.toFixed(3)}`);
       // The concat demuxer only honours the last duration when another entry follows it.
@@ -163,11 +224,11 @@ function main() {
       // The fps filter pads past the last image at end of input; cap at the recorded length.
       const total = list.reduce((sum, s) => sum + s.seconds, 0);
       const marks = (timeline.marks ?? []).filter((m) => m.at >= start);
-      const captions = join(work, `${wallet}-${index}.ass`);
+      const captions = join(work, `${name}-${index}.ass`);
       writeFileSync(captions, captionsAss(marks, start, total * 1000, 1200 + BAR), { mode: 0o600 });
 
       // A text file keeps the clock's own escaping away from the filtergraph's.
-      const clockText = join(work, `${wallet}-${index}-clock.txt`);
+      const clockText = join(work, `${name}-${index}-clock.txt`);
       writeFileSync(clockText, `${wallet}  %{pts:gmtime:${Math.floor(start / 1000)}:%Y-%m-%d %H\\:%M\\:%S} UTC`, { mode: 0o600 });
       // Caption bar: the operation on the first line, wallet and UTC clock on the second.
       const clock = `drawtext=fontfile='${font}':fontcolor=0xf5c542:fontsize=24:x=16:y=h-40:textfile='${clockText}'`;
@@ -179,11 +240,14 @@ function main() {
         clock,
         'format=yuv420p',
       ].join(',');
-      const file = join(out, `${wallet}${index ? `-page-${index}` : ''}.mp4`);
+      const file = join(out, `${name}${index ? `-page-${index}` : ''}.mp4`);
+      // Constant frame rate: without it the muxer may keep one frame for a long
+      // static hold, so the burned-in caption and clock freeze and players and
+      // editors that seek by frame skip the dead air.
       ffmpeg(['-f', 'concat', '-safe', '0', '-i', concat, '-vf', graph, '-t', total.toFixed(3),
-        '-c:v', 'libx264', '-crf', '20', '-movflags', '+faststart', file]);
+        '-fps_mode', 'cfr', '-r', String(FPS), '-c:v', 'libx264', '-crf', '20', '-movflags', '+faststart', file]);
 
-      chapters.push(`## ${wallet}${index ? ` (page ${index})` : ''}`, '');
+      chapters.push(`## ${name}${index ? ` (page ${index})` : ''}`, '');
       let lastTest = null;
       for (const m of marks) {
         if (m.test === lastTest) continue;
@@ -195,7 +259,7 @@ function main() {
   }
   writeFileSync(join(out, 'CHAPTERS.md'), `${chapters.join('\n')}\n`, { mode: 0o600 });
   rmSync(work, { recursive: true, force: true });
-  console.log(`Encoded ${timelines.length} wallet timeline(s) into ${out}.`);
+  console.log(`Encoded ${timelines.length} wallet session timeline(s) into ${out}.`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

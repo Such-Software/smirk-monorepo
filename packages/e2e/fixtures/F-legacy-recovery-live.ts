@@ -1,57 +1,76 @@
 /**
  * Live wallets for the F-legacy-recovery lane (older addresses, the move flow
- * and old-server tips) against a real backend.
+ * and old-server tips) against a real backend. Gates, preflight, evidence and
+ * the wallet lock live in `F-legacy-recovery-lane.mjs`.
  *
  * WALLET CUSTODY. The demo wallets' phrases are read in-process, one named line
  * at a time, from the owner-only custody file named by `E2E_WALLET_FILE` (the
  * same rules as `demo/capture-demo.mjs` readWalletPhrase: a regular 0600 file
  * owned by this user, exactly one assignment, 12 or 24 lowercase words). The
  * file is never sourced into the environment: that would hand the phrases to
- * every child process, browsers included, so this fixture refuses to start
- * when any SMOKE_*_MNEMONIC variable is set, and launches each browser with an
+ * every child process, browsers included, so this lane refuses to start when
+ * any SMOKE_*_MNEMONIC variable is set, and launches each browser with an
  * environment stripped of secret-looking names.
  *
  * Each wallet gets its own persistent Chromium profile under a 0700 scratch
- * directory, a random password that lives only in this process, and its own
- * footage. The words are digested into the footage canary and then blanked.
- * Profiles are deleted when the worker ends.
+ * directory, a random password that lives only in this process, its own
+ * footage session and a lock (no other live run may open it meanwhile). The
+ * words are digested into the footage canary and then blanked. Profiles are
+ * deleted when the worker ends.
+ *
+ * WAITS. Every element wait and action is bounded (`ACTION_TIMEOUT_MS` unless a
+ * longer, named patience applies), so a missing screen fails with its cause
+ * instead of recording one screen until the test timeout. Nothing sleeps.
  *
  * NETWORK EVIDENCE. Each context records method, host, path and status of the
  * wallet page's own requests (never query strings or bodies: LWS requests carry
- * view keys). One helper reads a broadcast response for its txid only.
+ * view keys). Two helpers read one field of one response: a UTXO broadcast's
+ * txid, and whether an old-server sign-in created a new account (`is_new`).
  */
 
-import { chromium, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
+import { chromium, expect, type BrowserContext, type Locator, type Page, type Response } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test as base } from './private-test.js';
-import { createCanary } from './F-legacy-recovery-guard.mjs';
+import { createCanary, type Canary } from './F-legacy-recovery-guard.mjs';
 import { WalletFootage, type FootageLabel } from './F-legacy-recovery-footage.js';
+import {
+  ACTION_TIMEOUT_MS,
+  LaneEvidence,
+  WALLET_NAMES,
+  acquireWalletLock,
+  assertOwnerOnlyFile,
+  laneGates,
+  lanePreflight,
+  type ReleaseFacts,
+  type WalletName,
+} from './F-legacy-recovery-lane.mjs';
 
-export type WalletName = 'alice' | 'bob' | 'carol';
-export const WALLET_NAMES: readonly WalletName[] = ['alice', 'bob', 'carol'];
+export { WALLET_NAMES, type WalletName };
+
 const WALLET_VARS: Record<WalletName, string> = {
   alice: 'SMOKE_ALICE_MNEMONIC',
   bob: 'SMOKE_BOB_MNEMONIC',
   carol: 'SMOKE_CAROL_MNEMONIC',
 };
 
-/** The whole lane is opt-in; without it the spec declares no tests. */
-export const LIVE = process.env.E2E_LIVE === '1';
-/** Moving real coins needs its own opt-in. */
-export const LIVE_MONEY = process.env.E2E_LIVE_MONEY === '1';
+const GATES = laneGates();
+/** The spec declares its tests only inside this lane's own invocation, with E2E_LIVE=1. */
+export const LIVE = GATES.declared;
 
 const VIEWPORT = { width: 380, height: 600 };
+/** Import, registration and the first full balance refresh. */
 const IMPORT_PATIENCE_MS = 10 * 60_000;
+/** One step of the import wizard. */
+const IMPORT_STEP_MS = 2 * 60_000;
+/** A balance refresh, through slow chains. */
+const BALANCE_PATIENCE_MS = 5 * 60_000;
 
 /** Read exactly one NAME=value phrase line from an owner-only file; never print it. */
 export function readWalletPhrase(file: string, variable: string): string[] {
-  const info = lstatSync(file);
-  if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()) {
-    throw new Error('wallet file must be a regular owner-only (0600) file owned by this user');
-  }
+  assertOwnerOnlyFile(file, 'the wallet custody file');
   const matches = readFileSync(file, 'utf8')
     .split('\n')
     .map((line) => line.match(new RegExp(`^\\s*(?:export\\s+)?${variable}\\s*=\\s*(.*)$`)))
@@ -65,17 +84,6 @@ export function readWalletPhrase(file: string, variable: string): string[] {
   return words;
 }
 
-/** Refuse a run whose environment already carries phrases. */
-function assertPhrasesNotInEnvironment(): void {
-  const leaked = Object.keys(process.env).filter((k) => /^SMOKE_.*MNEMONIC$/.test(k));
-  if (leaked.length) {
-    throw new Error(
-      `refusing: ${leaked.join(', ')} is set in the environment, so every child process (browsers included) ` +
-        'inherits the phrase. Unset it and pass the custody file path in E2E_WALLET_FILE instead.',
-    );
-  }
-}
-
 /** The browser's environment, without anything that looks like a credential. */
 function browserEnvironment(): Record<string, string> {
   const out: Record<string, string> = {};
@@ -85,19 +93,6 @@ function browserEnvironment(): Record<string, string> {
     out[k] = v;
   }
   return out;
-}
-
-function extensionDir(): string {
-  const dir = process.env.EXTENSION_DIST;
-  if (!dir) throw new Error('EXTENSION_DIST must name the unpacked release extension under test.');
-  const manifestPath = join(resolve(dir), 'manifest.json');
-  if (!existsSync(manifestPath)) throw new Error('EXTENSION_DIST has no manifest.json; unpack the release zip there.');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version?: string };
-  const expected = process.env.E2E_EXPECT_VERSION ?? '0.3.1';
-  if (manifest.version !== expected) {
-    throw new Error(`EXTENSION_DIST is version ${manifest.version ?? 'unknown'}, expected ${expected}.`);
-  }
-  return resolve(dir);
 }
 
 /** Method, host, path and status of one response. Never a query or a body. */
@@ -115,6 +110,9 @@ export interface LiveWallet {
   readonly page: Page;
   readonly extensionId: string;
   readonly footage: WalletFootage;
+  /** When this wallet's browser started, and when its import finished with a loaded balance set (ms epoch). */
+  readonly launchedAt: number;
+  readonly importedAt: number;
   /** Responses seen by this wallet's pages since `since` (ms epoch). */
   responses(since: number): NetEvent[];
   /**
@@ -132,39 +130,113 @@ export interface LiveWallet {
   enterSecretText(field: Locator, value: string, submit: Locator, done: Locator, label: FootageLabel): Promise<void>;
   /** Digest a secret value into this wallet's footage canary (the caller drops its copy). */
   guardSecret(value: string): void;
+  /** Open the wallet in a new window of the same profile (recorded and guarded like the first). */
+  openWindow(): Promise<Page>;
+}
+
+/** Resolve with the label of the first promise to settle successfully, or 'timeout'. */
+async function firstOf<K extends string>(waits: Record<K, Promise<unknown>>, timeoutMs: number): Promise<K | 'timeout'> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'timeout'>((r) => {
+    timer = setTimeout(() => r('timeout'), timeoutMs);
+  });
+  const labelled = (Object.entries(waits) as [K, Promise<unknown>][]).map(([label, p]) =>
+    p.then(
+      () => label,
+      () => new Promise<never>(() => {}),
+    ),
+  );
+  try {
+    return await Promise.race([...labelled, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Balances as last refreshed: whether a refresh landed, and which assets came back with an error. Public data only. */
+export async function balanceSnapshotState(page: Page): Promise<{ cachedAt: number; failed: string[]; assets: number } | null> {
+  return page.evaluate(async () => {
+    const area = (globalThis as unknown as { chrome: { storage: { session: { get(k: string): Promise<Record<string, unknown>> } } } }).chrome
+      .storage.session;
+    const raw = (await area.get('smirk_balance_snapshot_v2'))['smirk_balance_snapshot_v2'] as
+      | { cachedAt?: number; balances?: Record<string, { error?: string }> }
+      | undefined;
+    if (!raw || typeof raw.cachedAt !== 'number' || !raw.balances) return null;
+    const assets = Object.keys(raw.balances);
+    return { cachedAt: raw.cachedAt, failed: assets.filter((k) => !!raw.balances?.[k]?.error), assets: assets.length };
+  });
+}
+
+/** The Home freshness cue's level ('fresh' means a refresh landed and none is in flight), or null off Home. */
+async function freshness(page: Page): Promise<string | null> {
+  const cue = page.getByTestId('balance-freshness-cue');
+  if ((await cue.count()) === 0) return null;
+  return cue.first().getAttribute('data-freshness');
+}
+
+/**
+ * Wait until Home shows balances that came from a completed refresh: the
+ * snapshot exists, `asset` (or at least one asset) loaded without an error, and
+ * no refresh is in flight. A rendered "0" or "$0.00" before that is a
+ * placeholder, not a balance.
+ */
+export async function waitForLoadedBalances(page: Page, asset: string | null, patienceMs = BALANCE_PATIENCE_MS): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const snap = await balanceSnapshotState(page).catch(() => null);
+        if (!snap) return 'no refresh has completed';
+        if (asset ? snap.failed.includes(asset) : snap.failed.length >= snap.assets) return 'the balance read failed';
+        const level = await freshness(page);
+        return level === 'fresh' ? 'loaded' : `refresh ${level ?? 'state unknown'}`;
+      },
+      { timeout: patienceMs, intervals: [1_000, 2_000, 5_000], message: `the ${asset ?? 'wallet'} balance never loaded from a completed refresh` },
+    )
+    .toBe('loaded');
 }
 
 async function importWallet(page: Page, extensionId: string, words: string[], password: string): Promise<void> {
-  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.goto(`chrome-extension://${extensionId}/popup.html`, { timeout: ACTION_TIMEOUT_MS });
   await page.getByTestId('onboarding-import-btn').click();
   await page.getByTestId('onboarding-import-warning-continue').click();
   for (let i = 0; i < words.length; i++) await page.getByTestId(`onboarding-import-word-${i}`).fill(words[i] ?? '');
   await page.getByTestId('onboarding-import-continue').click();
-  // The wizard fails closed until the backend's sign-up requirements resolve,
-  // and its retry rebuilds the step with empty fields; re-enter before each
-  // press. Retry only that race: other refusals count against the backend's
-  // per-wallet restore budget.
+  // The wizard fails closed until the backend's sign-up requirements resolve:
+  // the press is refused (the password step stays, with a message), the wizard
+  // re-reads the capabilities, and the next press proceeds. Retry only that
+  // case, once the re-read has landed; other refusals count against the
+  // backend's per-wallet restore budget. Its retry rebuilds the step with empty
+  // fields, so re-enter before each press.
   const submit = page.getByTestId('onboarding-set-password-submit');
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 1; ; attempt++) {
+    let pressedAt = Number.POSITIVE_INFINITY;
+    const reread = page.waitForResponse((r) => Date.now() >= pressedAt && new URL(r.url()).pathname.endsWith('/capabilities'), {
+      timeout: IMPORT_STEP_MS,
+    });
+    reread.catch(() => {});
     await page.getByTestId('onboarding-password-input').fill(password);
     await page.getByTestId('onboarding-password-confirm-input').fill(password);
+    pressedAt = Date.now();
     await submit.click();
-    await page.waitForTimeout(3_000);
-    if (!(await submit.isVisible().catch(() => false))) break;
-    if (!/sign-up requirements/.test(await page.locator('#root').innerText())) break;
-    await page.waitForTimeout(5_000);
+    const left = submit.waitFor({ state: 'hidden', timeout: IMPORT_STEP_MS });
+    const outcome = await firstOf({ left, reread }, IMPORT_STEP_MS);
+    if (outcome === 'timeout') throw new Error('the import stayed on the password step: the wallet refused it (screen withheld)');
+    // A re-read can also accompany a press that proceeds; the step leaving decides.
+    if (outcome === 'left' || (await firstOf({ left }, 5_000)) === 'left') break;
+    if (attempt >= 4) throw new Error("the backend's sign-up requirements never resolved after 4 attempts");
   }
-  await page.getByTestId('onboarding-setup-finish-btn').click({ timeout: 30_000 }).catch(() => {});
+  const finish = page.getByTestId('onboarding-setup-finish-btn');
   const total = page.getByTestId('home-total-balance');
-  await total.waitFor({ timeout: IMPORT_PATIENCE_MS }).catch(() => {
-    throw new Error('the import never reached Home (screen withheld: it may show phrase or password entry)');
+  const reached = await firstOf(
+    { finish: finish.waitFor({ state: 'visible', timeout: IMPORT_PATIENCE_MS }), home: total.waitFor({ state: 'visible', timeout: IMPORT_PATIENCE_MS }) },
+    IMPORT_PATIENCE_MS,
+  );
+  if (reached === 'timeout') throw new Error('the import never reached the setup step or Home (screen withheld: it may show phrase or password entry)');
+  if (reached === 'finish') await finish.click();
+  await total.waitFor({ state: 'visible', timeout: IMPORT_PATIENCE_MS }).catch(() => {
+    throw new Error('the import never reached Home after setup (screen withheld)');
   });
-  await expect
-    .poll(async () => (await total.textContent())?.trim() ?? '', {
-      timeout: IMPORT_PATIENCE_MS,
-      message: 'the wallet never loaded a real balance set, so sign-in to the backend did not complete',
-    })
-    .toMatch(/\d/);
+  await waitForLoadedBalances(page, null, IMPORT_PATIENCE_MS);
 }
 
 /** Opens each demo wallet once per worker, on first use. */
@@ -172,17 +244,21 @@ export class LiveWallets {
   private readonly open = new Map<WalletName, Promise<LiveWallet>>();
   private readonly contexts: BrowserContext[] = [];
   private readonly footages: WalletFootage[] = [];
+  private readonly canaries: Canary[] = [];
+  private readonly releases: (() => void)[] = [];
   private readonly profiles: string;
   private readonly custody: string;
   private readonly extension: string;
+  readonly release: ReleaseFacts;
+  readonly evidence: LaneEvidence;
   private testTitle = '';
 
   constructor() {
-    assertPhrasesNotInEnvironment();
-    const file = process.env.E2E_WALLET_FILE;
-    if (!file) throw new Error('E2E_WALLET_FILE must name the owner-only demo wallet custody file.');
-    this.custody = resolve(file);
-    this.extension = extensionDir();
+    // Cheap refusals first: the lane config ran these too, and a worker re-checks.
+    this.release = lanePreflight();
+    this.custody = resolve(process.env.E2E_WALLET_FILE!);
+    this.extension = resolve(process.env.EXTENSION_DIST!);
+    this.evidence = new LaneEvidence((value) => this.canaries.some((c) => c.hit([value])));
     // mkdtemp creates the directory 0700.
     this.profiles = mkdtempSync(join(tmpdir(), 'smirk-f-legacy-'));
   }
@@ -204,11 +280,14 @@ export class LiveWallets {
   }
 
   private async launch(name: WalletName): Promise<LiveWallet> {
+    this.releases.push(await acquireWalletLock(name));
     const words = readWalletPhrase(this.custody, WALLET_VARS[name]);
     const password = randomBytes(24).toString('base64url');
     const canary = createCanary();
     canary.addPhrase(words);
     canary.addToken(password);
+    this.canaries.push(canary);
+    const launchedAt = Date.now();
 
     // A fresh directory per launch: a failed import must not leave a locked profile behind.
     const context = await chromium.launchPersistentContext(mkdtempSync(join(this.profiles, `${name}-`)), {
@@ -220,6 +299,8 @@ export class LiveWallets {
       args: [`--disable-extensions-except=${this.extension}`, `--load-extension=${this.extension}`],
     });
     this.contexts.push(context);
+    context.setDefaultTimeout(ACTION_TIMEOUT_MS);
+    context.setDefaultNavigationTimeout(ACTION_TIMEOUT_MS);
     const events: NetEvent[] = [];
     context.on('response', (response) => {
       try {
@@ -249,6 +330,7 @@ export class LiveWallets {
     } finally {
       words.fill('');
     }
+    const importedAt = Date.now();
     await footage.settled(page, 'Home after import');
 
     const confirmPassword = async (windowMs: number): Promise<boolean> => {
@@ -267,12 +349,14 @@ export class LiveWallets {
       page,
       extensionId,
       footage,
+      launchedAt,
+      importedAt,
       responses: (since) => events.filter((e) => e.at >= since),
       enterPassword: async (field, submit, label) => {
         await footage.secret(label, async () => {
           await field.fill(password);
           await submit.click();
-          await field.waitFor({ state: 'hidden', timeout: 60_000 }).catch(() => {});
+          await field.waitFor({ state: 'hidden', timeout: 60_000 });
         });
       },
       confirmOperationPasswordIfAsked: async (windowMs = 15_000) => {
@@ -294,6 +378,11 @@ export class LiveWallets {
         });
       },
       guardSecret: (value) => canary.addToken(value),
+      openWindow: async () => {
+        const next = await context.newPage();
+        await next.goto(`chrome-extension://${extensionId}/popup.html`, { timeout: ACTION_TIMEOUT_MS });
+        return next;
+      },
     };
   }
 
@@ -301,13 +390,16 @@ export class LiveWallets {
     await Promise.all(this.footages.map((f) => f.close().catch(() => {})));
     await Promise.all(this.contexts.map((c) => c.close().catch(() => {})));
     rmSync(this.profiles, { recursive: true, force: true });
+    for (const release of this.releases) release();
   }
 }
 
-export const test = base.extend<{ legacyFootageTitle: void }, { liveWallets: LiveWallets }>({
+export const test = base.extend<{ legacyLaneTest: void }, { liveWallets: LiveWallets }>({
   liveWallets: [
     async ({}, use) => {
       const wallets = new LiveWallets();
+      wallets.evidence.note('(worker)', 'release-zip-sha256', wallets.release.zipSha256);
+      if (wallets.release.sourceCommit) wallets.evidence.note('(worker)', 'release-source-commit', wallets.release.sourceCommit);
       try {
         await use(wallets);
       } finally {
@@ -316,11 +408,19 @@ export const test = base.extend<{ legacyFootageTitle: void }, { liveWallets: Liv
     },
     { scope: 'worker', timeout: 45 * 60_000 },
   ],
-  // Footage markers carry the test title (a static string in the spec).
-  legacyFootageTitle: [
+  // Footage markers carry the test title (a static string in the spec); the
+  // evidence file keeps each test's status and any skip reason, which the
+  // private reporter does not print.
+  legacyLaneTest: [
     async ({ liveWallets }, use, testInfo) => {
       liveWallets.beginTest(testInfo.title);
-      await use();
+      try {
+        await use();
+      } finally {
+        const skip = testInfo.annotations.find((a) => a.type === 'skip');
+        if (testInfo.status === 'skipped' && skip?.description) liveWallets.evidence.note(testInfo.title, 'skipped', skip.description);
+        liveWallets.evidence.note(testInfo.title, 'status', testInfo.status ?? 'unknown');
+      }
     },
     { auto: true },
   ],
@@ -396,17 +496,16 @@ export async function sendJournalState(page: Page): Promise<{ sealed: boolean; l
 // ── Navigation and reads, every tap through the footage ─────────────────────
 
 /** A tab tap restores that tab's last screen; a second tap returns to its root. */
-export async function tabRoot(w: LiveWallet, tab: 'home' | 'settings' | 'inbox', label: FootageLabel): Promise<void> {
-  const nav = w.page.getByTestId(`nav-tab-${tab}`);
+export async function tabRoot(w: LiveWallet, tab: 'home' | 'settings' | 'inbox', label: FootageLabel, page: Page = w.page): Promise<void> {
+  const nav = page.getByTestId(`nav-tab-${tab}`);
   await w.footage.tap(nav, label);
   await w.footage.tap(nav, label);
 }
 
-export async function openOlderAddresses(w: LiveWallet): Promise<void> {
-  await tabRoot(w, 'settings', 'Open Settings');
-  await w.footage.tap(w.page.getByTestId('settings-old-addresses-nav'), 'Settings: Older addresses and tips');
-  await expect(w.page.getByTestId('legacy-funds-route')).toBeVisible();
-  await w.footage.settled(w.page, 'Settings: Older addresses and tips');
+export async function openOlderAddresses(w: LiveWallet, page: Page = w.page): Promise<void> {
+  await tabRoot(w, 'settings', 'Open Settings', page);
+  await w.footage.tap(page.getByTestId('settings-old-addresses-nav'), 'Settings: Older addresses and tips');
+  await expect(page.getByTestId('legacy-funds-route')).toBeVisible();
 }
 
 /** First decimal number in a rendered amount ("0.0049 LTC", "1,234.5"). */
@@ -415,17 +514,34 @@ export function parseAmount(text: string | null | undefined): number | null {
   return m?.[1] ? Number(m[1]) : null;
 }
 
-/** The asset's full-precision balance from its detail screen, then back to Home. */
+/**
+ * The asset's full-precision confirmed balance from its detail screen, read
+ * only once Home has a completed refresh for that asset and two reads agree;
+ * then back to Home.
+ */
 export async function assetBalance(w: LiveWallet, asset: 'btc' | 'ltc' | 'xmr' | 'wow', hold: 'settled' | 'result'): Promise<number> {
   await tabRoot(w, 'home', 'Back to Home');
+  await waitForLoadedBalances(w.page, asset);
   await w.footage.tap(w.page.getByTestId(`asset-row-${asset}`), 'Open asset');
   const balance = w.page.getByTestId('asset-detail-balance');
-  await expect.poll(async () => parseAmount(await balance.textContent()), { timeout: 120_000 }).not.toBeNull();
+  let previous: number | null = null;
+  await expect
+    .poll(
+      async () => {
+        const now = parseAmount(await balance.textContent());
+        const stable = now !== null && now === previous;
+        previous = now;
+        return stable;
+      },
+      { timeout: ACTION_TIMEOUT_MS, intervals: [2_000], message: `the ${asset} balance on its detail screen never read the same twice` },
+    )
+    .toBe(true);
   if (hold === 'result') await w.footage.result('Asset balance');
   else await w.footage.settled(w.page, 'Asset balance');
   const value = parseAmount(await balance.textContent());
   await w.footage.tap(w.page.getByTestId('asset-detail-back'), 'Back to Home');
-  return value ?? 0;
+  if (value === null) throw new Error(`the ${asset} balance could not be read`);
+  return value;
 }
 
 /**
@@ -457,29 +573,47 @@ export async function staysAbsent(probe: () => Promise<boolean>, windowMs: numbe
   return !(await probe());
 }
 
+const isUtxoBroadcast = (r: Response) => r.request().method() === 'POST' && /\/wallet\/(utxo\/)?broadcast$/.test(new URL(r.url()).pathname);
+
 /** Resolve with the txid of the next UTXO broadcast this page makes (the txid only). */
 export function nextUtxoBroadcastTxid(page: Page, timeoutMs: number): Promise<string> {
+  const pending = page.waitForResponse(isUtxoBroadcast, { timeout: timeoutMs }).then(async (r) => {
+    const body = (await r.json().catch(() => null)) as { txid?: unknown; data?: { txid?: unknown } } | null;
+    const txid = body?.txid ?? body?.data?.txid;
+    return typeof txid === 'string' ? txid : '';
+  });
+  // Awaited later, or never if the test fails first; either way not an unhandled rejection.
+  pending.catch(() => {});
+  return pending;
+}
+
+/** Every broadcast path the wallet uses: UTXO, LWS (XMR/WOW) and Grin. */
+export const BROADCAST_PATH = /\/wallet\/((utxo\/)?broadcast|lws\/submit(_tx)?|grin\/broadcast)$/;
+
+/**
+ * Resolve with whether the next old-server sign-in made a NEW account (true),
+ * found an existing one (false), or failed (null). Reads `user.is_new` and
+ * nothing else from the response; the access token in the same body is
+ * never kept.
+ */
+export function nextLegacySignIn(page: Page, host: string, timeoutMs: number): Promise<boolean | null> {
   const pending = page
     .waitForResponse(
-      (r) => r.request().method() === 'POST' && /\/wallet\/(utxo\/)?broadcast$/.test(new URL(r.url()).pathname),
+      (r) => r.request().method() === 'POST' && new URL(r.url()).host === host && new URL(r.url()).pathname.endsWith('/auth/extension'),
       { timeout: timeoutMs },
     )
     .then(async (r) => {
-      const body = (await r.json().catch(() => null)) as { txid?: unknown; data?: { txid?: unknown } } | null;
-      const txid = body?.txid ?? body?.data?.txid;
-      return typeof txid === 'string' ? txid : '';
+      if (!r.ok()) return null;
+      const body = (await r.json().catch(() => null)) as { user?: { is_new?: unknown } } | null;
+      return typeof body?.user?.is_new === 'boolean' ? body.user.is_new : null;
     });
-  // Awaited later, or never if the test fails first; either way not an unhandled rejection.
   pending.catch(() => {});
   return pending;
 }
 
 /** Read a single owner-only fixture line (a claim link) the same way as a phrase file, without word rules. */
 export function readOwnerOnlyValue(file: string, variable: string): string {
-  const info = lstatSync(file);
-  if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()) {
-    throw new Error('fixture file must be a regular owner-only (0600) file owned by this user');
-  }
+  assertOwnerOnlyFile(file, 'the fixture file');
   const matches = readFileSync(file, 'utf8')
     .split('\n')
     .map((line) => line.match(new RegExp(`^\\s*(?:export\\s+)?${variable}\\s*=\\s*(.*)$`)))

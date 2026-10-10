@@ -6,19 +6,27 @@
  * classifies each frame instead:
  *
  *   - `card`:  the screen itself is a secret (phrase entry or reveal, private-key
- *              text, or a known secret seen anywhere). The whole frame is
+ *              text, a claim link the recorder cannot cover, a known secret seen
+ *              anywhere, or a page outside the extension). The whole frame is
  *              replaced by a labelled redaction card; no pixels are kept.
  *   - `mask`:  the screen is fine but named elements are not (password fields,
  *              tip share URLs, a revealed tx key, filled claim-link inputs).
  *              The screenshot is taken with those elements painted over.
  *   - `clean`: nothing secret is visible.
  *
- * `classifyFrame` runs INSIDE the page, so it must stay self-contained (no
- * closure over module scope). Reasons name the kind of surface, never its
- * content. The known-secret canary compares keyed digests only: the recorder
- * holds a random per-run HMAC key and the digests of the phrase (three-word
- * windows), the wallet password and any claim-link fragment, and never the
- * values themselves once the digests exist.
+ * Two halves:
+ *   - `classifyFrame` runs INSIDE the page and must stay self-contained (no
+ *     closure over module scope). It judges structure only and receives nothing
+ *     secret. It returns the page's visible text and non-password input values
+ *     so the known-secret check can run in Node.
+ *   - `finalVerdict` runs in Node: it compares those texts with the canary and
+ *     refuses any page that is not an extension page.
+ *
+ * The canary never leaves this process. It holds a random per-run HMAC key and
+ * the digests of the phrase (three-word windows), the wallet password and any
+ * claim-link fragment, never the values themselves once the digests exist. A
+ * page cannot see the key or the digests, so a page cannot brute-force a
+ * phrase out of them. Reasons name the kind of surface, never its content.
  */
 import { createHmac, randomBytes } from 'node:crypto';
 
@@ -45,6 +53,9 @@ export const FRAME_GUARD_PATTERNS = Object.freeze({
   claimLinkText: '/tip/[^\\s#/]+#[A-Za-z0-9_~.+=-]{8,}',
 });
 
+/** The only origin whose pages the recorder keeps: the wallet's own extension pages. */
+export const RECORDABLE_PROTOCOL = 'chrome-extension:';
+
 /** Every CSS selector the recorder masks; the in-page reasons map onto these. */
 export function maskSelectors(patterns = FRAME_GUARD_PATTERNS) {
   return [...patterns.mask, ...patterns.maskWhenFilled].map(([, selector]) => selector);
@@ -60,9 +71,9 @@ export function canaryUnits(text) {
 }
 
 /**
- * A per-run canary. `add` digests secret values immediately; the caller drops
- * its copy afterwards. `forPage` is the only thing sent to the page: a random
- * key and digests, never a secret.
+ * A per-run canary. `add*` digest secret values immediately; the caller drops
+ * its copy afterwards. Nothing here is ever sent to a page: `hit` compares in
+ * this process.
  */
 export function createCanary() {
   const key = randomBytes(32);
@@ -81,19 +92,26 @@ export function createCanary() {
     size() {
       return digests.size;
     },
-    forPage() {
-      return { keyHex: key.toString('hex'), digests: [...digests] };
+    /** True when any unit of any text is a known secret. */
+    hit(texts) {
+      if (digests.size === 0) return false;
+      for (const text of texts) {
+        for (const unit of canaryUnits(text)) if (digests.has(digest(unit))) return true;
+      }
+      return false;
     },
   };
 }
 
 /**
- * Classify the current frame. Runs in the page; must not reference module scope.
- * @param {{ patterns: typeof FRAME_GUARD_PATTERNS, canary: { keyHex: string, digests: string[] } | null }} args
- * @returns {Promise<{ kind: 'clean' | 'mask' | 'card', reasons: string[] }>}
+ * Classify the current frame's structure. Runs in the page; must not reference
+ * module scope. Receives no secret. Returns the verdict plus the texts the Node
+ * side checks against the canary (never stored).
+ * @param {{ patterns: typeof FRAME_GUARD_PATTERNS }} args
+ * @returns {Promise<{ kind: 'clean' | 'mask' | 'card', reasons: string[], texts: string[], protocol: string }>}
  */
 export async function classifyFrame(args) {
-  const { patterns, canary } = args;
+  const { patterns } = args;
   const reasons = new Set();
   let card = false;
   const visible = (element) => {
@@ -141,39 +159,46 @@ export async function classifyFrame(args) {
       reasons.add('claim-link-unlocalised');
     }
   }
+  // A claim link inside a field. Only the named claim and import fields have a
+  // mask locator; a link in any other field would be recorded as typed, so the
+  // whole frame is redacted instead.
+  const masked = [...patterns.mask, ...patterns.maskWhenFilled].map(([, selector]) => selector).join(', ');
+  const texts = [body];
   for (const element of document.querySelectorAll('input:not([type="password"]), textarea')) {
-    if (visible(element) && claimLink.test(valueOf(element))) reasons.add('mask:claim-link-input');
-  }
-
-  if (canary && canary.digests.length) {
-    const bytes = new Uint8Array(canary.keyHex.match(/../g).map((h) => parseInt(h, 16)));
-    const key = await crypto.subtle.importKey('raw', bytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const wanted = new Set(canary.digests);
-    const encoder = new TextEncoder();
-    const hit = async (unit) => {
-      const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(unit)));
-      return wanted.has([...mac].map((b) => b.toString(16).padStart(2, '0')).join(''));
-    };
-    const units = (text) => {
-      const out = [];
-      const words = String(text).toLowerCase().match(/[a-z]+/g) ?? [];
-      for (let i = 0; i + 3 <= words.length; i++) out.push(words.slice(i, i + 3).join(' '));
-      for (const token of String(text).split(/[^A-Za-z0-9_~.+=-]+/)) if (token.length >= 12) out.push(token);
-      return out;
-    };
-    const sources = [body];
-    for (const element of document.querySelectorAll('input:not([type="password"]), textarea')) sources.push(valueOf(element));
-    search: for (const source of sources) {
-      for (const unit of units(source)) {
-        if (await hit(unit)) {
-          card = true;
-          reasons.add('known-secret');
-          break search;
-        }
-      }
+    const value = valueOf(element);
+    if (value !== '') texts.push(value);
+    if (visible(element) && claimLink.test(value) && !element.matches(masked)) {
+      card = true;
+      reasons.add('claim-link-in-unmasked-field');
     }
   }
 
+  const sorted = [...reasons].sort();
+  const protocol = location.protocol;
+  if (card) return { kind: 'card', reasons: sorted, texts, protocol };
+  return { kind: sorted.length ? 'mask' : 'clean', reasons: sorted, texts, protocol };
+}
+
+/**
+ * The verdict the recorder acts on, decided in Node: a page outside the
+ * extension is redacted whole (its main world is not ours to trust), and a
+ * known secret anywhere in the page text or a field redacts the frame. The
+ * returned verdict carries no text.
+ * @param {{ kind: string, reasons: string[], texts: string[], protocol: string }} raw
+ * @param {{ hit(texts: string[]): boolean } | null} canary
+ * @returns {{ kind: 'clean' | 'mask' | 'card', reasons: string[] }}
+ */
+export function finalVerdict(raw, canary) {
+  const reasons = new Set(raw.reasons);
+  let card = raw.kind === 'card';
+  if (raw.protocol !== RECORDABLE_PROTOCOL) {
+    card = true;
+    reasons.add('outside-extension');
+  }
+  if (canary && canary.hit(raw.texts)) {
+    card = true;
+    reasons.add('known-secret');
+  }
   const sorted = [...reasons].sort();
   if (card) return { kind: 'card', reasons: sorted };
   return { kind: sorted.length ? 'mask' : 'clean', reasons: sorted };
