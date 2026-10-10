@@ -21,6 +21,7 @@ import type { FullConfig } from '@playwright/test';
 import { assertPrivateCapture } from '../capture-policy.mjs';
 import { DEFAULT_FOOTAGE_DIR, footageMode } from './guarded-footage.js';
 import { DEMO_WALLETS, RELEASE_CANDIDATE, custodyStatus } from './live-wallets.js';
+import { baselineFor, loadBaseline } from './A-onboarding-identity-baseline.js';
 
 const E2E_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const LIVE_REPORTER = join(E2E_ROOT, 'fixtures', 'A-onboarding-identity-live-reporter.ts');
@@ -113,6 +114,14 @@ export default async function livePreflight(config: FullConfig): Promise<void> {
     if (!status.ok) refuse(`${name} (${variable}): ${status.reason}.`);
   }
 
+  let baselineAsOf = '';
+  try {
+    baselineAsOf = loadBaseline().asOf;
+  } catch (error) {
+    refuse(`The demo wallet baseline cannot be read: ${error instanceof Error ? error.message : String(error)}.`);
+  }
+  const withoutBaseline = Object.keys(DEMO_WALLETS).filter((name) => !baselineFor(name));
+
   const zip = process.env.E2E_EXTENSION_ZIP ?? (process.env.EXTENSION_DIST ? undefined : RELEASE_CANDIDATE.chromeZip);
   let verified = 'unpacked directory supplied by EXTENSION_DIST (not hash-verified here)';
   if (zip) {
@@ -139,6 +148,9 @@ export default async function livePreflight(config: FullConfig): Promise<void> {
   if (!backend) refuse('BACKEND_URL is not set; the live config defaults it to production.');
   const bundle = bundleSources(dist).map((file) => readFileSync(file, 'utf8')).join('\n');
   if (!bundle.includes(backend)) refuse(`The extension bundle does not target ${backend}, so the wallet and the specs would talk to different servers.`);
+  // Not a refusal: the run still tests these bytes. The settings tour fails on
+  // a dirty stamp unless the owner accepts it, and this says so up front.
+  const dirtyStamp = RELEASE_CANDIDATE.commits.map((commit) => bundle.match(new RegExp(`\\b${commit}[0-9a-f]*-dirty\\b`))?.[0]).find(Boolean);
   let capabilities: Response;
   try {
     capabilities = await fetch(`${backend.replace(/\/$/, '')}/capabilities`, { signal: AbortSignal.timeout(15_000) });
@@ -160,5 +172,9 @@ export default async function livePreflight(config: FullConfig): Promise<void> {
     `[live preflight] backend ${backend}`,
     `[live preflight] footage ${mode}${mode === 'guarded' ? ` into ${join(footageRoot, process.env.E2E_LIVE_RUN_ID)}` : ''}`,
     `[live preflight] production writes ${process.env.ALLOW_PROD_WRITES === '1' ? 'allowed' : 'not allowed (those scenarios skip, as declared)'}`,
+    `[live preflight] demo wallet baseline ${baselineAsOf} (${process.env.E2E_BASELINE_FILE ? 'E2E_BASELINE_FILE' : 'shipped'})${withoutBaseline.length ? `; none for ${withoutBaseline.join(', ')}, whose baseline scenarios skip as declared` : ''}`,
+    ...(dirtyStamp
+      ? [`[live preflight] build stamp ${dirtyStamp}: built from a modified tree; the settings tour fails on it unless E2E_ACCEPT_DIRTY_BUILD=1${process.env.E2E_ACCEPT_DIRTY_BUILD === '1' ? ' (set)' : ''}`]
+      : []),
   ].join('\n'));
 }

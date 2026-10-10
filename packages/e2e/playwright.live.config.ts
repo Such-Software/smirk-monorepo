@@ -8,12 +8,24 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
  *
  * Each gate is its own opt-in:
  *   E2E_LIVE=1           run this lane at all (preflight refuses otherwise)
- *   ALLOW_PROD_WRITES=1  scenarios that create users, claim handles or publish
+ *   ALLOW_PROD_WRITES=1  scenarios that create users, claim handles, publish, or
+ *                        ask the backend for a sign-in challenge
  *   E2E_LIVE_MONEY=1     scenarios that move funds (other areas)
  *   FOOTAGE=guarded      record; unset or "off" records nothing
  *
+ * Owner decisions, closed unless set:
+ *   E2E_ACCEPT_DIRTY_BUILD=1  accept a release candidate whose build stamp ends
+ *                             in -dirty (built from a modified tree); listed
+ *                             as not proven either way
+ *
+ * The demo wallets are compared with what they were before v0.3.1 (user ids,
+ * receipts, a sent tip): fixtures/A-onboarding-identity-baseline.ts, or a JSON
+ * file of the same shape in E2E_BASELINE_FILE. A wallet without a baseline
+ * skips those scenarios with that reason, and the reporter lists it.
+ *
  * Playwright's trace, screenshot and video stay off: they cannot be guarded
- * frame by frame. The private reporter stays, beside the lane's skip guard.
+ * frame by frame. The private reporter stays, beside the lane's skip guard,
+ * which also lists every claim a test ran without checking.
  *
  *   E2E_LIVE=1 FOOTAGE=guarded ALLOW_PROD_WRITES=1 \
  *   E2E_WALLET_FILE=<owner-only custody file> \
@@ -43,5 +55,9 @@ export default defineConfig({
   reporter: [['./private-reporter.ts'], ['./fixtures/A-onboarding-identity-live-reporter.ts']],
   quiet: true,
   preserveOutput: 'never',
-  use: PRIVATE_USE,
+  // The runner's default for both is no limit, so one renamed element would
+  // stall the run for the three-hour test timeout. The live profiles set the
+  // same limits on themselves (fixtures/live-wallets.ts); long waits that are
+  // expected (proof of work, confirmations) pass their own timeouts.
+  use: { ...PRIVATE_USE, actionTimeout: 60_000, navigationTimeout: 120_000 },
 });

@@ -1,6 +1,7 @@
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
+import { copiedExactly, recordClipboardWrites } from '../fixtures/A-onboarding-identity-helpers.js';
 
 /**
  * nostr-identity: Settings → Nostr identities (the P2 multi-identity switcher).
@@ -111,18 +112,18 @@ test('the seed npub copies exactly and survives lock and unlock', async ({ conte
   const npub = ((await page.getByTestId('nostr-npub').textContent()) ?? '').trim();
   expect(npub).toMatch(/^npub1[02-9ac-hj-np-z]{58}$/);
 
-  // Copy through the seed row's own copy control and read the clipboard back.
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+  // Copy through the seed row's own copy control. What the page hands to the
+  // clipboard is recorded in the page as it happens, so this holds in every
+  // browser mode; the system clipboard itself is never read.
   const seedRow = page.locator('[data-testid^="nostr-identity-"]').filter({ hasText: /\bseed\b/ }).first();
   const seedHex = ((await seedRow.getAttribute('data-testid')) ?? '').replace('nostr-identity-', '');
   expect(seedHex).toMatch(/^[0-9a-f]{64}$/);
+  await recordClipboardWrites(page);
   await page.getByTestId(`nostr-copy-npub-${seedHex}`).click();
-  const copied = await page.evaluate(() => navigator.clipboard.readText()).catch(() => null);
-  if (copied === null) {
-    test.info().annotations.push({ type: 'unverified', description: 'the clipboard could not be read back in this browser mode' });
-  } else {
-    expect(copied.trim(), 'copy npub put something other than the npub on the clipboard').toBe(npub);
-  }
+  await expect.poll(() => copiedExactly(page, npub), {
+    timeout: 10_000,
+    message: 'copy npub did not successfully copy exactly the npub shown',
+  }).toBe(true);
 
   // Lock, unlock, and the same identity comes back.
   await page.getByTestId('nav-tab-settings').click();

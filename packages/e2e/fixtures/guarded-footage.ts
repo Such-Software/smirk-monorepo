@@ -17,10 +17,16 @@
  *   5. Identical frames are written once; the timeline keeps the timestamps, so
  *      a 25 second static hold costs one JPEG.
  *
- * Dead air is policy, not a habit: `tap` holds the screen for HOLD_MS.preTap
- * before every click, `settled` holds HOLD_MS.settled once loading text is gone,
- * and `result` holds HOLD_MS.result on a key outcome. Every hold is written to
- * the timeline and `stop` fails the run if any is shorter than policy. Labels
+ * Dead air is policy, not a habit, and it is measured on the recorded frames,
+ * not on a clock. A hold ends only once its page's recording has shown no new
+ * frame for the hold's length: HOLD_MS.settled on a settled screen, HOLD_MS.result
+ * on a key outcome, HOLD_MS.preTap before every tap. Every interaction (tap,
+ * choice, typing, key press) first settles the screen if it changed since its
+ * last settled hold, then pauses. `settleAll` holds every changed page at the
+ * end of a step. `stop` replays the timeline and fails the run, with the cause,
+ * if any tap followed less than HOLD_MS.preTap of unchanged frames, if any
+ * screen was left by a tap without a settled hold of its current frame, or if
+ * any hold ended on a screen that had not been static for its length. Labels
  * are short static phrases; values, URLs and keys are refused.
  *
  * Output (0700 directories, 0600 files) goes to E2E_FOOTAGE_DIR, by default
@@ -41,20 +47,32 @@ import {
   type LiveFrameVerdict,
   type SecretCanary,
 } from '../demo/guard.mjs';
+import {
+  HOLD_MS,
+  POLICY_TOLERANCE_MS,
+  checkHoldPolicy,
+  describeViolations,
+  type HoldKind,
+} from './footage-policy.mjs';
 
-/** The owner's dead-air policy, in milliseconds. */
-export const HOLD_MS = Object.freeze({
-  /** Every settled screen stays static at least this long. */
-  settled: 12_000,
-  /** Balances, confirmations, a claimed tip, a received message, swap status, history detail. */
-  result: 25_000,
-  /** Before every tap. */
-  preTap: 6_000,
-});
-export type HoldKind = keyof typeof HOLD_MS;
+/** The owner's dead-air policy and its timeline check live in footage-policy.mjs. */
+export { HOLD_MS, type HoldKind };
 
 /** About four frames a second per recorded page. */
 export const FRAME_INTERVAL_MS = 250;
+/**
+ * How much longer than its policy a hold may wait for a screen that keeps
+ * changing. Past that the hold gives up and `stop` reports it.
+ */
+export const HOLD_OVERRUN_MS = 60_000;
+/** Settle-then-pause rounds before an interaction proceeds on a restless screen. */
+const SETTLE_ROUNDS = 3;
+/**
+ * The longest a footage helper waits for its target. The runner's default is
+ * no limit at all, so one renamed element would otherwise stall a live run for
+ * the whole test timeout.
+ */
+export const ACTION_TIMEOUT_MS = 60_000;
 /** Clean guard passes required before capture resumes after a card. */
 export const RESUME_CLEAN_PASSES = 2;
 /** The default output root for this release candidate's run. */
@@ -110,10 +128,17 @@ export type FootageEntry =
   | { kind: 'drop'; t: number; recorder: string; reason: string }
   | { kind: 'gap'; t: number; recorder: string }
   | { kind: 'stop'; t: number; recorder: string }
-  | { kind: 'hold'; t: number; end: number; hold: HoldKind; label: string; recorder: string | null }
-  | { kind: 'tap'; t: number; label: string; recorder: string | null }
+  | {
+    kind: 'hold'; t: number; end: number; hold: HoldKind; label: string; recorder: string | null;
+    /** How long the recording had shown the same frame when the hold ended; null for an unrecorded page. */
+    static?: number | null;
+  }
+  | { kind: 'tap'; t: number; label: string; recorder: string | null; action?: InteractionKind }
   | { kind: 'secret'; t: number; end: number; label: string }
   | { kind: 'chapter'; t: number; label: string };
+
+/** What an interaction entry records; each one gets the same settle-then-pause. */
+export type InteractionKind = 'tap' | 'choose' | 'type' | 'press';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -157,13 +182,21 @@ class PageRecorder {
   private stopped = false;
   private inFlight: Promise<void> = Promise.resolve();
   readonly done: Promise<void>;
+  /**
+   * When the recording last changed: the timestamp of the newest frame or card
+   * written for this page, or the attach time before the first. Holds measure
+   * dead air from here, so they measure what the video shows.
+   */
+  lastChange: number;
 
   constructor(
     private readonly footage: GuardedFootage,
     readonly page: Page,
     readonly id: string,
     private readonly dir: string,
+    readonly attachedAt: number,
   ) {
+    this.lastChange = attachedAt;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     page.once('close', () => { this.stopped = true; });
     this.done = this.loop();
@@ -200,7 +233,9 @@ class PageRecorder {
     if (this.carded === caption) return;
     this.carded = caption;
     this.lastHash = '';
-    this.footage.record({ kind: 'card', t: Date.now(), recorder: this.id, caption, surface });
+    const t = Date.now();
+    this.lastChange = t;
+    this.footage.record({ kind: 'card', t, recorder: this.id, caption, surface });
   }
 
   private async frame(): Promise<void> {
@@ -219,8 +254,10 @@ class PageRecorder {
     }
 
     const t = Date.now();
+    // Animations are paused for the shot, so a spinner or shimmer does not turn
+    // a settled screen into a stream of new frames and eat its dead air.
     const shot = await this.page.screenshot({
-      type: 'jpeg', quality: 85, timeout: 5_000, caret: 'hide',
+      type: 'jpeg', quality: 85, timeout: 5_000, caret: 'hide', animations: 'disabled',
       mask: maskLocators(this.page), maskColor: MASK_COLOR,
     });
     const second = await verdictOf(this.page);
@@ -234,6 +271,7 @@ class PageRecorder {
     this.seq += 1;
     const file = join(this.dir, `${String(this.seq).padStart(6, '0')}.jpg`);
     writeFileSync(file, shot, { mode: 0o600 });
+    this.lastChange = t;
     this.footage.record({
       kind: 'frame', t, recorder: this.id, file: relative(this.footage.runDir, file),
       verdict: first.mode === 'mask' ? 'mask' : 'clean', masks: first.masks, surface,
@@ -262,6 +300,8 @@ export class GuardedFootage {
   private readonly perWallet = new Map<string, number>();
   private readonly facts: Record<string, string | number | boolean> = {};
   private readonly scopes: string[] = [];
+  /** When each recorder's current frame last completed a settled or result hold. */
+  private readonly settledAt = new Map<PageRecorder, number>();
   private readonly startedAt = Date.now();
   private stopped = false;
 
@@ -300,16 +340,27 @@ export class GuardedFootage {
     this.perWallet.set(wallet, n);
     const id = `${wallet}-${n}`;
     const viewport = page.viewportSize() ?? { width: 380, height: 600 };
+    const t = Date.now();
     this.record({
-      kind: 'recorder', t: Date.now(), recorder: id, wallet,
+      kind: 'recorder', t, recorder: id, wallet,
       width: Math.round(viewport.width * this.options.scale), height: Math.round(viewport.height * this.options.scale),
     });
-    this.recorders.push(new PageRecorder(this, page, id, join(this.runDir, 'frames', id)));
+    this.recorders.push(new PageRecorder(this, page, id, join(this.runDir, 'frames', id), t));
+  }
+
+  private recorderFor(page: Page | undefined): PageRecorder | undefined {
+    if (!page) return undefined;
+    return this.recorders.find((recorder) => recorder.page === page);
   }
 
   private recorderOf(page: Page | undefined): string | null {
-    if (!page) return null;
-    return this.recorders.find((recorder) => recorder.page === page)?.id ?? null;
+    return this.recorderFor(page)?.id ?? null;
+  }
+
+  /** True when the page's current frame has not yet been held for a settled period. */
+  private needsSettle(recorder: PageRecorder): boolean {
+    const at = this.settledAt.get(recorder);
+    return at === undefined || recorder.lastChange > at;
   }
 
   /** The caption of the innermost open secret scope, or null. */
@@ -363,13 +414,50 @@ export class GuardedFootage {
     writeFileSync(join(this.runDir, 'run-facts.json'), `${JSON.stringify(this.facts, null, 2)}\n`, { mode: 0o600 });
   }
 
-  /** Hold the current screen static. No-op when not recording. */
+  /**
+   * Hold the page's recording static for the policy length of `kind`. The hold
+   * lasts at least that long and ends only once the recording has shown one
+   * unchanged frame for that long, so a screen that changes during the hold
+   * starts its dead air again. It waits at most HOLD_OVERRUN_MS past the policy
+   * for a screen that keeps changing, then gives up and `stop` reports it.
+   * No-op when not recording.
+   */
   async hold(kind: HoldKind, label: string, page?: Page): Promise<void> {
     assertStaticLabel(label);
     if (!this.recording) return;
+    const required = HOLD_MS[kind];
+    const recorder = this.recorderFor(page);
     const t = Date.now();
-    await sleep(HOLD_MS[kind]);
-    this.record({ kind: 'hold', t, end: Date.now(), hold: kind, label, recorder: this.recorderOf(page) });
+    const deadline = t + required + HOLD_OVERRUN_MS;
+    let quietFor: number | null = null;
+    for (;;) {
+      const now = Date.now();
+      const elapsed = now - t;
+      if (!recorder?.isLive) {
+        // An unrecorded or closed page: nothing to measure, so a plain pause.
+        quietFor = null;
+        if (elapsed >= required) break;
+        await sleep(Math.min(required - elapsed, FRAME_INTERVAL_MS));
+        continue;
+      }
+      const quiet = now - recorder.lastChange;
+      if (elapsed >= required && quiet >= required) {
+        // A frame still in flight carries an earlier timestamp. Let it land,
+        // then decide, so the timeline never shows a change inside the hold.
+        await recorder.idle();
+        quietFor = Date.now() - recorder.lastChange;
+        if (quietFor >= required) break;
+        continue;
+      }
+      if (now >= deadline) {
+        quietFor = quiet;
+        break;
+      }
+      await sleep(Math.min(Math.max(required - elapsed, required - quiet, 50), FRAME_INTERVAL_MS));
+    }
+    const end = Date.now();
+    if (recorder && quietFor !== null && quietFor >= required && kind !== 'preTap') this.settledAt.set(recorder, end);
+    this.record({ kind: 'hold', t, end, hold: kind, label, recorder: recorder?.id ?? null, static: quietFor });
   }
 
   /** Wait for loading text to clear, then hold for the settled period. */
@@ -384,31 +472,61 @@ export class GuardedFootage {
     await this.hold('result', label, page);
   }
 
-  /** The only way a live spec clicks: wait for the target, hold, then click. */
+  /**
+   * Hold every open page whose current frame has not had its settled period,
+   * all at once. The live lane calls this at the end of every test, so the last
+   * screen of a step gets its dead air even when no tap follows it.
+   */
+  async settleAll(label = 'last screen of the step'): Promise<void> {
+    if (!this.recording || this.stopped) return;
+    const pending = this.recorders.filter((recorder) => recorder.isLive && this.needsSettle(recorder));
+    await Promise.all(pending.map((recorder) => this.settled(recorder.page, label)));
+  }
+
+  /**
+   * Before any interaction: settle the screen if its current frame has not been
+   * held for the settled period, then the pre-tap pause. A screen that changes
+   * during the pause is settled again, a bounded number of times.
+   */
+  private async beforeInteraction(page: Page, label: string): Promise<void> {
+    if (!this.recording) return;
+    const recorder = this.recorderFor(page);
+    for (let round = 0; round < SETTLE_ROUNDS; round++) {
+      if (recorder?.isLive && this.needsSettle(recorder)) await this.settled(page, 'screen settled before a tap');
+      await this.hold('preTap', label, page);
+      if (!recorder?.isLive || !this.needsSettle(recorder)) return;
+    }
+  }
+
+  private interaction(action: InteractionKind, page: Page, label: string): void {
+    this.record({ kind: 'tap', t: Date.now(), label, recorder: this.recorderOf(page), action });
+  }
+
+  /** The only way a live spec clicks: wait for the target, settle, pause, then click. */
   async tap(target: Locator, label: string, options: { force?: boolean } = {}): Promise<void> {
     assertStaticLabel(label);
-    await target.waitFor({ state: 'visible' });
-    await target.scrollIntoViewIfNeeded().catch(() => {});
-    await this.hold('preTap', label, target.page());
-    this.record({ kind: 'tap', t: Date.now(), label, recorder: this.recorderOf(target.page()) });
-    await target.click(options.force ? { force: true } : {});
+    await target.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
+    await target.scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS }).catch(() => {});
+    await this.beforeInteraction(target.page(), label);
+    this.interaction('tap', target.page(), label);
+    await target.click({ timeout: ACTION_TIMEOUT_MS, ...(options.force ? { force: true } : {}) });
   }
 
   /** Tap a checkbox only when its state differs. Returns whether it changed. */
   async setChecked(target: Locator, checked: boolean, label: string): Promise<boolean> {
-    await target.waitFor({ state: 'visible' });
-    if ((await target.isChecked()) === checked) return false;
+    await target.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
+    if ((await target.isChecked({ timeout: ACTION_TIMEOUT_MS })) === checked) return false;
     await this.tap(target, label);
     return true;
   }
 
-  /** Choose an option of a select element, after the pre-tap hold. */
+  /** Choose an option of a select element, after the settle and the pre-tap pause. */
   async choose(target: Locator, value: string, label: string): Promise<void> {
     assertStaticLabel(label);
-    await target.waitFor({ state: 'visible' });
-    await this.hold('preTap', label, target.page());
-    this.record({ kind: 'tap', t: Date.now(), label, recorder: this.recorderOf(target.page()) });
-    await target.selectOption(value);
+    await target.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
+    await this.beforeInteraction(target.page(), label);
+    this.interaction('choose', target.page(), label);
+    await target.selectOption(value, { timeout: ACTION_TIMEOUT_MS });
   }
 
   /** Type ordinary, non-secret text (a handle). Refuses a known secret. */
@@ -417,23 +535,24 @@ export class GuardedFootage {
     if (this.canary.hit({ values: [text], text })) {
       throw new Error('Refusing to type a known secret in the open; use footage.secret with secretFill.');
     }
-    await target.waitFor({ state: 'visible' });
-    await this.hold('preTap', label, target.page());
-    await target.fill(text);
+    await target.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
+    await this.beforeInteraction(target.page(), label);
+    this.interaction('type', target.page(), label);
+    await target.fill(text, { timeout: ACTION_TIMEOUT_MS });
   }
 
   /** Fill a secret. Allowed only inside `secret(...)`, so no frame shows it. */
   async secretFill(target: Locator, value: string, label: string): Promise<void> {
     assertStaticLabel(label);
     if (!this.secretCaption()) throw new Error('secretFill runs only inside footage.secret(...).');
-    await target.fill(value);
+    await target.fill(value, { timeout: ACTION_TIMEOUT_MS });
   }
 
-  /** Press a key on the page, after the pre-tap hold. */
+  /** Press a key on the page, after the settle and the pre-tap pause. */
   async press(page: Page, key: string, label: string): Promise<void> {
     assertStaticLabel(label);
-    await this.hold('preTap', label, page);
-    this.record({ kind: 'tap', t: Date.now(), label, recorder: this.recorderOf(page) });
+    await this.beforeInteraction(page, label);
+    this.interaction('press', page, label);
     await page.keyboard.press(key);
   }
 
@@ -449,34 +568,38 @@ export class GuardedFootage {
   }
 
   /**
-   * Stop every recorder, write the timeline, check the hold policy and encode
-   * one video per recorded page. Throws after writing if the policy was broken.
+   * Stop every recorder, write the timeline, check the dead-air policy on the
+   * recorded frames and encode one video per recorded page. Throws after
+   * writing, with the cause, if the policy was broken or a video is not real time.
    */
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
     await Promise.all(this.recorders.map((recorder) => recorder.stop()));
-    const short = this.entries.filter((entry): entry is Extract<FootageEntry, { kind: 'hold' }> =>
-      entry.kind === 'hold' && entry.end - entry.t < HOLD_MS[entry.hold] - 25);
+    const policy = checkHoldPolicy(this.entries);
     writeFileSync(join(this.runDir, 'timeline.json'), `${JSON.stringify({
-      version: 1,
-      policy: { holdMs: HOLD_MS, frameIntervalMs: FRAME_INTERVAL_MS, resumeCleanPasses: RESUME_CLEAN_PASSES },
+      version: 2,
+      policy: {
+        holdMs: HOLD_MS, frameIntervalMs: FRAME_INTERVAL_MS, resumeCleanPasses: RESUME_CLEAN_PASSES,
+        holdOverrunMs: HOLD_OVERRUN_MS, toleranceMs: POLICY_TOLERANCE_MS,
+      },
       startedAt: this.startedAt,
       stoppedAt: Date.now(),
       entries: this.entries,
     }, null, 1)}\n`, { mode: 0o600 });
+    writeFileSync(join(this.runDir, 'policy.json'), `${JSON.stringify(policy, null, 1)}\n`, { mode: 0o600 });
     this.writeChapters();
     const problems: string[] = [];
-    if (short.length) {
-      problems.push(`${short.length} footage hold(s) were shorter than policy, so the recording does not meet the dead-air requirement`);
-    }
+    if (policy.violations.length) problems.push(describeViolations(policy.violations));
     if (this.recording && process.env.FOOTAGE_ENCODE !== '0') {
       const failed = encodeRecorders(this.runDir, this.entries).filter((result) => !result.realTime);
       if (failed.length) {
         problems.push(`${failed.length} page video(s) did not encode at real time (${failed.map((result) => result.recorder).join(', ')}); frames and the timeline are kept`);
       }
     }
-    if (problems.length) throw new Error(`Guarded footage: ${problems.join('; ')}.`);
+    // One line, tagged, so the live reporter can show it: the private reporter
+    // withholds runner errors, and these carry only static labels and counts.
+    if (problems.length) throw new Error(`[guarded footage] ${problems.join('; ')}.`);
   }
 
   private writeChapters(): void {

@@ -11,7 +11,11 @@
  * process.
  *
  * Every step asserts an outcome the backend or the wallet had to produce: a user
- * id, an npub, balances, history, a lock screen, a claimed handle.
+ * id, an npub, balances, history, a lock screen, a claimed handle. The demo
+ * wallets are compared with what they were before v0.3.1 existed
+ * (fixtures/A-onboarding-identity-baseline.ts), not only with another v0.3.1
+ * import, which would agree with itself. A claim a test cannot check is
+ * declared, and the lane's reporter lists it as not proven.
  */
 import { randomBytes } from 'node:crypto';
 import type { Page } from '@playwright/test';
@@ -20,29 +24,37 @@ import {
   DEMO_WALLETS,
   RELEASE_CANDIDATE,
   SecretValue,
+  TICKERS,
   confirmPasswordIfAsked,
   custodyStatus,
+  declareUnproven,
   expect,
   expectedSkip,
   finishOnboarding,
   historyAmounts,
   homeBalances,
   isPositive,
+  missingReceipts,
   onLiveLane,
   openHome,
   readNpub,
   requireProdWrites,
+  sentTipSummaries,
   setPasswordAndSubmit,
   settingsSection,
   tabRoot,
   test,
   unlock,
   wipeWords,
+  type AssetId,
   type DemoWallet,
+  type LiveWallet,
 } from '../../fixtures/live-wallets.js';
-import { loadBaseline, openCreateTab, sessionExpiry, watchForProofOfWork } from '../../fixtures/A-onboarding-identity-helpers.js';
+import { openCreateTab, recordClipboardWrites, copiedExactly, sessionExpiry, watchForProofOfWork } from '../../fixtures/A-onboarding-identity-helpers.js';
+import { baselineFor, loadBaseline, type WalletBaseline } from '../../fixtures/A-onboarding-identity-baseline.js';
 import { getCapabilities } from '../../fixtures/capabilities.js';
 import { BACKEND_URL } from '../../fixtures/extension.js';
+import type { GuardedFootage } from '../../fixtures/guarded-footage.js';
 
 const DEMO: DemoWallet[] = ['alice', 'bob', 'carol'];
 /** Long enough to catch a beacon that merely waits a little before firing. */
@@ -52,14 +64,16 @@ if (onLiveLane()) defineScenarios();
 
 function defineScenarios(): void {
   test('cold launch shows onboarding, contacts nothing, and hands Create to a tab', async ({ wallets, footage }) => {
-    // The profile records every host its context contacts from launch on,
-    // including service-worker fetches, and closes the setup tab a fresh
-    // install opens by itself.
-    const profile = await wallets.profile('cold-launch', 'newcomer');
+    // The profile runs behind a refusing proxy that records every host the
+    // browser tries from launch on, which Playwright's request events cannot:
+    // the service worker before any listener attaches, the offscreen document
+    // Playwright detaches from, and WebSocket upgrades. Hosts of Chromium's own
+    // services that the extension bundle never names are the browser's and are
+    // recorded as a run fact. The setup tab a fresh install opens is closed.
+    const profile = await wallets.profile('cold-launch', 'newcomer', { observeNetwork: true });
     try {
-      const contacted = profile.contacted;
       expect(profile.installTabOpened, 'a fresh install did not open its setup tab').toBe(true);
-      expect([...contacted], 'installing contacted the network before the user acted').toEqual([]);
+      expect(profile.extensionContacts(), 'installing contacted the network before the user acted').toEqual([]);
 
       const popup = profile.page;
       await popup.goto(profile.popupUrl());
@@ -68,13 +82,18 @@ function defineScenarios(): void {
       // An observation window, not dead air: opening the popup is not consent.
       await popup.waitForTimeout(OBSERVE_MS);
       await footage.settled(popup, 'cold launch welcome');
-      expect([...contacted], 'a cold launch must contact nothing before the user acts').toEqual([]);
+      expect(profile.extensionContacts(), 'a cold launch must contact nothing before the user acts').toEqual([]);
 
       const tab = await openCreateTab(footage, profile);
       await expect(tab.getByTestId('onboarding-create-seed-word-0'), 'the tab must not mint a phrase on load').toHaveCount(0);
       await tab.waitForTimeout(OBSERVE_MS);
       await footage.result(tab, 'create handed to a tab');
-      expect([...contacted], 'the hand-off contacted the network before the user asked for anything').toEqual([]);
+      expect(profile.extensionContacts(), 'the hand-off contacted the network before the user asked for anything').toEqual([]);
+
+      // The control: a request this test makes does reach the observer, so
+      // "nothing contacted" above is an observation, not a blind spot.
+      expect(await profile.proveObservation(tab), 'the observation proxy saw no traffic at all, so an empty result proves nothing').toBe(true);
+      footage.fact('cold launch browser service hosts', profile.browserContacts().join(', ') || 'none');
     } finally {
       await profile.close();
     }
@@ -137,75 +156,95 @@ function defineScenarios(): void {
     }
     expect(outcome.welcomeBack, 'a brand-new phrase was greeted as a returning identity').toBe(false);
     expect(outcome.userId, 'registration produced no backend user id').toBeTruthy();
+    if (outcome.isNew === null) declareUnproven('create: the bootstrap did not say whether the sign-in created the account');
+    else expect(outcome.isNew, 'a brand-new phrase signed in to an account that already existed').toBe(true);
+    // The new user row carries no label on the server. This run's facts record
+    // its user id, and the handle scenario below gives it a public e2e_a_ handle.
     footage.fact('created wallet user id', outcome.userId!);
     await footage.result(tab, 'new wallet home');
 
     const npub = await readNpub(footage, tab);
     expect(npub).toMatch(/^npub1[02-9ac-hj-np-z]{58}$/);
     await footage.result(tab, 'new wallet npub');
-    wallets.remember('created', { name: 'newcomer', profile, password, userId: outcome.userId, welcomeBack: false });
+    wallets.remember('created', { name: 'newcomer', profile, password, ...outcome });
   });
 
   test('fresh import of alice: returning-user bootstrap and real balances', async ({ wallets, footage }) => {
     test.setTimeout(60 * 60_000);
+    const baseline = requireBaseline('alice');
     // The first request for alice in this worker imports her into a clean
     // profile, recorded: warning, words (carded), password (carded, masked).
     const alice = await wallets.reference('alice');
     const page = alice.profile.page;
-    expect(alice.userId, 'alice did not resolve to a backend user').toBeTruthy();
     await expect(page.getByTestId('bootstrap-error')).toHaveCount(0);
-    const baseline = loadBaseline()?.alice;
-    if (baseline?.userId) expect(alice.userId, 'alice resolved to a different account than the baseline').toBe(baseline.userId);
+    expectExistingAccount('alice', alice, baseline, 'this import');
 
-    const balances = await homeBalances(page);
-    if (!Object.values(balances).some(isPositive)) {
-      expectedSkip('alice holds no funds on any chain, so real-balance evidence needs a funded demo wallet');
-    }
-    for (const asset of ASSETS) if (balances[asset]) footage.fact(`alice ${asset} balance`, balances[asset]);
+    const balances = await expectHeldBalances(footage, 'alice', page, baseline);
     footage.fact('alice user id', alice.userId!);
     await footage.result(page, 'alice balances');
+    if (!Object.values(balances).some(isPositive)) declareUnproven('alice: no positive balance on any chain, so no real balance was shown');
   });
 
   for (const name of DEMO) {
     test(`beta v0.3.0 import of ${name} keeps its account, npub, balances and history`, async ({ wallets, footage }) => {
       test.setTimeout(2 * 60 * 60_000);
+      const baseline = requireBaseline(name);
       const reference = await wallets.reference(name);
-      expect(reference.userId, `${name} did not resolve to a backend user`).toBeTruthy();
+      expectExistingAccount(name, reference, baseline, 'the first import');
       let referencePage = await openHome(footage, reference);
       const referenceNpub = await readNpub(footage, referencePage);
       referencePage = await openHome(footage, reference);
       const referenceBalances = await homeBalances(referencePage);
 
       // Import the same phrase into a second clean profile, as a v0.3.0 beta
-      // user moving to v0.3.1 would. It must land on the same account.
+      // user moving to v0.3.1 would. It must land on the account the seed had
+      // before v0.3.1, with that account's balances, history and tips.
       const profile = await wallets.profile(`${name}-reimport`, name);
       try {
         const again = await wallets.importInto(profile, DEMO_WALLETS[name], name);
-        expect(again.userId, 'the re-import resolved to a different account, so a new identity was minted').toBe(reference.userId);
+        expectExistingAccount(name, again, baseline, 'the re-import');
+        expect(again.userId, 'the two imports resolved to different accounts').toBe(reference.userId);
         const page = again.profile.page;
         await expect.poll(async () => JSON.stringify(await homeBalances(page)), {
           timeout: 15 * 60_000,
-          message: 'the re-imported balances never matched the reference profile',
+          message: 'the re-imported balances never matched the first import',
         }).toBe(JSON.stringify(referenceBalances));
+        await expectHeldBalances(footage, name, page, baseline);
         await footage.result(page, 're-imported balances');
 
         const npub = await readNpub(footage, page);
         expect(npub, 'the re-import shows a different npub').toBe(referenceNpub);
-        const baseline = loadBaseline()?.[name];
-        if (baseline?.npub) expect(npub, `${name}'s npub differs from the baseline`).toBe(baseline.npub);
-        if (baseline?.userId) expect(again.userId, `${name} resolved to a different account than the baseline`).toBe(baseline.userId);
         footage.fact(`${name} npub`, npub);
         await footage.result(page, 're-imported npub');
 
         const freshPage = await openHome(footage, again);
         referencePage = await openHome(footage, reference);
-        for (const asset of ASSETS) {
-          if (!referenceBalances[asset]) continue;
+        const withHistory = ASSETS.filter((asset) => referenceBalances[asset] || baseline.receipts[asset]?.length);
+        for (const asset of withHistory) {
           const expected = await historyAmounts(footage, referencePage, asset);
+          const receipts = baseline.receipts[asset] ?? [];
+          expect(missingReceipts(expected, TICKERS[asset], receipts), `${name}'s first v0.3.1 import lost ${asset} receipts from before v0.3.1`).toEqual([]);
           await expect.poll(() => historyAmounts(footage, freshPage, asset), {
             timeout: 15 * 60_000,
-            message: `${asset} history after re-import never matched the reference profile`,
+            message: `${asset} history after re-import never matched the first import`,
           }).toEqual(expected);
+        }
+        if (!Object.values(baseline.receipts).some((list) => list?.length)) {
+          declareUnproven(`${name}: no history before v0.3.1 in the baseline, so the re-import's history is compared only with the first import`);
+        }
+
+        if (baseline.sentTips.length) {
+          const tips = await sentTipSummaries(footage, freshPage);
+          for (const tip of baseline.sentTips) {
+            const shape = new RegExp(`\\b${TICKERS[tip.asset]} → ${tip.recipient}\\b`);
+            expect(
+              tips.some((summary) => shape.test(summary.line) && summary.status.startsWith(tip.status)),
+              `${name}'s ${tip.asset} tip to a ${tip.recipient} (${tip.status}) from before v0.3.1 is not on the re-imported account`,
+            ).toBe(true);
+          }
+          await openHome(footage, again);
+        } else {
+          declareUnproven(`${name}: no sent tips before v0.3.1 in the baseline, so tip carry-over is not compared`);
         }
       } finally {
         await profile.close();
@@ -227,14 +266,18 @@ function defineScenarios(): void {
       const legacy = await wallets.importInto(profile, variable, 'legacy');
       expect(legacy.userId, 'the migrated wallet resolved to no account').toBeTruthy();
       expect(legacy.welcomeBack, 'setup did not greet the migrated account, so its handle or socials did not carry over').toBe(true);
+      if (legacy.isNew !== null) expect(legacy.isNew, 'the migrated wallet created a new account').toBe(false);
       if (process.env.E2E_LEGACY_USER_ID) {
         expect(legacy.userId, 'the migrated wallet signed in to a different account').toBe(process.env.E2E_LEGACY_USER_ID);
+      } else {
+        declareUnproven('migrated import: no E2E_LEGACY_USER_ID, so the account is identified by its greeting and handle, not by its id');
       }
       const page = legacy.profile.page;
       await settingsSection(footage, page, 'settings-nostr-nav', 'settings-nostr-screen', 'Nostr identity');
       const handle = page.getByTestId('nostr-handle');
       await expect(handle, 'the migrated account shows no handle').toBeVisible({ timeout: 30_000 });
       if (process.env.E2E_LEGACY_HANDLE) await expect(handle).toContainText(`${process.env.E2E_LEGACY_HANDLE}@`);
+      else declareUnproven('migrated import: no E2E_LEGACY_HANDLE, so a handle is shown but not compared with the old one');
       await footage.result(page, 'handle carried over');
 
       if (process.env.E2E_LEGACY_EXPECT_TIPS === '1') {
@@ -242,12 +285,16 @@ function defineScenarios(): void {
         await footage.tap(page.getByTestId('settings-sent-tips-nav'), 'Sent tips');
         await expect(page.locator('[data-testid^="sent-tip-card-"]').first(), 'the migrated account shows no sent tips').toBeVisible({ timeout: 60_000 });
         await footage.result(page, 'tips carried over');
+      } else {
+        declareUnproven('migrated import: tips carry-over not checked (set E2E_LEGACY_EXPECT_TIPS=1 when the old account sent tips)');
       }
       if (process.env.E2E_LEGACY_EXPECT_PREMIUM === '1') {
         await tabRoot(footage, page, 'feed');
         await waitForFeed(page);
         await expect(page.getByTestId('feed-needs-premium'), 'the migrated account lost its premium posting').toHaveCount(0);
         await footage.result(page, 'premium carried over');
+      } else {
+        declareUnproven('migrated import: premium carry-over not checked (set E2E_LEGACY_EXPECT_PREMIUM=1 when the old account had premium)');
       }
     } finally {
       await profile.close();
@@ -272,7 +319,6 @@ function defineScenarios(): void {
     await footage.result(page, 'lock screen after reopening');
     await unlock(footage, alice, page);
     await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 60_000 });
-    await footage.settled(page, 'unlocked');
 
     await tabRoot(footage, page, 'settings');
     await footage.choose(page.getByTestId('settings-autolock-select'), '60', 'auto-lock after one hour');
@@ -299,7 +345,8 @@ function defineScenarios(): void {
       await footage.tap(page.getByTestId('settings-lock-now-btn'), 'lock now');
       await expect(page.getByTestId('lockscreen-root')).toBeVisible({ timeout: 30_000 });
       await expect(other.getByTestId('lockscreen-root'), 'Lock now left the second window unlocked').toBeVisible({ timeout: 30_000 });
-      expect(await sessionExpiry(page), 'Lock now left a session cache behind').toBeUndefined();
+      // Clearing the cache may trail the lock screen, so this waits for it.
+      await expect.poll(() => sessionExpiry(page), { timeout: 15_000, message: 'Lock now left a session cache behind' }).toBeUndefined();
       await footage.result(other, 'second window revoked');
     } finally {
       await other.close();
@@ -315,7 +362,6 @@ function defineScenarios(): void {
     const alice = await wallets.reference('alice');
     const page = await openHome(footage, alice);
     await tabRoot(footage, page, 'settings');
-    await footage.settled(page, 'settings root');
 
     const policies = [
       ['require-password-sends', 'password for every send'],
@@ -327,7 +373,7 @@ function defineScenarios(): void {
       const initial = await box.isChecked();
       for (const target of [!initial, initial]) {
         await footage.tap(box, `${target ? 'require' : 'stop requiring'} ${label}`);
-        expect(await confirmPasswordIfAsked(footage, alice, page, 15_000), 'changing a confirmation policy did not ask for the password').toBe(true);
+        expect(await confirmPasswordIfAsked(footage, alice, page, { patience: 30_000 }), 'changing a confirmation policy did not ask for the password').toBe(true);
         if (target) await expect(box).toBeChecked();
         else await expect(box).not.toBeChecked();
         await footage.result(page, target ? 'policy on' : 'policy off');
@@ -342,8 +388,27 @@ function defineScenarios(): void {
     const stamp = page.getByTestId('settings-build-identity');
     await stamp.scrollIntoViewIfNeeded();
     await expect(stamp).toContainText(`v${RELEASE_CANDIDATE.version}`);
-    const stampText = (await stamp.textContent()) ?? '';
-    expect(RELEASE_CANDIDATE.commits.some((commit) => stampText.includes(commit)), 'the build stamp names neither the release commit nor its Builds wrapper').toBe(true);
+    const stampText = ((await stamp.textContent()) ?? '').trim();
+    const built = stampText.match(/\(([0-9a-f]{7,40})(-dirty)?[,)]/);
+    expect(built, 'the build stamp names no commit').not.toBeNull();
+    const commit = built![1]!;
+    expect(
+      RELEASE_CANDIDATE.commits.some((known) => commit.startsWith(known) || known.startsWith(commit)),
+      'the build stamp names neither the release commit nor its Builds wrapper',
+    ).toBe(true);
+    const dirty = Boolean(built![2]);
+    footage.fact('build stamp', stampText);
+    footage.fact('build stamp dirty', dirty);
+    if (dirty) {
+      // The release candidate was built from a tree with uncommitted changes,
+      // so its commit alone does not say what is in it. That is the owner's
+      // call: it fails here unless accepted on purpose, and is listed either way.
+      const accepted = process.env.E2E_ACCEPT_DIRTY_BUILD === '1';
+      declareUnproven(`build stamp ends in -dirty: the release candidate was built from a modified tree${accepted ? ' (accepted by E2E_ACCEPT_DIRTY_BUILD=1)' : ''}`);
+      if (!accepted) {
+        expect.soft(dirty, 'the release candidate was built from a modified tree; review the Builds run, then set E2E_ACCEPT_DIRTY_BUILD=1 to accept it').toBe(false);
+      }
+    }
     await footage.result(page, 'build stamp');
 
     const sites = page.getByTestId('settings-connected-sites');
@@ -386,14 +451,14 @@ function defineScenarios(): void {
     const seedHex = ((await seedRow.getAttribute('data-testid')) ?? '').replace('nostr-identity-', '');
     expect(seedHex, 'no seed-derived identity row').toMatch(/^[0-9a-f]{64}$/);
 
-    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+    // What the control hands to the clipboard is recorded in the page as it
+    // happens; the system clipboard itself is never read.
+    await recordClipboardWrites(page);
     await footage.tap(page.getByTestId(`nostr-copy-npub-${seedHex}`), 'copy the npub');
-    const copied = await page.evaluate(() => navigator.clipboard.readText()).catch(() => null);
-    if (copied === null) {
-      test.info().annotations.push({ type: 'unverified', description: 'copy npub: the clipboard could not be read back in this browser mode' });
-    } else {
-      expect(copied.trim(), 'copy npub put something other than the npub on the clipboard').toBe(npub);
-    }
+    await expect.poll(() => copiedExactly(page, npub), {
+      timeout: 15_000,
+      message: 'copy npub did not successfully copy exactly the npub shown',
+    }).toBe(true);
     await footage.settled(page, 'npub copied');
 
     const present = page.getByTestId('nostr-handle');
@@ -443,9 +508,10 @@ function defineScenarios(): void {
     const handle = `e2e_a_${stamp}_${randomBytes(2).toString('hex')}`;
     await footage.type(page.getByTestId('nostr-claim-handle-input'), handle, 'type a test handle');
     await footage.tap(page.getByTestId('nostr-claim-handle-btn'), 'claim the handle');
-    await confirmPasswordIfAsked(footage, created, page);
     const shown = page.getByTestId('nostr-handle');
     const refused = page.getByTestId('nostr-claim-handle-error');
+    // Whichever comes first: the password prompt, or the claim's own outcome.
+    await confirmPasswordIfAsked(footage, created, page, { outcome: shown.or(refused) });
     await expect(shown.or(refused).first()).toBeVisible({ timeout: 60_000 });
     if (await refused.isVisible()) throw new Error(`the handle claim was refused: ${(await refused.innerText()).replace(/\s+/g, ' ').slice(0, 200)}`);
     await expect(shown).toContainText(`${handle}@`);
@@ -453,16 +519,17 @@ function defineScenarios(): void {
     await footage.result(page, 'handle claimed');
 
     const link = page.getByTestId('nostr-link-btn');
+    const linked = page.getByTestId('nostr-linked-badge');
     if (await link.isVisible()) {
       await footage.tap(link, 'link the identity');
-      await confirmPasswordIfAsked(footage, created, page);
+      await confirmPasswordIfAsked(footage, created, page, { outcome: linked });
     }
-    await expect(page.getByTestId('nostr-linked-badge'), 'the identity never reached the linked state').toBeVisible({ timeout: 60_000 });
+    await expect(linked, 'the identity never reached the linked state').toBeVisible({ timeout: 60_000 });
     await footage.result(page, 'identity linked');
 
-    await footage.tap(page.getByTestId('nostr-publish-profile'), 'publish the profile');
-    await confirmPasswordIfAsked(footage, created, page);
     const result = page.getByTestId('nostr-publish-result');
+    await footage.tap(page.getByTestId('nostr-publish-profile'), 'publish the profile');
+    await confirmPasswordIfAsked(footage, created, page, { outcome: result });
     await expect(result).toBeVisible({ timeout: 60_000 });
     await expect(result, 'publishing a claimed, linked handle did not succeed').toContainText(`Published ${handle}@`);
     await footage.result(page, 'profile published');
@@ -525,8 +592,73 @@ function defineScenarios(): void {
       await expect(page.getByTestId('asset-detail-balance')).toBeVisible({ timeout: 30_000 });
       await footage.result(page, 'GRIN registered');
       await footage.tap(page.getByTestId('asset-detail-back'), 'back to Home');
+      await expect(page.getByTestId('home-total-balance')).toBeVisible({ timeout: 30_000 });
+      await footage.settled(page, 'back on Home');
     });
   }
+}
+
+/** The wallet's facts from before v0.3.1, or a declared skip that the lane reports. */
+function requireBaseline(name: string): WalletBaseline {
+  const baseline = baselineFor(name);
+  if (!baseline) {
+    expectedSkip(`no baseline for ${name}: without the user id it had before v0.3.1, two v0.3.1 imports could agree on a newly minted account`);
+  }
+  return baseline;
+}
+
+/**
+ * The import signed in to the account the seed had before v0.3.1: the same user
+ * id, not a new account, and a scan start no later than its first receipt.
+ */
+function expectExistingAccount(name: string, wallet: LiveWallet, baseline: WalletBaseline, which: string): void {
+  expect(wallet.userId, `${which} of ${name} resolved to no backend account`).toBeTruthy();
+  expect(wallet.userId, `${which} of ${name} signed in to a different account than the one registered before v0.3.1`).toBe(baseline.userId);
+  if (wallet.isNew === null) {
+    declareUnproven(`${which} of ${name}: the bootstrap did not say whether it created the account (the user id still ties it to the old one)`);
+  } else {
+    expect(wallet.isNew, `${which} of ${name} created a new account for a seed registered before v0.3.1`).toBe(false);
+  }
+  for (const chain of ['xmr', 'wow'] as const) {
+    const first = baseline.firstReceiptHeight[chain];
+    if (first === undefined) continue;
+    const start = wallet.startHeights[chain];
+    if (start === undefined) {
+      declareUnproven(`${which} of ${name}: the backend echoed no ${chain} scan start, so only the history shows the old receipts are scanned`);
+    } else {
+      expect(start, `${which} of ${name} scans ${chain} from after its first receipt, so that history is lost`).toBeLessThanOrEqual(first);
+    }
+  }
+}
+
+/**
+ * Home balances, once every asset the wallet held before v0.3.1 shows a
+ * positive amount. Each balance is recorded beside its baseline amount.
+ */
+async function expectHeldBalances(
+  footage: GuardedFootage,
+  name: string,
+  page: Page,
+  baseline: WalletBaseline,
+): Promise<Record<AssetId, string>> {
+  let balances = await homeBalances(page);
+  if (baseline.holds.length) {
+    await expect.poll(async () => {
+      balances = await homeBalances(page);
+      return baseline.holds.filter((asset) => !isPositive(balances[asset]));
+    }, {
+      timeout: 15 * 60_000,
+      message: `${name} shows no balance on a chain it held before v0.3.1`,
+    }).toEqual([]);
+  } else {
+    declareUnproven(`${name}: held nothing at the ${loadBaseline().asOf} baseline, so no balance is compared with it`);
+  }
+  for (const asset of ASSETS) {
+    if (balances[asset]) footage.fact(`${name} ${asset} balance`, balances[asset]);
+    const before = baseline.balancesAtBaseline[asset];
+    if (before) footage.fact(`${name} ${asset} balance at baseline`, before);
+  }
+  return balances;
 }
 
 /** The feed tab resolves to its composer or its premium gate. */

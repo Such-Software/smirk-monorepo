@@ -3,7 +3,6 @@
  * identity), shared by its live specs and the fundless specs it extends.
  */
 import { createServer } from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect, type BrowserContext, type Page } from '@playwright/test';
@@ -64,29 +63,77 @@ export async function openCreateTab(footage: GuardedFootage, profile: LiveProfil
   await expect.poll(() => popup.isClosed(), { message: 'the popup should close once it has handed off' }).toBe(true);
   profile.page = tab;
   await expect(tab.getByTestId('onboarding-create-btn')).toBeVisible({ timeout: 30_000 });
+  await footage.settled(tab, 'create tab');
   return tab;
 }
 
-/** Optional non-secret baseline: expected user ids and npubs per demo wallet. */
-export interface WalletBaseline { userId?: string; npub?: string }
+/**
+ * Record what the page hands to the clipboard, without reading the clipboard.
+ * Wraps `navigator.clipboard.writeText` and the `execCommand('copy')` fallback
+ * (packages/ui/src/clipboard.ts tries both) so each copy is kept with whether
+ * it succeeded, and passes every call through unchanged. The system clipboard
+ * is never read: in a headed run it is the owner's, and may hold anything.
+ */
+export async function recordClipboardWrites(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    type Copy = { texts: string[]; ok: boolean | null };
+    const holder = window as unknown as { __e2eCopies?: Copy[] };
+    if (holder.__e2eCopies) return;
+    const copies: Copy[] = [];
+    holder.__e2eCopies = copies;
+    const clipboard = navigator.clipboard as Clipboard | undefined;
+    if (clipboard && typeof clipboard.writeText === 'function') {
+      const original = clipboard.writeText.bind(clipboard);
+      Object.defineProperty(clipboard, 'writeText', {
+        configurable: true,
+        value: (text: string) => {
+          const copy: Copy = { texts: [String(text)], ok: null };
+          copies.push(copy);
+          return original(text).then(
+            () => { copy.ok = true; },
+            (error: unknown) => { copy.ok = false; throw error; },
+          );
+        },
+      });
+    }
+    const execCommand = document.execCommand.bind(document);
+    document.execCommand = (command: string, showUi?: boolean, value?: string) => {
+      if (command !== 'copy') return execCommand(command, showUi, value);
+      // The fallback copies a selected scratch textarea; keep what was selected.
+      const texts = new Set<string>();
+      const active = document.activeElement;
+      if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) {
+        texts.add(active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? undefined));
+      }
+      for (const area of Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea[readonly][aria-hidden="true"]'))) {
+        texts.add(area.value);
+      }
+      texts.add(String(document.getSelection() ?? ''));
+      const ok = execCommand(command, showUi, value);
+      copies.push({ texts: [...texts].filter(Boolean), ok });
+      return ok;
+    };
+  });
+}
 
-/** E2E_BASELINE_FILE, when set: `{ "alice": { "userId": "...", "npub": "npub1..." }, ... }`. */
-export function loadBaseline(): Record<string, WalletBaseline> | null {
-  const file = process.env.E2E_BASELINE_FILE;
-  if (!file) return null;
-  if (!existsSync(file)) throw new Error('E2E_BASELINE_FILE does not exist');
-  const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
-  if (!parsed || typeof parsed !== 'object') throw new Error('E2E_BASELINE_FILE must hold a JSON object keyed by wallet name');
-  return parsed as Record<string, WalletBaseline>;
+/** Whether the page successfully copied exactly `text` since recordClipboardWrites. */
+export async function copiedExactly(page: Page, text: string): Promise<boolean> {
+  return page.evaluate((wanted) => {
+    const copies = (window as unknown as { __e2eCopies?: Array<{ texts: string[]; ok: boolean | null }> }).__e2eCopies ?? [];
+    return copies.some((copy) => copy.ok === true && copy.texts.some((value) => value.trim() === wanted));
+  }, text);
 }
 
 /**
- * A Smirk website challenge naming https://smirk.cash, fetched from the backend
- * exactly as the website asks for one. Falls back to the documented format if
- * the backend refuses (the wallet's check is on the text alone); `live` says
- * which was used. A challenge is a public nonce, not a credential.
+ * A Smirk website challenge naming https://smirk.cash. With ALLOW_PROD_WRITES=1
+ * it is fetched from the backend exactly as the website asks for one (the
+ * backend stores the nonce for five minutes, so it is a production write the
+ * gate must cover). Otherwise, or if the backend refuses, it is the documented
+ * format: the wallet's check is on the text alone. `live` says which was used.
+ * A challenge is a public nonce, not a credential.
  */
 export async function websiteChallenge(backend: string, origin = 'https://smirk.cash'): Promise<{ text: string; live: boolean }> {
+  if (process.env.ALLOW_PROD_WRITES !== '1') return documentedChallenge(origin);
   try {
     const res = await fetch(`${backend.replace(/\/$/, '')}/auth/website/challenge`, {
       method: 'POST',
@@ -103,6 +150,10 @@ export async function websiteChallenge(backend: string, origin = 'https://smirk.
   } catch {
     /* fall through to the documented format */
   }
+  return documentedChallenge(origin);
+}
+
+function documentedChallenge(origin: string): { text: string; live: boolean } {
   return {
     text: `Smirk Authentication Challenge\nNonce: e2e-${Date.now().toString(36)}\nOrigin: ${origin}\nTimestamp: ${new Date().toISOString()}`,
     live: false,

@@ -137,5 +137,6 @@ test('Lock now revokes a second open window', async ({ context, extensionId }) =
   await page.getByTestId('settings-lock-now-btn').click();
   await expect(page.getByTestId('lockscreen-root')).toBeVisible({ timeout: 20_000 });
   await expect(other.getByTestId('lockscreen-root'), 'Lock now left the second window unlocked').toBeVisible({ timeout: 20_000 });
-  expect(await sessionExpiry(page), 'Lock now left a session cache behind').toBeUndefined();
+  // Clearing the cache may trail the lock screen, so this waits for it.
+  await expect.poll(() => sessionExpiry(page), { timeout: 15_000, message: 'Lock now left a session cache behind' }).toBeUndefined();
 });

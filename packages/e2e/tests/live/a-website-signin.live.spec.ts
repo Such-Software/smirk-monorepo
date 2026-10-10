@@ -12,6 +12,7 @@
 import type { BrowserContext, Page } from '@playwright/test';
 import {
   WEBSITE_URL,
+  declareUnproven,
   expect,
   onLiveLane,
   openHome,
@@ -103,11 +104,16 @@ function defineScenarios(): void {
     const approvals = watchApprovals(context);
     const page = await context.newPage();
     try {
+      // A backend-issued challenge only with ALLOW_PROD_WRITES=1: asking for one
+      // stores a nonce on production. The wallet's check reads the text alone.
       const challenge = await websiteChallenge(BACKEND_URL);
-      test.info().annotations.push({
-        type: 'challenge',
-        description: challenge.live ? 'a real challenge issued by the backend for https://smirk.cash' : 'the documented challenge format (the backend refused to issue one)',
-      });
+      if (challenge.live) {
+        test.info().annotations.push({ type: 'challenge', description: 'a real challenge issued by the backend for https://smirk.cash' });
+      } else {
+        declareUnproven(process.env.ALLOW_PROD_WRITES === '1'
+          ? '#27 used the documented challenge format: the backend refused to issue one'
+          : '#27 used the documented challenge format, not one the backend issued (set ALLOW_PROD_WRITES=1 to ask production for one)');
+      }
       await page.goto(server.url);
       await expect.poll(() => page.evaluate(() => typeof (window as unknown as { smirk?: { signIn?: unknown } }).smirk?.signIn === 'function'), {
         timeout: 30_000, message: 'window.smirk was not injected on the dummy origin',

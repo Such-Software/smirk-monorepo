@@ -17,14 +17,15 @@
  * worker, the first time a test asks for them, and that import is recorded.
  */
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { inspect } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { chromium, expect, type BrowserContext, type Page } from '@playwright/test';
+import { chromium, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { test as base } from './private-test.js';
-import { GuardedFootage, assertStaticLabel, surfaceOf, waitForQuiet } from './guarded-footage.js';
+import { ACTION_TIMEOUT_MS, GuardedFootage, assertStaticLabel, surfaceOf, waitForQuiet } from './guarded-footage.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -147,11 +148,103 @@ export function expectedSkip(reason: string): never {
   throw new Error(reason);
 }
 
+/**
+ * Record a claim this test could not check, with the reason. The test goes on
+ * and may pass, but the lane's reporter lists every such line under what the
+ * run did not prove, so an unchecked claim is never a silent pass. Reasons are
+ * static text, like skip reasons.
+ */
+export function declareUnproven(reason: string): void {
+  base.info().annotations.push({ type: 'unproven', description: reason });
+}
+
 /** Production writes (new user rows, handles, profiles) need ALLOW_PROD_WRITES=1. */
 export function requireProdWrites(what: string): void {
   if (process.env.ALLOW_PROD_WRITES !== '1') {
     expectedSkip(`${what} writes to production; set ALLOW_PROD_WRITES=1 to run it on purpose`);
   }
+}
+
+// ── Network observation ─────────────────────────────────────────────────────
+
+/** Navigations wait this long; the runner's default is no limit at all. */
+export const NAVIGATION_TIMEOUT_MS = 120_000;
+
+/**
+ * Hosts Chromium itself contacts on a fresh profile, extension or not: account,
+ * variations, component, update and safe-browsing services. Seen with no
+ * extension loaded, through the same refusing proxy.
+ */
+const BROWSER_SERVICE_HOST = /(^|\.)(google\.com|googleapis\.com|gvt1\.com|gstatic\.com)$/;
+
+/** The control host the observation proves itself with (.invalid never resolves). */
+const PROXY_CONTROL_HOST = 'e2e-proxy-control.invalid';
+
+let bundleText: string | null = null;
+
+/** Every script, page and manifest of the extension under test, as one string. */
+function extensionBundleText(): string {
+  if (bundleText !== null) return bundleText;
+  const parts: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.(m?js|html|json)$/.test(entry.name)) parts.push(readFileSync(path, 'utf8'));
+    }
+  };
+  walk(extensionDist());
+  bundleText = parts.join('\n');
+  return bundleText;
+}
+
+/**
+ * Whether a contacted host belongs to the browser rather than the extension.
+ * On a fresh profile with no network answered, the extension can only reach a
+ * host its own bundle names, so a browser-service host the bundle never names
+ * cannot be the extension's. One the bundle does name always counts.
+ */
+function isBrowserService(host: string): boolean {
+  return BROWSER_SERVICE_HOST.test(host) && !extensionBundleText().includes(host);
+}
+
+interface RefusingProxy {
+  server: string;
+  hosts: Set<string>;
+  close(): Promise<void>;
+}
+
+/**
+ * A local proxy that answers every request with 403 and records the host it
+ * was for. Given to a profile as its browser-wide proxy, it sees what Playwright
+ * request events cannot: the service worker before any listener attaches, the
+ * offscreen document (which Playwright detaches from), and WebSocket upgrades.
+ */
+async function startRefusingProxy(): Promise<RefusingProxy> {
+  const hosts = new Set<string>();
+  const proxy = createServer((request, response) => {
+    try { hosts.add(new URL(request.url ?? '').hostname); } catch { hosts.add('unparseable'); }
+    response.writeHead(403, { Connection: 'close' });
+    response.end();
+  });
+  proxy.on('connect', (request, socket) => {
+    const host = String(request.url ?? '').replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1');
+    hosts.add(host || 'unparseable');
+    socket.on('error', () => {});
+    socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+  });
+  proxy.on('clientError', (_error, socket) => socket.destroy());
+  await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+  const address = proxy.address();
+  if (!address || typeof address === 'string') throw new Error('the observation proxy did not bind a port');
+  return {
+    server: `http://127.0.0.1:${address.port}`,
+    hosts,
+    close: () => new Promise<void>((resolve) => {
+      proxy.closeAllConnections();
+      proxy.close(() => resolve());
+    }),
+  };
 }
 
 // ── Profiles and wallets ────────────────────────────────────────────────────
@@ -161,6 +254,8 @@ export class LiveProfile {
   closed = false;
   /** Whether the fresh install opened its setup tab by itself. */
   installTabOpened = false;
+  /** The refusing proxy of an observed profile, or null for a networked one. */
+  private observer: RefusingProxy | null = null;
 
   constructor(
     readonly label: string,
@@ -168,10 +263,51 @@ export class LiveProfile {
     readonly extensionId: string,
     readonly dir: string,
     first: Page,
-    /** Hostnames this profile contacted since launch (never full URLs). */
+    /** Hostnames this profile's pages and workers requested (never full URLs). */
     readonly contacted: Set<string>,
   ) {
     this.page = first;
+  }
+
+  /** @internal Set once by LiveWallets for a profile launched behind the refusing proxy. */
+  observeWith(observer: RefusingProxy): void {
+    this.observer = observer;
+  }
+
+  /** Whether this profile runs behind the refusing proxy. */
+  get observed(): boolean {
+    return this.observer !== null;
+  }
+
+  /**
+   * Hosts the extension tried to reach: every page or worker request, and on
+   * an observed profile every host the browser-wide proxy saw, less the
+   * browser's own services (see isBrowserService). Hostnames only.
+   */
+  extensionContacts(): string[] {
+    const proxied = [...(this.observer?.hosts ?? [])].filter((host) => !isBrowserService(host));
+    return [...new Set([...this.contacted, ...proxied])].filter((host) => host !== PROXY_CONTROL_HOST).sort();
+  }
+
+  /** Browser-service hosts the proxy saw and attributed to Chromium itself. */
+  browserContacts(): string[] {
+    return [...(this.observer?.hosts ?? [])].filter(isBrowserService).sort();
+  }
+
+  /**
+   * Prove the observation is live: a request from `page` to a reserved host
+   * must reach the proxy. Without this, "nothing contacted" could also mean a
+   * proxy that saw nothing at all.
+   */
+  async proveObservation(page: Page): Promise<boolean> {
+    const observer = this.observer;
+    if (!observer) return false;
+    await page.evaluate((host) => fetch(`http://${host}/`, { cache: 'no-store' }).then(() => {}, () => {}), PROXY_CONTROL_HOST);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && !observer.hosts.has(PROXY_CONTROL_HOST)) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return observer.hosts.has(PROXY_CONTROL_HOST);
   }
 
   popupUrl(suffix = ''): string {
@@ -190,18 +326,27 @@ export class LiveProfile {
     if (this.closed) return;
     this.closed = true;
     await this.context.close().catch(() => {});
+    await this.observer?.close().catch(() => {});
     rmSync(this.dir, { recursive: true, force: true });
   }
 }
 
-export interface LiveWallet {
-  readonly name: string;
-  readonly profile: LiveProfile;
-  readonly password: SecretValue;
-  /** The backend user id the import resolved to (not a secret). */
+/** What onboarding learned about the account; no value here is a secret. */
+export interface OnboardingOutcome {
+  /** The backend user id the import resolved to. */
   userId: string | null;
   /** True when setup greeted a returning identity (handle or linked socials). */
   welcomeBack: boolean;
+  /** The backend's own answer: true when this sign-in created the account; null if unreadable. */
+  isNew: boolean | null;
+  /** Scan-start heights the backend echoed for the account, when it did. */
+  startHeights: { xmr?: number; wow?: number };
+}
+
+export interface LiveWallet extends OnboardingOutcome {
+  readonly name: string;
+  readonly profile: LiveProfile;
+  readonly password: SecretValue;
 }
 
 export class LiveWallets {
@@ -217,20 +362,33 @@ export class LiveWallets {
     chmodSync(this.root, 0o700);
   }
 
-  /** A clean browser profile with the release candidate loaded and no wallet. */
-  async profile(label: string, wallet = label): Promise<LiveProfile> {
+  /**
+   * A clean browser profile with the release candidate loaded and no wallet.
+   * With `observeNetwork`, the profile runs behind a refusing proxy that records
+   * every host the browser tries from launch on, and lets nothing through.
+   */
+  async profile(label: string, wallet = label, options: { observeNetwork?: boolean } = {}): Promise<LiveProfile> {
     assertStaticLabel(label);
     const dist = extensionDist();
     if (!existsSync(join(dist, 'manifest.json'))) throw new Error('no unpacked extension at EXTENSION_DIST; run the live preflight');
     const dir = mkdtempSync(join(this.root, `${label.replace(/[^a-z0-9]+/gi, '-')}-`));
     chmodSync(dir, 0o700);
+    const observer = options.observeNetwork ? await startRefusingProxy() : null;
     const context = await chromium.launchPersistentContext(dir, {
       headless: !process.env.HEADED,
       channel: 'chromium',
       viewport: { ...LIVE_VIEWPORT },
       deviceScaleFactor: LIVE_SCALE,
       args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, '--no-sandbox'],
+      ...(observer ? { proxy: { server: observer.server } } : {}),
+    }).catch(async (error: unknown) => {
+      await observer?.close();
+      throw error;
     });
+    // Explicit, whatever the runner's defaults: a missing element fails its
+    // step in a minute instead of stalling the run for the test timeout.
+    context.setDefaultTimeout(ACTION_TIMEOUT_MS);
+    context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     const contacted = new Set<string>();
     // Context-level, so service-worker fetches count too. Hostnames only.
     context.on('request', (request) => {
@@ -244,6 +402,7 @@ export class LiveWallets {
     const extensionId = new URL(worker.url()).host;
     const first = context.pages()[0] ?? await context.newPage();
     const profile = new LiveProfile(label, context, extensionId, dir, first, contacted);
+    if (observer) profile.observeWith(observer);
     // A fresh install opens setup in a tab by itself (background onInstalled),
     // a moment after launch. Wait for it and close it, so each scenario starts
     // from the surface it names and a later page event is never that tab.
@@ -286,7 +445,7 @@ export class LiveWallets {
     const words = readCustodyPhrase(variable);
     try {
       const outcome = await importPhrase(this.footage, profile, words, password);
-      return { name, profile, password, userId: outcome.userId, welcomeBack: outcome.welcomeBack };
+      return { name, profile, password, ...outcome };
     } finally {
       words.fill('');
     }
@@ -318,7 +477,7 @@ export async function importPhrase(
   profile: LiveProfile,
   words: string[],
   password: SecretValue,
-): Promise<{ userId: string | null; welcomeBack: boolean }> {
+): Promise<OnboardingOutcome> {
   const page = profile.page;
   await page.goto(profile.popupUrl());
   await expect(page.getByTestId('onboarding-import-btn')).toBeVisible({ timeout: 60_000 });
@@ -370,7 +529,7 @@ export async function setPasswordAndSubmit(footage: GuardedFootage, page: Page, 
 export async function finishOnboarding(
   footage: GuardedFootage,
   page: Page,
-): Promise<{ userId: string | null; welcomeBack: boolean }> {
+): Promise<OnboardingOutcome> {
   const finish = page.getByTestId('onboarding-setup-finish-btn');
   const home = page.getByTestId('bottom-nav');
   const failed = page.getByTestId('bootstrap-error');
@@ -394,34 +553,60 @@ export async function finishOnboarding(
     timeout: 10 * 60_000,
     message: 'the fiat total never resolved, so the wallet never received a balance set from the backend',
   }).toMatch(/\d/);
-  const userId = await pollUserId(page);
-  return { userId, welcomeBack };
+  const facts = await pollBootstrapFacts(page);
+  return { ...facts, welcomeBack };
+}
+
+/** The non-secret part of the wallet's bootstrap: who the backend says this is. */
+export interface BootstrapFacts {
+  userId: string | null;
+  isNew: boolean | null;
+  startHeights: { xmr?: number; wow?: number };
 }
 
 /**
- * The backend user id from the wallet's bootstrap cache. Only the id leaves the
- * page; the access token beside it never does.
+ * The account facts from the wallet's bootstrap cache: user id, whether the
+ * sign-in created the account, and the scan-start heights. Only these cross out
+ * of the page; the access token beside them never does.
  */
-export async function readUserId(page: Page): Promise<string | null> {
+export async function readBootstrapFacts(page: Page): Promise<BootstrapFacts> {
   return page.evaluate(async (key) => {
     const chromeApi = (globalThis as unknown as { chrome: { storage: { session: { get(k: string): Promise<Record<string, unknown>> } } } }).chrome;
-    const entry = (await chromeApi.storage.session.get(key))[key] as { bootstrap?: { userId?: unknown } } | undefined;
-    const id = entry?.bootstrap?.userId;
-    return typeof id === 'string' ? id : null;
+    const entry = (await chromeApi.storage.session.get(key))[key] as
+      | { bootstrap?: { userId?: unknown; isNew?: unknown; xmrStartHeight?: unknown; wowStartHeight?: unknown } }
+      | undefined;
+    const bootstrap = entry?.bootstrap;
+    const height = (value: unknown) => (typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined);
+    const xmr = height(bootstrap?.xmrStartHeight);
+    const wow = height(bootstrap?.wowStartHeight);
+    return {
+      userId: typeof bootstrap?.userId === 'string' ? bootstrap.userId : null,
+      isNew: typeof bootstrap?.isNew === 'boolean' ? bootstrap.isNew : null,
+      startHeights: { ...(xmr === undefined ? {} : { xmr }), ...(wow === undefined ? {} : { wow }) },
+    };
   }, 'smirk_bootstrap_cache_v1');
 }
 
-export async function pollUserId(page: Page, patience = 90_000): Promise<string | null> {
-  const deadline = Date.now() + patience;
-  while (Date.now() < deadline) {
-    const id = await readUserId(page).catch(() => null);
-    if (id) return id;
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-  }
-  return null;
+/** The backend user id alone (see readBootstrapFacts). */
+export async function readUserId(page: Page): Promise<string | null> {
+  return (await readBootstrapFacts(page)).userId;
 }
 
-/** Type the password into the lock screen (carded) and wait for it to go. */
+export async function pollBootstrapFacts(page: Page, patience = 90_000): Promise<BootstrapFacts> {
+  const deadline = Date.now() + patience;
+  while (Date.now() < deadline) {
+    const facts = await readBootstrapFacts(page).catch(() => null);
+    if (facts?.userId) return facts;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  return { userId: null, isNew: null, startHeights: {} };
+}
+
+export async function pollUserId(page: Page, patience = 90_000): Promise<string | null> {
+  return (await pollBootstrapFacts(page, patience)).userId;
+}
+
+/** Type the password into the lock screen (carded), wait for it to go, and hold what it uncovers. */
 export async function unlock(footage: GuardedFootage, wallet: LiveWallet, page: Page = wallet.profile.page): Promise<void> {
   const field = page.getByTestId('lockscreen-password-input');
   await expect(field).toBeVisible({ timeout: 60_000 });
@@ -431,18 +616,26 @@ export async function unlock(footage: GuardedFootage, wallet: LiveWallet, page: 
     await footage.tap(page.getByTestId('lockscreen-unlock-btn'), 'unlock');
     await expect(page.getByTestId('lockscreen-root')).toHaveCount(0, { timeout: 60_000 });
   });
+  await footage.settled(page, 'unlocked');
 }
 
-/** If an operation password prompt appears, answer it (carded). Returns whether it did. */
+/**
+ * If an operation password prompt appears, answer it (carded). Returns whether
+ * it did. With `outcome`, the wait ends as soon as either the prompt or the
+ * operation's own result shows, so a slow prompt is never taken for no prompt
+ * and a prompt-free operation costs no waiting.
+ */
 export async function confirmPasswordIfAsked(
   footage: GuardedFootage,
   wallet: LiveWallet,
   page: Page,
-  patience = 5_000,
+  options: { patience?: number; outcome?: Locator } = {},
 ): Promise<boolean> {
   const field = page.getByTestId('operation-password');
-  const shown = await field.waitFor({ state: 'visible', timeout: patience }).then(() => true, () => false);
-  if (!shown) return false;
+  const patience = options.patience ?? 60_000;
+  const either = options.outcome ? field.or(options.outcome).first() : field;
+  const appeared = await either.waitFor({ state: 'visible', timeout: patience }).then(() => true, () => false);
+  if (!appeared || !(await field.isVisible().catch(() => false))) return false;
   await expect(field).toHaveAttribute('type', 'password');
   await footage.secret('Operation password', async () => {
     await footage.secretFill(field, wallet.password.reveal(), 'operation password');
@@ -457,7 +650,10 @@ const TAB_ROOT: Record<string, string> = {
   settings: 'settings-lock-now-btn',
 };
 
-/** A tab tap restores its last sub-screen; tapping it again returns to its root. */
+/**
+ * A tab tap restores its last sub-screen; tapping it again returns to its root.
+ * The root is then held for the settled period, like every screen.
+ */
 export async function tabRoot(footage: GuardedFootage, page: Page, tab: 'home' | 'swap' | 'inbox' | 'settings' | 'feed'): Promise<void> {
   const nav = page.getByTestId(`nav-tab-${tab}`);
   await footage.tap(nav, `open the ${tab} tab`);
@@ -466,9 +662,10 @@ export async function tabRoot(footage: GuardedFootage, page: Page, tab: 'home' |
     await footage.tap(nav, `back to the ${tab} root`);
   }
   if (marker) await expect(page.getByTestId(marker)).toBeVisible({ timeout: 30_000 });
+  await footage.settled(page, `${tab} tab`);
 }
 
-/** A usable wallet page on Home: reopened if closed, unlocked if locked. */
+/** A usable wallet page on Home, held settled: reopened if closed, unlocked if locked. */
 export async function openHome(footage: GuardedFootage, wallet: LiveWallet): Promise<Page> {
   let page = wallet.profile.page;
   if (page.isClosed() || surfaceOf(page.url()) !== 'wallet') page = await wallet.profile.openPage();
@@ -542,7 +739,66 @@ export async function historyAmounts(footage: GuardedFootage, page: Page, asset:
   const amounts = (at >= 0 ? text.slice(at) : '').match(AMOUNT) ?? [];
   await footage.result(page, 'asset history');
   await footage.tap(page.getByTestId('asset-detail-back'), 'back to Home');
+  await expect(page.getByTestId('home-total-balance')).toBeVisible({ timeout: 30_000 });
+  await footage.settled(page, 'back on Home');
   return amounts.map((amount) => amount.replace(/\s+/g, ' ').replace('−', '-'));
+}
+
+/** A displayed amount as a canonical decimal string: no grouping, no trailing zeros. */
+export function canonicalAmount(text: string): string | null {
+  const figure = text.replace(/,/g, '').match(/\d+(?:\.\d+)?/)?.[0];
+  if (!figure) return null;
+  const [whole, fraction = ''] = figure.split('.');
+  const trimmed = fraction.replace(/0+$/, '');
+  return `${whole!.replace(/^0+(?=\d)/, '')}${trimmed ? `.${trimmed}` : ''}`;
+}
+
+/**
+ * Which expected incoming amounts a history list lacks. Each expected amount
+ * must match its own incoming entry ("+ 0.05 XMR"), so two receipts of the same
+ * size need two entries.
+ */
+export function missingReceipts(history: readonly string[], ticker: string, expected: readonly string[]): string[] {
+  const pool = history
+    .filter((entry) => /^\+/.test(entry.trim()) && new RegExp(`\\b${ticker}$`).test(entry.trim()))
+    .map(canonicalAmount);
+  const missing: string[] = [];
+  for (const amount of expected) {
+    const at = pool.indexOf(canonicalAmount(amount));
+    if (at < 0) missing.push(amount);
+    else pool.splice(at, 1);
+  }
+  return missing;
+}
+
+/** Each asset's ticker as the history shows it. */
+export const TICKERS: Readonly<Record<AssetId, string>> = Object.freeze({
+  btc: 'BTC', ltc: 'LTC', xmr: 'XMR', wow: 'WOW', grin: 'GRIN',
+});
+
+/**
+ * A sent tip as the Sent tips list shows it: the collapsed card's text
+ * ("0.01 XMR → link", when, the badge) and its status badge alone.
+ */
+export interface SentTipSummary { line: string; status: string }
+
+/**
+ * Open Settings, Sent tips, and read each collapsed card's text and status.
+ * Only those strings leave the page; a claim link appears only in an expanded
+ * card, and no card is expanded here.
+ */
+export async function sentTipSummaries(footage: GuardedFootage, page: Page): Promise<SentTipSummary[]> {
+  await tabRoot(footage, page, 'settings');
+  await footage.tap(page.getByTestId('settings-sent-tips-nav'), 'Sent tips');
+  const cards = page.locator('[data-testid^="sent-tip-card-"]');
+  await expect(cards.first().or(page.getByText('No tips sent yet')).first(), 'the Sent tips list never loaded').toBeVisible({ timeout: 60_000 });
+  await waitForQuiet(page);
+  const summaries = await cards.evaluateAll((elements) => elements.map((element) => ({
+    line: (element.querySelector('[data-testid="sent-tip-toggle"]')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    status: (element.querySelector('[data-testid="sent-tip-status-badge"]')?.textContent ?? '').trim(),
+  })));
+  await footage.result(page, 'sent tips');
+  return summaries;
 }
 
 // ── The lane's test object ──────────────────────────────────────────────────
@@ -576,6 +832,9 @@ export const test = base.extend<{ liveChapter: void }, { footage: GuardedFootage
   liveChapter: [async ({ footage }, use, testInfo) => {
     footage.chapter(chapterLabel(testInfo.title));
     await use();
+    // The last screen of every step gets its settled hold too, on every open
+    // page whose frame changed since its last one, even when no tap follows.
+    await footage.settleAll();
   }, { auto: true }],
 });
 
