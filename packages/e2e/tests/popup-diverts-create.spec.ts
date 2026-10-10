@@ -17,7 +17,16 @@
  * This asserts the diversion itself: in the popup, create must not reach a
  * phrase. It is the regression guard for the whole class.
  */
+import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/extension.js';
+import { settleInstallTab } from '../fixtures/A-onboarding-identity-helpers.js';
+
+// A fresh install opens setup in a tab by itself, a moment after launch. Let
+// that happen first, so a `page` event below is the one the click caused.
+test.beforeEach(async ({ context, extensionId }) => {
+  void extensionId; // the extension must be loaded before its install tab can open
+  await settleInstallTab(context);
+});
 
 test('the action popup diverts create instead of generating a phrase', async ({
   context,
@@ -57,6 +66,31 @@ test('the action popup diverts create instead of generating a phrase', async ({
   await expect(tab.getByTestId('onboarding-create-seed-word-0')).toBeVisible({
     timeout: 30_000,
   });
+});
+
+/**
+ * Import is deliberately not diverted: the phrase already exists, so losing the
+ * popup costs only retyping. It must stay in the popup and reach the word grid
+ * there, without opening a tab. Diverting it would make every returning user
+ * pay for a hazard that only create has.
+ */
+test('the action popup keeps import in place and reaches the word grid', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  const opened: string[] = [];
+  const onPage = (other: Page) => { opened.push(other.url()); };
+  context.on('page', onPage);
+  try {
+    await page.getByTestId('onboarding-import-btn').click();
+    await page.getByTestId('onboarding-import-warning-continue').click();
+    await expect(page.getByTestId('onboarding-import-word-0')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('onboarding-import-word-11')).toBeVisible();
+    expect(page.isClosed(), 'import closed the popup').toBe(false);
+    expect(page.url(), 'import moved to the tab surface').not.toContain('ctx=tab');
+    expect(opened, 'import opened another page').toEqual([]);
+  } finally {
+    context.off('page', onPage);
+  }
 });
 
 test('the tab surface does generate a phrase', async ({ context, extensionId }) => {

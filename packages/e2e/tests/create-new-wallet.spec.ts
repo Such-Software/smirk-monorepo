@@ -1,5 +1,6 @@
 import { test, expect, skipDestructiveOnShared } from '../fixtures/extension.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
+import { readUserId } from '../fixtures/live-wallets.js';
 
 // Registers a brand-new wallet → writes a real user row. Refused on a shared/prod
 // backend unless you deliberately opt in with ALLOW_PROD_WRITES=1, so a routine
@@ -63,6 +64,10 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   );
 
   const PASSWORD = 'e2e-test-password-123';
+  // A backend with registration.pow_required mines before it registers, which
+  // takes longer than a UI step; give that path room rather than flake on it.
+  if (caps.registration.pow_required) test.setTimeout(6 * 60_000);
+  const homeTimeout = caps.registration.pow_required ? 5 * 60_000 : 40_000;
 
   const page = await context.newPage();
   // `?ctx=tab` is how a real user reaches creation now: the action popup diverts
@@ -89,6 +94,13 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   }
   expect(words.filter(Boolean)).toHaveLength(WORD_COUNT);
 
+  // The copy control explains itself before it is used. It is deliberately NOT
+  // pressed: a test must not put a recovery phrase on this machine's clipboard.
+  const copyStatus = page.getByTestId('onboarding-create-copy-seed-status');
+  await expect(copyStatus).toBeVisible();
+  expect(((await copyStatus.textContent()) ?? '').trim(), 'the copy status line is empty').not.toBe('');
+  await expect(page.getByTestId('onboarding-create-copy-seed')).toBeEnabled();
+
   // Acknowledge the backup checkbox, then continue to the verify challenge.
   // The checkbox has no testid (plain label); it's the only checkbox on this
   // step, so target it directly to enable the Continue button.
@@ -105,15 +117,19 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   for (let i = 0; i < WORD_COUNT; i++) {
     const input = page.getByTestId(`onboarding-verify-word-${i}`);
     if ((await input.count()) > 0) {
-      await input.fill(words[i]);
+      await input.fill(words[i]!);
       answered++;
     }
   }
   // Sanity: the wizard should have asked for at least one word (default is 3).
   expect(answered, 'verify step presented at least one word challenge').toBeGreaterThan(0);
   await page.getByTestId('onboarding-create-continue').click();
+  words.fill('');
 
   // ── Password step (shared testids with the import flow) ────────────────────
+  // Both fields mask what is typed.
+  await expect(page.getByTestId('onboarding-password-input')).toHaveAttribute('type', 'password');
+  await expect(page.getByTestId('onboarding-password-confirm-input')).toHaveAttribute('type', 'password');
   await page.getByTestId('onboarding-password-input').fill(PASSWORD);
   await page.getByTestId('onboarding-password-confirm-input').fill(PASSWORD);
   // Submitting runs onComplete → the offscreen bootstrap-auth registers the new
@@ -124,7 +140,7 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   // optional Smirk-setup step → finish (absent when the shell wires no setup step)
   await page
     .getByTestId('onboarding-setup-finish-btn')
-    .click({ timeout: 30_000 })
+    .click({ timeout: homeTimeout })
     .catch(() => {
       /* hasSetupStep === false → skipped straight to Home */
     });
@@ -132,7 +148,24 @@ test('create a fresh wallet → verify generated phrase → register → Home re
   // ── Home is up. A FRESH wallet has ZERO balance, so assert on the PRESENCE ──
   // of the Home surface, not a balance number: the bottom nav renders and the
   // onboarding create entry is gone (the wizard unmounted).
-  await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: homeTimeout });
   footage.mark('home-rendered', 'wallet created, registered, Home visible');
   await expect(page.getByTestId('onboarding-create-btn')).toHaveCount(0);
+
+  // Registered for real: the bootstrap holds a backend user id. Only the id is
+  // read out of the page; the access token beside it stays there.
+  await expect
+    .poll(() => readUserId(page), {
+      timeout: 90_000,
+      message: 'Home rendered but the wallet holds no backend user id, so registration did not complete',
+    })
+    .toBeTruthy();
+
+  // The new wallet has a Nostr identity derived from its phrase.
+  await page.getByTestId('nav-tab-settings').click();
+  await page.getByTestId('settings-nostr-nav').click();
+  await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('nostr-npub')).toHaveText(/^\s*npub1[02-9ac-hj-np-z]{58}\s*$/, { timeout: 20_000 });
+  // A brand-new account has no handle yet, and says so instead of rendering nothing.
+  await expect(page.getByTestId('nostr-handle-absent')).toBeVisible({ timeout: 30_000 });
 });
