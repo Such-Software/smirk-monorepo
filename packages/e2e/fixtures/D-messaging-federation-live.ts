@@ -194,10 +194,14 @@ function footageRoot(): string {
 export function recordFinding(type: string, description: string): void {
   const info = test.info();
   info.annotations.push({ type, description });
+  appendFinding(info.title, type, description);
+}
+
+function appendFinding(title: string, type: string, description: string): void {
   const label = (process.env.E2E_RUN_LABEL ?? 'run').replace(/[^A-Za-z0-9._-]/g, '');
   const dir = join(homedir(), 'Build', 'smirk-e2e', `v${dExtensionVersion()}-${label}`, 'reports');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const line = JSON.stringify({ at: new Date().toISOString(), test: info.title, type, description });
+  const line = JSON.stringify({ at: new Date().toISOString(), test: title, type, description });
   appendFileSync(join(dir, 'D-messaging-federation-findings.jsonl'), `${line}\n`, { mode: 0o600 });
 }
 
@@ -324,16 +328,19 @@ async function importIntoProfile(
     // The wizard fails closed until the backend's sign-up requirements resolve;
     // its retry rebuilds the step with empty fields, so re-enter before each press.
     const submit = page.getByTestId('onboarding-set-password-submit');
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       await page.getByTestId('onboarding-password-input').fill(password);
       await page.getByTestId('onboarding-password-confirm-input').fill(password);
       await submit.click();
       await page.waitForTimeout(3_000);
       if (!(await submit.isVisible().catch(() => false))) break;
-      // Retry only the capabilities race; any other refusal would count against
-      // the backend's per-wallet restore budget.
-      if (!/sign-up requirements/.test(await page.locator('#root').innerText())) break;
-      await page.waitForTimeout(5_000);
+      // Retry only what the wallet itself calls retryable: the capabilities
+      // race, and a history lookup that did not answer ("Retry before
+      // registering", seen when several runs share the backend). Any other
+      // refusal stops here: it would count against the restore budget.
+      const screen = await page.locator('#root').innerText();
+      if (!/sign-up requirements|Could not check wallet history/.test(screen)) break;
+      await page.waitForTimeout(/wallet history/.test(screen) ? 20_000 : 5_000);
     }
     stage = 'setup';
     await page.getByTestId('onboarding-setup-finish-btn').click({ timeout: 25_000 }).catch(() => {});
@@ -344,7 +351,23 @@ async function importIntoProfile(
     return page;
   } catch {
     // Stage only: Playwright call logs can quote values typed into fields.
-    throw new Error(`live lane: wallet import stopped at the ${stage} stage`);
+    // As in the demo lane, name the visible screen by its test IDs, and add
+    // its text only when no phrase field is on it. Typed values (the phrase
+    // words, the password) live in input values, never in the page text, and
+    // the canary still checks the line before it is recorded.
+    const ids = await page
+      .evaluate(() =>
+        Array.from(document.querySelectorAll('[data-testid]'))
+          .filter((e) => e.getBoundingClientRect().width > 0)
+          .map((e) => (e as HTMLElement).dataset.testid ?? '')
+          .slice(0, 30),
+      )
+      .catch(() => [] as string[]);
+    const sensitive = ids.some((id) => /import-word|mnemonic|seed|revealed/i.test(id));
+    const text = sensitive
+      ? '(withheld on a phrase screen)'
+      : ((await page.locator('#root').innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').slice(-240);
+    throw new Error(`live lane: wallet import stopped at the ${stage} stage; screen: ${ids.join(', ') || 'none'}; text: ${text}`);
   }
 }
 
@@ -445,15 +468,27 @@ type DWorkerFixtures = { dWallets: DWallets };
 export const test = privateTest.extend<DFixtures, DWorkerFixtures>({
   dWallets: [
     async ({}, use) => {
-      const guard = await loadGuard();
-      const readWalletPhrase = await loadCustody();
-      const canary = new SecretCanary();
-      const shortHolds = holdsShortened();
-      const recordRoot = footageEnabled() ? footageRoot() : null;
-      const expected = process.env.E2E_EXPECT_VERSION;
-      if (expected && dExtensionVersion() !== expected) {
-        throw new Error('live lane: EXTENSION_DIST is not the expected release version');
+      let guard: Awaited<ReturnType<typeof loadGuard>>;
+      let readWalletPhrase: ReadWalletPhrase;
+      let shortHolds: boolean;
+      let recordRoot: string | null;
+      try {
+        guard = await loadGuard();
+        readWalletPhrase = await loadCustody();
+        shortHolds = holdsShortened();
+        recordRoot = footageEnabled() ? footageRoot() : null;
+        const expected = process.env.E2E_EXPECT_VERSION;
+        if (expected && dExtensionVersion() !== expected) {
+          throw new Error('live lane: EXTENSION_DIST is not the expected release version');
+        }
+      } catch (error) {
+        // Nothing secret is loaded yet: the first line is safe to record.
+        if (process.env.E2E_LIVE_DIAGNOSE === '1') {
+          appendFinding('lane setup', 'failure', String(error instanceof Error ? error.message : error).split('\n')[0]!.slice(0, 300));
+        }
+        throw error;
       }
+      const canary = new SecretCanary();
       const scratch = mkdtempSync(join(tmpdir(), 'smirk-e2e-D-'));
       chmodSync(scratch, 0o700);
       const opened: DWallet[] = [];
@@ -461,7 +496,18 @@ export const test = privateTest.extend<DFixtures, DWorkerFixtures>({
         // Sequential: three concurrent restores against one backend would race
         // its sign-up checks for no benefit.
         for (const name of D_WALLET_NAMES) {
-          opened.push(await openWallet(name, { readWalletPhrase, canary, scratch, recordRoot, guard, shortHolds }));
+          try {
+            opened.push(await openWallet(name, { readWalletPhrase, canary, scratch, recordRoot, guard, shortHolds }));
+          } catch (error) {
+            if (process.env.E2E_LIVE_DIAGNOSE === '1') {
+              // The lane's own messages name a stage only; anything else is
+              // reduced to its first line and checked against the canary.
+              const first = String(error instanceof Error ? error.message : error).split('\n')[0]!.slice(0, 300);
+              const safe = first.startsWith('live lane:') || !(canary.hit([first]) || /nsec1|[xtyz]prv/.test(first));
+              appendFinding('wallet setup', 'failure', `${name}: ${safe ? first : '(withheld: it carries a secret)'}`);
+            }
+            throw error;
+          }
         }
         // Recording starts only once all three wallets are on Home.
         for (const wallet of opened) wallet.footage.start();

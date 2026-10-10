@@ -287,7 +287,23 @@ export class DFootage {
     assertStaticLabel(label);
     await locator.waitFor({ state: 'visible', timeout: 60_000 });
     await this.hold('tap', label, D_HOLD.BEFORE_TAP_MS);
-    await locator.click();
+    try {
+      await locator.click();
+    } catch (error) {
+      // Name what sits on the target (test ids and tags only, never text), so
+      // a blocked tap can be triaged from its first line.
+      const cover = await locator
+        .evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+          const owner = top?.closest('[data-testid]') as HTMLElement | null;
+          const state = (el as HTMLButtonElement).disabled ? 'disabled' : 'enabled';
+          return `${state}; on top: ${top ? top.tagName.toLowerCase() : 'nothing'}${owner?.dataset.testid ? ` in ${owner.dataset.testid}` : ''}`;
+        })
+        .catch(() => 'target gone');
+      const first = String(error instanceof Error ? error.message : error).split('\n')[0];
+      throw new Error(`tap "${label}" failed (${cover}): ${first}`);
+    }
   }
 
   /**

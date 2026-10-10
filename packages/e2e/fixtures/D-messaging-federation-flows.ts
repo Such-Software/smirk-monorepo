@@ -42,10 +42,31 @@ export async function goTab(w: DWallet, tab: DTab): Promise<void> {
   const nav = w.page.getByTestId(`nav-tab-${tab}`);
   const root = tabRoot(w, tab);
   await w.footage.tap(nav, `open the ${tab} tab`);
-  if (!(await appears(root, 5_000))) {
+  // A tab can flash its root and then restore its last sub-screen, so judge
+  // the root only once the screen has stopped changing.
+  if (!(await stableVisibility(root))) {
     await w.footage.tap(nav, `back to the ${tab} root`);
+    await stableVisibility(root);
   }
   await expect(root, `the ${tab} tab root never rendered`).toBeVisible({ timeout: 60_000 });
+}
+
+/** Visibility of `locator` once it has held steady for `steadyMs` (bounded). */
+async function stableVisibility(locator: Locator, steadyMs = 1_500, limitMs = 15_000): Promise<boolean> {
+  let last = await locator.isVisible();
+  let since = Date.now();
+  const deadline = Date.now() + limitMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const now = await locator.isVisible();
+    if (now !== last) {
+      last = now;
+      since = Date.now();
+    } else if (Date.now() - since >= steadyMs) {
+      return now;
+    }
+  }
+  return last;
 }
 
 /** Inbox, then Messages. Returns whether the relay compose surface is up. */
