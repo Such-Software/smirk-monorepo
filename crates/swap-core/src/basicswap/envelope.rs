@@ -4,19 +4,19 @@ use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use hmac::{Hmac, Mac};
 use k256::{ecdsa, elliptic_curve::sec1::ToEncodedPoint, schnorr, PublicKey, SecretKey};
 use ripemd::Ripemd160;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::Zeroizing;
 
-#[derive(Deserialize)]
-struct Event {
-    id: String,
-    pubkey: String,
-    created_at: u64,
-    kind: u64,
-    tags: Vec<Vec<String>>,
-    content: String,
-    sig: String,
+#[derive(Deserialize, Serialize)]
+pub(super) struct Event {
+    pub(super) id: String,
+    pub(super) pubkey: String,
+    pub(super) created_at: u64,
+    pub(super) kind: u64,
+    pub(super) tags: Vec<Vec<String>>,
+    pub(super) content: String,
+    pub(super) sig: String,
 }
 
 /// An authenticated payload, not evidence of funds or a safe swap protocol.
@@ -74,6 +74,27 @@ pub(crate) fn recover(hash: &[u8; 32], signature: &[u8]) -> Result<[u8; 33]> {
         .map_err(|_| Error("invalid sender key"))
 }
 
+pub(super) fn encryption_keys(public: &PublicKey, secret: &SecretKey) -> Zeroizing<[u8; 64]> {
+    // libsecp256k1's ECDH default hashes the compressed shared point, including parity.
+    let shared = (public.to_projective() * secret.to_nonzero_scalar().as_ref()).to_affine();
+    let encoded = Zeroizing::new(shared.to_encoded_point(true).as_bytes().to_vec());
+    let shared_hash = Zeroizing::new(<[u8; 32]>::from(Sha256::digest(encoded.as_slice())));
+    Zeroizing::new(<[u8; 64]>::from(Sha512::digest(shared_hash.as_slice())))
+}
+
+pub(super) fn event_digest(event: &Event) -> Result<[u8; 32]> {
+    let canonical = serde_json::to_vec(&(
+        0u8,
+        &event.pubkey,
+        event.created_at,
+        event.kind,
+        &event.tags,
+        &event.content,
+    ))
+    .map_err(|_| Error("event serialization failed"))?;
+    Ok(Sha256::digest(&canonical).into())
+}
+
 /// Validate a single event and decrypt an uncompressed format-2 SMSG payload.
 /// `recipient` is a dedicated messaging key. No wallet or social key is derived.
 /// No network, clock, persistent state or replay cache is accessed here.
@@ -111,16 +132,7 @@ pub fn receive(json: &[u8], recipient: &SecretKey, now: u64) -> Result<ReceivedM
     if event.created_at > latest {
         return Err(Error("event timestamp is in the future"));
     }
-    let canonical = serde_json::to_vec(&(
-        0u8,
-        &event.pubkey,
-        event.created_at,
-        event.kind,
-        &event.tags,
-        &event.content,
-    ))
-    .map_err(|_| Error("event serialization failed"))?;
-    let digest: [u8; 32] = Sha256::digest(&canonical).into();
+    let digest = event_digest(&event)?;
     if digest != hex_array::<32>(&event.id)? {
         return Err(Error("event identifier mismatch"));
     }
@@ -163,11 +175,7 @@ pub fn receive(json: &[u8], recipient: &SecretKey, now: u64) -> Result<ReceivedM
     }
     let ephemeral =
         PublicKey::from_sec1_bytes(&data[39..72]).map_err(|_| Error("invalid ephemeral key"))?;
-    // libsecp256k1's ECDH default hashes the compressed shared point, including parity.
-    let shared = (ephemeral.to_projective() * recipient.to_nonzero_scalar().as_ref()).to_affine();
-    let encoded = Zeroizing::new(shared.to_encoded_point(true).as_bytes().to_vec());
-    let shared_hash = Zeroizing::new(<[u8; 32]>::from(Sha256::digest(encoded.as_slice())));
-    let keys = Zeroizing::new(<[u8; 64]>::from(Sha512::digest(shared_hash.as_slice())));
+    let keys = encryption_keys(&ephemeral, recipient);
     let mut mac =
         Hmac::<Sha256>::new_from_slice(&keys[32..]).map_err(|_| Error("invalid MAC key"))?;
     mac.update(&data[11..19]);
