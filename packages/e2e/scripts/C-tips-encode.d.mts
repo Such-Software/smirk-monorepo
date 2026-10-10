@@ -13,6 +13,15 @@ export function encodeInvocation(options?: {
 }): Promise<EncodeReport>;
 export function loadInvocation(root: string, invocation: string): { sessions: unknown[]; problems: string[] };
 export function probeFrames(file: string): { pts: number[]; duration: number };
+export function vfrArgs(): string[];
+export function concatList(track: Array<{ path: string; from: number; to: number }>): string;
+export function encode(
+  listFile: string,
+  out: string,
+  vfr: string[],
+  extra?: { inputs: string[]; filter: string | null; map: string[] },
+): void;
+export function encodeSideBySide(lists: string[], file: string, vfr?: string[], chapters?: string | null): void;
 export function checkHold(
   hold: { from: number; to: number },
   t0: number,

@@ -45,7 +45,7 @@ function run(command, args, options = {}) {
 }
 
 /** ffmpeg 5.1+ takes -fps_mode; older builds only -vsync. */
-function vfrArgs() {
+export function vfrArgs() {
   const help = run('ffmpeg', ['-hide_banner', '-h', 'full']);
   return /fps_mode/.test(help.stdout) ? ['-fps_mode', 'vfr'] : ['-vsync', 'vfr'];
 }
@@ -115,7 +115,7 @@ function pageTrack(sessions, page, gap, startAt, endAt) {
 }
 
 /** An ffconcat list where each image lasts until the next one appeared. */
-function concatList(track) {
+export function concatList(track) {
   const lines = ['ffconcat version 1.0'];
   for (let i = 0; i < track.length; i++) {
     const frame = track[i];
@@ -128,14 +128,37 @@ function concatList(track) {
   return `${lines.join('\n')}\n`;
 }
 
-function encode(listFile, out, vfr, extra = { inputs: [], filter: null, map: [] }) {
+/**
+ * Encode a concat list (plus extra inputs and a filter graph) to MP4 at
+ * variable frame rate. B-frames are off: with a few still frames of very
+ * different lengths, libx264's reordering left the MP4 sample durations
+ * summing to less than the frames' own timestamps, so a 5.8 s side-by-side
+ * read as 3.7 s and players could stop early. Without reordering every frame
+ * keeps the duration until the next one.
+ */
+export function encode(listFile, out, vfr, extra = { inputs: [], filter: null, map: [] }) {
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', listFile, ...extra.inputs];
   if (extra.filter) args.push('-filter_complex', extra.filter, ...extra.map);
   else args.push('-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2');
-  args.push(...vfr, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out);
+  args.push(...vfr, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-bf', '0', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out);
   const r = run('ffmpeg', args);
   if (r.status !== 0) throw new Error(`ffmpeg failed on ${out}: ${r.stderr.trim().slice(0, 400)}`);
   chmodSync(out, 0o600);
+}
+
+/** Pages side by side on one clock, from their aligned concat lists, with chapters when given. */
+export function encodeSideBySide(lists, file, vfr = vfrArgs(), chapters = null) {
+  const inputs = lists.slice(1).flatMap((l) => ['-f', 'concat', '-safe', '0', '-i', l]);
+  const filter =
+    lists.length > 1
+      ? `${lists.map((_, i) => `[${i}:v]`).join('')}hstack=inputs=${lists.length},scale=trunc(iw/2)*2:trunc(ih/2)*2[v]`
+      : '[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[v]';
+  const meta = String(lists.length);
+  encode(lists[0], file, vfr, {
+    inputs: chapters ? [...inputs, '-f', 'ffmetadata', '-i', chapters] : inputs,
+    filter,
+    map: chapters ? ['-map', '[v]', '-map_metadata', meta, '-map_chapters', meta] : ['-map', '[v]'],
+  });
 }
 
 /** Presentation times (s) of every frame in a video, and its duration. */
@@ -246,17 +269,7 @@ export async function encodeInvocation({ env = process.env, invocation = invocat
     const chapters = chaptersFile(out, sessions.flatMap((s) => s.lane.chapters ?? []), startAt, endAt);
     const file = join(out, 'C-tips-all.mp4');
     log(`encoding the side-by-side video (${main.join(', ')})`);
-    const inputs = lists.slice(1).flatMap((l) => ['-f', 'concat', '-safe', '0', '-i', l]);
-    const metaIndex = lists.length;
-    const filter =
-      main.length > 1
-        ? `${main.map((_, i) => `[${i}:v]`).join('')}hstack=inputs=${main.length},scale=trunc(iw/2)*2:trunc(ih/2)*2[v]`
-        : '[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[v]';
-    encode(lists[0], file, vfr, {
-      inputs: [...inputs, '-f', 'ffmetadata', '-i', chapters],
-      filter,
-      map: ['-map', '[v]', '-map_metadata', String(metaIndex), '-map_chapters', String(metaIndex)],
-    });
+    encodeSideBySide(lists, file, vfr, chapters);
     const probe = probeFrames(file);
     report.combined = { file, pages: main, seconds: probe.duration };
     if (probe.duration < (endAt - startAt) / 1000 - 1) failures.push('the side-by-side video is shorter than the run');
