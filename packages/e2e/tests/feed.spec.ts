@@ -13,9 +13,10 @@ import type { FeedCapabilityLike } from '@smirk/core';
  * select from the relay (owner notes, premium notes when `show_premium`), with
  * the owner's NIP-51 mute list applied, and that posting rights are coherent.
  *
- * Returning-user spec: SMOKE_ALICE_MNEMONIC. Read-only: it never publishes.
- * It runs against a local relay, or against the production relay through the
- * live lane (`E2E_LIVE=1`), since reading a public feed writes nothing.
+ * Returning-user spec: local backend + SMOKE_ALICE_MNEMONIC. Read-only (no
+ * writes), and local relays only: this suite has no transport guard and
+ * records nothing, so the production feed is exercised by the recorded, guarded
+ * live lane instead (tests/live/d-messaging.live.spec.ts).
  */
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
 
@@ -32,14 +33,12 @@ test('Feed tab is present + renders iff the backend advertises a feed', async ({
     messaging?: { relay_url?: string };
     feed?: FeedCapabilityLike | null;
   };
-  // A local relay always; the production relay only through the live lane.
-  // Verified on prod 2026-08-24: the relay refuses a public kind-1 outright
-  // under `premium-post`, so this spec stays read-only everywhere.
+  // A local relay only. Verified on prod 2026-08-24: the relay refuses a public
+  // kind-1 outright under `premium-post`, so pointing the suite at production
+  // produced a failure that looked like a broken feed and was in fact correct
+  // policy enforcement. The production feed belongs to the recorded live lane.
   const relayUrl = caps.messaging?.relay_url;
-  test.skip(
-    !isLocalPublishRelay(relayUrl) && process.env.E2E_LIVE !== '1',
-    publishRelaySkipReason(relayUrl),
-  );
+  test.skip(!isLocalPublishRelay(relayUrl), publishRelaySkipReason(relayUrl));
   const feedAdvertised = !!caps.features?.feed && !!caps.feed;
 
   const page = await context.newPage();

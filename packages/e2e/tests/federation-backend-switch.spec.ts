@@ -24,13 +24,16 @@
  *   - the way back works: resetting to the default leaves no stored override
  *     and the wallet signs in and shows balances again
  *
- * A shared B (for example https://api.moon.vote) registers this wallet there
- * and hands its light-wallet servers the view keys, so it needs the owner's
- * approval for the run (`FED_BACKEND_APPROVED=1`). A loopback B does not.
+ * Loopback B only. A shared B (for example https://api.moon.vote) registers the
+ * wallet there and hands its light-wallet servers the view keys: that needs the
+ * owner's approval, and it runs only in the recorded, transport-guarded live
+ * lane (tests/live/d-federation.live.spec.ts with FED_BACKEND_APPROVED=1), never
+ * in this unrecorded suite. Any relay write is refused at the transport here.
  */
 
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import { refuseProductionRelayWrites } from '../fixtures/relay-guard.js';
 
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
@@ -59,8 +62,8 @@ function fedIsLoopback(): boolean {
 }
 
 test.skip(
-  !!FED_URL && !fedIsLoopback() && process.env.FED_BACKEND_APPROVED !== '1',
-  'FED_BACKEND_URL names a shared host: switching registers this wallet there and hands it view keys; set FED_BACKEND_APPROVED=1 once the owner approves',
+  !!FED_URL && !fedIsLoopback(),
+  'FED_BACKEND_URL names a shared host: switching registers this wallet there and hands it view keys, so it runs only in the recorded live lane (tests/live/d-federation.live.spec.ts, with the owner approval FED_BACKEND_APPROVED=1)',
 );
 
 /** The import password `importAndUnlock` sets (a fixed test value, not a secret). */
@@ -75,6 +78,8 @@ test('the wallet can be pointed at an independent operator backend', async ({
   extensionId,
   footage,
 }) => {
+  // Read-only as far as any relay is concerned: refused at the transport.
+  const relayWrites = await refuseProductionRelayWrites(context);
   const page = await context.newPage();
 
   // Reach the picker the way a user does: Settings → Backend
@@ -239,4 +244,5 @@ test('the wallet can be pointed at an independent operator backend', async ({
     })
     .toMatch(/\d/);
   footage.mark('federated-backend-reset', 'back on the default backend with balances');
+  expect(relayWrites.refused, 'the wallet tried to publish to a non-local relay during a read-only spec').toBe(0);
 });

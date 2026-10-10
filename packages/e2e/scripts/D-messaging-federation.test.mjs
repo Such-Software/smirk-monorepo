@@ -7,18 +7,19 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { liveRelayAdmits, LIVE_RELAY_WALLET_KINDS } from '../fixtures/relay-guard.ts';
+import { liveRelayAdmits, relayKey, LIVE_RELAY_WALLET_KINDS } from '../fixtures/relay-guard.ts';
 import {
   D_HOLD,
   SecretCanary,
   assertStaticLabel,
   holdsShortened,
 } from '../fixtures/D-messaging-federation-footage.ts';
-import { check } from './D-messaging-federation-check-live-specs.mjs';
+import { check, checkHelper } from './D-messaging-federation-check-live-specs.mjs';
 
 const PROD = 'wss://relay.smirk.cash';
 const LOCAL = 'ws://127.0.0.1:8088';
 const live = { E2E_LIVE_RELAY: '1' };
+const pinned = [PROD];
 
 test('a local relay admits every kind, with or without the live flag', () => {
   for (const kind of [1, 1059, 10050, 30023]) assert.equal(liveRelayAdmits(LOCAL, kind, { env: {} }).admit, true);
@@ -32,17 +33,40 @@ test('a production relay refuses everything without E2E_LIVE_RELAY=1', () => {
   }
 });
 
-test('the live flag admits exactly the wallet kinds 1059 and 10050', () => {
+test('the live flag admits exactly the wallet kinds 1059 and 10050 to a pinned relay', () => {
   assert.deepEqual([...LIVE_RELAY_WALLET_KINDS], [1059, 10050]);
-  for (const kind of LIVE_RELAY_WALLET_KINDS) assert.equal(liveRelayAdmits(PROD, kind, { env: live }).admit, true);
-  for (const kind of [0, 3, 4, 5, 7, 10000, 30023]) assert.equal(liveRelayAdmits(PROD, kind, { env: live }).admit, false);
+  for (const kind of LIVE_RELAY_WALLET_KINDS) assert.equal(liveRelayAdmits(PROD, kind, { env: live, pinned }).admit, true);
+  for (const kind of [0, 3, 4, 5, 7, 10000, 30023]) assert.equal(liveRelayAdmits(PROD, kind, { env: live, pinned }).admit, false);
+});
+
+test('a production relay that is not pinned is refused whatever the kind', () => {
+  for (const kind of [1059, 10050]) {
+    assert.equal(liveRelayAdmits(PROD, kind, { env: live }).admit, false, 'no pin list refuses');
+    assert.equal(liveRelayAdmits(PROD, kind, { env: live, pinned: [] }).admit, false, 'an empty pin list refuses');
+    const third = liveRelayAdmits('wss://relay.damus.io', kind, { env: live, pinned });
+    assert.equal(third.admit, false, 'a third-party inbox relay is refused');
+    assert.ok(!third.admit && third.reason.includes('pinned'), 'the refusal names the pin');
+  }
+  // Same host, other path or a trailing slash: the same relay.
+  assert.equal(liveRelayAdmits(`${PROD}/`, 1059, { env: live, pinned }).admit, true);
+  // Same host over plain ws, or another port: not the pinned relay.
+  assert.equal(liveRelayAdmits('ws://relay.smirk.cash', 1059, { env: live, pinned }).admit, false);
+  assert.equal(liveRelayAdmits('wss://relay.smirk.cash:8443', 1059, { env: live, pinned }).admit, false);
+  // A second pinned relay (an approved backend B) is admitted alongside.
+  assert.equal(liveRelayAdmits('wss://relay.b.example', 1059, { env: live, pinned: [PROD, 'wss://relay.b.example'] }).admit, true);
+});
+
+test('relayKey normalises ws and wss URLs and rejects anything else', () => {
+  assert.equal(relayKey('wss://Relay.Smirk.Cash/'), 'wss://relay.smirk.cash');
+  assert.equal(relayKey('ws://127.0.0.1:8088'), 'ws://127.0.0.1:8088');
+  for (const bad of ['https://relay.smirk.cash', 'not a url', '', undefined]) assert.equal(relayKey(bad), null);
 });
 
 test('a public note needs premium AND owner approval', () => {
-  assert.equal(liveRelayAdmits(PROD, 1, { env: live }).admit, false);
-  assert.equal(liveRelayAdmits(PROD, 1, { env: live, premium: true }).admit, false);
-  assert.equal(liveRelayAdmits(PROD, 1, { env: { ...live, E2E_LIVE_FEED_POST: '1' } }).admit, false);
-  assert.equal(liveRelayAdmits(PROD, 1, { env: { ...live, E2E_LIVE_FEED_POST: '1' }, premium: true }).admit, true);
+  assert.equal(liveRelayAdmits(PROD, 1, { env: live, pinned }).admit, false);
+  assert.equal(liveRelayAdmits(PROD, 1, { env: live, pinned, premium: true }).admit, false);
+  assert.equal(liveRelayAdmits(PROD, 1, { env: { ...live, E2E_LIVE_FEED_POST: '1' }, pinned }).admit, false);
+  assert.equal(liveRelayAdmits(PROD, 1, { env: { ...live, E2E_LIVE_FEED_POST: '1' }, pinned, premium: true }).admit, true);
 });
 
 test('an unparseable or plain-ws public relay is production', () => {
@@ -94,4 +118,15 @@ test('the live-spec check refuses direct taps, ad hoc pauses and built labels', 
   assert.deepEqual(lines("await w.footage.type(input, text, 'write the message');"), []);
   assert.deepEqual(lines('test.setTimeout(60_000);'), []);
   assert.deepEqual(lines(' * a comment that mentions .click( is fine'), []);
+});
+
+test('the helper check refuses fixed sleeps on the page clock, not polls or backoffs', () => {
+  const lines = (src) => checkHelper(src).map((v) => v.line);
+  assert.deepEqual(lines('await w.page.waitForTimeout(3_000);'), [1]);
+  assert.deepEqual(lines('await page.waitForTimeout(limited ? 60_000 : 5_000);'), [1]);
+  assert.deepEqual(lines('console.log(text);'), [1]);
+  assert.deepEqual(lines('await retryBackoff(60_000);'), []);
+  assert.deepEqual(lines('await new Promise((resolve) => setTimeout(resolve, 250));'), []);
+  assert.deepEqual(lines('await submit.click();'), []);
+  assert.deepEqual(lines(' * a comment that mentions waitForTimeout( is fine'), []);
 });

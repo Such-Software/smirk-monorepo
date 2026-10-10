@@ -3,6 +3,7 @@ import { deriveNostrIdentity } from '@smirk/core';
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
+import { refuseProductionRelayWrites } from '../fixtures/relay-guard.js';
 
 /**
  * Nostr identity overhaul (v0.3.0) nav smoke: daemon-free.
@@ -123,12 +124,31 @@ async function openMessagesScreen(page: Page) {
   await expect(page.getByTestId('messages-screen')).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * The identity the Messages picker has selected is `npub`. The trigger pill
+ * shows a label or handle when there is one, so read the open list instead,
+ * whose rows always carry the short npub, then close it again.
+ */
+async function expectPickerSelects(page: Page, npub: string) {
+  const picker = page.getByTestId('messages-identity-picker');
+  await picker.click();
+  await expect(page.getByRole('option', { selected: true })).toContainText(`${npub.slice(0, 10)}…${npub.slice(-4)}`);
+  await picker.click();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+}
+
+// The two tests below may run against any backend the suite targets, and this
+// suite records nothing and has no live-lane guard. They only read a relay;
+// every outbound relay write is refused at the transport and must not occur.
+// Production messaging belongs to the recorded live lane (tests/live).
+
 test('Messages is honest about whether this backend runs a relay', async ({ context, extensionId }) => {
   const caps = (await getCapabilities()) as unknown as {
     features?: { nostr_relay?: boolean };
     messaging?: { relay_url?: string } | null;
   };
   const relay = !!caps.features?.nostr_relay && !!caps.messaging?.relay_url;
+  const relayWrites = await refuseProductionRelayWrites(context);
   const page = await context.newPage();
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
   await openMessagesScreen(page);
@@ -150,7 +170,8 @@ test('Messages is honest about whether this backend runs a relay', async ({ cont
   const seed = deriveNostrIdentity(MNEMONIC!, 0);
   const npub = seed.npub;
   seed.privateKey.fill(0);
-  await expect(page.getByTestId('messages-identity-picker')).toContainText(npub.slice(-4));
+  await expectPickerSelects(page, npub);
+  expect(relayWrites.refused, 'the wallet tried to publish to a non-local relay just by opening Messages').toBe(0);
 });
 
 test('the Messages identity picker switches to a burner and back (no publishing)', async ({ context, extensionId }) => {
@@ -162,6 +183,7 @@ test('the Messages identity picker switches to a burner and back (no publishing)
     !caps.features?.nostr_relay || !caps.messaging?.relay_url,
     'the identity picker lives in the compose surface, which needs a relay',
   );
+  const relayWrites = await refuseProductionRelayWrites(context);
   const page = await context.newPage();
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
   const seed = deriveNostrIdentity(MNEMONIC!, 0);
@@ -190,13 +212,18 @@ test('the Messages identity picker switches to a burner and back (no publishing)
   // Pick an identity that is not the seed's account-0.
   const shortPrimary = `${primaryNpub.slice(0, 10)}…${primaryNpub.slice(-4)}`;
   await options.filter({ hasNotText: shortPrimary }).first().click();
-  await expect(picker).not.toContainText(primaryNpub.slice(-4));
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await picker.click();
+  await expect(page.getByRole('option', { selected: true }), 'the picker still selects the seed identity').not.toContainText(shortPrimary);
+  await picker.click();
   await expect(page.getByTestId('dm-recipient-input')).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('messages-error')).toHaveCount(0);
 
   // And back to the seed identity.
   await picker.click();
   await options.filter({ hasText: shortPrimary }).first().click();
-  await expect(picker).toContainText(primaryNpub.slice(-4));
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expectPickerSelects(page, primaryNpub);
   await expect(page.getByTestId('dm-recipient-input')).toBeVisible({ timeout: 60_000 });
+  expect(relayWrites.refused, 'switching identities tried to publish to a non-local relay').toBe(0);
 });

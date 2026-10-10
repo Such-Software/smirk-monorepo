@@ -37,12 +37,11 @@
  *     RELAY_WRITE_POLICY=open        # or premium-post to exercise the gate
  *     FEATURE_FEED=true
  *
- * Production relay: only through the reviewed live lane. With
- * `E2E_LIVE_RELAY=1` the DM round trip runs against the operator relay (a
- * kind-1059 gift wrap, ciphertext under a throwaway key, nothing public). The
- * feed test then checks the posting-rights state read-only, and publishes its
- * public kind-1 note only when the server grants posting rights AND the owner
- * approved a note for the run (`E2E_LIVE_FEED_POST=1`). See relay-guard.ts.
+ * Do NOT point these at the production relay: the feed test publishes a public
+ * kind-1 note, which would appear in the real announcements feed. Both tests
+ * skip unless the relay is a local one. Production messaging is exercised only
+ * by the recorded, transport-guarded live lane
+ * (tests/live/d-messaging.live.spec.ts, D-messaging-federation.live.config.ts).
  */
 
 import { test, expect } from '../fixtures/extension.js';
@@ -50,7 +49,7 @@ import type { Page } from '@playwright/test';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { deriveNostrIdentity } from '@smirk/core';
 import { getCapabilities } from '../fixtures/capabilities.js';
-import { liveRelaySkipReason } from '../fixtures/relay-guard.js';
+import { isLocalPublishRelay, publishRelaySkipReason } from '../fixtures/relay-guard.js';
 import { closeNostrReader, hasDmInbox, inboxWraps, newInboxWraps } from '../fixtures/D-messaging-federation-nostr.js';
 
 test.afterAll(() => closeNostrReader());
@@ -92,10 +91,12 @@ test('an encrypted DM survives a round trip through the relay', async ({
     'backend advertises no relay, so there is nowhere to deliver a DM (see the header of this spec)',
   );
 
-  // A LOCAL relay, or the production relay through the explicit live lane,
-  // which admits only gift wraps (kind 1059). Enforced, not merely documented.
-  const relayRefusal = liveRelaySkipReason(caps.messaging?.relay_url, 1059);
-  test.skip(relayRefusal !== null, relayRefusal ?? '');
+  // And it must be a LOCAL relay: these tests publish real events, and the spec
+  // header forbids production. Enforced rather than merely documented.
+  test.skip(
+    !isLocalPublishRelay(caps.messaging?.relay_url),
+    publishRelaySkipReason(caps.messaging?.relay_url),
+  );
   const relayUrl = caps.messaging!.relay_url!;
 
   const page = await context.newPage();
@@ -190,11 +191,12 @@ test('the feed composer agrees with the server about posting rights', async ({
     'backend advertises no feed/relay, so there is nothing to post to (see the header of this spec)',
   );
 
-  // A LOCAL relay, or the production relay through the explicit live lane. On
-  // production the posting-rights check is read-only unless a public note is
-  // admitted below. Enforced rather than merely documented.
-  const relayRefusal = liveRelaySkipReason(caps.messaging?.relay_url, 1059);
-  test.skip(relayRefusal !== null, relayRefusal ?? '');
+  // And it must be a LOCAL relay: these tests publish real events, and the spec
+  // header forbids production. Enforced rather than merely documented.
+  test.skip(
+    !isLocalPublishRelay(caps.messaging?.relay_url),
+    publishRelaySkipReason(caps.messaging?.relay_url),
+  );
 
   const page = await context.newPage();
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC });
@@ -234,17 +236,7 @@ test('the feed composer agrees with the server about posting rights', async ({
     return;
   }
 
-  // Allowed by the server. A public note on a production relay additionally
-  // needs the owner's approval for this run; without it the check above is the
-  // whole test, and nothing is published.
-  const noteRefusal = liveRelaySkipReason(caps.messaging?.relay_url, 1, { premium: true });
-  if (noteRefusal !== null) {
-    test.info().annotations.push({ type: 'not-exercised', description: noteRefusal });
-    footage.mark('feed-posting-allowed', 'server grants posting; no public note approved');
-    return;
-  }
-
-  // Publish for real and require it to come back from the relay.
+  // Allowed: publish for real and require it to come back from the relay.
   const body = marker('note');
   await composer.fill(body);
   await page.getByTestId('feed-post').click();

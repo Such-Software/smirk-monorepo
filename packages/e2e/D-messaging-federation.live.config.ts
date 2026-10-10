@@ -14,9 +14,27 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
  * an hour. One worker, worker-scoped wallets, no retries.
  *
  *   E2E_LIVE=1 E2E_LIVE_RELAY=1 FOOTAGE=guarded E2E_RUN_LABEL=run-11204 \
+ *   E2E_LIVE_LINK=1 ALLOW_PROD_WRITES=1 \
  *   BACKEND_URL=https://api.smirk.cash/api/v1 EXTENSION_DIST=<unpacked zip> \
  *   E2E_WALLET_FILE=<owner-only custody file> E2E_MIN_EXECUTED=1 \
+ *   [FED_BACKEND_URL=<B> FED_BACKEND_APPROVED=1] \
  *   npx playwright test -c D-messaging-federation.live.config.ts
+ *
+ * Run it ALONE. Lanes B, C and E use alice, bob and carol too, and the
+ * federation test compares carol's balances before and after her trip to
+ * backend B exactly. (Relay checks look up this run's own gift wraps by id, so
+ * they would survive concurrent traffic; the balance check would not.)
+ *
+ * Owner approvals this lane reads, each a durable production write and never
+ * inferred: `E2E_LIVE_LINK=1` with `ALLOW_PROD_WRITES=1` links an unlinked demo
+ * wallet's seed npub to its account (without it the DM tests fail, because the
+ * operator relay refuses DMs to unlinked npubs); `E2E_LIVE_CAROL_HANDLE=<name>`
+ * claims a handle for carol; `E2E_LIVE_FEED_POST=1` posts one public note;
+ * `FED_BACKEND_APPROVED=1` registers carol on a shared backend B.
+ *
+ * Any skip fails the run (skip guard): a skipped scenario is not evidence. The
+ * cross-server name@domain test skips until a backend B serves both a relay and
+ * HTTPS NIP-05, so a green run needs that B or an owner decision on that skip.
  */
 assertPrivateCapture();
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';

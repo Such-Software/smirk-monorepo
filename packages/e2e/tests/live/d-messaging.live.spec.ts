@@ -14,56 +14,73 @@
  * hints. The specs compute that from the relay, so a notice that lies in either
  * direction fails.
  *
+ * Relay evidence is looked up by the ids of the gift wraps this run published
+ * (the relay guard records them), never by "whatever is new", so another lane
+ * writing to the same wallets cannot satisfy or spoil it.
+ *
  * The operator relay (premium-post) admits a gift wrap only when its recipient
  * is a LINKED npub (an account bound to that seed identity). A demo wallet that
- * is not linked therefore cannot receive DMs there; the honest outcome for its
- * senders is the relay's refusal, which these tests then assert instead of
- * delivery and record as a finding. With the owner's approval for this durable
- * account write (`E2E_LIVE_LINK=1` plus `ALLOW_PROD_WRITES=1`), the first test
- * links each unlinked demo wallet from the identity hub, as a user would.
+ * is not linked therefore cannot receive DMs there. With the owner's approval
+ * for this durable account write (`E2E_LIVE_LINK=1` plus `ALLOW_PROD_WRITES=1`)
+ * the first test that needs a wallet's link state links it from the identity
+ * hub, as a user would (`ensureLinkState`, shared with the federation spec, so
+ * file order does not matter). Without that approval a DM to an unlinked
+ * wallet is still sent and the wallet's honest refusal is asserted, but the
+ * test then FAILS: it has not proven its title, and whether unlinked v0.3.1
+ * users may go without DMs is a release question for the owner (recorded in
+ * the findings file). A comprehensive run therefore needs the link approval.
  *
  * Running it (owner-approved demo wallets; never `set -a` the custody file):
  *
  *   E2E_LIVE=1 E2E_LIVE_RELAY=1 FOOTAGE=guarded E2E_RUN_LABEL=run-11204 \
- *   [E2E_LIVE_LINK=1 ALLOW_PROD_WRITES=1] [E2E_LIVE_FEED_POST=1] \
+ *   E2E_LIVE_LINK=1 ALLOW_PROD_WRITES=1 [E2E_LIVE_CAROL_HANDLE=<name>] [E2E_LIVE_FEED_POST=1] \
  *   BACKEND_URL=https://api.smirk.cash/api/v1 \
  *   EXTENSION_DIST=<unpacked, hash-verified smirk-wallet-chrome-v0.3.1.zip> \
  *   E2E_WALLET_FILE=<main checkout>/packages/smoke-tests/secrets/smoke-mnemonics.env \
  *   E2E_MIN_EXECUTED=1 npx playwright test -c D-messaging-federation.live.config.ts
  *
  * `E2E_LIVE_FEED_POST=1` lets a wallet that the server lets post publish ONE
- * public note (owner approval for the real feed).
+ * public note (owner approval for the real feed). `E2E_LIVE_CAROL_HANDLE=<name>`
+ * (with `ALLOW_PROD_WRITES=1`) lets the name@domain test claim that handle for
+ * carol when no demo wallet has one (owner approval: a durable account write).
  *
- * No funds move in this file. Publishing is limited by the relay guard to kinds
- * 1059 and 10050 (plus an approved premium kind-1).
+ * Run this lane alone: lanes B, C and E use the same wallets (see the config).
+ *
+ * No funds move in this file. Publishing is limited by the relay guard to the
+ * relays the run pinned (the operator relay) and to kinds 1059 and 10050 (plus
+ * an approved premium kind-1).
  */
 
 import { randomBytes } from 'node:crypto';
 import {
   test,
   expect,
-  dLinkApproved,
   dLiveSkipReason,
   dRelaySkipReason,
   recordFinding,
   D_BACKEND_URL,
   type DWallet,
+  type DWallets,
 } from '../../fixtures/D-messaging-federation-live.js';
 import {
   addBurner,
   backgroundWrapIds,
   chooseMessagingIdentity,
+  claimHandle,
   deliverDm,
+  ensureLinkState,
   expectMessage,
+  expectMessagingAs,
   goTab,
   hubHandle,
-  linkIdentity,
-  linkedState,
+  notifiedWrapIds,
   openIdentityHub,
   openMessages,
-  readLinked,
+  publishedWraps,
+  requireDelivered,
   runText,
   sendMessage,
+  type DmRecord,
 } from '../../fixtures/D-messaging-federation-flows.js';
 import {
   closeNostrReader,
@@ -72,10 +89,9 @@ import {
   externalSecretForms,
   feedAuthorLabel,
   feedExpectation,
+  findWraps,
   hasDmInbox,
   hexToNpub,
-  inboxWraps,
-  newInboxWraps,
   nip05Expectation,
   readCapabilities,
   sendFromExternal,
@@ -105,25 +121,26 @@ test.beforeAll(async () => {
 test.afterAll(() => closeNostrReader());
 
 /** Skip (with the rule's own reason) unless gift wraps may be published here. */
-function requireGiftWrapRelay(): void {
+function requireGiftWrapRelay(dWallets: DWallets): void {
   test.skip(!caps.features?.nostr_relay || !relay, 'the backend advertises no relay, so there is nowhere to deliver a DM');
-  const refused = liveRelaySkipReason(relay, 1059);
+  const refused = liveRelaySkipReason(relay, 1059, { pinned: dWallets.relayPins });
   test.skip(refused !== null, refused ?? '');
 }
 
-/** Static finding text for a recipient the relay will not admit. */
-const UNLINKED: Record<string, string> = {
-  alice: 'alice is not linked to her seed npub, so the operator relay refuses DMs to her; her senders saw the refusal',
-  bob: 'bob is not linked to his seed npub, so the operator relay refuses DMs to him; his senders saw the refusal',
-  carol: 'carol is not linked to her seed npub, so the operator relay refuses DMs to her; her senders saw the refusal',
-};
-
 /**
  * One DM between demo wallets on the operator relay, with evidence on both
- * sides (see `deliverDm`). A recipient that is not linked must be refused.
+ * sides (see `deliverDm`). A recipient that is not linked is refused, and the
+ * refusal is asserted; the caller then fails through `requireDelivered`.
  */
-async function deliver(from: DWallet, to: DWallet, fromNpub: string, address: string, text: string, expectInbox: boolean | null = null) {
-  const registered = to.linked !== false;
+async function deliver(
+  from: DWallet,
+  to: DWallet,
+  fromNpub: string,
+  address: string,
+  text: string,
+  expectInbox: boolean | null = null,
+): Promise<DmRecord> {
+  const registered = await ensureLinkState(to);
   const outcome = await deliverDm({
     from,
     fromNpub,
@@ -135,8 +152,7 @@ async function deliver(from: DWallet, to: DWallet, fromNpub: string, address: st
     expectInbox,
     recipientRegistered: registered,
   });
-  if (outcome === 'refused') recordFinding('policy', UNLINKED[to.name]!);
-  return outcome;
+  return { direction: `${from.name} to ${to.name}`, outcome };
 }
 
 /** Handles the hub shows (null: none claimed), cached per worker. */
@@ -146,9 +162,16 @@ async function handleOf(w: DWallet): Promise<string | null> {
   if (!handles.has(w.name)) {
     await openIdentityHub(w);
     handles.set(w.name, await hubHandle(w));
-    await readLinked(w);
+    await ensureLinkState(w, { hubOpen: true });
   }
   return handles.get(w.name) ?? null;
+}
+
+/** A handle the owner approved claiming for carol in this run, or null. */
+function approvedCarolHandle(): string | null {
+  const name = (process.env.E2E_LIVE_CAROL_HANDLE ?? '').trim().toLowerCase();
+  if (!name || process.env.ALLOW_PROD_WRITES !== '1') return null;
+  return /^[a-z0-9._-]{1,32}$/.test(name) ? name : null;
 }
 
 test('each wallet messages as its seed identity on the operator relay', async ({ dWallets }) => {
@@ -160,33 +183,30 @@ test('each wallet messages as its seed identity on the operator relay', async ({
     // here independently from the phrase (public key only).
     await expect(w.page.getByTestId('nostr-npub'), 'the active identity is not the seed account-0 npub').toHaveText(w.npub);
     handles.set(w.name, await hubHandle(w));
-    // Linked or not decides whether the relay will deliver DMs to this wallet.
-    if (!(await readLinked(w))) {
-      if (dLinkApproved()) {
-        await linkIdentity(w);
-        recordFinding('setup', `${w.name} was not linked to its seed npub; the run linked it with the owner's approval`);
-      } else {
-        recordFinding('precondition', UNLINKED[w.name]!);
-      }
-    }
     await w.footage.result('seed identity shown');
+    // Linked or not decides whether the relay will deliver DMs to this wallet
+    // (linked here with the owner's approval; otherwise a release question).
+    await ensureLinkState(w, { hubOpen: true });
   }
   for (const w of [alice, bob, carol]) {
+    const mark = w.relayGuard.wrapSubscriptions.length;
     const state = await openMessages(w);
     expect(state, 'Messages disagrees with the backend about running a relay').toBe(caps.features?.nostr_relay && relay ? 'on' : 'off');
-    // The picker names the identity you message as, and the npub to hand out.
     if (state === 'on') {
+      // The picker names the identity you message as, and the npub to hand out.
       await expect(w.page.getByTestId('messages-identity-picker')).toBeVisible();
       await expect(w.page.getByTestId('messages-copy-npub')).toBeVisible();
+      // Messages listens as the seed identity, and the picker selects it.
+      await expectMessagingAs(w, w.npub, mark);
     }
     await w.footage.result('Messages ready');
   }
 });
 
 test('alice, bob and carol message each other by npub and reply', async ({ dWallets }) => {
-  requireGiftWrapRelay();
+  requireGiftWrapRelay(dWallets);
   const { alice, bob, carol } = dWallets;
-  for (const w of [alice, bob, carol]) await linkedState(w);
+  for (const w of [alice, bob, carol]) await ensureLinkState(w);
   dWallets.chapter('DMs by npub on the Smirk relay');
   // Every recipient listens live while the sender types.
   for (const w of [alice, bob, carol]) await openMessages(w);
@@ -197,34 +217,47 @@ test('alice, bob and carol message each other by npub and reply', async ({ dWall
     [bob, carol, 'bob to carol', 'DM bob to carol', 'Reply carol to bob'],
     [carol, alice, 'carol to alice', 'DM carol to alice', 'Reply alice to carol'],
   ];
-  let delivered = 0;
+  const records: DmRecord[] = [];
   for (const [from, to, purpose, dmChapter, replyChapter] of pairs) {
     dWallets.chapter(dmChapter);
-    if ((await deliver(from, to, from.npub, to.npub, runText(purpose, RUN))) === 'delivered') delivered++;
+    records.push(await deliver(from, to, from.npub, to.npub, runText(purpose, RUN)));
     dWallets.chapter(replyChapter);
-    if ((await deliver(to, from, to.npub, from.npub, runText(`reply to ${purpose}`, RUN))) === 'delivered') delivered++;
+    records.push(await deliver(to, from, to.npub, from.npub, runText(`reply to ${purpose}`, RUN)));
   }
-  // At least one direction must work, or the relay delivered nothing at all.
-  expect(delivered, 'no DM between the demo wallets was delivered').toBeGreaterThan(0);
+  // All six directions, each shown on both sides of the wire.
+  requireDelivered(records);
 });
 
 test('a DM by name@domain resolves the handle to the seed identity', async ({ dWallets }) => {
-  requireGiftWrapRelay();
+  requireGiftWrapRelay(dWallets);
   const { alice, bob, carol } = dWallets;
   dWallets.chapter('DM by Smirk handle');
-  // Prefer carol (bob writes to her); fall back to another demo wallet's handle.
+  // Prefer carol (bob writes to her), then another demo wallet's handle, and
+  // among those a recipient the relay delivers to (a linked one).
   const candidates: [DWallet, DWallet][] = [[bob, carol], [carol, alice], [alice, bob]];
-  let route: { from: DWallet; to: DWallet; handle: string } | null = null;
+  const routes: { from: DWallet; to: DWallet; handle: string; linked: boolean }[] = [];
   for (const [from, to] of candidates) {
     const handle = await handleOf(to);
-    if (handle) {
-      route = { from, to, handle };
-      break;
-    }
+    if (handle) routes.push({ from, to, handle, linked: await ensureLinkState(to) });
+  }
+  let route = routes.find((r) => r.linked) ?? routes[0] ?? null;
+  const claim = approvedCarolHandle();
+  if (!route && claim) {
+    // No demo wallet has a handle: claim the one the owner approved for carol.
+    dWallets.chapter('Claim a handle for carol');
+    await openIdentityHub(carol);
+    const claimed = await claimHandle(carol, claim);
+    expect(claimed, 'the claimed handle is not shown in the hub').not.toBeNull();
+    handles.set(carol.name, claimed);
+    recordFinding('setup', 'no demo wallet had a Smirk handle; the run claimed the owner-approved handle for carol (E2E_LIVE_CAROL_HANDLE)');
+    route = { from: bob, to: carol, handle: claimed!, linked: await ensureLinkState(carol) };
   }
   if (!route) {
-    recordFinding('not-exercised', 'none of alice, bob or carol has a Smirk handle, so name@domain delivery was not exercised');
-    test.skip(true, 'no demo wallet has a claimed Smirk handle to message by name@domain');
+    recordFinding(
+      'not-exercised',
+      'none of alice, bob or carol has a Smirk handle, so name@domain delivery was not exercised (E2E_LIVE_CAROL_HANDLE with ALLOW_PROD_WRITES=1 claims one, with owner approval)',
+    );
+    test.skip(true, 'no demo wallet has a claimed Smirk handle to message by name@domain, and no handle claim was approved');
     return;
   }
   const { from, to, handle } = route;
@@ -235,18 +268,17 @@ test('a DM by name@domain resolves the handle to the seed identity', async ({ dW
   expect(resolved!.pubkeyHex, 'the handle resolves to a key that is not the recipient\'s seed identity').toBe(to.pubkeyHex);
   const inbox = resolved!.relays.length > 0 || (await hasDmInbox(relay, to.pubkeyHex));
 
-  await linkedState(to);
   await openMessages(to);
   await openMessages(from);
-  await deliver(from, to, from.npub, handle, runText('by handle', RUN), inbox);
+  requireDelivered([await deliver(from, to, from.npub, handle, runText('by handle', RUN), inbox)]);
 });
 
 test('background delivery collects a DM while Messages is closed and the Inbox shows it', async ({ dWallets }) => {
-  requireGiftWrapRelay();
+  requireGiftWrapRelay(dWallets);
   const { alice, bob, carol } = dWallets;
   // The recipient must be one the relay delivers to.
   let recipient: DWallet | null = null;
-  for (const w of [alice, bob]) if (await linkedState(w)) { recipient = w; break; }
+  for (const w of [alice, bob]) if (await ensureLinkState(w)) { recipient = w; break; }
   if (!recipient) {
     recordFinding('not-exercised', 'neither alice nor bob is linked, so background delivery could not be exercised');
     test.skip(true, 'no linked demo wallet to receive a DM in the background');
@@ -258,14 +290,14 @@ test('background delivery collects a DM while Messages is closed and the Inbox s
   await goTab(recipient, 'home');
   await recipient.footage.settled('Messages closed');
 
-  const before = await inboxWraps(relay, recipient.pubkeyHex);
   await openMessages(carol);
   const text = runText('while the screen is closed', RUN);
+  const mark = carol.relayGuard.sentWraps.length;
   const outcome = await sendMessage(carol, recipient.npub, text);
   expect(outcome.status, `the wallet reported an error for a DM to a linked recipient: ${outcome.error ?? ''}`).toBe('sent');
-  await carol.footage.settled('message sent');
-  const fresh = await newInboxWraps(relay, recipient.pubkeyHex, before);
-  expect(fresh.size, 'the relay holds no new gift wrap for the recipient').toBeGreaterThan(0);
+  await carol.footage.result('message sent');
+  const fresh = await findWraps(relay, recipient.pubkeyHex, publishedWraps(carol, mark, relay));
+  expect(fresh.size, 'the relay holds none of the gift wraps carol just published for the recipient').toBeGreaterThan(0);
 
   // The service worker polls on an alarm (five minutes). It stores the wraps
   // still encrypted; nothing here decrypts them. The recipient's Home stays static.
@@ -280,25 +312,45 @@ test('background delivery collects a DM while Messages is closed and the Inbox s
       message: 'the background poller never collected the DM while Messages was closed',
     })
     .toBe(true);
+  // It raised its notification for exactly these wraps: its seen-set is written
+  // right after the notification is created.
+  const notified = new Set(await notifiedWrapIds(target));
+  expect([...fresh.keys()].every((id) => notified.has(id)), 'the background poller collected the DM but raised no notification for it').toBe(true);
+  recordFinding(
+    'scope',
+    'v0.3.1 shows no unread badge for DMs in the Inbox; background delivery is a system notification plus the decrypted list on the next open of Messages',
+  );
   await recipient.footage.result('collected in the background');
 
-  // The Inbox's Messages entry shows it, decrypted, on the next open.
-  await openMessages(recipient);
-  await expectMessage(recipient, carol.npub, text, 60_000);
+  // The Inbox's Messages entry shows it, decrypted, on the next open, from the
+  // collected wraps ALONE: the page's live gift-wrap subscription is held at the
+  // socket while Messages reopens, so the relay cannot hand the DM over again.
+  const heldBefore = recipient.relayGuard.heldWrapReads;
+  recipient.relayGuard.holdWrapReads = true;
+  try {
+    await openMessages(recipient);
+    await expectMessage(recipient, carol.npub, text, 60_000);
+    expect(
+      recipient.relayGuard.heldWrapReads,
+      'Messages opened no live subscription to hold, so the display cannot be attributed to the collected wraps',
+    ).toBeGreaterThan(heldBefore);
+  } finally {
+    recipient.relayGuard.holdWrapReads = false;
+  }
 });
 
 test('a burner identity messages with proof-of-work and is picked to receive', async ({ dWallets }) => {
-  requireGiftWrapRelay();
+  requireGiftWrapRelay(dWallets);
   const { alice, bob, carol } = dWallets;
   // The burner writes to a wallet the relay delivers to.
   let peer: DWallet | null = null;
-  for (const w of [carol, alice]) if (await linkedState(w)) { peer = w; break; }
+  for (const w of [carol, alice]) if (await ensureLinkState(w)) { peer = w; break; }
   if (!peer) {
     recordFinding('not-exercised', 'neither carol nor alice is linked, so burner delivery could not be exercised');
     test.skip(true, 'no linked demo wallet to receive the burner\'s message');
     return;
   }
-  await linkedState(bob);
+  await ensureLinkState(bob);
   dWallets.chapter('Burner identity');
   await openIdentityHub(bob);
   const burnerHex = await addBurner(bob);
@@ -314,18 +366,20 @@ test('a burner identity messages with proof-of-work and is picked to receive', a
   // on the NIP-13 work the wallet mines. The peer sees the burner, never bob.
   dWallets.chapter('Burner sends with proof-of-work');
   if (powBits === 0) recordFinding('not-exercised', 'the relay advertises no inbound proof-of-work, so PoW mining was not exercised');
-  await deliver(bob, peer, burnerNpub, peer.npub, runText('from a burner', RUN));
+  const records: DmRecord[] = [];
+  records.push(await deliver(bob, peer, burnerNpub, peer.npub, runText('from a burner', RUN)));
 
   // The peer replies to the burner. The operator relay admits gift wraps only
   // to linked npubs, so on a premium-post relay this is refused by design; the
   // wallet must say so rather than claim delivery.
   dWallets.chapter('Reply to the burner');
-  const burnerBefore = await inboxWraps(relay, burnerHex);
   const reply = runText('reply to a burner', RUN);
+  const mark = peer.relayGuard.sentWraps.length;
   const outcome = await sendMessage(peer, burnerNpub, reply);
+  const offered = publishedWraps(peer, mark, relay);
   if (outcome.status === 'sent') {
-    await peer.footage.settled('reply sent');
-    expect((await newInboxWraps(relay, burnerHex, burnerBefore)).size, 'the wallet reported success but the relay holds nothing for the burner').toBeGreaterThan(0);
+    await peer.footage.result('reply sent');
+    expect((await findWraps(relay, burnerHex, offered)).size, 'the wallet reported success but the relay holds none of its wraps for the burner').toBeGreaterThan(0);
     await expectMessage(bob, peer.npub, reply);
     // The reply belongs to the burner's inbox only.
     await chooseMessagingIdentity(bob, bob.npub);
@@ -334,10 +388,10 @@ test('a burner identity messages with proof-of-work and is picked to receive', a
     expect(outcome.error ?? '', 'the refusal does not say why').toMatch(/refused|registered|proof-of-work|reach/i);
     await peer.footage.result('relay refused the reply');
     recordFinding(
-      'policy',
-      'the operator relay refuses gift wraps addressed to an unregistered key: a burner can send but cannot receive replies on relay.smirk.cash',
+      'release-question',
+      'the operator relay refuses gift wraps addressed to an unregistered key, so a burner can send but cannot receive replies there. The wallet reports the refusal honestly; whether v0.3.1 ships burners that cannot be answered is for the owner.',
     );
-    expect((await newInboxWraps(relay, burnerHex, burnerBefore, 10_000)).size, 'the relay stored a wrap the wallet said was refused').toBe(0);
+    expect((await findWraps(relay, burnerHex, offered, 10_000)).size, 'the relay stored a wrap the wallet said was refused').toBe(0);
     await expect(bob.page.getByTestId('message-item').filter({ hasText: reply })).toHaveCount(0);
     await bob.footage.settled('no reply for the burner');
     await chooseMessagingIdentity(bob, bob.npub);
@@ -345,14 +399,15 @@ test('a burner identity messages with proof-of-work and is picked to receive', a
 
   // Picking the seed identity again receives as it: the peer writes to bob's npub.
   dWallets.chapter('Receive as the seed identity');
-  await deliver(peer, bob, peer.npub, bob.npub, runText('picker back to the seed identity', RUN));
+  records.push(await deliver(peer, bob, peer.npub, bob.npub, runText('picker back to the seed identity', RUN)));
+  requireDelivered(records);
 });
 
 test('an unregistered external identity reaches a linked wallet only with proof-of-work', async ({ dWallets }) => {
-  requireGiftWrapRelay();
+  requireGiftWrapRelay(dWallets);
   const { alice, bob, carol } = dWallets;
   let target: DWallet | null = null;
-  for (const w of [alice, bob, carol]) if (await linkedState(w)) { target = w; break; }
+  for (const w of [alice, bob, carol]) if (await ensureLinkState(w)) { target = w; break; }
   if (!target) {
     recordFinding('not-exercised', 'no demo wallet is linked, so inbound delivery from outside Smirk could not be exercised');
     test.skip(true, 'no linked demo wallet to receive from outside Smirk');
@@ -365,23 +420,23 @@ test('an unregistered external identity reaches a linked wallet only with proof-
 
   // Without work the relay refuses an unknown author outright (Node side).
   const bare = runText('external without proof-of-work', RUN);
-  const refused = await sendFromExternal(relay, external, target.npub, bare, 0);
+  const refused = await sendFromExternal(relay, dWallets.relayPins, external, target.pubkeyHex, bare, 0);
   if (powBits > 0) {
     expect(refused.ok, 'the relay admitted an unknown author without the proof-of-work it advertises').toBe(false);
     if (!refused.ok) expect(refused.refusal).toMatch(/proof-of-work/i);
+    expect((await findWraps(relay, target.pubkeyHex, refused.ids, 10_000)).size, 'the relay stored the wrap it refused').toBe(0);
   } else {
     recordFinding('not-exercised', 'the relay advertises no inbound proof-of-work, so the refusal without it was not exercised');
   }
 
   // With work (at least 8 bits, as other Nostr clients would mine) it arrives.
-  const before = await inboxWraps(relay, target.pubkeyHex);
   const bits = Math.max(8, powBits);
   const text = runText('external with proof-of-work', RUN);
-  const sent = await sendFromExternal(relay, external, target.npub, text, bits);
+  const sent = await sendFromExternal(relay, dWallets.relayPins, external, target.pubkeyHex, text, bits);
   expect(sent.ok, 'the relay refused a mined gift wrap to a linked user').toBe(true);
-  const fresh = await newInboxWraps(relay, target.pubkeyHex, before);
-  expect(fresh.size).toBeGreaterThan(0);
-  for (const got of fresh.values()) expect(got).toBeGreaterThanOrEqual(bits);
+  const stored = await findWraps(relay, target.pubkeyHex, sent.ids);
+  expect(stored.size, 'the relay holds none of the wraps the external identity sent').toBeGreaterThan(0);
+  for (const got of stored.values()) expect(got, 'the stored wrap carries less work than was mined').toBeGreaterThanOrEqual(bits);
 
   await expectMessage(target, external.npub, text);
   if (powBits > 0) {
@@ -390,7 +445,7 @@ test('an unregistered external identity reaches a linked wallet only with proof-
 });
 
 test('messaging an unregistered external npub never claims delivery', async ({ dWallets }) => {
-  requireGiftWrapRelay();
+  requireGiftWrapRelay(dWallets);
   const { alice } = dWallets;
   dWallets.chapter('Outbound to outside Smirk');
   const external = createExternalIdentity();
@@ -407,7 +462,10 @@ test('messaging an unregistered external npub never claims delivery', async ({ d
     expect(outcome.error ?? '', 'the error does not say why').toMatch(/refused|registered|reach/i);
     await alice.footage.result('relay refused delivery');
     expect(await externalInboxTexts(relay, external), 'the relay stored a message the wallet said was refused').not.toContain(text);
-    recordFinding('policy', 'the operator relay refuses DMs to keys no Smirk account owns; the wallet reports the refusal');
+    recordFinding(
+      'release-question',
+      'the operator relay refuses DMs to keys no Smirk account owns, so a v0.3.1 user cannot message an outside Nostr user through it; the wallet reports the refusal honestly',
+    );
   } else {
     await alice.footage.result('reach notice shown');
   }

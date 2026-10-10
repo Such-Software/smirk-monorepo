@@ -15,9 +15,12 @@
  *  2. `secret(label, fn)` switches the recorder to the card BEFORE a password
  *     or phrase is typed, and resumes only after two consecutive clean passes.
  *  3. Dead air is part of the fixture, never an ad hoc sleep in a spec:
- *     `tap` holds the screen static before every tap, `settled` holds a settled
- *     screen, and `result` holds a key result. Each hold is written to the
- *     timeline, and `assertHoldsMeetPolicy` fails a run whose holds fall short.
+ *     `tap` holds the screen static before every tap (`beforeTap` alone for a
+ *     tap made inside a `secret` scope), `settled` holds a settled screen, and
+ *     `result` holds a key result. Each hold is written to the timeline, and
+ *     `assertHoldsMeetPolicy` fails a run whose holds fall short. A hold that is
+ *     never taken cannot be measured, so the flows take one at every screen
+ *     they reach (tab roots and menus included).
  *
  * What is never retained: values, URLs, page text or the canary's inputs.
  * Labels are static strings (checked at runtime), and the timeline names a
@@ -280,6 +283,15 @@ export class DFootage {
   /** Counts only; never values. */
   stats(): Readonly<FootageCounters> {
     return this.counters;
+  }
+
+  /**
+   * The static pre-tap hold on its own, for a tap the caller must make itself
+   * (inside a `secret` scope, where the value typed must never reach `type`).
+   */
+  async beforeTap(label: string): Promise<void> {
+    assertStaticLabel(label);
+    await this.hold('tap', label, D_HOLD.BEFORE_TAP_MS);
   }
 
   /** Hold the screen static, then tap. */

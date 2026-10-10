@@ -9,13 +9,17 @@
  *   - whether a recipient advertises a NIP-17 inbox (kind 10050), which decides
  *     whether the wallet must show its reach notice;
  *   - a Node-side EXTERNAL identity (random key, never Smirk-registered) that
- *     sends and receives NIP-17 DMs through the wallet's own core code path;
+ *     sends and receives NIP-17 DMs through the wallet's own core wrapping, to
+ *     the operator relay only;
  *   - the operator feed exactly as the client computes it, and the owner's
  *     NIP-51 mute list.
  *
- * Every publish goes through `assertLiveRelayAdmits` first. Reads (REQ) are
- * unrestricted. Keys created here exist only in memory for one worker and are
- * registered with the footage canary by the caller.
+ * Every publish goes through `assertLiveRelayAdmits` (with the run's pinned
+ * relays) first. Reads (REQ) are unrestricted. Relay evidence on a shared relay
+ * is looked up by the ids this run published (`findWraps`), never by "whatever
+ * is new", so a concurrent lane cannot satisfy or spoil it. Keys created here
+ * exist only in memory for one worker and are registered with the footage
+ * canary by the caller.
  */
 
 import {
@@ -34,7 +38,6 @@ import {
   NostrMessagingProvider,
   setMessagingProvider,
   resolveNip05,
-  sendDm,
   type DisplayNote,
   type FeedCapabilityLike,
   type GiftWrapEvent,
@@ -138,8 +141,37 @@ export async function inboxWraps(relayUrl: string, pubkeyHex: string): Promise<M
 }
 
 /**
+ * Which of `ids` (gift wraps a wallet or this file just published) the relay
+ * holds for `pubkeyHex`, as id to NIP-13 difficulty. Polls until every id is
+ * there or the timeout passes, then returns what it found. Asking by id keeps
+ * the evidence to this run's own wraps: another lane writing to the same demo
+ * wallet at the same time can neither satisfy nor spoil the check.
+ */
+export async function findWraps(
+  relayUrl: string,
+  pubkeyHex: string,
+  ids: Iterable<string>,
+  timeoutMs = 60_000,
+): Promise<Map<string, number>> {
+  const wanted = [...new Set(ids)].filter((id) => /^[0-9a-f]{64}$/.test(id));
+  if (wanted.length === 0) return new Map();
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const events = await withClient(
+      (c) => c.querySync([relayUrl], [{ ids: wanted, kinds: [1059], '#p': [pubkeyHex] }]),
+      'wrap lookup',
+    );
+    const found = new Map(events.filter((e) => wanted.includes(e.id)).map((e) => [e.id, leadingZeroBits(e.id)]));
+    if (found.size === wanted.length || Date.now() > deadline) return found;
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+}
+
+/**
  * Wait until `pubkeyHex`'s inbox gains at least one wrap not in `before`, and
- * return the new ones (id to difficulty). Empty after the timeout.
+ * return the new ones (id to difficulty). Empty after the timeout. Only for a
+ * disposable local relay that nothing else writes to; on a shared relay use
+ * `findWraps` with the ids that were published.
  */
 export async function newInboxWraps(
   relayUrl: string,
@@ -193,31 +225,61 @@ export function externalSecretForms(external: ExternalIdentity): string[] {
   return [hex, encodeNsec(external.identity.privateKey)];
 }
 
-/** Outcome of a Node-side send: accepted, or the relay's own refusal text. */
-export type ExternalSend = { ok: true; inboxFound: boolean } | { ok: false; refusal: string };
+/**
+ * Outcome of a Node-side send: accepted, or the relay's own refusal text. Either
+ * way `ids` names the gift wraps that were offered to the relay (public event ids).
+ */
+export type ExternalSend = { ok: true; ids: string[] } | { ok: false; refusal: string; ids: string[] };
 
 /**
  * Send a NIP-17 DM from an external identity through the wallet's own core
- * path (`sendDm`: kind-14 rumor, kind-13 seal, kind-1059 wrap, optional NIP-13
- * mining). Only the operator relay is used; no public relays are contacted.
+ * wrapping (`NostrMessagingProvider.sendDm`: kind-14 rumor, kind-13 seal,
+ * kind-1059 wrap, optional NIP-13 mining) to `relayUrl` ONLY. Core's top-level
+ * `sendDm` would also publish to the recipient's kind-10050 inbox relays and
+ * NIP-05 hints, which this Node process cannot guard at the transport, so the
+ * relay set is pinned here instead. `pinned` is the run's pin list
+ * (fixtures/relay-guard.ts); `relayUrl` must be on it.
  */
 export async function sendFromExternal(
   relayUrl: string,
+  pinned: readonly string[],
   from: ExternalIdentity,
-  recipient: string,
+  recipientPubkeyHex: string,
   text: string,
   powBits: number,
 ): Promise<ExternalSend> {
-  assertLiveRelayAdmits(relayUrl, 1059);
-  return withProvider(relayUrl, async () => {
-    try {
-      const sent = await sendDm(from.identity, recipient, text, powBits);
-      return { ok: true, inboxFound: sent.inboxFound } as const;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, refusal: message } as const;
-    }
-  });
+  assertLiveRelayAdmits(relayUrl, 1059, { pinned });
+  const provider = new NostrMessagingProvider();
+  const ids: string[] = [];
+  // Every publish goes through the provider's one internal `publish`; record
+  // the id of each event it ships so the caller can find exactly these wraps.
+  const spied = provider as unknown as {
+    publish: (relays: string[], event: { id: string }) => Promise<void>;
+  };
+  const publish = spied.publish.bind(provider);
+  spied.publish = async (relays, event) => {
+    ids.push(event.id);
+    return publish(relays, event);
+  };
+  try {
+    await bounded(
+      provider.sendDm({
+        identity: from.identity,
+        recipientPubkeyHex,
+        text,
+        relays: [relayUrl],
+        ...(powBits ? { powBits } : {}),
+      }),
+      'Node-side relay exchange',
+      60_000,
+    );
+    return { ok: true, ids };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, refusal: message, ids };
+  } finally {
+    provider.close();
+  }
 }
 
 /**
