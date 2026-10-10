@@ -118,6 +118,26 @@ jobs:
         continue-on-error: true
         run: cargo clippy --all-targets --no-deps -p grin-ext
 
+      - name: Test experimental BasicSwap codec (offline)
+        run: |
+          cargo test --locked -p swap-core --features basicswap-interop --all-targets
+          cargo clippy --locked -p swap-core --features basicswap-interop --all-targets --no-deps -- -D warnings
+          cargo check --locked -p swap-core --features basicswap-interop --target wasm32-unknown-unknown
+          cargo build --locked -p swap-core --features basicswap-interop --example basicswap_fixture
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: BasicSwap reference compatibility (fundless)
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          git clone --depth 1 --branch v0.19.0 https://github.com/basicswap/basicswap.git "$RUNNER_TEMP/basicswap-reference"
+          python -m venv "$RUNNER_TEMP/basicswap-fixtures"
+          "$RUNNER_TEMP/basicswap-fixtures/bin/pip" install --only-binary=:all: -r crates/swap-core/tests/reference-requirements.txt
+          "$RUNNER_TEMP/basicswap-fixtures/bin/python" crates/swap-core/tests/basicswap_reference.py \
+            --reference "$RUNNER_TEMP/basicswap-reference" --binary target/debug/examples/basicswap_fixture
+
   typescript:
     # Isolated toolchain homes, one per job. These runners execute several jobs
     # concurrently as the same user, so a shared ~/.rustup and ~/.cargo means one
