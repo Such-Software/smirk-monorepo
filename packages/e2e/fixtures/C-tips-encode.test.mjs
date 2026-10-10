@@ -84,3 +84,41 @@ test('recorded holds survive encoding as still frames, and the check catches wha
   const tampered = await encodeInvocation({ env, allowTestPolicy: true });
   assert.ok(tampered.failures.some((f) => /Straddles the tap.*changes/.test(f)), 'the straddling hold is caught in the video');
 });
+
+// A few still frames of very different lengths once encoded as an MP4 whose
+// sample durations summed to 3.7 s for 5.8 s of footage: libx264 B-frame
+// reordering at variable frame rate. The recorded test above hit it about one
+// run in eight; this is that shape, fixed, so it fails every time it regresses.
+test('a side-by-side of a few long still frames keeps the full length of the run', async (t) => {
+  const { concatList, encodeSideBySide, probeFrames } = await import('../scripts/C-tips-encode.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'c-tips-side-by-side-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const still = (color) => {
+    const file = join(dir, `${color}.jpg`);
+    const made = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x${color}:s=380x600`, '-frames:v', '1', file]);
+    assert.equal(made.status, 0, 'ffmpeg draws a still frame');
+    return file;
+  };
+  const t0 = 1_700_000_000_000;
+  const tracks = {
+    alice: [
+      { path: still('203040'), from: t0, to: t0 + 1_823 },
+      { path: still('302040'), from: t0 + 1_823, to: t0 + 4_574 },
+      { path: still('405060'), from: t0 + 4_574, to: t0 + 5_825 },
+    ],
+    bob: [
+      { path: still('0d0b14'), from: t0, to: t0 + 52 },
+      { path: still('506070'), from: t0 + 52, to: t0 + 5_825 },
+    ],
+  };
+  const lists = Object.entries(tracks).map(([name, track]) => {
+    const list = join(dir, `${name}.ffconcat`);
+    writeFileSync(list, concatList(track));
+    return list;
+  });
+  const file = join(dir, 'side-by-side.mp4');
+  encodeSideBySide(lists, file);
+  const probe = probeFrames(file);
+  assert.ok(probe.duration >= 5.825 - 0.1, `the side-by-side lasts the whole run (${probe.duration} s of 5.825 s)`);
+  assert.ok(probe.pts.length < 20, 'each still screen stays one frame (variable frame rate)');
+});
