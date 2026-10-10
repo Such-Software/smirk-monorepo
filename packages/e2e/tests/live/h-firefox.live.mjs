@@ -16,12 +16,13 @@
  *                compares against.
  *
  * Flows per lane, each asserting a real outcome
- *   Import alice (redacted), balances on Home, lock policy "lock every time",
- *   lock and unlock twice, Receive XMR (a valid address), Send to Review
- *   (alice's own address, never submitted), Messages (relay up, no error),
- *   a live swap quote (THORChain, else Trocador; never confirmed), and the
- *   380x600 compact layout with every header button clicked, in the default
- *   theme and in Windows XP. No funds move in this area.
+ *   Import alice (redacted), balances on Home, Receive XMR (a valid address),
+ *   Send to Review (alice's own address, never submitted), Messages (relay
+ *   up, no error), a live swap quote (THORChain, else Trocador; never
+ *   confirmed), the 380x600 compact layout with every header control on
+ *   screen and hit-testable in the default theme and in Windows XP (Refresh,
+ *   identity, tab and window clicked), then lock policy "lock every time":
+ *   Lock from the header, reopen to the lock screen, unlock. No funds move.
  *
  * Video policy: every operation goes through the recorder's helpers: a 6 s
  * still before each tap, 12 s on every settled screen, 25 s on key results.
@@ -31,6 +32,13 @@
  *
  * Gates (each opt-in, all required): E2E_LIVE=1, FOOTAGE=guarded and
  * ALLOW_PROD_WRITES=1 (importing alice signs in to production).
+ *
+ * Sign-in budget: every sign-in runs the backend's check-restore, limited to
+ * 30 an hour per IP (RESTORE_IP_THRESHOLD) for all wallets and agents on that
+ * IP. A lane spends about five: import (two), the tab and window hand-offs
+ * (two) and one unlock. Past the limit the wallet shows "Could not check
+ * wallet history: Rate limited" and the header loses its identity and
+ * Refresh controls. Space full runs of all lanes across hours.
  *
  * Custody: the phrase comes from one NAME=value line of the owner-only (0600)
  * custody file through readWalletPhrase, in this process only. Never `set -a`
@@ -156,6 +164,12 @@ class Lane {
 
   /** Back to an unlocked Home from anywhere: reopen the wallet and unlock if asked. */
   async recover() {
+    // Reuse an open, unlocked wallet: every unlock runs the backend's history
+    // check, whose per-wallet budget rate-limits repeated unlocks.
+    if ((await this.ui.visible('bottom-nav')) && !(await this.ui.visible('lockscreen-root'))) {
+      await this.tabRoot('home', 'Back to Home');
+      return;
+    }
     await this.footage.act('Reopen the wallet', () => this.ui.goto('popup.html'));
     await until(async () => (await this.ui.visible('lockscreen-root')) || (await this.ui.visible('home-total-balance')), { timeout: 60_000, what: 'the wallet to open' });
     if (await this.ui.visible('lockscreen-root')) await this.unlock();
@@ -177,6 +191,9 @@ class Lane {
       await ops.tap('lockscreen-unlock-btn');
       await until(async () => !(await this.ui.visible('lockscreen-root')), { timeout: 60_000, what: 'the lock screen to close' });
     });
+    // Unlocking restores the last screen (Settings, say), not Home.
+    await until(() => this.ui.visible('bottom-nav'), { timeout: 60_000, what: 'the wallet after unlock' });
+    if (!(await this.ui.visible('home-total-balance'))) await this.tabRoot('home', 'Back to Home');
     await this.homeLoaded();
   }
 
@@ -247,20 +264,24 @@ class Lane {
     await this.footage.settled('Lock every time is set');
   }
 
-  async lockAndUnlock() {
-    await this.footage.tap({ aria: 'Lock wallet' }, 'Lock the wallet');
+  /**
+   * The header Lock control, then lock every time: reopening the wallet asks
+   * for the password again. `reopen` is false for a plain lock and unlock.
+   */
+  async lockAndUnlock({ reopen = true, themeLabel = 'default' } = {}) {
+    await this.footage.tap({ aria: 'Lock wallet' }, 'Tap Lock wallet in the header');
     await until(() => this.ui.visible('lockscreen-root'), { what: 'the lock screen' });
     await this.footage.settled('Lock screen');
-    // Lock every time: reopening the wallet asks for the password again.
-    for (const round of [1, 2]) {
-      await this.footage.act(round === 1 ? 'Reopen the wallet' : 'Reopen the wallet again', () => this.ui.goto('popup.html'));
+    if (reopen) {
+      await this.footage.act('Reopen the wallet', () => this.ui.goto('popup.html'));
       await until(() => this.ui.visible('lockscreen-root'), { timeout: 60_000, what: 'the lock screen on reopen' });
       if (await this.ui.visible('home-total-balance')) throw new LaneError('the wallet opened unlocked under lock every time');
       await this.footage.settled('Lock screen after reopening');
-      await this.unlock();
-      await this.footage.settled('Home after unlock');
-      await this.footage.result('Unlocked Home');
     }
+    await this.unlock();
+    await this.footage.settled('Home after unlock');
+    await this.footage.result('Unlocked Home');
+    return { reopened: reopen, theme: themeLabel };
   }
 
   async receiveXmr() {
@@ -348,25 +369,41 @@ class Lane {
         if (!(await this.ui.visible('swap-wizard-step'))) await this.footage.tap(row, 'Start a THORChain swap');
       }
       await until(() => this.ui.visible('swap-pair-get-quote'), { what: 'the swap pair step' });
-      if (!(await this.ui.visible(`swap-pair-from-${candidate.from}`)) || !(await this.ui.visible(`swap-pair-to-${candidate.to}`))) {
+      const attempt = { provider: candidate.provider, pair: `${candidate.from}-${candidate.to}` };
+      (this.evidence.swapAttempts ??= []).push(attempt);
+      if (!(await this.ui.visible(`swap-pair-from-${candidate.from}`))) {
+        attempt.outcome = 'send asset not offered';
         await this.footage.tap('swap-wizard-cancel', 'Cancel this pair');
         continue;
       }
+      // The To row leaves out the asset chosen in From, so choose From first.
       await this.footage.tap(`swap-pair-from-${candidate.from}`, 'Choose what to send');
+      if (!(await until(() => this.ui.visible(`swap-pair-to-${candidate.to}`), { timeout: 10_000, what: 'the receive asset' }).catch(() => false))) {
+        attempt.outcome = 'receive asset not offered';
+        await this.footage.tap('swap-wizard-cancel', 'Cancel this pair');
+        continue;
+      }
       await this.footage.tap(`swap-pair-to-${candidate.to}`, 'Choose what to receive');
       // A quote moves nothing; half the balance clears provider minimums best.
-      await this.footage.type('swap-pair-amount', String(Number((held / 2).toPrecision(6))), 'Enter the amount to quote');
+      // At most 8 decimals: BTC and LTC refuse finer amounts.
+      const half = (Math.floor((held / 2) * 1e8) / 1e8).toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+      await this.footage.type('swap-pair-amount', half, 'Enter the amount to quote');
       if (!(await until(() => this.ui.enabled('swap-pair-get-quote'), { timeout: 10_000, what: 'Get quote' }).catch(() => false))) {
+        attempt.outcome = 'Get quote stayed disabled';
         await this.footage.tap('swap-wizard-cancel', 'Cancel this pair');
         continue;
       }
       await this.footage.tap('swap-pair-get-quote', 'Get a live quote');
       const quoted = await until(async () => ((await this.ui.text('swap-wizard-step')) ?? '').startsWith('2/'), { timeout: 90_000, what: 'a quote' }).catch(() => false);
       if (!quoted) {
+        // The provider's refusal as the UI words it (public text, no values).
+        const said = (await this.ui.rootText()).split('\n').find((line) => /minimum|too small|too low|insufficient|failed|error|unavailable|refused|limit|not supported/i.test(line));
+        attempt.outcome = `quote refused${said ? `: ${said.trim().slice(0, 140)}` : ''}`;
         await this.footage.settled('Quote refused');
         await this.footage.tap('swap-wizard-cancel', 'Cancel this pair');
         continue;
       }
+      attempt.outcome = 'quoted';
       const fee = (await this.ui.text('swap-quote-fee')) ?? '';
       const screen = await this.ui.rootText();
       const receive = parseAmount(/You receive \(est\.\)\s*([\d.,]+)/.exec(screen)?.[1]);
@@ -383,9 +420,16 @@ class Lane {
   }
 
   /** Every header button: on screen, receives a hit at its centre, and works when clicked. */
-  async headerButtons(themeLabel) {
+  /**
+   * `openWindows`: also open the wallet in a tab and in its own window. Each
+   * new window signs in again, which spends one of the backend's per-IP
+   * restore checks (30 an hour), so only the default theme does it.
+   */
+  async headerButtons(themeLabel, { openWindows = true } = {}) {
     await this.tabRoot('home', 'Open Home');
     await this.ui.setSize(POPUP.width, POPUP.height);
+    // The identity chip and Refresh render only with a live session.
+    await until(async () => (await this.ui.evaluate(hHeaderHitTest)).buttons.length >= 5, { timeout: 60_000, what: 'the full header' }).catch(() => {});
     const report = await this.ui.evaluate(hHeaderHitTest);
     const layout = { theme: themeLabel, layout: report.layout, bar: report.bar, width: report.width, buttons: report.buttons };
     (this.evidence.layout ??= []).push(layout);
@@ -411,7 +455,11 @@ class Lane {
       await this.footage.tap('header-identity-switcher', 'Close the identity list');
     }
     // Open in a browser tab, then in its own window: each opens the wallet elsewhere.
-    for (const [aria, label] of [['Open in a browser tab', 'Open in a browser tab'], ['Open in its own window', 'Open in its own window']]) {
+    const windowControls = [['Open in a browser tab', 'Open in a browser tab'], ['Open in its own window', 'Open in its own window']];
+    for (const [aria] of windowControls) {
+      if (!openWindows && !report.buttons.some((button) => button.label === aria) && report.layout === 'popup') throw new LaneError(`the ${aria} control is missing`);
+    }
+    for (const [aria, label] of openWindows ? windowControls : []) {
       if (!(await this.ui.visible({ aria }))) {
         if (aria === 'Open in its own window' && report.layout !== 'popup') continue;
         throw new LaneError(`the ${aria} control is missing`);
@@ -438,11 +486,9 @@ class Lane {
       if (await this.ui.visible('lockscreen-root')) await this.unlock();
       await this.tabRoot('home', 'Back to Home');
     }
-    // Lock, then unlock.
-    await this.footage.tap({ aria: 'Lock wallet' }, 'Tap Lock wallet');
-    await until(() => this.ui.visible('lockscreen-root'), { what: 'the lock screen' });
-    await this.footage.settled('Locked from the header');
-    await this.unlock();
+    // Lock is clicked in its own step (each unlock spends the backend's
+    // history-check budget); here it must be on screen and hit-testable.
+    if (!report.buttons.some((button) => button.label === 'Lock wallet')) throw new LaneError('the Lock wallet control is missing');
     await this.footage.result(`Header works in the ${themeLabel} theme`);
     return layout.expectedSkip ? { expectedSkip: 'RFP measured layout' } : { buttons: report.buttons.length };
   }
@@ -578,15 +624,16 @@ async function runLane(lane, options) {
     } else {
       await flow.step('Import alice (redacted)', () => flow.importAlice(words), { recover: false });
       await flow.step('Home balances', () => flow.homeBalances());
-      await flow.step('Lock every time', () => flow.lockEveryTime(), { recover: false });
-      await flow.step('Lock and unlock', () => flow.lockAndUnlock(), { recover: false });
       await flow.step('Receive XMR', () => flow.receiveXmr());
       await flow.step('Send to Review', () => flow.sendToReview());
       await flow.step('Messages render', () => flow.messages());
       await flow.step('Swap quote', () => flow.swapQuote());
       await flow.step('Popup layout, default theme', () => flow.headerButtons('default'));
       await flow.step('Switch to Windows XP', () => flow.theme('winxp', 'Choose the Windows XP theme'));
-      await flow.step('Popup layout, Windows XP', () => flow.headerButtons('Windows XP'));
+      await flow.step('Popup layout, Windows XP', () => flow.headerButtons('Windows XP', { openWindows: false }));
+      // Unlocks last: each one runs the backend's rate-limited history check.
+      await flow.step('Lock every time', () => flow.lockEveryTime());
+      await flow.step('Lock from the header (Windows XP), reopen, unlock', () => flow.lockAndUnlock({ reopen: true, themeLabel: 'Windows XP' }));
       await flow.step('Back to the default theme', () => flow.theme('default', 'Choose the default theme'));
     }
   } catch (error) {
