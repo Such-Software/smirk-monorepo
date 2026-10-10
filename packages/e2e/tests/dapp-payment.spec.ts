@@ -1,5 +1,6 @@
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import { BroadcastMonitor } from '../fixtures/live-send.js';
 
 /**
  * Dapp payment popup e2e: the exact flow the "Cannot convert 9.0000 to a BigInt" bug
@@ -108,4 +109,68 @@ test('dapp payment popup shows the human amount (decimal->atomic, no BigInt cras
 
   // 7. Deny (a real WOW broadcast needs funds/node, out of scope for this popup test).
   await approval.getByRole('button', { name: 'Deny' }).click();
+});
+
+/**
+ * A fractional BTC request ("0.00012", the way a checkout quotes it) renders in
+ * human units with the destination in full, and Deny reaches the page as a
+ * rejected promise. Every broadcast endpoint is blocked and must see no attempt.
+ */
+test('a fractional BTC payment request shows human units, and Deny reaches the page with nothing broadcast', async ({
+  context,
+  extensionId,
+}) => {
+  const BTC_TO = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+  const trip = await BroadcastMonitor.attach(context, 'block');
+  const popup = await context.newPage();
+  await importAndUnlock(popup, { extensionId, mnemonic: MNEMONIC! });
+  await expect(popup.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
+
+  let [sw] = context.serviceWorkers();
+  if (!sw) sw = await context.waitForEvent('serviceworker');
+  await sw.evaluate(
+    async ({ key, perm }) => {
+      const g = globalThis as unknown as { chrome: { storage: { local: { set(v: Record<string, unknown>): Promise<void> } } } };
+      await g.chrome.storage.local.set({ [key]: perm });
+    },
+    { key: `smirk:dapp:origin:${SHOP_ORIGIN}`, perm: { origin: SHOP_ORIGIN, assets: ['btc'] } },
+  );
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>BTC checkout</title></head><body>
+<button id="pay">Pay 0.00012 BTC</button><pre id="out"></pre>
+<script>document.getElementById('pay').addEventListener('click', async () => {
+  try { const r = await window.smirk.requestPayment({ asset: 'btc', amount: '0.00012', address: ${JSON.stringify(BTC_TO)} });
+    document.getElementById('out').textContent = 'ok:' + JSON.stringify(r); }
+  catch (e) { document.getElementById('out').textContent = 'err:' + (e && e.message); }
+});</script></body></html>`;
+  const shop = await context.newPage();
+  await shop.route(`${SHOP_ORIGIN}/**`, (route) => route.fulfill({ contentType: 'text/html', body: html }));
+  await shop.goto(`${SHOP_ORIGIN}/`);
+  await shop.waitForFunction(
+    () => typeof (window as unknown as { smirk?: { requestPayment?: unknown } }).smirk?.requestPayment === 'function',
+    null,
+    { timeout: 20_000 },
+  );
+
+  const approvalPromise = context.waitForEvent('page', (p) => p.url().includes('#approval'));
+  await shop.getByRole('button', { name: 'Pay 0.00012 BTC' }).click();
+  const approval = await approvalPromise;
+  const pw = approval.getByTestId('lockscreen-password-input');
+  await Promise.race([
+    pw.waitFor({ timeout: 20_000 }).catch(() => {}),
+    approval.getByRole('button', { name: 'Deny' }).waitFor({ timeout: 20_000 }).catch(() => {}),
+  ]);
+  if (await pw.count()) {
+    await pw.fill('e2e-test-password-123');
+    await approval.getByRole('button', { name: 'Unlock' }).click();
+  }
+
+  const body = approval.locator('body');
+  await expect(body).toContainText('Send BTC?', { timeout: 20_000 });
+  await expect(body).toContainText('0.00012 BTC');
+  await expect(body).toContainText(BTC_TO);
+  await expect(body).not.toContainText('atomic units');
+  await approval.getByRole('button', { name: 'Deny' }).click();
+  await expect(shop.locator('#out')).toHaveText(/^err:/, { timeout: 20_000 });
+  expect(trip.count(), 'nothing was broadcast').toBe(0);
 });

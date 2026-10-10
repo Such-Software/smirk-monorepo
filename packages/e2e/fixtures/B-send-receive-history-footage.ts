@@ -1,0 +1,453 @@
+/**
+ * Guarded footage for the send, receive and history lane.
+ *
+ * VIDEO POLICY (owner requirement), enforced here and nowhere else:
+ *   - 6 s of static screen before every tap or field entry (HOLD_BEFORE_TAP_MS);
+ *   - every settled screen held for 12 s (HOLD_SETTLED_MS);
+ *   - key results (balances, confirmations, history detail, a received
+ *     payment) held for 25 s (HOLD_RESULT_MS);
+ *   - no secret ever reaches a frame.
+ *
+ * Specs never sleep or click directly; they call `tap`, `fill`, `settled`,
+ * `result` and `secret`, so the dead air is a property of the fixture and the
+ * timeline records every hold for the encoder to verify
+ * (scripts/B-send-receive-history-footage.mjs refuses a hold shorter than
+ * policy).
+ *
+ * Recording is a screenshot loop per page, not Playwright video or trace
+ * (both stay off, because neither can be guarded frame by frame). Each frame:
+ * guard, screenshot with masks, guard again, known-secret canary. Any refusal
+ * or disagreement writes a redaction card instead of the frame. Identical
+ * frames are deduplicated by hash, so long holds cost no disk. `secret(label,
+ * fn)` switches the page to a card before a password or phrase is typed and
+ * resumes only after two consecutive clean guard passes.
+ *
+ * Recording is opt-in: FOOTAGE=guarded. Without it the hooks still act (taps,
+ * fills, busy waits) but hold nothing and write nothing.
+ *
+ * Labels are static strings. `assertStaticLabel` refuses anything that looks
+ * like an address, a transaction id or a URL, so a value can never become a
+ * caption.
+ */
+
+import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Locator, Page } from '@playwright/test';
+import {
+  B_EXTRA,
+  B_PATTERNS,
+  MASK_SELECTORS,
+  canarySnapshot,
+  extraSecretSurface,
+  secretSurface,
+} from './B-send-receive-history-guard.mjs';
+
+export const HOLD_BEFORE_TAP_MS = 6_000;
+export const HOLD_SETTLED_MS = 12_000;
+export const HOLD_RESULT_MS = 25_000;
+/** Consecutive clean guard passes required before a secret scope resumes recording. */
+export const SECRET_CLEAN_PASSES = 2;
+export const CAPTURE_FPS = 4;
+/** How long `settled` waits for busy indicators to clear before holding anyway. */
+export const SETTLE_PATIENCE_MS = 45_000;
+/** A heartbeat row while frames are identical, so the encoder can tell a hold from a dead recorder. */
+const HEARTBEAT_MS = 1_000;
+
+/** Text the wallet shows while it is still working; a settled screen shows none of it. */
+export const BUSY_TEXT =
+  /Updating…|Loading…|Loading address…|Loading fee rates…|Refreshing…|Estimating…|Inspecting…|Validating…|Building slate…|Broadcasting…|Signing…|Sending…|Unlocking…|Checking…|Preparing…/;
+
+export function footageEnabled(): boolean {
+  return process.env.FOOTAGE === 'guarded';
+}
+
+/** Refuse a caption that could carry a value: long alphanumeric runs, URLs, or odd characters. */
+export function assertStaticLabel(label: string): void {
+  if (!/^[A-Za-z][A-Za-z0-9 ,.:;()'/+&-]{0,90}$/.test(label) || /[A-Za-z0-9]{16,}/.test(label) || label.includes('://')) {
+    throw new Error('footage labels must be short static text, never a value');
+  }
+}
+
+/**
+ * In-memory known-secret canary. Phrase words are kept only as keyed hashes
+ * of every 4-word window (single BIP39 words are ordinary English and would
+ * match constantly); passwords are compared exactly. Nothing is ever printed.
+ */
+export class SecretCanary {
+  private readonly key = randomBytes(32);
+  private readonly grams = new Set<string>();
+  private readonly exact: string[] = [];
+
+  private mac(text: string): string {
+    return createHmac('sha256', this.key).update(text).digest('hex');
+  }
+
+  addPhrase(words: readonly string[]): void {
+    for (let i = 0; i + 4 <= words.length; i++) this.grams.add(this.mac(words.slice(i, i + 4).join(' ')));
+  }
+
+  addExact(value: string): void {
+    if (value.length >= 8) this.exact.push(value);
+  }
+
+  /** True when `value` (something about to be typed or shown) contains a known secret. */
+  isSecret(value: string): boolean {
+    return this.hits({ text: value, values: [] });
+  }
+
+  hits(snapshot: { text: string; values: string[] }): boolean {
+    const all = [snapshot.text, ...snapshot.values];
+    if (this.exact.some((secret) => all.some((v) => v.includes(secret)))) return true;
+    if (this.grams.size === 0) return false;
+    const tokens = all.join(' ').toLowerCase().match(/[a-z]+/g) ?? [];
+    for (let i = 0; i + 4 <= tokens.length; i++) {
+      if (this.grams.has(this.mac(tokens.slice(i, i + 4).join(' ')))) return true;
+    }
+    return false;
+  }
+}
+
+function privateDir(dir: string): string {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  return dir;
+}
+
+function appendLine(file: string, value: unknown): void {
+  appendFileSync(file, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export type TimelineKind =
+  | 'step'
+  | 'tap'
+  | 'fill'
+  | 'settled'
+  | 'result'
+  | 'hold'
+  | 'secret-start'
+  | 'secret-end'
+  | 'secret-span'
+  | 'mark';
+
+/** One recorder's timeline: what happened and how long each hold actually lasted. */
+export class Timeline {
+  constructor(private readonly file: string | null) {}
+
+  add(kind: TimelineKind, label: string, extra: { holdMs?: number; from?: number; to?: number } = {}): void {
+    if (!this.file) return;
+    appendLine(this.file, { at: Date.now(), kind, label, ...extra });
+  }
+}
+
+/**
+ * Screenshot loop for one page. Frames land in `<dir>/frames/NNNNNN.jpg`
+ * (0600) and `<dir>/frames.jsonl` indexes every tick: a new frame, a repeat of
+ * the previous one, or a redaction card with a static label.
+ */
+export class PageRecorder {
+  private stopped = false;
+  private loop: Promise<void> | null = null;
+  private lastHash = '';
+  private lastRowAt = 0;
+  private count = 0;
+  private secretLabel: string | null = null;
+  private readonly framesDir: string;
+  private readonly index: string;
+
+  constructor(
+    readonly name: string,
+    private readonly page: Page,
+    dir: string,
+    private readonly canary: SecretCanary,
+  ) {
+    privateDir(dir);
+    this.framesDir = privateDir(join(dir, 'frames'));
+    this.index = join(dir, 'frames.jsonl');
+  }
+
+  start(): void {
+    if (this.loop) return;
+    this.loop = (async () => {
+      while (!this.stopped && !this.page.isClosed()) {
+        const started = Date.now();
+        try {
+          await this.tick();
+        } catch {
+          this.card('Unreadable page state');
+        }
+        const wait = 1000 / CAPTURE_FPS - (Date.now() - started);
+        if (wait > 0) await sleep(wait);
+      }
+    })();
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    await this.loop;
+  }
+
+  /** Switch to a redaction card immediately; frames stay suppressed until `resume`. */
+  suppress(label: string): void {
+    this.secretLabel = label;
+    this.card(label);
+  }
+
+  resume(): void {
+    this.secretLabel = null;
+  }
+
+  /** Guard verdict for the page as it is now; null means clean. A page that cannot answer is refused. */
+  async verdict(): Promise<string | null> {
+    if (this.page.isClosed()) return 'closed page';
+    const check = async (): Promise<string | null> => {
+      const a = await this.page.evaluate(secretSurface, B_PATTERNS);
+      if (a) return a;
+      const b = await this.page.evaluate(extraSecretSurface, B_EXTRA);
+      if (b) return b;
+      const snap = await this.page.evaluate(canarySnapshot);
+      return this.canary.hits(snap) ? 'a known secret' : null;
+    };
+    return Promise.race([check(), sleep(10_000).then(() => 'an unresponsive page')]);
+  }
+
+  private card(label: string): void {
+    this.lastHash = `card:${label}`;
+    this.lastRowAt = Date.now();
+    appendLine(this.index, { at: this.lastRowAt, kind: 'card', label, verdict: 'redacted' });
+  }
+
+  private async tick(): Promise<void> {
+    if (this.secretLabel) {
+      if (Date.now() - this.lastRowAt >= HEARTBEAT_MS) this.card(this.secretLabel);
+      return;
+    }
+    if (await this.verdict()) {
+      this.card('Protected screen');
+      return;
+    }
+    const image = await this.page.screenshot({
+      type: 'jpeg',
+      quality: 85,
+      mask: MASK_SELECTORS.map((selector) => this.page.locator(selector)),
+      maskColor: '#1d1b26',
+      timeout: 10_000,
+    });
+    // The page may have changed while the screenshot was taken: a second
+    // verdict that disagrees with the first drops the frame.
+    if (this.secretLabel || (await this.verdict())) {
+      this.card('Protected screen');
+      return;
+    }
+    const hash = createHash('sha256').update(image).digest('hex');
+    const at = Date.now();
+    if (hash === this.lastHash) {
+      if (at - this.lastRowAt >= HEARTBEAT_MS) {
+        this.lastRowAt = at;
+        appendLine(this.index, { at, kind: 'same', verdict: 'clean' });
+      }
+      return;
+    }
+    this.count += 1;
+    const file = `${String(this.count).padStart(6, '0')}.jpg`;
+    writeFileSync(join(this.framesDir, file), image, { mode: 0o600 });
+    this.lastHash = hash;
+    this.lastRowAt = at;
+    appendLine(this.index, { at, kind: 'frame', file, verdict: 'clean' });
+  }
+}
+
+/**
+ * The hooks a live spec drives one wallet page through. Holds apply only when
+ * recording; the waits for busy indicators and actionability always apply.
+ */
+export class WalletFootage {
+  private secretDepth = 0;
+
+  constructor(
+    readonly name: string,
+    readonly page: Page,
+    private readonly canary: SecretCanary,
+    private readonly recorder: PageRecorder | null,
+    private readonly timeline: Timeline,
+  ) {}
+
+  get recording(): boolean {
+    return this.recorder !== null;
+  }
+
+  private async holdFor(ms: number): Promise<number> {
+    if (!this.recording) return 0;
+    const started = Date.now();
+    await this.page.waitForTimeout(ms);
+    return Date.now() - started;
+  }
+
+  mark(label: string): void {
+    assertStaticLabel(label);
+    this.timeline.add('mark', label);
+  }
+
+  /** Record a span that happened before this recorder started, shown as a card (wallet import). */
+  spanBefore(label: string, from: number, to: number): void {
+    assertStaticLabel(label);
+    this.timeline.add('secret-span', label, { from, to });
+  }
+
+  async stop(): Promise<void> {
+    await this.recorder?.stop();
+  }
+
+  /** A static hold of any length, for waits between polls. */
+  async hold(ms: number, label: string): Promise<void> {
+    assertStaticLabel(label);
+    const held = await this.holdFor(ms);
+    this.timeline.add('hold', label, { holdMs: held });
+  }
+
+  /**
+   * Wait until `locator` is actionable, hold the screen static, then tap it.
+   * `position` taps a point inside the element (a history row's arrow, so the
+   * row opens rather than its copy control).
+   */
+  async tap(
+    locator: Locator,
+    label: string,
+    opts: { timeout?: number; position?: { x: number; y: number } } = {},
+  ): Promise<void> {
+    assertStaticLabel(label);
+    const timeout = opts.timeout ?? 60_000;
+    const where = opts.position ? { position: opts.position } : {};
+    // Logged before waiting, so a stalled run shows what it was waiting for.
+    this.timeline.add('step', label);
+    await locator.click({ trial: true, timeout, ...where });
+    const held = await this.holdFor(HOLD_BEFORE_TAP_MS);
+    this.timeline.add('tap', label, { holdMs: held });
+    await locator.click({ timeout, ...where });
+  }
+
+  /**
+   * Hold, then enter a NON-secret value (an address, an amount, a slatepack).
+   * Refuses a value the canary knows; secrets go through `typeSecret`.
+   */
+  async fill(locator: Locator, value: string, label: string, opts: { timeout?: number } = {}): Promise<void> {
+    assertStaticLabel(label);
+    if (this.canary.isSecret(value)) throw new Error('refusing to type a known secret outside a secret scope');
+    const timeout = opts.timeout ?? 60_000;
+    this.timeline.add('step', label);
+    await locator.waitFor({ state: 'visible', timeout });
+    const held = await this.holdFor(HOLD_BEFORE_TAP_MS);
+    this.timeline.add('fill', label, { holdMs: held });
+    await locator.fill(value, { timeout });
+  }
+
+  /** Type a secret. Only inside `secret()`, where the recorder shows a card. */
+  async typeSecret(locator: Locator, value: string): Promise<void> {
+    if (this.secretDepth === 0) throw new Error('secrets are typed only inside a secret scope');
+    await locator.fill(value);
+  }
+
+  /** Wait for the wallet to stop showing busy text, then hold the settled screen. */
+  async settled(label: string, opts: { patience?: number } = {}): Promise<void> {
+    assertStaticLabel(label);
+    this.timeline.add('step', label);
+    const deadline = Date.now() + (opts.patience ?? SETTLE_PATIENCE_MS);
+    let clean = 0;
+    while (Date.now() < deadline && clean < 2) {
+      const text = await Promise.race([
+        this.page.evaluate(() => document.body?.innerText ?? '').catch(() => ''),
+        sleep(10_000).then(() => ''),
+      ]);
+      clean = BUSY_TEXT.test(text) ? 0 : clean + 1;
+      if (clean < 2) await this.page.waitForTimeout(500);
+    }
+    const held = await this.holdFor(HOLD_SETTLED_MS);
+    this.timeline.add('settled', label, { holdMs: held });
+  }
+
+  /** Hold a key result on screen. */
+  async result(label: string): Promise<void> {
+    assertStaticLabel(label);
+    const held = await this.holdFor(HOLD_RESULT_MS);
+    this.timeline.add('result', label, { holdMs: held });
+  }
+
+  /**
+   * Run `fn` behind a redaction card: password entry, a lock screen, any
+   * screen the guard would refuse anyway. Recording resumes only after the
+   * page passes the guard twice in a row.
+   */
+  async secret<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    assertStaticLabel(label);
+    this.secretDepth += 1;
+    this.recorder?.suppress(label);
+    this.timeline.add('secret-start', label);
+    try {
+      return await fn();
+    } finally {
+      this.secretDepth -= 1;
+      if (this.secretDepth === 0 && this.recorder) {
+        let clean = 0;
+        const deadline = Date.now() + 60_000;
+        while (clean < SECRET_CLEAN_PASSES && Date.now() < deadline) {
+          clean = (await this.recorder.verdict().catch(() => 'unreadable')) ? 0 : clean + 1;
+          if (clean < SECRET_CLEAN_PASSES) await sleep(250);
+        }
+        // Still unclean: stay suppressed. The recorder refuses such frames
+        // anyway, and the next clean scope end resumes.
+        if (clean >= SECRET_CLEAN_PASSES) this.recorder.resume();
+      }
+      this.timeline.add('secret-end', label);
+    }
+  }
+}
+
+/** Where a recorder for `name` writes, under the lane's footage directory. */
+export function recorderDir(footageRoot: string, name: string): string {
+  return join(footageRoot, name.replace(/[^a-z0-9-]/gi, '-'));
+}
+
+/** Write the run's footage manifest: the policy the encoder verifies against. */
+export function writeFootageManifest(footageRoot: string, info: Record<string, unknown>): void {
+  privateDir(footageRoot);
+  writeFileSync(
+    join(footageRoot, 'manifest.json'),
+    JSON.stringify(
+      {
+        lane: 'B-send-receive-history',
+        policy: {
+          holdBeforeTapMs: HOLD_BEFORE_TAP_MS,
+          holdSettledMs: HOLD_SETTLED_MS,
+          holdResultMs: HOLD_RESULT_MS,
+          captureFps: CAPTURE_FPS,
+        },
+        ...info,
+      },
+      null,
+      1,
+    ),
+    { mode: 0o600 },
+  );
+}
+
+/**
+ * Build the per-page footage pair (recorder plus hooks) for one recorder name.
+ * Without footage, `traceRoot` still receives the timeline (static labels and
+ * times only), so a failed run shows the last step each page reached.
+ */
+export function createFootage(opts: {
+  name: string;
+  page: Page;
+  canary: SecretCanary;
+  footageRoot: string | null;
+  traceRoot?: string;
+}): WalletFootage {
+  const dir = opts.footageRoot ? recorderDir(opts.footageRoot, opts.name) : null;
+  const recorder = dir ? new PageRecorder(opts.name, opts.page, dir, opts.canary) : null;
+  const traceDir = dir ?? (opts.traceRoot ? privateDir(recorderDir(opts.traceRoot, opts.name)) : null);
+  const timeline = new Timeline(traceDir ? join(traceDir, 'timeline.jsonl') : null);
+  recorder?.start();
+  return new WalletFootage(opts.name, opts.page, opts.canary, recorder, timeline);
+}

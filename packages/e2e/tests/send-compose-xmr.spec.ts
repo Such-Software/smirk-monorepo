@@ -1,5 +1,8 @@
-import { test, expect } from '../fixtures/extension.js';
+import type { Page } from '@playwright/test';
+import { test, expect, BACKEND_URL } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import { BroadcastMonitor } from '../fixtures/live-send.js';
+import { corrupt, withIdentitySpendKey } from '../fixtures/B-send-receive-history-cryptonote.js';
 
 /**
  * send-compose-xmr: drive the REAL Send wizard for Monero (XMR) from
@@ -48,6 +51,11 @@ const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC?.trim();
 // ever sent to it.
 const XMR_RECIPIENT =
   '44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A';
+
+// A checksum-valid mainnet Wownero address (dapp-payment.spec's shop address):
+// valid for WOW, so an XMR send must refuse it.
+const WOW_ADDRESS =
+  'WW454V3kHSKTQtxBpR12MLK8XTd2wHFxkeeW7X5XdnaFZvvmPNVTk357SL8rpfm5Wj1htTn9PVb48csdzpK8mf5233oDBszub';
 
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
 
@@ -171,4 +179,118 @@ test('Send → XMR → address + amount → reach Review (no broadcast)', async 
     'REVIEW_TEXT>>>',
     (await root.innerText()).replace(/\s+/g, ' ').slice(0, 600),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Coin-screen entry, USD, Max, and refusals. Every test below blocks every
+// broadcast endpoint and asserts none was attempted: nothing here can send.
+// ---------------------------------------------------------------------------
+
+const USD_TEXT = /^(≈ \$[\d,]+\.\d{2} USD|Less than \$0\.01 USD)$/;
+
+/** True when the backend under test quotes a USD price for `asset`. */
+async function priced(asset: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/prices`);
+    const body = res.ok ? ((await res.json()) as { prices?: Record<string, number> }) : {};
+    return Object.entries(body.prices ?? {}).some(([k, v]) => k.toLowerCase() === asset && v > 0);
+  } catch {
+    return false;
+  }
+}
+
+/** Home → the XMR row → Send: the wizard must open at destination entry. */
+async function sendFromXmrScreen(page: Page): Promise<void> {
+  await page.getByTestId('asset-row-xmr').click();
+  await expect(page.getByTestId('asset-detail-balance')).toBeVisible({ timeout: 30_000 });
+  await page.locator('button', { hasText: /^↗\s*Send$/ }).click();
+  await expect(page.getByTestId('send-address-input')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('[data-testid^="send-asset-"]')).toHaveCount(0);
+  await expect(page.getByText(/Step 2 \/ 4/)).toBeVisible();
+}
+
+test('Send from the XMR coin screen opens at destination entry, with USD on the amount and on Review (no broadcast)', async ({
+  context,
+  extensionId,
+}) => {
+  const trip = await BroadcastMonitor.attach(context, 'block');
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await sendFromXmrScreen(page);
+  await page.getByTestId('send-address-input').fill(XMR_RECIPIENT);
+  await page.getByTestId('send-address-continue').click();
+  await page.getByTestId('send-amount-input').fill('0.0001');
+  const hasPrice = await priced('xmr');
+  if (hasPrice) await expect(page.getByTestId('send-amount-usd')).toHaveText(USD_TEXT);
+  await expect(page.getByTestId('send-compose-continue')).toBeEnabled({ timeout: 15_000 });
+  await page.getByTestId('send-compose-continue').click();
+  await expect(page.getByTestId('send-review-submit')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#root')).not.toContainText('Estimating…', { timeout: 30_000 });
+  await expect(page.locator('#root')).toContainText(/Network fee\s*~[\d.]+ XMR/);
+  if (hasPrice) await expect(page.getByTestId('send-review-usd')).toHaveText(USD_TEXT);
+  await expect(page.getByTestId('send-done-txid')).toHaveCount(0);
+  expect(trip.count(), 'nothing was broadcast').toBe(0);
+});
+
+test('Max on XMR reaches Review as a sweep, never sent', async ({ context, extensionId }) => {
+  const trip = await BroadcastMonitor.attach(context, 'block');
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await sendFromXmrScreen(page);
+  await page.getByTestId('send-address-input').fill(XMR_RECIPIENT);
+  await page.getByTestId('send-address-continue').click();
+  const max = page.getByTestId('send-max-button');
+  await max.click();
+  await expect(max).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('send-amount-input')).toBeDisabled();
+  // CryptoNote sweeps price the fee for every spendable output.
+  await expect(page.locator('#root')).toContainText('Network fee (est.)', { timeout: 30_000 });
+  await expect(page.getByTestId('send-amount-input')).toHaveValue(/^\d+(\.\d+)?$/, { timeout: 30_000 });
+  await page.getByTestId('send-compose-continue').click();
+  await expect(page.locator('#root')).toContainText('Max (sweeps balance)');
+  await expect(page.getByTestId('send-review-submit')).toHaveText(/Send Max/);
+  await expect(page.getByTestId('send-done-txid')).toHaveCount(0);
+  expect(trip.count(), 'nothing was broadcast').toBe(0);
+});
+
+test('A malformed XMR address and a Wownero address are refused at the address step', async ({
+  context,
+  extensionId,
+}) => {
+  const trip = await BroadcastMonitor.attach(context, 'block');
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await sendFromXmrScreen(page);
+  const input = page.getByTestId('send-address-input');
+  for (const bad of [corrupt(XMR_RECIPIENT), WOW_ADDRESS]) {
+    await input.fill(bad);
+    await page.getByTestId('send-address-continue').click();
+    await expect(page.locator('#root')).toContainText('Not a valid XMR address');
+    await expect(page.getByTestId('send-amount-input')).toHaveCount(0);
+  }
+  expect(trip.count(), 'nothing was broadcast').toBe(0);
+});
+
+test('An XMR address with an unusable public key is refused before signing; nothing is broadcast', async ({
+  context,
+  extensionId,
+}) => {
+  // Same prefix, view key and valid checksum as a real address, but the
+  // identity point as the spend key: the Address step accepts it (it is
+  // well-formed) and only the signer can refuse it.
+  const unusable = withIdentitySpendKey(XMR_RECIPIENT);
+  const trip = await BroadcastMonitor.attach(context, 'block');
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await sendFromXmrScreen(page);
+  await page.getByTestId('send-address-input').fill(unusable);
+  await page.getByTestId('send-address-continue').click();
+  await page.getByTestId('send-amount-input').fill('0.0001');
+  await page.getByTestId('send-compose-continue').click();
+  const submit = page.getByTestId('send-review-submit');
+  await expect(submit).toBeEnabled({ timeout: 30_000 });
+  await submit.click();
+  await expect(page.locator('#root')).toContainText(/invalid public key/i, { timeout: 120_000 });
+  await expect(page.getByTestId('send-done-txid')).toHaveCount(0);
+  expect(trip.count(), 'the refusal came before any broadcast').toBe(0);
 });
