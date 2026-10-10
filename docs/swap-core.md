@@ -112,8 +112,9 @@ CI runs this lane explicitly while the wallet feature remains disabled.
 ## Settlement prerequisites
 
 1. Add encrypted durable session state and an outbox, bounded retries, duplicate
-   delivery and restart tests, then an isolated unmodified-peer session. Keep
-   messaging, per-route signing and wallet spending keys separate.
+   delivery and restart tests, then an isolated unmodified-peer session. Add
+   signed outgoing offers/revocations and inventory reservation before enabling
+   maker publication. Keep messaging, per-route signing and spending keys separate.
 2. Specify the complete WOW/LTC transaction graph against the pinned BasicSwap
    adaptor protocol, including both commercial directions, key-release proofs,
    refund/compensation paths and split-proof message binding. Verify current
