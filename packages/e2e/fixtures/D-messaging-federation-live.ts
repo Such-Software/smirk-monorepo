@@ -460,6 +460,9 @@ async function openWallet(
   const profile = join(deps.scratch, name);
   const marker = join(deps.scratch, `${name}.imported`);
   const reuse = existsSync(marker) && existsSync(profile);
+  // A profile without the marker is a failed import (it may hold a half-set-up
+  // wallet that opens on the lock screen): start it clean.
+  if (!reuse) rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   const context = await chromium.launchPersistentContext(profile, {
     headless: !process.env.HEADED,
