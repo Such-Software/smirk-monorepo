@@ -187,3 +187,94 @@ test('paste a public BTC tip link → claim → swept success screen', async ({
   await expect(page.getByTestId('paste-tip-done-btn')).toBeVisible();
   footage.mark('tip-claimed', 'public BTC tip claimed and swept');
 });
+
+/**
+ * Refusals that must happen before the backend is asked to mark anything as
+ * claiming. A link's fragment is the only claim secret: a wrong one fails the
+ * authenticated decryption, and a link on a foreign host is not a Smirk tip.
+ * Neither may reach POST /claim or a broadcast.
+ */
+async function stubPublicTip(context: import('@playwright/test').BrowserContext) {
+  const writes: string[] = [];
+  context.on('request', (request) => {
+    if (request.method() !== 'GET') writes.push(new URL(request.url()).pathname);
+  });
+  const lookups: string[] = [];
+  await context.route('**/api/v1/tips/social/*/public', async (route) => {
+    lookups.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: TIP_ID,
+        asset: 'btc',
+        amount: TIP_AMOUNT_SAT,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        is_public: true,
+        encrypted_key: ENCRYPTED_KEY,
+        tip_address: TIP_ADDRESS,
+        funding_confirmations: 3,
+        confirmations_required: 1,
+        is_claimable: true,
+      }),
+    });
+  });
+  await context.route('**/api/v1/wallet/grin/scan', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ outputs: [], total_balance: 0, last_pmmr_index: 0 }),
+    }),
+  );
+  return { writes, lookups };
+}
+
+/** Paste `url` and press Claim until the session is bootstrapped and `error` shows. */
+async function pasteAndExpectRefusal(
+  page: import('@playwright/test').Page,
+  url: string,
+  error: RegExp,
+): Promise<void> {
+  await page.getByTestId('nav-tab-inbox').click();
+  await expect(page.getByTestId('inbox-tab')).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId('inbox-paste-tip-link-btn').click();
+  await page.getByTestId('paste-tip-input').fill(url);
+  const claim = page.getByTestId('paste-tip-claim-btn');
+  // Before bootstrap the screen refuses with "not bootstrapped"; retry until the
+  // refusal under test shows (see the bootstrap note in the claim test above).
+  await expect(async () => {
+    await expect(claim).toBeEnabled();
+    await claim.click();
+    await expect(page.getByTestId('paste-tip-error')).toContainText(error, { timeout: 6_000 });
+  }).toPass({ timeout: 80_000, intervals: [2_000, 3_000, 3_000] });
+  await expect(page.getByTestId('paste-tip-success')).toHaveCount(0);
+}
+
+test('a tip link with the wrong claim key is refused before anything is claimed', async ({ context, extensionId }) => {
+  const { writes, lookups } = await stubPublicTip(context);
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  // Same tip id, a well-formed key that is not the one the tip was sealed with.
+  const wrong = generateUrlFragmentKey();
+  await pasteAndExpectRefusal(page, `https://smirk.cash/tip/${TIP_ID}#${wrong.encoded}`, /Decryption failed/);
+  expect(lookups.length, 'the public record was looked up').toBeGreaterThan(0);
+  expect(writes.some((path) => /\/tips\/social\/[^/]+\/claim$/.test(path)), 'a claim was registered').toBe(false);
+  expect(writes.some((path) => path.endsWith('/broadcast')), 'a sweep was broadcast').toBe(false);
+});
+
+test('a tip link on a foreign host is not a Smirk tip link and is refused without a lookup', async ({
+  context,
+  extensionId,
+}) => {
+  const { writes, lookups } = await stubPublicTip(context);
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await pasteAndExpectRefusal(
+    page,
+    `https://smirk.cash.example.net/tip/${TIP_ID}#${fragment.encoded}`,
+    /Not a recognised Smirk tip link/,
+  );
+  expect(lookups, 'nothing was looked up for a foreign link').toHaveLength(0);
+  expect(writes.some((path) => path.includes('/tips/social/')), 'a tip endpoint was written').toBe(false);
+});
