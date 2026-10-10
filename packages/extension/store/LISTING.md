@@ -52,7 +52,7 @@ longer the whole of it.
     Full Monero and Wownero light-wallet support, with history built only from your own outputs. Grin also uses our new open-source light-wallet system backend to offer seamless usage without having to wait on long wallet syncs.
 
     SWAP BETWEEN CHAINS
-    Swap between supported coins inside the wallet through Trocador, THORChain or, where your wallet server offers it, NonLogs. Before you confirm you see the estimate, the provider's fees in the coin they are charged in, any Smirk swap fee as its own line (at most 1%), and any price limit the swap carries. Swap providers are third parties: none is contacted until you choose it.
+    Swap between supported coins inside the wallet through Trocador or THORChain. Before you confirm you see the estimate, the provider's fees in the coin they are charged in, any Smirk swap fee as its own line (at most 1%), and any price limit the swap carries. Swap providers are third parties: none is contacted until you choose it.
 
     A NOSTR IDENTITY FROM THE SAME SEED
     Your Nostr key comes from your wallet seed, so your identity is restored with your backup. Use it on Nostr sites through the built-in NIP-07 signer, claim a readable name@domain handle, keep separate burner identities, or import an nsec you already have.
@@ -88,7 +88,7 @@ text, user-facing.
     - Tap any transaction to see its details: amount, fee, time, confirmations and, for your sends, the recipient.
     - Funds sitting at addresses from older Smirk versions are found and can be moved to your current address in one step. Old tips can be claimed from the wallet.
     - Send tips to an npub, a name@domain handle or a Smirk username, delivered privately over Nostr.
-    - Swap Bitcoin and Litecoin through THORChain, and through NonLogs where our server offers it, with every fee shown before you confirm.
+    - Swap Bitcoin and Litecoin through THORChain, with every fee shown before you confirm.
     - Signing in to a website takes one approval and one password.
     - USD value at the top of each coin's page.
     - Fixed: the Firefox popup layout, including LibreWolf and other privacy-hardened builds.
@@ -214,15 +214,17 @@ so a reviewer watching the network sees nothing undeclared:
   card: pool and vault lookups, then pair and amount, then the receive address
   (and a Monero refund address) on confirm, and the deposit txid for status.
   When the wallet server advertises an affiliate (`swaps.thorchain.affiliate`),
-  the quote names that THORName with a fee capped at 100 basis points, shown to
-  the user as its own "Smirk fee" line; the name is first looked up at the same
+  the quote names that THORName with a fee capped at 100 basis points (25 on the
+  smirk.cash server), shown to the user as its own "Smirk fee" line; the name is first looked up at the same
   gateway (`/thorchain/thorname/<name>`, `/thorchain/lastblock`) and dropped if
   it does not exist or has expired.
-- **NonLogs** (`packages/extension/src/popup/nonlogs.ts`), brokered by the wallet
-  server's `/swaps/nonlogs/*` and shown only when that server enables it: pair,
-  amount, payout and refund addresses pass through the server to NonLogs under
-  the operator's account. The server keeps a 90-day record linking the user to
-  the swap, without addresses or amounts.
+- **Server-brokered providers** (today only NonLogs, `packages/extension/src/popup/nonlogs.ts`),
+  turned off on the smirk.cash server, so the wallet does not list or contact
+  them. A self-hosted server may enable one through `/swaps/nonlogs/*`; the
+  wallet then shows it as its own card, and pair, amount, payout and refund
+  addresses pass through that server to the provider under the operator's
+  account, with a 90-day record linking the user to the swap, without addresses
+  or amounts.
 - **Neroswap** (`packages/extension/src/popup/routes/swap.tsx`), WOW and GRIN
   price lookups at `neroswap.com`, only on the user's tap.
 - **The old Smirk server** (`packages/extension/src/popup/legacy-tips.ts`),

@@ -72,10 +72,10 @@ test('an unchecked THORChain card is a tap target that names what the tap contac
   assert.equal(checks, 0, 'rendering the tab asks nothing');
 });
 
-test('a THORChain card the wallet server turned off is disabled and reads as paused', () => {
-  const thor = card(swapTab({ offered: false, unavailableReason: 'Turned off by this wallet server.' }), 'thorchain');
-  assert.match(thor, /disabled/);
-  assert.match(thor, />Paused</);
+test('a THORChain card the wallet server turned off is not listed', () => {
+  const html = swapTab({ offered: false, unavailableReason: 'Turned off by this wallet server.' });
+  assert.doesNotMatch(html, /data-testid="swap-provider-thorchain"/);
+  assert.doesNotMatch(html, />Paused</);
 });
 
 test('an offered THORChain card with no live pair and no check is unavailable, not paused', () => {

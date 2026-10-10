@@ -230,14 +230,14 @@ export interface SwapTabProps {
   onResumeSwap?: (swap: SwapSummary) => Promise<void> | void;
   resolveIcon?: (iconKey: string) => string | undefined;
   /**
-   * THORChain. Omit to leave it listed as unavailable. Pairs are decided
+   * THORChain. Omit to hide its card. Pairs are decided
    * live by the consumer (THORChain's own state plus the wallet server's
    * policy), so an empty pair list shows `unavailableReason` instead.
    */
   thorchain?: ThorchainHandlers;
   /**
    * NonLogs (order-book exchange, brokered by the wallet server). Omit to
-   * leave it listed as unavailable. Its quotes carry `bookAnalysis`.
+   * hide its card. Its quotes carry `bookAnalysis`.
    */
   nonlogs?: ProviderHandlers;
   /** Live DEX prices for the WOW/GRIN "where to trade" panel. Optional;
@@ -257,8 +257,8 @@ export interface ThorchainHandlers {
   unavailableReason?: string;
   /**
    * Whether the wallet server offers this provider (its `/capabilities`
-   * switch). `false` lists it last as paused; `true` or absent lists it with
-   * the live providers, as a tap target or as unavailable right now.
+   * switch). `false` hides its card; `true` or absent lists it with the live
+   * providers, as a tap target or as unavailable right now.
    */
   offered?: boolean;
   /**
@@ -397,30 +397,30 @@ const liveProvider = (h: ProviderHandlers | undefined): boolean =>
 const tickerList = (h: ProviderHandlers): string =>
   [...new Set([...h.fromAssets, ...h.toAssets])].map((a) => a.toUpperCase()).join(', ');
 
-/** Display tier: live and server-offered providers before coming-soon, and
- *  providers the wallet server turned off last. */
+/** Display tier: live and server-offered providers before coming-soon. */
 const TIER: Record<SwapProviderStatus, number> = { active: 0, unavailable: 0, coming_soon: 1, paused: 2 };
 
 /**
  * The Swap tab's provider cards, in display order. A provider the wallet
  * server offers is never shown as paused: it is live, a tap target ("Tap to
  * check", for one that asks a third party only when tapped), or unavailable
- * right now. Only a provider the server switched off reads as paused, and it
- * sorts last. Pure, so the order and labels are testable.
+ * right now. A provider the server does not offer (switched off, or not wired
+ * by the consumer) is not listed at all; Trocador is always listed. Pure, so
+ * the order, labels and visibility are testable.
  */
 export function swapProviderCards(
   thor: ThorchainHandlers | undefined,
   nl: ProviderHandlers | undefined,
 ): ShownProviderCard[] {
-  const shaped = (p: ProviderCard, h: ProviderHandlers | undefined, live: (h: ProviderHandlers) => string, offeredNote: string, offNote: string): ShownProviderCard => {
-    if (liveProvider(h)) return { ...p, status: 'active', blurb: live(h!) };
-    if (!h || h.offered === false) return { ...p, status: 'paused', statusNote: h?.unavailableReason ?? offNote, badge: 'Paused' };
+  const shaped = (p: ProviderCard, h: ProviderHandlers | undefined, live: (h: ProviderHandlers) => string, offeredNote: string): ShownProviderCard | null => {
+    if (!h || h.offered === false) return null;
+    if (liveProvider(h)) return { ...p, status: 'active', blurb: live(h) };
     if (h.onCheck) return { ...p, status: 'unavailable', checkable: true, statusNote: h.unavailableReason ?? offeredNote, badge: 'Tap to check' };
     return { ...p, status: 'unavailable', statusNote: h.unavailableReason ?? offeredNote, badge: 'Unavailable now' };
   };
-  const cards: ShownProviderCard[] = PROVIDERS.map((p) => {
+  const shapeCard = (p: ProviderCard): ShownProviderCard | null => {
     if (p.id === 'thorchain') {
-      return shaped(p, thor, (h) => `Cross-chain pools. Live now: ${tickerList(h)}.`, 'No live pair right now.', 'Not available in this app.');
+      return shaped(p, thor, (h) => `Cross-chain pools. Live now: ${tickerList(h)}.`, 'No live pair right now.');
     }
     if (p.id === 'nonlogs') {
       return shaped(
@@ -428,13 +428,13 @@ export function swapProviderCards(
         nl,
         (h) => `Order-book exchange. Live now: ${tickerList(h)}. Pays your own addresses.`,
         'No pair for this wallet right now.',
-        'Not offered by this wallet server.',
       );
     }
     if (p.status === 'coming_soon') return { ...p, badge: 'Soon' };
     if (p.status === 'paused') return { ...p, badge: 'Paused' };
     return p;
-  });
+  };
+  const cards = PROVIDERS.map(shapeCard).filter((c): c is ShownProviderCard => c !== null);
   return cards
     .map((c, i) => ({ c, i }))
     .sort((a, b) => TIER[a.c.status] - TIER[b.c.status] || a.i - b.i)

@@ -55,11 +55,14 @@ it sees your IP address.
   those addresses, is also written into the deposit transaction itself. When
   your wallet server sets one, a Smirk swap fee (at most 1%, shown on the quote
   as its own line) is credited to the server operator's THORChain name; the
-  wallet first looks that name up on THORChain through the same gateway.
-- **NonLogs**, only when your wallet server offers it: the pair, amount, payout
-  address and refund address pass through your wallet server to NonLogs, which
-  keeps them under the server operator's NonLogs account. Your IP address does
-  not reach NonLogs. The server keeps a record linking your account to the swap
+  wallet first looks that name up on THORChain through the same gateway. The
+  smirk.cash server sets it at 0.25%.
+- **Other swap providers a server operator enables.** The wallet can show more
+  swap providers when your wallet server enables them; none is enabled on the
+  smirk.cash server today. When one is, the wallet shows it as its own card,
+  and the pair, amount, payout address and refund address pass through your
+  wallet server to that provider under the operator's account. Your IP address
+  does not reach it. The server keeps a record linking your account to the swap
   for 90 days, without addresses or amounts.
 - **Neroswap** (`neroswap.com`) price lookups for WOW and GRIN, only when you tap
   for live prices.

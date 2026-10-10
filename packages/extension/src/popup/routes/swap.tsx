@@ -222,9 +222,12 @@ export function SwapRouter({
   // NonLogs key). Coins are the ones NonLogs lists as swappable now that
   // this wallet holds; any listed coin swaps to any other.
   const nonlogs = useMemo(() => nonlogsSwap(), []);
+  // Hidden until our wallet server says it offers NonLogs, so a server that
+  // does not (the public default) never flashes a NonLogs card.
   const [nlAssets, setNlAssets] = useState<{ assets: string[]; reason?: string; offered?: boolean }>({
     assets: [],
     reason: 'Checking NonLogs…',
+    offered: false,
   });
   useEffect(() => {
     let alive = true;
