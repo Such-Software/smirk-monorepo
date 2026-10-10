@@ -22,7 +22,7 @@
  *     --footage <root with alice/ bob/ carol/> [--out <dir>] [--font <ttf>]
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -98,9 +98,9 @@ function card(dir, label, font, cache) {
 }
 
 /** Concat list for one wallet on the shared clock [start, end] (seconds). */
-function concatList(dir, timeline, start, end, font, cards) {
+function concatList(dir, timeline, start, end, font, cards, cardDir) {
   const entries = [];
-  const idle = card(dir, 'not recording yet', font, cards);
+  const idle = card(cardDir, 'not recording yet', font, cards);
   const first = timeline.frames[0]?.at ?? end * 1000;
   if (first / 1000 > start) entries.push([idle, first / 1000 - start]);
   let current = null;
@@ -112,7 +112,7 @@ function concatList(dir, timeline, start, end, font, cards) {
     const at = frame.at / 1000;
     let file;
     if (frame.verdict === 'clean') file = frame.same ? current : join(dir, frame.file);
-    else file = card(dir, frame.card, font, cards);
+    else file = card(cardDir, frame.card, font, cards);
     if (file === current) continue;
     flush(at);
     current = file;
@@ -129,19 +129,33 @@ function concatList(dir, timeline, start, end, font, cards) {
   return lines.join('\n');
 }
 
+/** Segment roots under `root`: the root itself, or its segment-* directories in order. */
+function segmentsOf(root) {
+  if (existsSync(join(root, WALLETS[0], 'timeline.json'))) return [root];
+  const found = readdirSync(root)
+    .filter((name) => /^segment-\d+$/.test(name) && existsSync(join(root, name, WALLETS[0], 'timeline.json')))
+    .sort((a, b) => Number(a.slice(8)) - Number(b.slice(8)))
+    .map((name) => join(root, name));
+  if (!found.length) throw new Error('no guarded footage found under --footage');
+  return found;
+}
+
+function loadSegment(segment) {
+  return WALLETS.map((wallet) => {
+    const dir = join(segment, wallet);
+    const timeline = JSON.parse(readFileSync(join(dir, 'timeline.json'), 'utf8'));
+    return { wallet, dir, timeline: validateTimeline(timeline, dir) };
+  });
+}
+
 function main() {
   const root = resolve(argument('footage'));
   const font = argument('font', existsSync('/System/Library/Fonts/Supplemental/Arial Bold.ttf')
     ? '/System/Library/Fonts/Supplemental/Arial Bold.ttf'
     : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf');
   if (!existsSync(font)) throw new Error('caption font not found; pass --font');
-  const timelines = WALLETS.map((wallet) => {
-    const dir = join(root, wallet);
-    const timeline = JSON.parse(readFileSync(join(dir, 'timeline.json'), 'utf8'));
-    return { wallet, dir, timeline: validateTimeline(timeline, dir) };
-  });
-  const start = Math.min(...timelines.map((t) => t.timeline.startedAt)) / 1000;
-  const end = Math.max(...timelines.map((t) => t.timeline.stoppedAt)) / 1000;
+  // Validate EVERY segment before encoding anything.
+  const segments = segmentsOf(root).map(loadSegment);
   // Default: beside the raw tree, ~/Build/smirk-e2e/v<ver>-<label>/footage/D-messaging-federation.
   const rawAt = root.lastIndexOf('/footage/raw/');
   const fallback = rawAt >= 0
@@ -154,13 +168,46 @@ function main() {
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { mode: 0o700 });
 
+  const encoded = segments.map((timelines, index) => encodeSegment(timelines, work, index, font));
+  // Segments are consecutive workers of one run (a failed test restarts the
+  // worker); the gap between them is the time the next worker spent unlocking.
+  const list = join(work, 'segments.txt');
+  writeFileSync(list, encoded.map((s) => `file '${s.video}'`).join('\n'), { mode: 0o600 });
+  const video = join(out, 'D-messaging-federation.mp4');
+  run(['-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', video]);
+
+  const stamp = (s) => new Date(Math.max(0, s) * 1000).toISOString().slice(11, 19);
+  const rows = [];
+  let offset = 0;
+  encoded.forEach((segment, i) => {
+    if (i > 0) {
+      const gap = segment.start - encoded[i - 1].end;
+      rows.push(`| ${stamp(offset)} | (worker restarted; ${Math.round(gap)} s not recorded) |`);
+    }
+    for (const c of segment.chapters) rows.push(`| ${stamp(offset + c.from)} | ${c.label} |`);
+    offset += segment.end - segment.start;
+  });
+  const md = ['# Area D: messaging and federation', '',
+    `Wall clock from ${new Date(encoded[0].start * 1000).toISOString()} (1.0x, untrimmed; ${encoded.length} segment(s)).`, '',
+    '| Offset | Chapter |', '| --- | --- |', ...rows, ''].join('\n');
+  writeFileSync(join(out, 'CHAPTERS.md'), md, { mode: 0o600 });
+  if (!process.argv.includes('--keep-work')) rmSync(work, { recursive: true, force: true });
+  console.log(`Encoded ${rows.length} chapter rows over ${stamp(offset)} from ${encoded.length} segment(s) into ${out}.`);
+}
+
+/** Encode one segment (three columns on one clock); return its file and chapters. */
+function encodeSegment(timelines, work, index, font) {
+  const start = Math.min(...timelines.map((t) => t.timeline.startedAt)) / 1000;
+  const end = Math.max(...timelines.map((t) => t.timeline.stoppedAt)) / 1000;
   // One column per wallet, on the shared clock.
   const columns = [];
   for (const { wallet, dir, timeline } of timelines) {
     const cards = new Map();
-    const list = join(work, `${wallet}.txt`);
-    writeFileSync(list, concatList(dir, timeline, start, end, font, cards), { mode: 0o600 });
-    const column = join(work, `${wallet}.mp4`);
+    const cardDir = join(work, `${index}-${wallet}-cards`);
+    mkdirSync(cardDir, { mode: 0o700 });
+    const list = join(work, `${index}-${wallet}.txt`);
+    writeFileSync(list, concatList(dir, timeline, start, end, font, cards, cardDir), { mode: 0o600 });
+    const column = join(work, `${index}-${wallet}.mp4`);
     // `-t` pins every column to the shared clock: the fps filter otherwise
     // stretches the final still by the previous interval at end of input.
     run(['-f', 'concat', '-safe', '0', '-i', list,
@@ -192,16 +239,10 @@ function main() {
     `[grid]pad=1920:1080:0:${BAR}:color=0x0d0b14[framed]`,
     `[framed]${[...names, clock, ...chapterText].join(',')},format=yuv420p[v]`,
   ].join(';');
-  const video = join(out, 'D-messaging-federation.mp4');
+  const video = join(work, `segment-${index}.mp4`);
   run([...columns.flatMap((c) => ['-i', c]), '-filter_complex', graph, '-map', '[v]',
-    '-c:v', 'libx264', '-crf', '20', '-preset', 'veryfast', '-movflags', '+faststart', video]);
-
-  const stamp = (s) => new Date(Math.max(0, s) * 1000).toISOString().slice(11, 19);
-  const md = ['# Area D: messaging and federation', '', `Wall clock from ${new Date(start * 1000).toISOString()} (1.0x, untrimmed).`, '',
-    '| Offset | Chapter |', '| --- | --- |', ...chapters.map((c) => `| ${stamp(c.from)} | ${c.label} |`), ''].join('\n');
-  writeFileSync(join(out, 'CHAPTERS.md'), md, { mode: 0o600 });
-  if (!process.argv.includes('--keep-work')) rmSync(work, { recursive: true, force: true });
-  console.log(`Encoded ${chapters.length} chapters over ${stamp(end - start)} into ${out}.`);
+    '-c:v', 'libx264', '-crf', '20', '-preset', 'veryfast', '-r', String(FPS), video]);
+  return { video, chapters, start, end };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

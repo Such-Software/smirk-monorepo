@@ -34,8 +34,8 @@
  */
 
 import { chromium, expect, type BrowserContext, type Page } from '@playwright/test';
-import { randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createHmac, randomBytes } from 'node:crypto';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,14 +172,24 @@ export function dExtensionVersion(): string {
   return manifest.version ?? 'unknown';
 }
 
-/** Footage root: ~/Build/smirk-e2e/v<version>-<label>/footage/raw/D-messaging-federation/<stamp>. */
-function footageRoot(): string {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+/**
+ * This worker's footage directory:
+ * ~/Build/smirk-e2e/v<version>-<label>/footage/raw/D-messaging-federation/<run stamp>/segment-<ms>.
+ * One run stamp per Playwright run (kept in the run directory), one segment per
+ * worker, so a worker restarted after a failure never overwrites earlier frames.
+ * The encoder joins the segments in order.
+ */
+function footageRoot(runDir: string): string {
+  const stampFile = join(runDir, 'footage-stamp');
+  if (!existsSync(stampFile)) writeFileSync(stampFile, new Date().toISOString().replace(/[:.]/g, '-'), { mode: 0o600 });
+  const stamp = readFileSync(stampFile, 'utf8').trim();
   const label = (process.env.E2E_RUN_LABEL ?? 'run').replace(/[^A-Za-z0-9._-]/g, '');
-  const root = process.env.E2E_FOOTAGE_DIR
+  const runRoot = process.env.E2E_FOOTAGE_DIR
     ? resolve(process.env.E2E_FOOTAGE_DIR)
     : join(homedir(), 'Build', 'smirk-e2e', `v${dExtensionVersion()}-${label}`, 'footage', 'raw', 'D-messaging-federation', stamp);
+  const root = join(runRoot, `segment-${Date.now()}`);
   mkdirSync(root, { recursive: true, mode: 0o700 });
+  chmodSync(runRoot, 0o700);
   chmodSync(root, 0o700);
   return root;
 }
@@ -328,7 +338,7 @@ async function importIntoProfile(
     // The wizard fails closed until the backend's sign-up requirements resolve;
     // its retry rebuilds the step with empty fields, so re-enter before each press.
     const submit = page.getByTestId('onboarding-set-password-submit');
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 12; attempt++) {
       await page.getByTestId('onboarding-password-input').fill(password);
       await page.getByTestId('onboarding-password-confirm-input').fill(password);
       await submit.click();
@@ -336,11 +346,13 @@ async function importIntoProfile(
       if (!(await submit.isVisible().catch(() => false))) break;
       // Retry only what the wallet itself calls retryable: the capabilities
       // race, and a history lookup that did not answer ("Retry before
-      // registering", seen when several runs share the backend). Any other
-      // refusal stops here: it would count against the restore budget.
+      // registering"). The backend allows 30 history lookups an hour per IP,
+      // shared by every run on this host, so a rate-limited lookup waits a
+      // minute for the window to move. Any other refusal stops here.
       const screen = await page.locator('#root').innerText();
       if (!/sign-up requirements|Could not check wallet history/.test(screen)) break;
-      await page.waitForTimeout(/wallet history/.test(screen) ? 20_000 : 5_000);
+      const limited = /too many|rate.?limit|429/i.test(screen);
+      await page.waitForTimeout(limited ? 60_000 : /wallet history/.test(screen) ? 20_000 : 5_000);
     }
     stage = 'setup';
     await page.getByTestId('onboarding-setup-finish-btn').click({ timeout: 25_000 }).catch(() => {});
@@ -371,19 +383,69 @@ async function importIntoProfile(
   }
 }
 
+/** Unlock a profile a previous worker of this run imported (no history lookup). */
+async function unlockProfile(context: BrowserContext, extensionId: string, password: string): Promise<Page> {
+  const page = await context.newPage();
+  let stage = 'open';
+  try {
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+    stage = 'lock screen';
+    const input = page.getByTestId('lockscreen-password-input');
+    await input.waitFor({ timeout: 60_000 });
+    await input.fill(password);
+    await page.getByTestId('lockscreen-unlock-btn').click();
+    stage = 'home';
+    const total = page.getByTestId('home-total-balance');
+    await total.waitFor({ timeout: 120_000 });
+    await expect.poll(async () => (await total.textContent()) ?? '', { timeout: 120_000 }).toMatch(/\d/);
+    return page;
+  } catch {
+    throw new Error(`live lane: unlocking the run's profile stopped at the ${stage} stage`);
+  }
+}
+
+/**
+ * The run's profile directory, shared by every worker of ONE Playwright run
+ * (keyed by the runner's pid). A failed test restarts the worker; reusing the
+ * imported profiles then costs an unlock instead of three more history
+ * lookups, which the backend limits to 30 an hour per IP for every run on the
+ * host. The directory is 0700 and removed by the config's global teardown;
+ * directories of runs that no longer exist are removed here.
+ */
+function runProfileDir(): { dir: string; salt: string } {
+  for (const entry of readdirSync(tmpdir())) {
+    const match = entry.match(/^smirk-e2e-D-run-(\d+)$/);
+    if (!match || Number(match[1]) === process.ppid) continue;
+    try {
+      process.kill(Number(match[1]), 0);
+    } catch {
+      rmSync(join(tmpdir(), entry), { recursive: true, force: true });
+    }
+  }
+  const dir = join(tmpdir(), `smirk-e2e-D-run-${process.ppid}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const saltFile = join(dir, 'salt');
+  if (!existsSync(saltFile)) writeFileSync(saltFile, randomBytes(16).toString('hex'), { mode: 0o600 });
+  return { dir, salt: readFileSync(saltFile, 'utf8').trim() };
+}
+
 async function openWallet(
   name: DWalletName,
   deps: {
     readWalletPhrase: ReadWalletPhrase;
     canary: SecretCanary;
     scratch: string;
+    salt: string;
     recordRoot: string | null;
     guard: Awaited<ReturnType<typeof loadGuard>>;
     shortHolds: boolean;
   },
 ): Promise<DWallet> {
   const words = deps.readWalletPhrase(D_WALLET_FILE, `SMOKE_${name.toUpperCase()}_MNEMONIC`);
-  const password = randomBytes(24).toString('base64url');
+  // Derived in memory from the phrase and the run's salt, so a restarted
+  // worker can unlock the profile this run already imported. Never stored.
+  const password = createHmac('sha256', words.join(' ')).update(`smirk-e2e-D|${name}|${deps.salt}`).digest('base64url');
   deps.canary.addPhrase(words);
   deps.canary.addExact(password);
   let npub: string;
@@ -396,7 +458,9 @@ async function openWallet(
   }
 
   const profile = join(deps.scratch, name);
-  mkdirSync(profile, { mode: 0o700 });
+  const marker = join(deps.scratch, `${name}.imported`);
+  const reuse = existsSync(marker) && existsSync(profile);
+  mkdirSync(profile, { recursive: true, mode: 0o700 });
   const context = await chromium.launchPersistentContext(profile, {
     headless: !process.env.HEADED,
     channel: 'chromium',
@@ -414,8 +478,11 @@ async function openWallet(
     let [worker] = context.serviceWorkers();
     if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 30_000 });
     const extensionId = new URL(worker.url()).host;
-    const page = await importIntoProfile(context, extensionId, words, password);
+    const page = reuse
+      ? await unlockProfile(context, extensionId, password)
+      : await importIntoProfile(context, extensionId, words, password);
     words.fill('');
+    if (!reuse) writeFileSync(marker, 'imported\n', { mode: 0o600 });
     await assertRelayGuardAttached(page, relayGuard);
     // Dialogs: identity actions use window.confirm; tests accept them
     // explicitly, and anything else is dismissed (Playwright's default).
@@ -476,7 +543,7 @@ export const test = privateTest.extend<DFixtures, DWorkerFixtures>({
         guard = await loadGuard();
         readWalletPhrase = await loadCustody();
         shortHolds = holdsShortened();
-        recordRoot = footageEnabled() ? footageRoot() : null;
+        recordRoot = footageEnabled() ? footageRoot(runProfileDir().dir) : null;
         const expected = process.env.E2E_EXPECT_VERSION;
         if (expected && dExtensionVersion() !== expected) {
           throw new Error('live lane: EXTENSION_DIST is not the expected release version');
@@ -489,20 +556,19 @@ export const test = privateTest.extend<DFixtures, DWorkerFixtures>({
         throw error;
       }
       const canary = new SecretCanary();
-      const scratch = mkdtempSync(join(tmpdir(), 'smirk-e2e-D-'));
-      chmodSync(scratch, 0o700);
+      const { dir: scratch, salt } = runProfileDir();
       const opened: DWallet[] = [];
       try {
         // Sequential: three concurrent restores against one backend would race
         // its sign-up checks for no benefit.
         for (const name of D_WALLET_NAMES) {
           try {
-            opened.push(await openWallet(name, { readWalletPhrase, canary, scratch, recordRoot, guard, shortHolds }));
+            opened.push(await openWallet(name, { readWalletPhrase, canary, scratch, salt, recordRoot, guard, shortHolds }));
           } catch (error) {
             if (process.env.E2E_LIVE_DIAGNOSE === '1') {
               // The lane's own messages name a stage only; anything else is
               // reduced to its first line and checked against the canary.
-              const first = String(error instanceof Error ? error.message : error).split('\n')[0]!.slice(0, 300);
+              const first = String(error instanceof Error ? error.message : error).split('\n')[0]!.slice(0, 700);
               const safe = first.startsWith('live lane:') || !(canary.hit([first]) || /nsec1|[xtyz]prv/.test(first));
               appendFinding('wallet setup', 'failure', `${name}: ${safe ? first : '(withheld: it carries a secret)'}`);
             }
@@ -529,8 +595,9 @@ export const test = privateTest.extend<DFixtures, DWorkerFixtures>({
         });
       } finally {
         for (const wallet of opened) await wallet.footage.stop().catch(() => {});
+        // Profiles stay for the next worker of this run; the config's global
+        // teardown removes the run directory.
         for (const wallet of opened) await wallet.context.close().catch(() => {});
-        rmSync(scratch, { recursive: true, force: true });
       }
     },
     { scope: 'worker', timeout: 45 * 60_000 },

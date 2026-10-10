@@ -31,6 +31,8 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   globalSetup: './global-setup.ts',
+  // Removes this run's wallet profiles (kept across worker restarts).
+  globalTeardown: './fixtures/D-messaging-federation-teardown.ts',
   reporter: [['./private-reporter.ts'], ['./skip-guard-reporter.ts']],
   quiet: true,
   preserveOutput: 'never',
