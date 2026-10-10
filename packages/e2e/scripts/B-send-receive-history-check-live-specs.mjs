@@ -10,7 +10,8 @@
  *   - a Playwright action (click, fill, press, type, check, tap, ...) whose
  *     receiver is not a footage object (`footage`, `*Footage`);
  *   - waitForTimeout or setTimeout, unless the line says `lint-allow: poll`
- *     (a short poll interval inside a wait, never a hold);
+ *     (a short poll interval inside a wait, never a hold; the waits between
+ *     looks at the chain go through `pollWait`, which always applies);
  *   - a footage label built from a variable other than a ticker or an action
  *     name, which could put a value into a caption.
  * Exits non-zero with file:line for each finding.
@@ -22,12 +23,12 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FILES = [
   'tests/live/b-send-receive.live.spec.ts',
-  'tests/live/b-history-detail.live.spec.ts',
   'fixtures/B-send-receive-history-flows.ts',
 ];
 const ACTION = /([A-Za-z_$][\w$]*)\s*\.\s*(click|dblclick|fill|press|pressSequentially|type|check|uncheck|selectOption|setInputFiles|tap|hover|dragTo)\s*\(/g;
-const SLEEP = /\b(waitForTimeout|setTimeout)\s*\(/;
-const HOOK_LABEL = /\b(?:footage|Footage)\s*\.\s*(?:tap|fill|settled|result|hold|secret|mark)\s*\(([^;]*)/;
+// `test.setTimeout(...)` sets a test's time budget; it is not a sleep.
+const SLEEP = /(?<!\btest\.|\btestInfo\.)\b(waitForTimeout|setTimeout)\s*\(/;
+const HOOK_LABEL = /\b(?:footage|Footage)\s*\.\s*(?:tap|fill|settled|result|pollWait|secret|mark)\s*\(([^;]*)/;
 // The label is a call's last string argument; only these interpolations are static.
 const LITERALS = /'[^']*'|`[^`]*`/g;
 const SAFE_TEMPLATE_PARTS = /^\$\{(TICKER\[[\w.]+\]|action|tier)\}$/;

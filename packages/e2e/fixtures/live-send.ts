@@ -26,7 +26,7 @@
 
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { BrowserContext, Route } from '@playwright/test';
+import type { BrowserContext, Response, Route } from '@playwright/test';
 
 export type LiveAsset = 'btc' | 'ltc' | 'xmr' | 'wow' | 'grin';
 export type WalletName = 'alice' | 'bob' | 'carol';
@@ -77,9 +77,9 @@ export function fromAtomic(asset: LiveAsset, atomic: bigint, maxFractionDigits?:
 /**
  * Caps, in atomic units. `perSend` bounds one leg, `perRun` bounds the sum of
  * every leg in one run directory, and `feeCap` is the most a single leg may
- * pay in network fee before the spec calls the fee wrong. The planned legs sit
- * well inside them: BTC 9,000 of 10,000 sat, LTC/XMR 0.035 of 0.05, WOW 3.5 of
- * 5, GRIN 1.75 of 2.
+ * pay in network fee before the spec calls the fee wrong. The planned rings
+ * (RING_AMOUNTS) sit well inside them: BTC 7,500 of 10,000 sat, LTC 0.009 of
+ * 0.05, XMR 0.006 of 0.05, WOW 0.6 of 5, GRIN 0.9 of 2.
  */
 export const SPEND_CAPS: Readonly<Record<LiveAsset, { perSend: bigint; perRun: bigint; feeCap: bigint }>> = {
   btc: { perSend: 6_000n, perRun: 10_000n, feeCap: 5_000n },
@@ -88,6 +88,139 @@ export const SPEND_CAPS: Readonly<Record<LiveAsset, { perSend: bigint; perRun: b
   wow: { perSend: toAtomic('wow', '2.5'), perRun: toAtomic('wow', '5'), feeCap: toAtomic('wow', '0.1') },
   grin: { perSend: toAtomic('grin', '1.1'), perRun: toAtomic('grin', '2'), feeCap: toAtomic('grin', '0.05') },
 };
+
+/**
+ * What the funding plan sets aside for one leg's network fee. Realistic, not
+ * the cap: `feeCap` is where a fee becomes wrong, which is about ten times a
+ * normal one, and planning with it refused rings the wallets could pay. Each
+ * leg still checks the wallet's own estimate on Compose or Review before it
+ * reserves anything. BTC 1,500 sat covers a two-input segwit send at about
+ * 7 sat/vB; the others are several times their usual fee.
+ */
+export const FEE_RESERVE: Readonly<Record<LiveAsset, bigint>> = {
+  btc: 1_500n,
+  ltc: toAtomic('ltc', '0.0002'),
+  xmr: toAtomic('xmr', '0.0005'),
+  wow: toAtomic('wow', '0.05'),
+  grin: toAtomic('grin', '0.05'),
+};
+
+/**
+ * One coin's payments form a ring through the three wallets, largest first.
+ * Each amount covers the next leg plus its fee reserve, so only the wallet
+ * that starts the ring needs a balance of its own; the other two pay from
+ * what they just received. Every amount is a small multiple of the coin's
+ * minimum useful output, and the coins only circulate: the cost of a ring is
+ * three network fees.
+ */
+export const RING_AMOUNTS: Readonly<Record<LiveAsset, readonly [string, string, string]>> = {
+  btc: ['0.00004', '0.000025', '0.00001'],
+  ltc: ['0.004', '0.003', '0.002'],
+  xmr: ['0.003', '0.002', '0.001'],
+  wow: ['0.3', '0.2', '0.1'],
+  grin: ['0.5', '0.3', '0.1'],
+};
+
+export type GrinVia = 'npub' | 'address' | 'pasted';
+
+export interface RingEdge {
+  from: WalletName;
+  to: WalletName;
+  /** Grin only: how the slate travels on this edge. */
+  via?: GrinVia;
+}
+
+/** The on-chain coins' ring: alice pays bob, bob pays carol, carol pays alice. */
+export const CHAIN_RING: readonly RingEdge[] = [
+  { from: 'alice', to: 'bob' },
+  { from: 'bob', to: 'carol' },
+  { from: 'carol', to: 'alice' },
+];
+
+/** Grin's ring: one edge per delivery path (Nostr npub, pasted slatepack, grin1 address). */
+export const GRIN_RING: readonly RingEdge[] = [
+  { from: 'carol', to: 'alice', via: 'npub' },
+  { from: 'alice', to: 'bob', via: 'pasted' },
+  { from: 'bob', to: 'carol', via: 'address' },
+];
+
+export interface PlannedLeg extends RingEdge {
+  /** Stable per edge, so a re-run resumes the same payment whatever order it planned. */
+  id: string;
+  asset: LiveAsset;
+  amount: string;
+  /** 0 for the leg that starts the ring. */
+  position: number;
+}
+
+export type RingPlan =
+  | { ok: true; legs: PlannedLeg[]; startsWith: WalletName; resumed: boolean }
+  | { ok: false; reason: string };
+
+export function ringLegId(asset: LiveAsset, edge: RingEdge): string {
+  return `${asset}-${edge.from}-${edge.to}`;
+}
+
+/**
+ * Choose where a coin's ring starts. The preferred order comes first; another
+ * start is used only when the preferred starter cannot fund it. `balances` are
+ * the wallets' header totals now, which already include any leg this run
+ * broadcast earlier. When this run's ledger already holds legs of the ring,
+ * the order they were planned in is kept (their amounts say their positions),
+ * so a resumed run never pays an edge twice or at a different amount.
+ */
+export function planRing(
+  asset: LiveAsset,
+  ring: readonly RingEdge[],
+  balances: ReadonlyMap<WalletName, bigint>,
+  ledger: readonly LedgerEntry[],
+): RingPlan {
+  const amounts = RING_AMOUNTS[asset];
+  const reserve = FEE_RESERVE[asset];
+  const order = (start: number): PlannedLeg[] =>
+    [0, 1, 2].map((position) => {
+      const edge = ring[(start + position) % ring.length]!;
+      return { ...edge, id: ringLegId(asset, edge), asset, amount: amounts[position]!, position };
+    });
+  const ids = new Set(ring.map((edge) => ringLegId(asset, edge)));
+  const known = ledger.filter((e) => e.asset === asset && e.status !== 'refused' && ids.has(e.legId));
+  let starts = [0, 1, 2];
+  if (known.length > 0) {
+    starts = starts.filter((s) =>
+      known.every((k) => {
+        const leg = order(s).find((l) => l.id === k.legId)!;
+        return toAtomic(asset, leg.amount).toString() === k.amountAtomic;
+      }),
+    );
+    if (starts.length !== 1) {
+      return { ok: false, reason: `this run's ledger holds ${TICKER[asset]} legs that fit no single ring order; check them before re-running` };
+    }
+  }
+  const tried: string[] = [];
+  for (const start of starts) {
+    const legs = order(start);
+    const have = new Map(balances);
+    let shortfall: string | null = null;
+    for (const leg of legs) {
+      // A leg this run already broadcast has moved its coins: they are in the balances.
+      if (known.some((k) => k.legId === leg.id && k.status === 'broadcast')) continue;
+      const amount = toAtomic(asset, leg.amount);
+      const need = amount + reserve;
+      const holds = have.get(leg.from) ?? 0n;
+      if (holds < need) {
+        shortfall =
+          `${leg.from} would hold ${fromAtomic(asset, holds)} ${TICKER[asset]} but ${leg.id} needs ` +
+          `${fromAtomic(asset, need)} (${leg.amount} plus a ${fromAtomic(asset, reserve)} fee reserve)`;
+        break;
+      }
+      have.set(leg.from, holds - need);
+      have.set(leg.to, (have.get(leg.to) ?? 0n) + amount);
+    }
+    if (!shortfall) return { ok: true, legs, startsWith: legs[0]!.from, resumed: known.length > 0 };
+    tried.push(`starting with ${legs[0]!.from}, ${shortfall}`);
+  }
+  return { ok: false, reason: `no ${TICKER[asset]} ring order can be funded: ${tried.join('; ')}` };
+}
 
 /** Shapes a destination must have before it is even considered for the allowlist. */
 const ADDRESS_SHAPE: Readonly<Record<LiveAsset, RegExp>> = {
@@ -199,6 +332,14 @@ export interface LedgerEntry {
   slateId?: string;
   /** What the sender's history detail said right after the broadcast. */
   firstStatus?: string;
+  /**
+   * The browser profiles (by their import id) that signed and, for Grin,
+   * received the payment. The send record behind the history sheet's
+   * recipient, fee and transaction key, and every Grin history row, live
+   * only in that profile.
+   */
+  senderProfile?: string;
+  recipientProfile?: string;
   /** Short non-secret note, e.g. the refusal class. */
   note?: string;
 }
@@ -288,7 +429,17 @@ export class SpendLedger {
     return to;
   }
 
-  broadcast(legId: string, outcome: { txid?: string; kernel?: string; slateId?: string; feeAtomic?: bigint }): void {
+  broadcast(
+    legId: string,
+    outcome: {
+      txid?: string;
+      kernel?: string;
+      slateId?: string;
+      feeAtomic?: bigint;
+      senderProfile?: string;
+      recipientProfile?: string;
+    },
+  ): void {
     const e = this.legs.get(legId);
     if (!e) throw new Error(`leg ${legId} was never reserved`);
     this.write({
@@ -299,6 +450,8 @@ export class SpendLedger {
       ...(outcome.kernel ? { kernel: outcome.kernel } : {}),
       ...(outcome.slateId ? { slateId: outcome.slateId } : {}),
       ...(outcome.feeAtomic !== undefined ? { feeAtomic: outcome.feeAtomic.toString() } : {}),
+      ...(outcome.senderProfile ? { senderProfile: outcome.senderProfile } : {}),
+      ...(outcome.recipientProfile ? { recipientProfile: outcome.recipientProfile } : {}),
     });
   }
 
@@ -405,3 +558,45 @@ export class BroadcastMonitor {
 
 /** The refusal a CLSAG ring assembly gives when the sampled pool repeats an index. */
 export const DUPLICATE_DECOY_REFUSAL = /Could not assemble a full ring|Failed to create Decoys|invalid Decoys/i;
+
+/** The wallet's own Grin tip request: `GET /wallet/grin/height`, answering `{ height }`. */
+export const GRIN_HEIGHT_PATH = /\/wallet\/grin\/height$/;
+
+/**
+ * The Grin chain tip as the wallets' own balance refreshes report it. The
+ * wallet asks the backend for the tip before every Grin scan; this reads
+ * those answers (a public block height, nothing else) off the browser's
+ * network events, so the harness never holds a session token. Absent
+ * evidence is not progress: `latest` stays null until a real answer lands,
+ * and a wait that needs the tip refuses on a stale one.
+ */
+export class ChainTip {
+  private best: { height: number; at: number } | null = null;
+
+  /** Feed every response of a wallet's browser context through here. */
+  watch(response: Response): void {
+    let path: string;
+    try {
+      path = new URL(response.url()).pathname;
+    } catch {
+      return;
+    }
+    if (!GRIN_HEIGHT_PATH.test(path) || !response.ok()) return;
+    void response
+      .json()
+      .then((body: unknown) => {
+        const height = (body as { height?: unknown } | null)?.height;
+        if (typeof height === 'number' && Number.isSafeInteger(height) && height > 0) this.observe(height);
+      })
+      .catch(() => undefined);
+  }
+
+  observe(height: number): void {
+    if (!this.best || height >= this.best.height) this.best = { height, at: Date.now() };
+  }
+
+  /** The highest tip seen, and when a response last reported it (or a higher one). */
+  latest(): { height: number; at: number } | null {
+    return this.best;
+  }
+}

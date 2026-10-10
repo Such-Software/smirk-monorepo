@@ -2,10 +2,11 @@
  * The live lane for sends, receives and history (area B). SPENDS REAL FUNDS.
  *
  * Separate from playwright.config.ts on purpose: the ordinary suite stays
- * fundless and capture-closed. This lane keeps Playwright trace, screenshot
- * and video OFF (they cannot be guarded frame by frame) and keeps the private
- * reporter and the skip guard; footage, when asked for, comes from the
- * fixture's guarded recorder (fixtures/B-send-receive-history-footage.ts).
+ * fundless and capture-closed (it ignores tests/live). This lane keeps
+ * Playwright trace, screenshot and video OFF (they cannot be guarded frame by
+ * frame) and keeps the private reporter and the skip guard; footage, when
+ * asked for, comes from the fixture's guarded recorder
+ * (fixtures/B-send-receive-history-footage.ts).
  *
  * Run (from packages/e2e), every gate explicit, no phrase on any command line:
  *
@@ -18,15 +19,31 @@
  *   npx playwright test -c B-send-receive-history.live.config.ts
  *
  * The wallet file is read by path, in process, one variable at a time; never
- * source it. Projects run in order: sends and receives, then history detail
- * (which reads the run's ledger). Run one with --project. The history project
- * can be re-run later against the same E2E_LIVE_RUN_LABEL.
+ * source it.
  *
- * Restore budget: each worker imports all three wallets, and the backend
- * allows 30 restore attempts per IP per hour (and 3 failed ones per wallet).
- * A full run starts two workers (six imports); a failed test restarts its
- * worker and imports again. Do not run other live lanes from the same IP at
- * the same time, and use --max-failures=1 when iterating.
+ * Cheap first: run `--grep funding` alone before the full run. It reads every
+ * wallet's balance of every coin (about twenty minutes with the video holds)
+ * and names any wallet that cannot fund its coin's ring, before any money
+ * moves. The full run puts the same check right after the receive addresses.
+ *
+ * One project, one worker: every payment's history check runs in the test
+ * (and the browser profiles) that made it, because the send record behind
+ * the history sheet's recipient, fee and transaction key, and all Grin
+ * history, live only in the profile that signed. Profiles are per run, so a
+ * worker restarted after a failed test reopens them (unlock, no restore)
+ * instead of importing again; the backend allows 30 restore attempts per IP
+ * per hour and 3 failed ones per wallet. Profiles are deleted when the
+ * invocation ends; E2E_LIVE_KEEP_PROFILES=1 keeps them for a later re-run
+ * with the same E2E_LIVE_RUN_LABEL. Do not run other live lanes from the same
+ * IP at the same time, and use --max-failures=1 when iterating.
+ *
+ * Duration: about eleven hours at average block times with the owner's holds
+ * (6 s before every tap, 12 s on every settled screen, 25 s on every result),
+ * longer when blocks are slow; BTC's three payments alone can take five hours
+ * at one confirmation each in a slow hour. Hence the 24 h global timeout.
+ *
+ * The skip guard counts the tests this invocation selected: every selected
+ * test must run, so `--grep` subsets work and a skip still fails the run.
  *
  * Afterwards, encode the footage (1.0x, no trimming, holds verified):
  *   node scripts/B-send-receive-history-footage.mjs --run ~/Build/smirk-e2e/v0.3.1-run-11204
@@ -42,12 +59,16 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
 
 assertPrivateCapture();
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
-// Sixteen tests in this lane: eleven send/receive, five history.
-process.env.E2E_MIN_EXECUTED ??= '16';
+// Every test this invocation selects must run; a skip is a failure here.
+process.env.E2E_MIN_EXECUTED ??= 'selected';
+
+const HOUR = 60 * 60_000;
 
 /**
  * Verify the staged store zip and unpack it once, so global setup checks the
  * exact bytes under test. A hash mismatch refuses before anything launches.
+ * The unpacked path is named by the hash, so the extension keeps its id from
+ * one worker (and one invocation) to the next.
  */
 const zip = process.env.E2E_LIVE_EXTENSION_ZIP;
 if (zip && !process.env.EXTENSION_DIST) {
@@ -69,19 +90,18 @@ if (zip && !process.env.EXTENSION_DIST) {
 
 export default defineConfig({
   testDir: './tests/live',
-  timeout: 3 * 60 * 60_000,
-  globalTimeout: 12 * 60 * 60_000,
+  // Each test sets its own budget (BTC up to 8 h); this covers anything that does not.
+  timeout: 2 * HOUR,
+  globalTimeout: 24 * HOUR,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   retries: 0,
   globalSetup: './global-setup.ts',
+  globalTeardown: './fixtures/B-send-receive-history-teardown.ts',
   reporter: [['./private-reporter.ts'], ['./skip-guard-reporter.ts']],
   quiet: true,
   preserveOutput: 'never',
   use: PRIVATE_USE,
-  projects: [
-    { name: 'B-send-receive', testMatch: /b-send-receive\.live\.spec\.ts$/ },
-    { name: 'B-history-detail', testMatch: /b-history-detail\.live\.spec\.ts$/ },
-  ],
+  projects: [{ name: 'B-live', testMatch: /b-send-receive\.live\.spec\.ts$/ }],
 });

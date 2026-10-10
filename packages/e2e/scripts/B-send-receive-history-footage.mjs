@@ -14,7 +14,14 @@
  *   - a frame row without a guard verdict, a "clean" row without its image,
  *     or a redaction card whose label is not static text;
  *   - any tap or field entry held less than the policy's 6 s, any settled
- *     screen less than 12 s, any key result less than 25 s.
+ *     screen less than 12 s, any key result less than 25 s;
+ *   - a tap or field entry whose screen was never held: there must be a
+ *     settled or result hold since the previous tap or entry (or since the
+ *     recorder or a secret scope started). The single exception is an urgent
+ *     tap on a screen that counts itself down (reason "countdown"), which
+ *     must be followed directly by a settled hold.
+ * Reports, without refusing, holds during which the screen still changed
+ * (new frames after the first second), so a moving "static" screen is seen.
  *
  * Output (0700 directory, 0600 files) in <run>/footage/B-send-receive-history/video:
  *   alice.mp4, bob.mp4, carol.mp4, popups.mp4   one column each, real time
@@ -29,6 +36,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const LANE = 'B-send-receive-history';
 const WALLETS = ['alice', 'bob', 'carol'];
@@ -37,6 +45,9 @@ const TOP = 44;
 const BOTTOM = 84;
 const SLACK_MS = 250;
 const STATIC_LABEL = /^[A-Za-z][A-Za-z0-9 ,.:;()'/+&-]{0,90}$/;
+/** The fixture's `assertStaticLabel`, again: short text, no long alphanumeric run, no URL. */
+const isStaticLabel = (label) =>
+  typeof label === 'string' && STATIC_LABEL.test(label) && !/[A-Za-z0-9]{16,}/.test(label) && !label.includes('://');
 
 function argument(name, fallback) {
   const at = process.argv.indexOf(`--${name}`);
@@ -69,7 +80,10 @@ function hasFilter(name) {
 
 const escText = (t) => t.replace(/\\/g, '\\\\').replace(/'/g, '’').replace(/:/g, '\\:').replace(/%/g, '\\%');
 
-function verify(root, recorders, policy) {
+/** The only reason a tap may skip its pause. */
+const URGENT_REASONS = new Set(['countdown']);
+
+export function verify(root, recorders, policy) {
   const problems = [];
   const minimum = { tap: policy.holdBeforeTapMs, fill: policy.holdBeforeTapMs, settled: policy.holdSettledMs, result: policy.holdResultMs };
   for (const r of recorders) {
@@ -78,19 +92,66 @@ function verify(root, recorders, policy) {
       else if (!['clean', 'redacted'].includes(row.verdict)) problems.push(`${r.name}: frame row ${i + 1} has no guard verdict`);
       else if (row.kind === 'frame' && (row.verdict !== 'clean' || !existsSync(join(root, r.name, 'frames', row.file ?? '')))) {
         problems.push(`${r.name}: frame row ${i + 1} is not a clean, present image`);
-      } else if (row.kind === 'card' && (row.verdict !== 'redacted' || !STATIC_LABEL.test(row.label ?? ''))) {
+      } else if (row.kind === 'card' && (row.verdict !== 'redacted' || !isStaticLabel(row.label))) {
         problems.push(`${r.name}: card row ${i + 1} is not a static redaction label`);
       }
     }
+    // `held`: the screen on show had a settled or result hold since the last
+    // tap or entry. A new recorder session or a secret scope starts unheld.
+    let held = false;
+    let afterUrgent = null;
     for (const ev of r.timeline) {
-      const min = minimum[ev.kind];
-      if (min !== undefined && !(ev.holdMs >= min - SLACK_MS)) {
-        problems.push(`${r.name}: ${ev.kind} "${ev.label}" held ${ev.holdMs ?? 0} ms, policy ${min} ms`);
+      if (!isStaticLabel(ev.label)) problems.push(`${r.name}: a timeline label is not static text`);
+      if (afterUrgent && ['tap', 'fill', 'settled', 'result'].includes(ev.kind)) {
+        if (ev.kind !== 'settled') problems.push(`${r.name}: urgent tap "${afterUrgent}" is not followed by a settled hold`);
+        afterUrgent = null;
       }
-      if (!STATIC_LABEL.test(ev.label ?? '')) problems.push(`${r.name}: a timeline label is not static text`);
+      if (ev.kind === 'session' || ev.kind === 'secret-end') {
+        held = false;
+        continue;
+      }
+      if (ev.kind === 'settled' || ev.kind === 'result') {
+        if (!(ev.holdMs >= minimum[ev.kind] - SLACK_MS)) {
+          problems.push(`${r.name}: ${ev.kind} "${ev.label}" held ${ev.holdMs ?? 0} ms, policy ${minimum[ev.kind]} ms`);
+        }
+        held = true;
+        continue;
+      }
+      if (ev.kind !== 'tap' && ev.kind !== 'fill') continue;
+      if (ev.urgent !== undefined) {
+        if (ev.kind !== 'tap' || !URGENT_REASONS.has(ev.urgent)) problems.push(`${r.name}: ${ev.kind} "${ev.label}" claims an unknown urgency`);
+        afterUrgent = ev.label;
+      } else {
+        if (!(ev.holdMs >= minimum[ev.kind] - SLACK_MS)) {
+          problems.push(`${r.name}: ${ev.kind} "${ev.label}" held ${ev.holdMs ?? 0} ms, policy ${minimum[ev.kind]} ms`);
+        }
+        if (!held) problems.push(`${r.name}: ${ev.kind} "${ev.label}" acted on a screen that was never held`);
+      }
+      held = false;
     }
+    if (afterUrgent) problems.push(`${r.name}: urgent tap "${afterUrgent}" is not followed by a settled hold`);
   }
   return problems;
+}
+
+/**
+ * Holds during which the screen still changed: a new frame after the first
+ * second of a settled or result hold. Reported, not refused: an animation
+ * the wallet runs on a settled screen is worth seeing, not worth discarding
+ * a multi-hour run over.
+ */
+export function movingHolds(recorders) {
+  const out = [];
+  for (const r of recorders) {
+    const frames = r.rows.filter((row) => row.kind === 'frame').map((row) => row.at);
+    for (const ev of r.timeline) {
+      if ((ev.kind !== 'settled' && ev.kind !== 'result') || !(ev.holdMs > 0)) continue;
+      const from = ev.at - ev.holdMs + 1000;
+      const changes = frames.filter((at) => at > from && at <= ev.at).length;
+      if (changes > 0) out.push({ recorder: r.name, kind: ev.kind, label: ev.label, changes });
+    }
+  }
+  return out;
 }
 
 /** Labels for a column with nothing to show yet; drawn without the "Redacted" headline. */
@@ -218,6 +279,14 @@ function main() {
     console.error(`Refusing to encode: ${problems.length} problem(s)\n${problems.slice(0, 50).map((p) => `  ${p}`).join('\n')}`);
     process.exit(1);
   }
+  const moving = movingHolds(recorders);
+  if (moving.length) {
+    const held = recorders.reduce((n, r) => n + r.timeline.filter((e) => e.kind === 'settled' || e.kind === 'result').length, 0);
+    console.warn(
+      `Note: ${moving.length} of ${held} holds showed screen changes after their first second:\n` +
+        moving.slice(0, 20).map((m) => `  ${m.recorder}: ${m.kind} "${m.label}" (${m.changes} new frame(s))`).join('\n'),
+    );
+  }
 
   const outDir = privateDir(join(root, 'video'));
   const cardsDir = privateDir(join(outDir, 'cards'));
@@ -284,9 +353,13 @@ function main() {
   console.log(`Encoded ${files.length} columns and ${LANE}.mp4 (${hms(t1 - t0)}, ${marks.length} chapters) in ${outDir}`);
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`footage encode refused: ${String(error?.message ?? error).split('\n')[0]}`);
-  process.exit(1);
+// Importable for its checks (scripts/B-send-receive-history-footage.test.mjs);
+// encodes only when run directly.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`footage encode refused: ${String(error?.message ?? error).split('\n')[0]}`);
+    process.exit(1);
+  }
 }

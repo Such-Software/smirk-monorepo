@@ -9,10 +9,22 @@
  *   - no secret ever reaches a frame.
  *
  * Specs never sleep or click directly; they call `tap`, `fill`, `settled`,
- * `result` and `secret`, so the dead air is a property of the fixture and the
- * timeline records every hold for the encoder to verify
+ * `result`, `secret` and `pollWait`, so the dead air is a property of the
+ * fixture and the timeline records every hold for the encoder to verify
  * (scripts/B-send-receive-history-footage.mjs refuses a hold shorter than
- * policy).
+ * policy, and a tap whose screen was never held).
+ *
+ * Every screen a tap or entry acts on is held first: if nothing called
+ * `settled` or `result` since the previous tap (or since the recorder or a
+ * secret scope started), `tap` and `fill` hold the screen as settled before
+ * their own 6 s pause. Specs still call `settled` where a screen has a name
+ * worth a caption; the hooks guarantee the rest.
+ *
+ * One exception, and only one: a screen that counts itself down (the send
+ * receipt's "Done (12)") cannot be held static, so its "Stay on this screen"
+ * tap is `urgent: 'countdown'`: no pause before it, recorded as such, and the
+ * screen it leaves behind is then held as settled. The encoder accepts an
+ * urgent tap only with that reason and only when a settled hold follows.
  *
  * Recording is a screenshot loop per page, not Playwright video or trace
  * (both stay off, because neither can be guarded frame by frame). Each frame:
@@ -23,7 +35,9 @@
  * resumes only after two consecutive clean guard passes.
  *
  * Recording is opt-in: FOOTAGE=guarded. Without it the hooks still act (taps,
- * fills, busy waits) but hold nothing and write nothing.
+ * fills, busy waits) but skip the video holds and write no frames. Poll waits
+ * (`pollWait`, the pause between two looks at the chain) are not video holds
+ * and always apply, so FOOTAGE=off polls at the same pace as a recorded run.
  *
  * Labels are static strings. `assertStaticLabel` refuses anything that looks
  * like an address, a transaction id or a URL, so a value can never become a
@@ -121,6 +135,7 @@ function appendLine(file: string, value: unknown): void {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export type TimelineKind =
+  | 'session'
   | 'step'
   | 'tap'
   | 'fill'
@@ -132,14 +147,30 @@ export type TimelineKind =
   | 'secret-span'
   | 'mark';
 
+/** The one reason a tap may skip its pause: the screen counts itself down. */
+export type UrgentReason = 'countdown';
+
 /** One recorder's timeline: what happened and how long each hold actually lasted. */
 export class Timeline {
   constructor(private readonly file: string | null) {}
 
-  add(kind: TimelineKind, label: string, extra: { holdMs?: number; from?: number; to?: number } = {}): void {
+  add(
+    kind: TimelineKind,
+    label: string,
+    extra: { holdMs?: number; from?: number; to?: number; urgent?: UrgentReason } = {},
+  ): void {
     if (!this.file) return;
     appendLine(this.file, { at: Date.now(), kind, label, ...extra });
   }
+}
+
+/**
+ * Names this worker's recorders apart from an earlier worker's in the same
+ * run directory: a failed test restarts the worker, whose recorders append to
+ * the same folders, and frame files must never overwrite earlier ones.
+ */
+export function recorderSession(): string {
+  return `w${process.env.TEST_WORKER_INDEX ?? '0'}-${Date.now().toString(36)}`;
 }
 
 /**
@@ -162,6 +193,7 @@ export class PageRecorder {
     private readonly page: Page,
     dir: string,
     private readonly canary: SecretCanary,
+    private readonly session: string,
   ) {
     privateDir(dir);
     this.framesDir = privateDir(join(dir, 'frames'));
@@ -251,7 +283,7 @@ export class PageRecorder {
       return;
     }
     this.count += 1;
-    const file = `${String(this.count).padStart(6, '0')}.jpg`;
+    const file = `${this.session}-${String(this.count).padStart(6, '0')}.jpg`;
     writeFileSync(join(this.framesDir, file), image, { mode: 0o600 });
     this.lastHash = hash;
     this.lastRowAt = at;
@@ -259,12 +291,20 @@ export class PageRecorder {
   }
 }
 
+/** The caption of the hold `tap` and `fill` add when a spec did not hold the screen itself. */
+function heldBefore(label: string): string {
+  return `Screen before: ${label}`.slice(0, 90).trimEnd();
+}
+
 /**
- * The hooks a live spec drives one wallet page through. Holds apply only when
- * recording; the waits for busy indicators and actionability always apply.
+ * The hooks a live spec drives one wallet page through. Video holds apply
+ * only when recording; the waits for busy indicators and actionability, and
+ * the poll waits between looks at the chain, always apply.
  */
 export class WalletFootage {
   private secretDepth = 0;
+  /** True once the screen on show has been held (settled or result) since the last tap or entry. */
+  private held = false;
 
   constructor(
     readonly name: string,
@@ -272,12 +312,15 @@ export class WalletFootage {
     private readonly canary: SecretCanary,
     private readonly recorder: PageRecorder | null,
     private readonly timeline: Timeline,
-  ) {}
+  ) {
+    this.timeline.add('session', 'Recorder started');
+  }
 
   get recording(): boolean {
     return this.recorder !== null;
   }
 
+  /** A video hold: static screen on camera, skipped when nothing records. */
   private async holdFor(ms: number): Promise<number> {
     if (!this.recording) return 0;
     const started = Date.now();
@@ -300,22 +343,29 @@ export class WalletFootage {
     await this.recorder?.stop();
   }
 
-  /** A static hold of any length, for waits between polls. */
-  async hold(ms: number, label: string): Promise<void> {
+  /**
+   * The pause between two looks at the chain. Not a video hold: it always
+   * runs, recorded or not, so polling never turns into a tight loop. On video
+   * it is static screen like any hold.
+   */
+  async pollWait(ms: number, label: string): Promise<void> {
     assertStaticLabel(label);
-    const held = await this.holdFor(ms);
-    this.timeline.add('hold', label, { holdMs: held });
+    const started = Date.now();
+    await sleep(ms);
+    this.timeline.add('hold', label, { holdMs: Date.now() - started });
   }
 
   /**
-   * Wait until `locator` is actionable, hold the screen static, then tap it.
-   * `position` taps a point inside the element (a history row's arrow, so the
-   * row opens rather than its copy control).
+   * Wait until `locator` is actionable, make sure the screen was held, pause
+   * 6 s on it, then tap. `position` taps a point inside the element (a history
+   * row's arrow, so the row opens rather than its copy control).
+   * `urgent: 'countdown'` is for a screen that counts itself down and so can
+   * never be held: no pause, recorded as urgent; the caller holds what follows.
    */
   async tap(
     locator: Locator,
     label: string,
-    opts: { timeout?: number; position?: { x: number; y: number } } = {},
+    opts: { timeout?: number; position?: { x: number; y: number }; urgent?: UrgentReason } = {},
   ): Promise<void> {
     assertStaticLabel(label);
     const timeout = opts.timeout ?? 60_000;
@@ -323,9 +373,16 @@ export class WalletFootage {
     // Logged before waiting, so a stalled run shows what it was waiting for.
     this.timeline.add('step', label);
     await locator.click({ trial: true, timeout, ...where });
-    const held = await this.holdFor(HOLD_BEFORE_TAP_MS);
-    this.timeline.add('tap', label, { holdMs: held });
+    if (opts.urgent) {
+      if (opts.urgent !== 'countdown') throw new Error('the only urgent tap is a countdown screen');
+      this.timeline.add('tap', label, { holdMs: 0, urgent: opts.urgent });
+    } else {
+      if (!this.held) await this.settled(heldBefore(label));
+      const held = await this.holdFor(HOLD_BEFORE_TAP_MS);
+      this.timeline.add('tap', label, { holdMs: held });
+    }
     await locator.click({ timeout, ...where });
+    this.held = false;
   }
 
   /**
@@ -338,9 +395,11 @@ export class WalletFootage {
     const timeout = opts.timeout ?? 60_000;
     this.timeline.add('step', label);
     await locator.waitFor({ state: 'visible', timeout });
+    if (!this.held) await this.settled(heldBefore(label));
     const held = await this.holdFor(HOLD_BEFORE_TAP_MS);
     this.timeline.add('fill', label, { holdMs: held });
     await locator.fill(value, { timeout });
+    this.held = false;
   }
 
   /** Type a secret. Only inside `secret()`, where the recorder shows a card. */
@@ -365,6 +424,7 @@ export class WalletFootage {
     }
     const held = await this.holdFor(HOLD_SETTLED_MS);
     this.timeline.add('settled', label, { holdMs: held });
+    this.held = true;
   }
 
   /** Hold a key result on screen. */
@@ -372,6 +432,7 @@ export class WalletFootage {
     assertStaticLabel(label);
     const held = await this.holdFor(HOLD_RESULT_MS);
     this.timeline.add('result', label, { holdMs: held });
+    this.held = true;
   }
 
   /**
@@ -388,6 +449,9 @@ export class WalletFootage {
       return await fn();
     } finally {
       this.secretDepth -= 1;
+      // The scope changed the screen (an unlock, a confirmed password): the
+      // next tap holds what it left behind first.
+      this.held = false;
       if (this.secretDepth === 0 && this.recorder) {
         let clean = 0;
         const deadline = Date.now() + 60_000;
@@ -443,9 +507,10 @@ export function createFootage(opts: {
   canary: SecretCanary;
   footageRoot: string | null;
   traceRoot?: string;
+  session: string;
 }): WalletFootage {
   const dir = opts.footageRoot ? recorderDir(opts.footageRoot, opts.name) : null;
-  const recorder = dir ? new PageRecorder(opts.name, opts.page, dir, opts.canary) : null;
+  const recorder = dir ? new PageRecorder(opts.name, opts.page, dir, opts.canary, opts.session) : null;
   const traceDir = dir ?? (opts.traceRoot ? privateDir(recorderDir(opts.traceRoot, opts.name)) : null);
   const timeline = new Timeline(traceDir ? join(traceDir, 'timeline.jsonl') : null);
   recorder?.start();

@@ -13,6 +13,10 @@ process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
 
 export default defineConfig({
   testDir: './tests',
+  // tests/live spends real funds and runs only under its own reviewed config
+  // (B-send-receive-history.live.config.ts), which verifies the zip under
+  // test and runs its checks in order; never collect it here.
+  testIgnore: ['**/live/**'],
   timeout: 90_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

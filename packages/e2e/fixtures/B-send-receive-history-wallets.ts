@@ -1,23 +1,36 @@
 /**
- * The live lane's three demo wallets, for the send, receive and history specs.
+ * The live lane's three demo wallets, for the send, receive and history spec.
  *
- * One worker-scoped fixture imports alice, bob and carol once, each into its
- * own persistent Chromium profile of the release-candidate extension, and
- * hands the specs a page per wallet plus the lane's safety rails
+ * One worker-scoped fixture opens alice, bob and carol, each in its own
+ * persistent Chromium profile of the release-candidate extension, and hands
+ * the spec a page per wallet plus the lane's safety rails
  * (fixtures/live-send.ts) and footage hooks
  * (fixtures/B-send-receive-history-footage.ts).
+ *
+ * Profiles belong to the run, not to the worker. They live in the run
+ * directory (fixtures/B-send-receive-history-dirs.ts), and a worker that
+ * finds this run's profile reopens it and unlocks it instead of importing
+ * again. That matters twice over: a failed test restarts the worker, and a
+ * fresh import costs one of the backend's restore attempts (30 per hour per
+ * IP); and the history sheet's recipient, fee and transaction key, and every
+ * Grin history row, live only in the profile that signed the payment. The
+ * lane's global teardown deletes the profiles when the invocation ends
+ * (E2E_LIVE_KEEP_PROFILES=1 keeps them for a later re-check).
  *
  * Custody. Phrases are read in process, one NAME=value line at a time, from
  * the owner-only file named by E2E_LIVE_WALLET_FILE (regular file, mode 0600,
  * owned by this user; the same rules as demo/capture-demo.mjs). Nothing is
  * `set -a` into the environment, so no child process or browser ever sees a
- * phrase. Each password is random and stays in memory. The word arrays are
- * zeroed once typed; only keyed 4-word hashes remain, for the footage canary.
- * Import and password entry happen before recording starts and appear in the
- * footage only as a labelled redaction card.
+ * phrase. Each profile's password is derived in memory from the wallet's
+ * phrase, the run directory and the wallet's name (HMAC-SHA256), so a later
+ * worker can unlock the profile without the password ever being stored,
+ * logged or passed anywhere. The word arrays are zeroed once used; only keyed
+ * 4-word hashes remain, for the footage canary. Import, unlock and password
+ * entry happen before recording starts and appear in the footage only as a
+ * labelled redaction card.
  *
  * Gates, each its own opt-in:
- *   E2E_LIVE=1              registers the live specs at all
+ *   E2E_LIVE=1              registers the live spec at all
  *   E2E_LIVE_MONEY=1        allows any broadcast
  *   ALLOW_PROD_WRITES=1     required when BACKEND_URL is a shared host
  *   FOOTAGE=guarded         records (see the footage module)
@@ -32,21 +45,30 @@
  *   E2E_LIVE_RUN_DIR            overrides ~/Build/smirk-e2e/v<version>-<label>
  *
  * The run directory (0700) holds the address book, the spend ledger, a
- * progress log of non-secret steps, and footage. Profiles are deleted at the
- * end of the worker.
+ * progress log of non-secret steps, the profiles and footage.
  */
 
 import { chromium, type BrowserContext, type Page } from '@playwright/test';
-import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test as base } from './private-test.js';
 import {
   AddressBook,
   BroadcastMonitor,
+  ChainTip,
   SpendLedger,
   WALLET_NAMES,
   type WalletName,
@@ -55,12 +77,14 @@ import {
   SecretCanary,
   createFootage,
   footageEnabled,
+  recorderSession,
   writeFootageManifest,
   type WalletFootage,
 } from './B-send-receive-history-footage.js';
+import { LANE, laneDirs, workspaceDist } from './B-send-receive-history-dirs.js';
 
+export { LANE };
 export const LIVE_LANE = process.env.E2E_LIVE === '1';
-export const LANE = 'B-send-receive-history';
 
 const WALLET_VARIABLE: Readonly<Record<WalletName, string>> = {
   alice: 'SMOKE_ALICE_MNEMONIC',
@@ -103,13 +127,28 @@ export function readWalletPhrase(file: string, variable: string): string[] {
   return words;
 }
 
+/**
+ * The profile's wallet password: never stored, rederived by any worker of the
+ * same run from the phrase it already reads. Bound to the run directory and
+ * the wallet, so no two profiles share one.
+ */
+function profilePassword(words: readonly string[], runDir: string, name: WalletName): string {
+  return createHmac('sha256', words.join(' '))
+    .update(`smirk-e2e/${LANE}/profile-password/v1\0${runDir}\0${name}`)
+    .digest('base64url');
+}
+
 export interface LiveWallet {
   name: WalletName;
   context: BrowserContext;
   page: Page;
   extensionId: string;
+  /** The import this profile holds; the ledger tags each payment with it. */
+  profileId: string;
   footage: WalletFootage;
   broadcasts: BroadcastMonitor;
+  /** Append a non-secret line, prefixed with the wallet's name, to the progress log. */
+  log(line: string): void;
   /** Unlock behind a redaction card when the page shows the lock screen. */
   unlockIfLocked(): Promise<void>;
   /** Answer the wallet's password prompt (operation password or an approval lock screen) on `page`. */
@@ -122,6 +161,8 @@ export interface LiveLane {
   wallets: Readonly<Record<WalletName, LiveWallet>>;
   book: AddressBook;
   ledger: SpendLedger;
+  /** The Grin tip as the wallets' own balance refreshes report it. */
+  grinTip: ChainTip;
   runDir: string;
   backendUrl: string;
   extensionVersion: string;
@@ -160,9 +201,11 @@ function bundleTargets(dir: string, backendUrl: string): boolean {
 /**
  * The extension under test: EXTENSION_DIST when set (the lane config sets it
  * to the staged zip it verified and unpacked), else the staged zip verified
- * and unpacked here, else the workspace build.
+ * and unpacked here, else the workspace build. A zip unpacks to a path named
+ * by its hash, the same one the lane config uses, so the extension keeps its
+ * id from one worker to the next and a reopened profile finds its wallet.
  */
-function resolveExtension(scratch: string): { dir: string; version: string } {
+function resolveExtension(): { dir: string; version: string } {
   const zip = process.env.E2E_LIVE_EXTENSION_ZIP;
   let dir: string;
   if (zip && !process.env.EXTENSION_DIST) {
@@ -172,13 +215,13 @@ function resolveExtension(scratch: string): { dir: string; version: string } {
     }
     const actual = createHash('sha256').update(readFileSync(zip)).digest('hex');
     if (actual !== expected) throw new Error('the extension zip does not match its expected sha256; refusing to test other bytes');
-    dir = join(scratch, 'extension');
+    dir = join(homedir(), 'Build', 'smirk-e2e', '.scratch', `B-extension-${expected.slice(0, 16)}`);
     rmSync(dir, { recursive: true, force: true });
     privateDir(dir);
     const unpacked = spawnSync('unzip', ['-q', resolve(zip), '-d', dir], { stdio: 'ignore' });
     if (unpacked.status !== 0) throw new Error('could not unpack the extension zip');
   } else {
-    dir = resolve(process.env.EXTENSION_DIST ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'extension', 'dist'));
+    dir = resolve(process.env.EXTENSION_DIST ?? workspaceDist());
   }
   const manifestFile = join(dir, 'manifest.json');
   if (!existsSync(manifestFile)) throw new Error('no extension manifest; set E2E_LIVE_EXTENSION_ZIP or EXTENSION_DIST');
@@ -217,6 +260,19 @@ async function describeStuckScreen(page: Page): Promise<string> {
   return `visible test ids: ${ids.join(', ') || 'none'}; screen text: ${text}`;
 }
 
+/** Wait for Home to show a real balance set from the backend. */
+async function awaitHome(page: Page): Promise<void> {
+  const total = page.getByTestId('home-total-balance');
+  // A returning wallet may solve proof of work and rescan before Home shows.
+  await total.waitFor({ timeout: 10 * 60_000 }).catch(async () => {
+    throw new Error(`the wallet did not reach Home: ${await describeStuckScreen(page)}`);
+  });
+  for (let i = 0; i < 180 && !/\d/.test((await total.textContent()) ?? ''); i++) await page.waitForTimeout(1_000);
+  if (!/\d/.test((await total.textContent()) ?? '')) {
+    throw new Error('the wallet never loaded a real balance set from the backend');
+  }
+}
+
 async function importWallet(
   page: Page,
   extensionId: string,
@@ -244,15 +300,99 @@ async function importWallet(
     await page.waitForTimeout(5_000);
   }
   await page.getByTestId('onboarding-setup-finish-btn').click({ timeout: 25_000 }).catch(() => {});
-  const total = page.getByTestId('home-total-balance');
-  // A returning wallet may solve proof of work and rescan before Home shows.
-  await total.waitFor({ timeout: 10 * 60_000 }).catch(async () => {
-    throw new Error(`import did not reach Home: ${await describeStuckScreen(page)}`);
-  });
-  for (let i = 0; i < 180 && !/\d/.test((await total.textContent()) ?? ''); i++) await page.waitForTimeout(1_000);
-  if (!/\d/.test((await total.textContent()) ?? '')) {
-    throw new Error('the wallet never loaded a real balance set from the backend');
+  await awaitHome(page);
+}
+
+/**
+ * Reopen this run's profile: the wallet is already imported, so unlock it
+ * with the derived password. False when the profile turns out not to hold a
+ * wallet this password opens (onboarding shows, or the unlock is refused).
+ */
+async function reopenWallet(page: Page, extensionId: string, password: string): Promise<boolean> {
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  const lock = page.getByTestId('lockscreen-password-input');
+  const home = page.getByTestId('home-total-balance');
+  const onboarding = page.getByTestId('onboarding-import-btn');
+  const shown = await lock.or(home).or(onboarding).first().waitFor({ timeout: 60_000 }).then(
+    () => true,
+    () => false,
+  );
+  if (!shown || (await onboarding.isVisible().catch(() => false))) return false;
+  if (await lock.isVisible().catch(() => false)) {
+    await lock.fill(password);
+    await page.getByTestId('lockscreen-unlock-btn').click();
+    // Unlocked (the lock screen goes) or refused (it shows an error); either
+    // ends the wait. Neither branch may reject after the race is decided.
+    const never = new Promise<boolean>(() => undefined);
+    const unlocked = await Promise.race([
+      page.getByTestId('lockscreen-root').waitFor({ state: 'detached', timeout: 120_000 }).then(
+        () => true,
+        () => false,
+      ),
+      page.getByTestId('lockscreen-error').waitFor({ state: 'visible', timeout: 120_000 }).then(
+        () => false,
+        () => never,
+      ),
+    ]);
+    if (!unlocked) return false;
   }
+  await awaitHome(page);
+  return true;
+}
+
+interface ProfileMarker {
+  profileId: string;
+  extensionId: string;
+  importedAt: string;
+}
+
+function readMarker(file: string): ProfileMarker | null {
+  try {
+    const m = JSON.parse(readFileSync(file, 'utf8')) as Partial<ProfileMarker>;
+    return typeof m.profileId === 'string' && typeof m.extensionId === 'string' && typeof m.importedAt === 'string'
+      ? (m as ProfileMarker)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Chromium's single-instance locks, left behind when a worker died without closing its browser. */
+function clearProfileLocks(profile: string): void {
+  for (const lock of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    rmSync(join(profile, lock), { force: true });
+  }
+}
+
+interface OpenedProfile {
+  context: BrowserContext;
+  page: Page;
+  extensionId: string;
+  broadcasts: BroadcastMonitor;
+}
+
+async function launchProfile(profile: string, extensionDir: string, grinTip: ChainTip): Promise<OpenedProfile> {
+  privateDir(profile);
+  clearProfileLocks(profile);
+  const context = await chromium.launchPersistentContext(profile, {
+    headless: !process.env.HEADED,
+    channel: 'chromium',
+    viewport: VIEWPORT,
+    deviceScaleFactor: 2,
+    args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`],
+  });
+  for (const host of EXPLORER_HOSTS) {
+    await context.route(`https://${host}/**`, (route) =>
+      route.fulfill({ contentType: 'text/html', body: EXPLORER_STUB(route.request().url()) }),
+    );
+  }
+  context.on('response', (response) => grinTip.watch(response));
+  const broadcasts = await BroadcastMonitor.attach(context, 'observe');
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 60_000 });
+  const extensionId = new URL(worker.url()).host;
+  const page = await context.newPage();
+  return { context, page, extensionId, broadcasts };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -268,16 +408,14 @@ export const test = base.extend<{}, { live: LiveLane }>({
         throw new Error('FOOTAGE accepts only "guarded" or "off"');
       }
 
-      const label = (process.env.E2E_LIVE_RUN_LABEL ?? 'run-local').replace(/[^a-z0-9-]/gi, '-');
-      const scratchRoot = privateDir(join(homedir(), 'Build', 'smirk-e2e', '.scratch', `${LANE}-${process.pid}`));
-      const extension = resolveExtension(scratchRoot);
+      const extension = resolveExtension();
       if (!bundleTargets(extension.dir, backendUrl)) {
         throw new Error('the extension under test does not target BACKEND_URL; refusing to drive a build at another server');
       }
-      const runDir = privateDir(
-        resolve(process.env.E2E_LIVE_RUN_DIR ?? join(homedir(), 'Build', 'smirk-e2e', `v${extension.version}-${label}`)),
-      );
-      const laneDir = privateDir(join(runDir, LANE));
+      const { runDir, laneDir, profilesRoot } = laneDirs(extension.version);
+      privateDir(runDir);
+      privateDir(laneDir);
+      privateDir(profilesRoot);
       const footageRoot = footageEnabled() ? privateDir(join(runDir, 'footage', LANE)) : null;
       // Without footage, the hooks still write their step timeline here.
       const traceRoot = footageRoot ? undefined : privateDir(join(laneDir, 'trace'));
@@ -288,8 +426,11 @@ export const test = base.extend<{}, { live: LiveLane }>({
       const book = new AddressBook(join(laneDir, 'address-book.jsonl'));
       const ledger = new SpendLedger(join(laneDir, 'spend-ledger.jsonl'), book);
       const canary = new SecretCanary();
+      const grinTip = new ChainTip();
       const startedAt = Date.now();
-      if (footageRoot) {
+      const session = recorderSession();
+      // The first worker of a run writes the manifest; a restarted worker keeps it.
+      if (footageRoot && !existsSync(join(footageRoot, 'manifest.json'))) {
         writeFootageManifest(footageRoot, {
           startedAt,
           extensionVersion: extension.version,
@@ -297,57 +438,76 @@ export const test = base.extend<{}, { live: LiveLane }>({
           wallets: WALLET_NAMES,
         });
       }
-      progress(`lane start: extension ${extension.version}, backend ${new URL(backendUrl).host}, footage ${footageRoot ? 'guarded' : 'off'}`);
+      progress(
+        `lane worker start (${session}): extension ${extension.version}, backend ${new URL(backendUrl).host}, footage ${footageRoot ? 'guarded' : 'off'}`,
+      );
 
       const contexts: BrowserContext[] = [];
       const footages: WalletFootage[] = [];
       const wallets = {} as Record<WalletName, LiveWallet>;
       try {
         for (const name of WALLET_NAMES) {
-          const profile = join(scratchRoot, 'profiles', name);
-          rmSync(profile, { recursive: true, force: true });
-          privateDir(profile);
-          const context = await chromium.launchPersistentContext(profile, {
-            headless: !process.env.HEADED,
-            channel: 'chromium',
-            viewport: VIEWPORT,
-            deviceScaleFactor: 2,
-            args: [`--disable-extensions-except=${extension.dir}`, `--load-extension=${extension.dir}`],
-          });
-          contexts.push(context);
-          for (const host of EXPLORER_HOSTS) {
-            await context.route(`https://${host}/**`, (route) =>
-              route.fulfill({ contentType: 'text/html', body: EXPLORER_STUB(route.request().url()) }),
-            );
-          }
-          const broadcasts = await BroadcastMonitor.attach(context, 'observe');
-          let [worker] = context.serviceWorkers();
-          if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 60_000 });
-          const extensionId = new URL(worker.url()).host;
-          const page = await context.newPage();
+          const profile = join(profilesRoot, name);
+          const markerFile = join(profilesRoot, `${name}.json`);
+          let marker = readMarker(markerFile);
+          if (!marker) rmSync(profile, { recursive: true, force: true });
 
-          const password = randomBytes(24).toString('base64url');
-          const importStarted = Date.now();
+          let opened = await launchProfile(profile, extension.dir, grinTip);
+          contexts.push(opened.context);
+
+          const started = Date.now();
           const words = readWalletPhrase(resolve(walletFile), WALLET_VARIABLE[name]);
+          const password = profilePassword(words, runDir, name);
           canary.addPhrase(words);
           canary.addExact(password);
+          let profileId: string;
+          let reused = false;
           try {
-            await importWallet(page, extensionId, words, password);
+            if (marker && marker.extensionId === opened.extensionId) {
+              reused = await reopenWallet(opened.page, opened.extensionId, password);
+            }
+            if (reused) {
+              profileId = marker!.profileId;
+              progress(`${name}: reopened this run's profile and unlocked it; no restore spent`);
+            } else {
+              if (marker) {
+                progress(`${name}: this run's profile did not reopen; importing the wallet again`);
+                await opened.context.close().catch(() => {});
+                contexts.splice(contexts.indexOf(opened.context), 1);
+                rmSync(profile, { recursive: true, force: true });
+                rmSync(markerFile, { force: true });
+                marker = null;
+                opened = await launchProfile(profile, extension.dir, grinTip);
+                contexts.push(opened.context);
+              }
+              await importWallet(opened.page, opened.extensionId, words, password);
+              profileId = randomBytes(8).toString('hex');
+              const next: ProfileMarker = { profileId, extensionId: opened.extensionId, importedAt: new Date().toISOString() };
+              writeFileSync(markerFile, `${JSON.stringify(next)}\n`, { mode: 0o600 });
+              progress(`${name}: imported and showing Home`);
+            }
           } catch (error) {
-            // Only importWallet's own messages are logged: Playwright's can quote calls.
-            const message = error instanceof Error && error.message.startsWith('import did not reach Home')
-              ? error.message
-              : 'import failed before Home (details withheld)';
+            // Only this fixture's own messages are logged: Playwright's can quote calls.
+            const message =
+              error instanceof Error && /^the wallet (did not reach Home|never loaded)/.test(error.message)
+                ? error.message
+                : 'opening the wallet failed before Home (details withheld)';
             progress(`${name}: ${message}`);
             throw error;
           } finally {
             words.fill('');
           }
-          progress(`${name}: imported and showing Home`);
 
+          const { context, page, extensionId, broadcasts } = opened;
           let popupCount = 0;
-          const footage = createFootage({ name, page, canary, footageRoot, ...(traceRoot ? { traceRoot } : {}) });
-          footage.spanBefore('Wallet import: phrase and password entry are never recorded', importStarted, Date.now());
+          const footage = createFootage({ name, page, canary, footageRoot, session, ...(traceRoot ? { traceRoot } : {}) });
+          footage.spanBefore(
+            reused
+              ? 'Wallet unlock: password entry is never recorded'
+              : 'Wallet import: phrase and password entry are never recorded',
+            started,
+            Date.now(),
+          );
           footages.push(footage);
 
           const popupFootage = new Map<Page, WalletFootage>();
@@ -357,10 +517,11 @@ export const test = base.extend<{}, { live: LiveLane }>({
             if (!f) {
               popupCount += 1;
               f = createFootage({
-                name: `${name}-${role}-${popupCount}`,
+                name: `${name}-${role}-${session}-${popupCount}`,
                 page: target,
                 canary,
                 footageRoot,
+                session,
                 ...(traceRoot ? { traceRoot } : {}),
               });
               popupFootage.set(target, f);
@@ -399,22 +560,26 @@ export const test = base.extend<{}, { live: LiveLane }>({
             context,
             page,
             extensionId,
+            profileId,
             footage,
             broadcasts,
             footageFor,
             answerPasswordPrompt,
+            log: (line: string) => progress(`${name}: ${line}`),
             unlockIfLocked: async () => {
               if (await page.getByTestId('lockscreen-root').isVisible().catch(() => false)) {
                 await answerPasswordPrompt(page);
               }
             },
           };
+          await footage.settled('Home, wallet ready');
         }
 
         await use({
           wallets,
           book,
           ledger,
+          grinTip,
           runDir,
           backendUrl,
           extensionVersion: extension.version,
@@ -431,11 +596,9 @@ export const test = base.extend<{}, { live: LiveLane }>({
           },
         });
       } finally {
-        progress('lane teardown: stopping recorders and closing browsers');
+        progress('lane worker teardown: stopping recorders and closing browsers; profiles stay for this run');
         for (const f of footages) await f.stop().catch(() => {});
         for (const c of contexts) await c.close().catch(() => {});
-        rmSync(scratchRoot, { recursive: true, force: true });
-        progress('lane end: profiles deleted');
       }
     },
     { scope: 'worker', timeout: 45 * 60_000 },

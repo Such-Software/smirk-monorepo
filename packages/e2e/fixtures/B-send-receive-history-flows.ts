@@ -1,30 +1,41 @@
 /**
- * Wallet flows for the send, receive and history live specs.
+ * Wallet flows for the send, receive and history live spec.
  *
  * Every interaction goes through the footage hooks (`tap`, `fill`, `settled`,
- * `result`, `secret`), never `.click` or `.fill` directly; the lint in
- * scripts/B-send-receive-history-check-live-specs.mjs holds this file and the
- * live specs to that. Every money leg goes through the AddressBook and the
- * SpendLedger (fixtures/live-send.ts), and every Review-only or refusal check
- * runs with broadcasts blocked and asserts that none were attempted.
+ * `result`, `secret`, `pollWait`), never `.click` or `.fill` directly; the
+ * lint in scripts/B-send-receive-history-check-live-specs.mjs holds this file
+ * and the live spec to that. Every money leg goes through the AddressBook and
+ * the SpendLedger (fixtures/live-send.ts), and every Review-only or refusal
+ * check runs with broadcasts blocked and asserts that none were attempted.
  *
  * Reading the screen is in process and limited to public values: balances,
  * addresses, amounts, fees, statuses and transaction ids. The history sheet
  * reader skips any field whose label mentions a key, and nothing here ever
- * presses "Show transaction key".
+ * presses "Show transaction key": its presence is asserted, and the key
+ * stays in its masked state on camera.
+ *
+ * Health cues (the Home fiat total, the freshness cue, a coin's USD line) are
+ * asserted only where they are the subject (`strict`); while a flow polls the
+ * chain for an hour, a short price-feed or backend blip is logged, not fatal.
  */
 
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { LiveLane, LiveWallet } from './B-send-receive-history-wallets.js';
 import {
   ASSET_DECIMALS,
   DUPLICATE_DECOY_REFUSAL,
+  FEE_RESERVE,
   SPEND_CAPS,
   TICKER,
+  WALLET_NAMES,
   fromAtomic,
   looksLikeReceiveAddress,
+  planRing,
   toAtomic,
+  type GrinVia,
   type LiveAsset,
+  type RingEdge,
+  type RingPlan,
   type WalletName,
 } from './live-send.js';
 import { corrupt, withIdentitySpendKey } from './B-send-receive-history-cryptonote.js';
@@ -37,7 +48,7 @@ export const DISPLAY_NAME: Readonly<Record<LiveAsset, string>> = {
   grin: 'Grin',
 };
 
-/** Pause between polls while waiting on the chain. Held static on video. */
+/** Pause between polls while waiting on the chain. Always applied; static on video. */
 export const POLL_MS = 90_000;
 /** Ceiling for one wait on confirmations or spendable funds. */
 export const CHAIN_WAIT_MS: Readonly<Record<LiveAsset, number>> = {
@@ -47,6 +58,22 @@ export const CHAIN_WAIT_MS: Readonly<Record<LiveAsset, number>> = {
   wow: 75 * 60_000,
   grin: 60 * 60_000,
 };
+/**
+ * Confirmations a receive needs before the next leg may spend it: Bitcoin and
+ * Litecoin one, Monero outputs unlock after ten, Wownero after four.
+ */
+export const RECEIVE_CONFIRMATIONS: Readonly<Record<Exclude<LiveAsset, 'grin'>, number>> = {
+  btc: 1,
+  ltc: 1,
+  xmr: 10,
+  wow: 4,
+};
+/** "After 10 confirmations" for Grin: ten blocks past the height at which the payment became spendable. */
+export const GRIN_SETTLE_BLOCKS = 10;
+/** A Grin tip reading older than this is stale; a wait that needs the tip refuses it. */
+const GRIN_TIP_FRESH_MS = 5 * 60_000;
+/** A recipient that first looks this long after a broadcast cannot blame the chain for missing the pending state. */
+const PENDING_LOOK_WINDOW_MS = 5 * 60_000;
 
 const USD_TEXT = /^(≈ \$[\d,]+\.\d{2} USD|Less than \$0\.01 USD)$/;
 const TXID = /^[0-9a-f]{64}$/;
@@ -64,6 +91,20 @@ export function headerTolerance(asset: LiveAsset): bigint {
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isCryptonote(asset: LiveAsset): asset is 'xmr' | 'wow' {
+  return asset === 'xmr' || asset === 'wow';
+}
+
+/**
+ * A Monero ('8') or Wownero ('WW') subaddress. Payments to one use per-output
+ * keys, which the wallet does not keep, so their history offers no transaction
+ * key and says why. Receive shows primary addresses unless the subaddress
+ * flag is on.
+ */
+function isSubaddress(asset: LiveAsset, address: string): boolean {
+  return (asset === 'xmr' && address.startsWith('8')) || (asset === 'wow' && address.startsWith('WW'));
 }
 
 // ---------------------------------------------------------------------------
@@ -92,14 +133,16 @@ export async function pricedAssets(lane: LiveLane): Promise<Set<string>> {
 // Navigation and reading
 // ---------------------------------------------------------------------------
 
-export async function checkHomeHealth(w: LiveWallet): Promise<void> {
+/** What is wrong with Home's health cues, or null when the total and the freshness cue are fine. */
+async function homeProblem(w: LiveWallet): Promise<string | null> {
   const total = ((await w.page.getByTestId('home-total-balance').textContent()) ?? '').trim();
-  expect(total, 'the Home fiat total resolved to a figure').toMatch(/\d/);
+  if (!/\d/.test(total)) return 'the Home fiat total shows no figure';
   const cue = w.page.getByTestId('balance-freshness-cue');
   if (await cue.count()) {
-    const level = (await cue.first().getAttribute('data-freshness')) ?? 'fresh';
-    expect(['fresh', 'updating'], 'the freshness cue stayed fresh').toContain(level);
+    const level = ((await cue.first().getAttribute('data-freshness')) ?? 'fresh').replace(/[^a-z]/g, '');
+    if (!['fresh', 'updating'].includes(level)) return `the freshness cue reads ${level}`;
   }
+  return null;
 }
 
 /**
@@ -111,6 +154,7 @@ async function tabRoot(w: LiveWallet, tab: 'home' | 'inbox' | 'settings', root: 
   await w.unlockIfLocked();
   const nav = w.page.getByTestId(`nav-tab-${tab}`);
   for (let i = 0; i < 3; i++) {
+    if (i > 0) await w.footage.settled('Not the tab root yet');
     await w.footage.tap(nav, i === 0 ? label : 'Same tab again, back to its root');
     await w.page.waitForTimeout(1_500); // lint-allow: poll
     if (await root.isVisible().catch(() => false)) {
@@ -121,11 +165,18 @@ async function tabRoot(w: LiveWallet, tab: 'home' | 'inbox' | 'settings', root: 
   await expect(root, `the ${tab} tab reached its root`).toBeVisible({ timeout: 30_000 });
 }
 
-export async function goHome(w: LiveWallet): Promise<void> {
+/**
+ * Home, held. `strict` asserts the fiat total and a fresh (or updating)
+ * freshness cue; otherwise a problem with either is logged and the flow goes
+ * on, because a poll loop must not fail on a thirty-second backend blip.
+ */
+export async function goHome(w: LiveWallet, opts: { strict?: boolean } = {}): Promise<void> {
   const total = w.page.getByTestId('home-total-balance');
   await tabRoot(w, 'home', total, 'Home tab');
   await w.footage.settled('Home');
-  await checkHomeHealth(w);
+  const problem = await homeProblem(w);
+  if (opts.strict) expect(problem, 'Home shows a fiat total and a fresh freshness cue').toBeNull();
+  else if (problem) w.log(`noted while polling: ${problem} (asserted only by the USD and freshness test)`);
 }
 
 export interface CoinHeader {
@@ -157,23 +208,27 @@ export async function readCoinHeader(w: LiveWallet, asset: LiveAsset): Promise<C
   };
 }
 
-/** Open a coin's screen from Home, wait for its activity, and check its USD line. */
-export async function openCoin(lane: LiveLane, w: LiveWallet, asset: LiveAsset): Promise<CoinHeader> {
-  await goHome(w);
+/**
+ * Open a coin's screen from Home and read its header. `strict` asserts the
+ * USD line for a priced coin with a balance (and Home's cues on the way);
+ * otherwise a missing USD line is logged.
+ */
+export async function openCoin(
+  lane: LiveLane,
+  w: LiveWallet,
+  asset: LiveAsset,
+  opts: { strict?: boolean } = {},
+): Promise<CoinHeader> {
+  await goHome(w, opts);
   await w.footage.tap(w.page.getByTestId(`asset-row-${asset}`), `${TICKER[asset]} row`);
   await expect(w.page.getByTestId('asset-detail-balance')).toBeVisible({ timeout: 60_000 });
   await w.footage.settled('Coin screen with activity');
   const header = await readCoinHeader(w, asset);
   if ((await pricedAssets(lane)).has(asset) && headerTotal(header) > 0n) {
-    expect(header.usd, `${TICKER[asset]} header shows its USD value`).toMatch(USD_TEXT);
+    if (opts.strict) expect(header.usd, `${TICKER[asset]} header shows its USD value`).toMatch(USD_TEXT);
+    else if (!USD_TEXT.test(header.usd ?? '')) w.log(`noted while polling: the ${TICKER[asset]} header shows no USD value`);
   }
   return header;
-}
-
-/** Back out of the coin screen to Home. */
-export async function leaveCoin(w: LiveWallet): Promise<void> {
-  await w.footage.tap(w.page.getByTestId('asset-detail-back'), 'Back to Home');
-  await expect(w.page.getByTestId('home-total-balance')).toBeVisible({ timeout: 30_000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +277,7 @@ export async function readNpub(lane: LiveLane, w: LiveWallet): Promise<string> {
   const navItem = page.getByTestId('settings-nostr-nav');
   // Settings root carries recovery and password controls; the guard blanks it.
   await tabRoot(w, 'settings', navItem, 'Settings tab');
+  await w.footage.settled('Settings');
   await w.footage.tap(navItem, 'Nostr identity');
   await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({ timeout: 30_000 });
   const npub = page.getByTestId('nostr-npub');
@@ -242,6 +298,39 @@ export async function ensureDestinations(lane: LiveLane, asset: LiveAsset, walle
 }
 
 // ---------------------------------------------------------------------------
+// Funding plan
+// ---------------------------------------------------------------------------
+
+/**
+ * Read every wallet's balance of a coin (on camera) and plan its ring. With
+ * `show`, each balance is held as a key result: the funding check's evidence.
+ */
+export async function planCoin(
+  lane: LiveLane,
+  asset: LiveAsset,
+  ring: readonly RingEdge[],
+  opts: { show?: boolean } = {},
+): Promise<RingPlan> {
+  const balances = new Map<WalletName, bigint>();
+  for (const name of WALLET_NAMES) {
+    const w = lane.wallets[name];
+    balances.set(name, headerTotal(await openCoin(lane, w, asset)));
+    if (opts.show) await w.footage.result('Balance before the payments');
+  }
+  const plan = planRing(asset, ring, balances, lane.ledger.entries(asset));
+  const held = WALLET_NAMES.map((n) => `${n} ${fromAtomic(asset, balances.get(n)!)}`).join(', ');
+  if (plan.ok) {
+    lane.progress(
+      `${TICKER[asset]} plan: ${plan.legs.map((l) => `${l.from} pays ${l.to} ${l.amount}`).join(', then ')}` +
+        `${plan.resumed ? ' (order kept from this run\'s ledger)' : ''}; balances ${held}`,
+    );
+  } else {
+    lane.progress(`${TICKER[asset]} plan refused: ${plan.reason}; balances ${held}`);
+  }
+  return plan;
+}
+
+// ---------------------------------------------------------------------------
 // History detail
 // ---------------------------------------------------------------------------
 
@@ -250,6 +339,7 @@ export type DetailFields = Record<string, string>;
 export interface Detail {
   title: string;
   fields: DetailFields;
+  note: string;
   hasExplorer: boolean;
   hasRevealKey: boolean;
   keyShown: boolean;
@@ -275,7 +365,14 @@ async function readDetail(page: Page): Promise<Detail> {
       if (!dt || /key/i.test(dt)) continue;
       fields[dt] = pair.querySelector('dd > span')?.textContent?.trim() ?? '';
     }
-    return { title: el.querySelector('strong')?.textContent?.trim() ?? '', fields };
+    const box = el.firstElementChild;
+    const note = box
+      ? Array.from(box.children)
+          .filter((c) => c.tagName === 'DIV' && !c.querySelector('button, dl'))
+          .map((c) => c.textContent?.trim() ?? '')
+          .join(' ')
+      : '';
+    return { title: el.querySelector('strong')?.textContent?.trim() ?? '', fields, note };
   });
   return {
     ...read,
@@ -325,9 +422,11 @@ export async function openDetail(w: LiveWallet, ref: RowRef, label = 'Open the t
   return detail;
 }
 
+/** Close the sheet and hold the coin screen it leaves. */
 export async function closeDetail(w: LiveWallet): Promise<void> {
   await w.footage.tap(w.page.getByTestId('tx-detail-close'), 'Close the detail');
   await expect(w.page.getByTestId('tx-detail-sheet')).toHaveCount(0);
+  await w.footage.settled('Coin screen');
 }
 
 /** Confirmations a Status line states: 0 in the mempool, N when counted, null for a bare block. */
@@ -345,11 +444,17 @@ function meetsConfirmations(status: string | undefined, min: number): boolean {
   return c === null ? min <= 1 || /^confirmed$/i.test(status ?? '') : c >= min;
 }
 
-/** Check a send's detail on the sender's side. Returns the fee it reports. */
+/**
+ * Check a send's detail on the sender's side. Returns the fee it reports.
+ * `journal` says whether this profile signed the payment: the recipient, the
+ * fee and (XMR/WOW) the transaction key come from the wallet's own send
+ * record, which only that profile holds. Without it the wallet must say it
+ * has no record rather than invent a recipient.
+ */
 export function expectSenderDetail(
   asset: LiveAsset,
   d: Detail,
-  sent: { amountAtomic: bigint; txid?: string; destination?: string },
+  sent: { amountAtomic: bigint; txid?: string; destination?: string; journal: boolean },
 ): bigint | undefined {
   const ticker = TICKER[asset];
   const amountOf = (text: string | undefined): bigint | undefined => {
@@ -360,7 +465,15 @@ export function expectSenderDetail(
   expect(d.fields.Time, 'sender sees a time').toBeTruthy();
   expect(d.fields.Status, 'sender sees a status').toBeTruthy();
   if (sent.txid && asset !== 'grin') expect(d.fields['Transaction ID'], 'sender sees the txid').toBe(sent.txid);
-  if (sent.destination && asset !== 'grin') expect(d.fields['Sent to'], 'sender sees the recipient').toBe(sent.destination);
+  if (asset !== 'grin') {
+    if (sent.journal) {
+      expect(d.fields['Sent to'], 'sender sees the full recipient, from its send record').toBe(sent.destination);
+      expect(d.fields['Network fee'], 'sender sees the fee, from its send record').toBeTruthy();
+    } else {
+      expect(d.fields['Sent to'], 'without a send record the wallet names no recipient').toBeUndefined();
+      expect(d.note, 'without a send record the wallet says so').toMatch(/no send record/);
+    }
+  }
   expect(d.hasExplorer, 'the explorer action is offered').toBe(true);
   let fee: bigint | undefined;
   if (d.fields['Network fee'] !== undefined) {
@@ -387,11 +500,15 @@ export function expectRecipientDetail(asset: LiveAsset, d: Detail, sent: { amoun
   expect(d.hasRevealKey, 'a receive offers no transaction key').toBe(false);
 }
 
-/** For a chain row of an XMR or WOW send: the key is offered masked, and never revealed. */
+/**
+ * For an XMR or WOW send to a primary address, signed by this profile: the
+ * "Show transaction key" action is offered, and the key itself is not shown.
+ * Nothing here presses it, so the key appears on video only masked.
+ */
 export function expectMaskedTxKey(asset: LiveAsset, d: Detail): void {
-  if (asset !== 'xmr' && asset !== 'wow') return;
-  expect(d.hasRevealKey, 'the Show transaction key action is offered').toBe(true);
-  expect(d.keyShown, 'the key itself stays hidden').toBe(false);
+  if (!isCryptonote(asset)) return;
+  expect(d.hasRevealKey, 'the Show transaction key action is offered (send record with a verified key)').toBe(true);
+  expect(d.keyShown, 'the key itself stays masked').toBe(false);
 }
 
 /**
@@ -437,7 +554,7 @@ export async function waitConfirmations(
       if (meetsConfirmations(status, min)) return d;
     }
     if (Date.now() > deadline) throw new Error(`${TICKER[asset]} ${what} did not reach ${min} confirmation(s) in time`);
-    await w.footage.hold(POLL_MS, 'Waiting for the next block');
+    await w.footage.pollWait(POLL_MS, 'Waiting for the next block');
   }
 }
 
@@ -451,7 +568,7 @@ export async function waitSpendable(lane: LiveLane, w: LiveWallet, asset: LiveAs
       throw new Error(`${w.name} never had ${fromAtomic(asset, need)} ${TICKER[asset]} spendable`);
     }
     lane.progress(`${w.name}: waiting for ${fromAtomic(asset, need)} ${TICKER[asset]} spendable, have ${fromAtomic(asset, h.confirmed)}`);
-    await w.footage.hold(POLL_MS, 'Waiting for spendable funds');
+    await w.footage.pollWait(POLL_MS, 'Waiting for spendable funds');
   }
 }
 
@@ -471,16 +588,18 @@ export async function openSendFromCoin(w: LiveWallet): Promise<void> {
 
 async function enterDestination(w: LiveWallet, destination: string): Promise<void> {
   await w.footage.fill(w.page.getByTestId('send-address-input'), destination, 'Destination');
+  await w.footage.settled('Destination entered');
   await w.footage.tap(w.page.getByTestId('send-address-continue'), 'Continue');
   await expect(w.page.getByTestId('send-amount-input')).toBeVisible({ timeout: 30_000 });
   await w.footage.settled('Send: compose');
 }
 
-/** Leave the Send wizard without sending, from any step. */
+/** Leave the Send wizard without sending, from any step, holding each step it passes. */
 export async function exitSendWizard(w: LiveWallet): Promise<void> {
   const back = w.page.getByTestId('send-wizard-header-back');
   for (let i = 0; i < 5 && (await back.isVisible().catch(() => false)); i++) {
     await w.footage.tap(back, 'Back out of Send');
+    await w.footage.settled('Previous step');
   }
   await expect(back).toHaveCount(0, { timeout: 15_000 });
 }
@@ -509,6 +628,7 @@ async function feeTour(w: LiveWallet): Promise<void> {
   await w.footage.tap(page.getByTestId('send-fee-tier-normal'), 'Back to the normal tier');
   await expect(page.getByTestId('send-fee-tier-normal')).toHaveAttribute('aria-pressed', 'true');
   await expect(floored).toHaveCount(0);
+  await w.footage.settled('Normal tier again');
 }
 
 async function compose(
@@ -521,10 +641,11 @@ async function compose(
 ): Promise<void> {
   const page = w.page;
   const ticker = TICKER[asset];
+  const amountAtomic = toAtomic(asset, amount);
   const line = new RegExp(`Balance:\\s*([\\d.]+)\\s*${ticker}`).exec((await page.locator('#root').innerText()).replace(/\s+/g, ' '));
   expect(line, 'Compose shows the balance').not.toBeNull();
   const composeBalance = toAtomic(asset, line![1]!);
-  expect(composeBalance >= toAtomic(asset, amount), 'Compose shows enough spendable balance').toBe(true);
+  expect(composeBalance >= amountAtomic, 'Compose shows enough spendable balance').toBe(true);
   if (composeBalance !== header.confirmed) {
     // A background refresh can land between the two readings; note it rather than fail on timing.
     lane.progress(`${w.name}: ${ticker} Compose balance differs from the coin screen reading taken moments earlier`);
@@ -533,7 +654,26 @@ async function compose(
     const normal = page.getByTestId('send-fee-tier-normal');
     await expect(normal).toContainText(/sat\/vB/, { timeout: 60_000 });
     if (opts.feeTour) await feeTour(w);
-    if ((await normal.getAttribute('aria-pressed')) !== 'true') await w.footage.tap(normal, 'Normal fee tier');
+    if ((await normal.getAttribute('aria-pressed')) !== 'true') {
+      await w.footage.tap(normal, 'Normal fee tier');
+      await w.footage.settled('Normal fee tier selected');
+    }
+    // The wallet's own estimate, not the plan's reserve, decides whether this
+    // leg is payable. The tier reads "<rate> sat/vB · <fee>", the fee in sat
+    // or lits, or in coin units once it passes 0.001.
+    const tier = (await normal.innerText()).replace(/\s+/g, ' ');
+    const inAtomic = /· (\d+) (?:sat|lits)\b/.exec(tier);
+    const inCoin = new RegExp(`· ([\\d.]+) ${ticker}\\b`).exec(tier);
+    const fee = inAtomic ? BigInt(inAtomic[1]!) : inCoin ? toAtomic(asset, inCoin[1]!) : undefined;
+    if (fee === undefined) {
+      lane.progress(`${w.name}: ${ticker} normal-tier fee estimate unreadable; the wallet's own Continue gate decides`);
+    } else {
+      expect(
+        composeBalance >= amountAtomic + fee,
+        `${w.name} can pay ${amount} ${ticker} plus the wallet's own fee estimate`,
+      ).toBe(true);
+      lane.progress(`${w.name}: ${ticker} normal-tier fee estimate ${fromAtomic(asset, fee)} ${ticker}`);
+    }
   }
   await w.footage.fill(page.getByTestId('send-amount-input'), amount, 'Amount');
   if ((await pricedAssets(lane)).has(asset)) {
@@ -559,11 +699,18 @@ async function readReviewRows(page: Page): Promise<Record<string, string>> {
   });
 }
 
-async function review(lane: LiveLane, w: LiveWallet, asset: LiveAsset, amountAtomic: bigint, destination: string): Promise<void> {
+async function review(
+  lane: LiveLane,
+  w: LiveWallet,
+  asset: LiveAsset,
+  amountAtomic: bigint,
+  destination: string,
+  header: CoinHeader,
+): Promise<void> {
   const page = w.page;
   const ticker = TICKER[asset];
   await expect(page.getByTestId('send-review-submit')).toBeVisible({ timeout: 30_000 });
-  if (asset === 'xmr' || asset === 'wow') {
+  if (isCryptonote(asset)) {
     await expect(page.locator('#root')).not.toContainText('Estimating…', { timeout: 30_000 });
   }
   const rows = await readReviewRows(page);
@@ -577,6 +724,11 @@ async function review(lane: LiveLane, w: LiveWallet, asset: LiveAsset, amountAto
     expect(fee, 'Review shows a fee estimate').not.toBeNull();
     const est = toAtomic(asset, fee![1]!);
     expect(est > 0n && est <= SPEND_CAPS[asset].feeCap, 'the fee estimate is under the cap').toBe(true);
+    expect(
+      header.confirmed >= amountAtomic + est,
+      `${w.name} can pay the amount plus the wallet's own ${ticker} fee estimate`,
+    ).toBe(true);
+    lane.progress(`${w.name}: ${ticker} fee estimate ${fromAtomic(asset, est)}`);
   }
   if ((await pricedAssets(lane)).has(asset)) {
     await expect(page.getByTestId('send-review-usd'), 'USD on Review').toHaveText(USD_TEXT);
@@ -609,15 +761,25 @@ async function waitSendOutcome(w: LiveWallet, timeoutMs = 240_000): Promise<Send
   throw new Error('the send neither finished nor reported an error in time');
 }
 
-/** Hold the Done step (stopping its countdown), then close it. Returns the id it shows. */
+/**
+ * Hold the receipt, then close it and hold the screen it leaves. The receipt
+ * counts itself down ("Done (12)"), so "Stay on this screen" is tapped at
+ * once (an urgent tap, the only one) and the stopped receipt is then held.
+ */
 async function holdDone(w: LiveWallet, idLabel: 'Transaction ID' | 'Kernel ID'): Promise<string> {
   const page = w.page;
   const id = ((await page.getByTestId('send-done-txid').textContent()) ?? '').trim();
   await expect(page.locator('#root')).toContainText(idLabel);
   const stay = page.getByRole('button', { name: 'Stay on this screen' });
-  if (await stay.isVisible().catch(() => false)) await w.footage.tap(stay, 'Stay on the receipt');
+  await stay.waitFor({ state: 'visible', timeout: 3_000 }).catch(() => undefined);
+  if (await stay.isVisible().catch(() => false)) {
+    await w.footage.tap(stay, 'Stay on the receipt', { urgent: 'countdown' });
+    await expect(stay).toHaveCount(0);
+  }
+  await w.footage.settled('Receipt, countdown stopped');
   await w.footage.result('Sent: the receipt with its id');
   await w.footage.tap(page.getByTestId('send-done-close'), 'Done');
+  await w.footage.settled('Back from the receipt');
   return id;
 }
 
@@ -634,7 +796,7 @@ export interface SendLeg {
 
 export interface SentLeg {
   id: string;
-  asset: LiveAsset;
+  asset: Exclude<LiveAsset, 'grin'>;
   from: WalletName;
   to: WalletName;
   amountAtomic: bigint;
@@ -643,25 +805,55 @@ export interface SentLeg {
   feeAtomic?: bigint;
   firstStatus?: string;
   resumed: boolean;
+  /** When this attempt broadcast it (absent on a resumed leg). */
+  broadcastAt?: number;
   /** Totals before the leg, for the balance checks once it confirms. */
   senderBefore?: bigint;
-  recipientBefore?: bigint;
+  recipientBefore?: CoinHeader;
+}
+
+/** The sender, right after the broadcast: hold the receipt, then its own activity shows the payment. */
+async function senderAfterBroadcast(lane: LiveLane, sent: SentLeg): Promise<{ feeAtomic?: bigint; firstStatus?: string }> {
+  const sender = lane.wallets[sent.from];
+  await holdDone(sender, 'Transaction ID');
+  await openCoin(lane, sender, sent.asset);
+  const d = (await openDetail(sender, { txid: sent.txid })) ?? (await openDetail(sender, { recipient: sent.destination }));
+  expect(d, 'the sender sees the payment in activity right away').not.toBeNull();
+  const fee = expectSenderDetail(sent.asset, d!, {
+    amountAtomic: sent.amountAtomic,
+    destination: sent.destination,
+    journal: true,
+    ...(d!.fields['Transaction ID'] ? { txid: sent.txid } : {}),
+  });
+  await sender.footage.result('Sent payment in the history sheet');
+  await closeDetail(sender);
+  lane.ledger.annotate(sent.id, {
+    ...(d!.fields.Status ? { firstStatus: d!.fields.Status } : {}),
+    ...(fee !== undefined ? { feeAtomic: fee.toString() } : {}),
+  });
+  return {
+    ...(fee !== undefined ? { feeAtomic: fee } : {}),
+    ...(d!.fields.Status ? { firstStatus: d!.fields.Status } : {}),
+  };
 }
 
 /**
  * One on-chain leg, start to finish: from the coin screen through Review to a
- * broadcast, then the sender's pending row and detail. Allowlist and caps are
- * enforced by the ledger before the Send tap. A duplicate-decoy refusal is
- * retried once, and only when the monitor proves nothing was broadcast.
+ * broadcast. Allowlist and caps are enforced by the ledger before the Send
+ * tap. A duplicate-decoy refusal is retried once, and only when the monitor
+ * proves nothing was broadcast. Once broadcast, the sender holds its receipt
+ * and reads its own activity while, at the same time, the recipient watches
+ * for the payment to arrive, so the pending state is caught early.
  */
 export async function sendLeg(lane: LiveLane, leg: SendLeg): Promise<SentLeg> {
   const sender = lane.wallets[leg.from];
+  const recipient = lane.wallets[leg.to];
   const ticker = TICKER[leg.asset];
   const destination = lane.book.get(leg.to, leg.asset);
   const amountAtomic = toAtomic(leg.asset, leg.amount);
   const prior = lane.ledger.completed(leg.id);
   if (prior?.txid) {
-    lane.progress(`${leg.id}: resuming, already broadcast as ${prior.txid}`);
+    lane.progress(`${leg.id}: resuming, already broadcast as ${prior.txid}; this attempt checks only what follows the broadcast`);
     return {
       id: leg.id,
       asset: leg.asset,
@@ -676,13 +868,13 @@ export async function sendLeg(lane: LiveLane, leg: SendLeg): Promise<SentLeg> {
     };
   }
 
-  const recipientBefore = headerTotal(await openCoin(lane, lane.wallets[leg.to], leg.asset));
-  const header = await waitSpendable(lane, sender, leg.asset, amountAtomic + SPEND_CAPS[leg.asset].feeCap);
+  const recipientBefore = await openCoin(lane, recipient, leg.asset);
+  const header = await waitSpendable(lane, sender, leg.asset, amountAtomic + FEE_RESERVE[leg.asset]);
   sender.footage.mark(`${TICKER[leg.asset]} send`);
   await openSendFromCoin(sender);
   await enterDestination(sender, destination);
   await compose(lane, sender, leg.asset, leg.amount, header, { feeTour: leg.feeTour ?? false });
-  await review(lane, sender, leg.asset, amountAtomic, destination);
+  await review(lane, sender, leg.asset, amountAtomic, destination, header);
 
   lane.ledger.reserve({ legId: leg.id, asset: leg.asset, from: leg.from, destination, amountAtomic });
   lane.progress(`${leg.id}: reserved ${leg.amount} ${ticker} ${leg.from} to ${leg.to}`);
@@ -696,7 +888,7 @@ export async function sendLeg(lane: LiveLane, leg: SendLeg): Promise<SentLeg> {
       break;
     }
     const broadcasted = sender.broadcasts.since(mark);
-    const decoyRefusal = (leg.asset === 'xmr' || leg.asset === 'wow') && DUPLICATE_DECOY_REFUSAL.test(outcome.message);
+    const decoyRefusal = isCryptonote(leg.asset) && DUPLICATE_DECOY_REFUSAL.test(outcome.message);
     if (attempt === 0 && broadcasted === 0 && decoyRefusal) {
       lane.progress(`${leg.id}: ring assembly refused before any broadcast; retrying once`);
       await sender.footage.result('Ring refused, nothing broadcast');
@@ -707,22 +899,11 @@ export async function sendLeg(lane: LiveLane, leg: SendLeg): Promise<SentLeg> {
     throw new Error(`${ticker} ${leg.from} to ${leg.to} was refused${broadcasted ? ' after a broadcast attempt; check the chain' : ''}`);
   }
   expect(txid, 'the receipt shows a transaction id').toMatch(TXID);
-  lane.ledger.broadcast(leg.id, { txid });
+  lane.ledger.broadcast(leg.id, { txid, senderProfile: sender.profileId });
+  const broadcastAt = Date.now();
   lane.progress(`${leg.id}: broadcast ${txid}`);
-  await holdDone(sender, 'Transaction ID');
 
-  // The sender's own activity shows the payment at once, with its recipient.
-  await openCoin(lane, sender, leg.asset);
-  const d = (await openDetail(sender, { txid })) ?? (await openDetail(sender, { recipient: destination }));
-  expect(d, 'the sender sees the payment in activity right away').not.toBeNull();
-  const fee = expectSenderDetail(leg.asset, d!, { amountAtomic, destination, ...(d!.fields['Transaction ID'] ? { txid } : {}) });
-  await sender.footage.result('Sent payment in the history sheet');
-  await closeDetail(sender);
-  lane.ledger.annotate(leg.id, {
-    ...(d!.fields.Status ? { firstStatus: d!.fields.Status } : {}),
-    ...(fee !== undefined ? { feeAtomic: fee.toString() } : {}),
-  });
-  return {
+  const sent: SentLeg = {
     id: leg.id,
     asset: leg.asset,
     from: leg.from,
@@ -730,39 +911,87 @@ export async function sendLeg(lane: LiveLane, leg: SendLeg): Promise<SentLeg> {
     amountAtomic,
     destination,
     txid,
-    ...(fee !== undefined ? { feeAtomic: fee } : {}),
-    ...(d!.fields.Status ? { firstStatus: d!.fields.Status } : {}),
     resumed: false,
+    broadcastAt,
     senderBefore: headerTotal(header),
     recipientBefore,
   };
+  // Both wallets at once: neither branch is abandoned mid-step if the other fails.
+  const [own, arrival] = await Promise.allSettled([senderAfterBroadcast(lane, sent), expectIncoming(lane, sent)]);
+  if (own.status === 'rejected') throw own.reason;
+  if (arrival.status === 'rejected') throw arrival.reason;
+  return { ...sent, ...own.value };
 }
 
-/** The recipient sees the payment arrive: a pending or locked amount and an incoming row. */
-export async function expectIncoming(lane: LiveLane, sent: SentLeg): Promise<Detail> {
+/**
+ * The recipient sees the payment arrive while it is still pending: an
+ * incoming row with the amount, and the header's pending (or, for Monero and
+ * Wownero, locked) amount grown by it.
+ *
+ * Monero and Wownero hold a received output locked for ten (four) blocks, so
+ * the pending state is always there to see, and the check insists on the
+ * header showing it. For Bitcoin and Litecoin the pending state is the row
+ * listed unconfirmed or the header's pending amount grown by the payment
+ * (the header may show it before the list does), and the row must be listed
+ * either way. Both chains can mine the payment before the recipient's first
+ * look (a Litecoin block every two and a half minutes): if the first look,
+ * within five minutes of the broadcast, already finds it mined, that is
+ * recorded as an annotation and in the progress log, never passed off as an
+ * observed pending state. A first look later than that fails: the harness
+ * was too slow to claim the chain beat it.
+ */
+export async function expectIncoming(lane: LiveLane, sent: SentLeg): Promise<void> {
   const w = lane.wallets[sent.to];
+  const before = sent.recipientBefore;
+  if (!before || sent.broadcastAt === undefined) throw new Error('expectIncoming needs the recipient header before the leg');
+  const tol = headerTolerance(sent.asset);
   const deadline = Date.now() + 30 * 60_000;
+  let pendingRow = false;
+  let pendingHeader = false;
+  let firstLook: number | null = null;
   for (;;) {
     const header = await openCoin(lane, w, sent.asset);
+    const grown = header.pending + header.locked - (before.pending + before.locked) >= sent.amountAtomic - tol;
+    if (grown) pendingHeader = true;
     const d = await openDetail(w, { txid: sent.txid }, 'Open the incoming payment');
+    if (!d && grown) {
+      // The header shows it pending before the activity list does.
+      await w.footage.result('Incoming amount pending in the header');
+    }
     if (d) {
+      firstLook ??= Date.now();
       expectRecipientDetail(sent.asset, d, { amountAtomic: sent.amountAtomic, txid: sent.txid });
       const unconfirmed = confirmationsOf(d.fields.Status) === 0;
-      // Balances refresh on their own cadence, so the header may trail the
-      // activity list by a cycle: an unconfirmed payment must show as pending
-      // or locked once it catches up.
-      const shown = header.pending + header.locked >= sent.amountAtomic;
-      await w.footage.result('Incoming payment, pending');
+      if (unconfirmed) pendingRow = true;
+      await w.footage.result(unconfirmed || grown ? 'Incoming payment, pending' : 'Incoming payment');
       await closeDetail(w);
-      if (!unconfirmed || shown) {
-        lane.progress(`${sent.id}: ${sent.to} sees the payment (${d.fields.Status ?? 'no status'}${shown ? ', pending in the header' : ''})`);
-        return d;
+      if (isCryptonote(sent.asset)) {
+        if (pendingHeader) {
+          lane.progress(`${sent.id}: ${sent.to} sees the payment (${d.fields.Status ?? 'no status'}), ${pendingRow ? 'unconfirmed and ' : ''}pending or locked in the header`);
+          return;
+        }
+        // Listed, but the header has not caught up yet; the output stays locked for blocks.
+      } else if (pendingHeader || (pendingRow && !unconfirmed)) {
+        lane.progress(
+          `${sent.id}: ${sent.to} saw the payment pending (${[pendingRow ? 'unconfirmed row' : '', pendingHeader ? 'pending amount in the header' : ''].filter(Boolean).join(', ')})`,
+        );
+        return;
+      } else if (!pendingRow && !unconfirmed) {
+        const after = Math.round((firstLook - sent.broadcastAt) / 1000);
+        if (firstLook - sent.broadcastAt > PENDING_LOOK_WINDOW_MS) {
+          throw new Error(`${sent.to} first found the ${TICKER[sent.asset]} payment ${after} s after the broadcast, already mined: the pending state was never observed`);
+        }
+        const note = `${sent.id}: pending state not observable: mined before ${sent.to}'s first look, ${after} s after the broadcast`;
+        lane.progress(note);
+        test.info().annotations.push({ type: 'pending-not-observed', description: note });
+        return;
       }
+      // An unconfirmed row with the header not caught up yet: look again.
     }
     if (Date.now() > deadline) {
       throw new Error(`${sent.to} never saw the ${TICKER[sent.asset]} payment as an incoming row with a pending amount`);
     }
-    await w.footage.hold(60_000, 'Waiting for the payment to appear');
+    await w.footage.pollWait(60_000, 'Waiting for the payment to appear');
   }
 }
 
@@ -771,13 +1000,17 @@ export async function expectIncoming(lane: LiveLane, sent: SentLeg): Promise<Det
  * gained exactly the amount, the sender lost the amount plus the fee.
  */
 export async function expectSettledBalances(lane: LiveLane, sent: SentLeg): Promise<void> {
-  if (sent.senderBefore === undefined || sent.recipientBefore === undefined) return;
+  if (sent.senderBefore === undefined || sent.recipientBefore === undefined) {
+    lane.progress(`${sent.id}: resumed leg: no balances from before it in this attempt, so the balance movement is not checked`);
+    return;
+  }
   const tol = headerTolerance(sent.asset);
+  const recipientBefore = headerTotal(sent.recipientBefore);
   const deadline = Date.now() + CHAIN_WAIT_MS[sent.asset];
   for (;;) {
     const r = headerTotal(await openCoin(lane, lane.wallets[sent.to], sent.asset));
     const s = headerTotal(await openCoin(lane, lane.wallets[sent.from], sent.asset));
-    const gained = r - sent.recipientBefore;
+    const gained = r - recipientBefore;
     const spent = sent.senderBefore - s;
     const fee = sent.feeAtomic ?? 0n;
     const recipientOk = gained >= sent.amountAtomic - tol && gained <= sent.amountAtomic + tol;
@@ -790,32 +1023,110 @@ export async function expectSettledBalances(lane: LiveLane, sent: SentLeg): Prom
     if (Date.now() > deadline) {
       throw new Error(`${sent.id}: balances did not settle (recipient ${recipientOk ? 'ok' : 'off'}, sender ${senderOk ? 'ok' : 'off'})`);
     }
-    await lane.wallets[sent.from].footage.hold(POLL_MS, 'Waiting for balances to settle');
+    await lane.wallets[sent.from].footage.pollWait(POLL_MS, 'Waiting for balances to settle');
   }
 }
 
-/** Every planned leg must be fundable from balances now plus earlier legs' payments. */
-export async function fundingShortfall(
-  lane: LiveLane,
-  asset: LiveAsset,
-  legs: ReadonlyArray<{ id: string; from: WalletName; to: WalletName; amount: string }>,
-): Promise<string | null> {
-  const fee = SPEND_CAPS[asset].feeCap;
-  const have = new Map<WalletName, bigint>();
-  for (const name of ['alice', 'bob', 'carol'] as const) {
-    have.set(name, headerTotal(await openCoin(lane, lane.wallets[name], asset)));
+/** Re-open a send until its confirmation count rises past `from`, holding each reading. */
+async function watchOneMoreBlock(lane: LiveLane, sent: SentLeg, from: number): Promise<number> {
+  const w = lane.wallets[sent.from];
+  const deadline = Date.now() + CHAIN_WAIT_MS[sent.asset];
+  for (;;) {
+    await w.footage.pollWait(POLL_MS, 'Waiting for the next block');
+    await openCoin(lane, w, sent.asset);
+    const d = await openDetail(w, { txid: sent.txid }, 'Open the send again');
+    expect(d, 'the send is still listed').not.toBeNull();
+    const now = confirmationsOf(d!.fields.Status) ?? 0;
+    await w.footage.result('Confirmations after another block');
+    await closeDetail(w);
+    if (now > from) return now;
+    if (Date.now() > deadline) throw new Error(`${TICKER[sent.asset]} confirmations never rose`);
   }
-  for (const leg of legs) {
-    if (lane.ledger.completed(leg.id)) continue;
-    const need = toAtomic(asset, leg.amount) + fee;
-    const balance = have.get(leg.from)!;
-    if (balance < need) {
-      return `${leg.from} holds ${fromAtomic(asset, balance)} ${TICKER[asset]} but leg ${leg.id} needs ${fromAtomic(asset, need)} with the fee cap; fund the demo wallet`;
+}
+
+/**
+ * The history sheet for one confirmed on-chain payment, on both sides, in the
+ * worker (and browser profiles) that made it.
+ *
+ * Sender: Sent, the amount, a fee under the cap, a time, the txid, the full
+ * recipient from the send record, the explorer action (answered locally),
+ * and on XMR/WOW the "Show transaction key" action, never pressed.
+ * Confirmations: Monero and Wownero show a count, which must have risen
+ * since the broadcast, and on the first leg of each the sheet is held open
+ * while one more block lands. Bitcoin and Litecoin history shows the block a
+ * payment was mined in, not a count (the wallet reads no tip height for UTXO
+ * chains), so the check there is honest about what it proves: the payment
+ * moved from the mempool into a block.
+ * Recipient: Received, the amount, the txid, a time, a status at the
+ * confirmations the spec waited for, no recipient line and no key action.
+ */
+export async function historyDetail(lane: LiveLane, sent: SentLeg, opts: { watchRise: boolean }): Promise<void> {
+  const asset = sent.asset;
+  const ticker = TICKER[asset];
+  const sender = lane.wallets[sent.from];
+  const recipient = lane.wallets[sent.to];
+  const entry = lane.ledger.get(sent.id);
+  const journal = entry?.senderProfile !== undefined && entry.senderProfile === sender.profileId;
+  if (!journal) {
+    lane.progress(`${sent.id}: the send record is not in ${sent.from}'s current profile, so the sheet must show no recipient and no key`);
+  }
+
+  await openCoin(lane, sender, asset);
+  const d = await openDetail(sender, { txid: sent.txid }, 'Open the send');
+  expect(d, `${sent.from} lists the ${ticker} send by its txid`).not.toBeNull();
+  expectSenderDetail(asset, d!, { amountAtomic: sent.amountAtomic, txid: sent.txid, destination: sent.destination, journal });
+  if (isCryptonote(asset)) {
+    if (!journal) {
+      expect(d!.hasRevealKey, 'no send record, so no transaction key to offer').toBe(false);
+    } else if (isSubaddress(asset, sent.destination)) {
+      expect(d!.hasRevealKey, 'a subaddress payment keeps no transaction key').toBe(false);
+      expect(d!.note, 'the sheet says why there is no key').toMatch(/No transaction key on file/);
+      lane.progress(`${sent.id}: paid to a subaddress, so the sheet offers no transaction key, as it documents`);
+    } else {
+      expectMaskedTxKey(asset, d!);
     }
-    have.set(leg.from, balance - need);
-    have.set(leg.to, have.get(leg.to)! + toAtomic(asset, leg.amount));
   }
-  return null;
+  // What the sender's sheet said right after the broadcast; absent when an
+  // earlier attempt broadcast the leg and stopped before reading it.
+  const firstStatus = entry?.firstStatus ?? sent.firstStatus;
+  const first = firstStatus === undefined ? undefined : confirmationsOf(firstStatus);
+  const now = confirmationsOf(d!.fields.Status);
+  if (first === undefined) lane.progress(`${sent.id}: no reading right after the broadcast in this run, so the rise is checked from here on`);
+  if (isCryptonote(asset)) {
+    expect(now, `${ticker}: the sender sees a confirmation count`).not.toBeNull();
+    expect(now! >= RECEIVE_CONFIRMATIONS[asset], `${ticker}: the sender counts at least the confirmations the recipient waited for`).toBe(true);
+    if (typeof first === 'number') expect(now! > first, `${ticker}: confirmations rose since the broadcast`).toBe(true);
+  } else {
+    expect(d!.fields.Status, `${ticker}: the send is in a block (UTXO history names the block, not a count)`).toMatch(/^Block #\d+$/);
+    if (first === 0) lane.progress(`${sent.id}: ${sent.from} saw the send unconfirmed, now mined (${d!.fields.Status})`);
+    else if (first === null) lane.progress(`${sent.id}: ${sent.from} first saw the send already mined; the mempool state was not observed on the sender`);
+  }
+  await sender.footage.result('Send detail: amount, fee, time, confirmations, txid, recipient');
+  await checkExplorer(sender, sent.txid);
+  await sender.footage.result('Back on the send detail');
+  await closeDetail(sender);
+  if (opts.watchRise && isCryptonote(asset) && now !== null) {
+    const later = await watchOneMoreBlock(lane, sent, now);
+    lane.progress(`${sent.id}: confirmations rose from ${now} to ${later} on camera`);
+  }
+
+  await openCoin(lane, recipient, asset);
+  const r = await openDetail(recipient, { txid: sent.txid }, 'Open the receive');
+  expect(r, `${sent.to} lists the ${ticker} receive`).not.toBeNull();
+  expectRecipientDetail(asset, r!, { amountAtomic: sent.amountAtomic, txid: sent.txid });
+  expect(r!.fields.Time, 'the receive has a time').toBeTruthy();
+  if (isCryptonote(asset)) {
+    expect(confirmationsOf(r!.fields.Status) ?? 0, 'the receive shows its confirmations').toBeGreaterThanOrEqual(RECEIVE_CONFIRMATIONS[asset]);
+  } else {
+    expect(r!.fields.Status, 'the receive is in a block').toMatch(/^Block #\d+$/);
+  }
+  await recipient.footage.result('Receive detail: amount, time, confirmations, txid');
+  if (r!.hasExplorer) {
+    await checkExplorer(recipient, sent.txid);
+    await recipient.footage.result('Back on the receive detail');
+  }
+  await closeDetail(recipient);
+  lane.progress(`${sent.id}: history detail checked on both sides`);
 }
 
 /** Outgoing chain rows on the open coin screen, by their truncated txid. */
@@ -894,6 +1205,7 @@ export async function refusedDestination(
   const { attempted } = await w.broadcasts.blocking(async () => {
     await openSendFromCoin(w);
     await w.footage.fill(page.getByTestId('send-address-input'), bad, 'A destination the wallet must refuse');
+    await w.footage.settled('Destination entered');
     await w.footage.tap(page.getByTestId('send-address-continue'), 'Continue');
     if (kind === 'malformed') {
       await expect(page.locator('#root')).toContainText(new RegExp(`Not a valid ${TICKER[asset]} address`), { timeout: 15_000 });
@@ -905,6 +1217,7 @@ export async function refusedDestination(
       await w.footage.settled('Send: compose');
       const small = asset === 'xmr' ? '0.0001' : '0.01';
       await w.footage.fill(page.getByTestId('send-amount-input'), small, 'A small amount');
+      await w.footage.settled('Amount entered');
       await w.footage.tap(page.getByTestId('send-compose-continue'), 'Continue to review');
       await expect(page.locator('#root')).not.toContainText('Estimating…', { timeout: 30_000 });
       await w.footage.settled('Review');
@@ -991,11 +1304,12 @@ async function actOnInbox(
     }
     if (Date.now() > deadline) throw new Error(`${w.name} never received the Grin ${section === 'To sign' ? 'payment' : 'reply'} in the Inbox`);
     await w.footage.tap(w.page.getByRole('button', { name: 'Refresh', exact: true }), 'Refresh the Inbox');
-    await w.footage.hold(30_000, 'Waiting for the Grin exchange');
+    await w.footage.settled('Inbox refreshed');
+    await w.footage.pollWait(30_000, 'Waiting for the Grin exchange');
   }
 }
 
-/** Receiver side of an Inbox-delivered slate: the wallet signs and replies on its own. */
+/** Receiver side of a delivered slate: the wallet signs and replies on its own; each screen is held. */
 async function signIncoming(w: LiveWallet, amountAtomic: bigint): Promise<void> {
   const page = w.page;
   await expect(page.locator('#root')).toContainText('Reply slatepack ready', { timeout: 120_000 });
@@ -1005,6 +1319,7 @@ async function signIncoming(w: LiveWallet, amountAtomic: bigint): Promise<void> 
   await expect(page.locator('#root')).toContainText(`amount: ${amountAtomic} nanogrin`);
   await w.footage.result('Signed and replied');
   await w.footage.tap(page.getByRole('button', { name: 'Done', exact: true }), 'Done');
+  await w.footage.settled('Back from the signed reply');
 }
 
 export interface GrinLeg {
@@ -1013,7 +1328,7 @@ export interface GrinLeg {
   to: WalletName;
   amount: string;
   /** npub: the Nostr gift wrap; address: the recipient's grin1 address; pasted: slatepack by hand. */
-  via: 'npub' | 'address' | 'pasted';
+  via: GrinVia;
 }
 
 export interface GrinSent {
@@ -1025,11 +1340,8 @@ export interface GrinSent {
   feeAtomic?: bigint;
   resumed: boolean;
   senderBefore?: bigint;
-  recipientConfirmedBefore?: bigint;
+  recipientBefore?: CoinHeader;
 }
-
-/** Grin targets one block a minute and shows no per-payment confirmation count. */
-export const GRIN_BLOCK_MS = 60_000;
 
 /**
  * Compose a Grin send and build its slate. The ledger reservation is made
@@ -1044,11 +1356,12 @@ async function grinCompose(
   destination: string,
 ): Promise<bigint | undefined> {
   const page = sender.page;
-  const header = await waitSpendable(lane, sender, 'grin', amountAtomic + SPEND_CAPS.grin.feeCap);
+  const header = await waitSpendable(lane, sender, 'grin', amountAtomic + FEE_RESERVE.grin);
   sender.footage.mark('GRIN send');
   await openSendFromCoin(sender);
   if (leg.via === 'pasted') {
     await sender.footage.tap(page.getByRole('button', { name: 'Slatepack only', exact: true }), 'Slatepack only');
+    await sender.footage.settled('Slatepack only, no recipient');
     await sender.footage.tap(page.getByTestId('send-address-continue'), 'Continue');
     await expect(page.getByTestId('send-amount-input')).toBeVisible({ timeout: 30_000 });
     await sender.footage.settled('Send: compose');
@@ -1080,7 +1393,12 @@ async function grinCompose(
   return feeAtomic;
 }
 
-/** Finalize from the Exchange step (S2 already in the box) and hold the receipt. */
+/**
+ * Finalize from the Exchange step (S2 already in the box). The kernel is
+ * written to the ledger the moment the receipt shows it, before any hold, so
+ * a failure while the receipt is on screen can never leave a broadcast leg
+ * marked only "reserved". The receipt is left on screen for the caller.
+ */
 async function grinFinalize(lane: LiveLane, sender: LiveWallet, leg: GrinLeg): Promise<string> {
   const page = sender.page;
   const finalize = page.getByRole('button', { name: 'Finalize & broadcast', exact: true });
@@ -1090,19 +1408,39 @@ async function grinFinalize(lane: LiveLane, sender: LiveWallet, leg: GrinLeg): P
   const done = page.getByTestId('send-done-txid');
   await expect(done).toBeVisible({ timeout: 180_000 });
   expect(sender.broadcasts.since(mark), 'finalize reached the broadcast endpoint').toBeGreaterThanOrEqual(1);
-  await expect(page.locator('#root')).toContainText('Broadcast');
-  const kernel = await holdDone(sender, 'Kernel ID');
+  const kernel = ((await done.textContent()) ?? '').trim();
   expect(kernel, 'the receipt shows a kernel').toMatch(KERNEL);
-  lane.ledger.broadcast(leg.id, { kernel });
+  lane.ledger.broadcast(leg.id, {
+    kernel,
+    senderProfile: sender.profileId,
+    recipientProfile: lane.wallets[leg.to].profileId,
+  });
   lane.progress(`${leg.id}: finalized, kernel ${kernel}`);
+  await expect(page.locator('#root')).toContainText('Broadcast');
   return kernel;
 }
 
+/** The sender, right after finalizing: hold the receipt, then its history lists the send by its kernel. */
+async function grinSenderAfterFinalize(lane: LiveLane, sent: GrinSent): Promise<void> {
+  const sender = lane.wallets[sent.from];
+  await holdDone(sender, 'Kernel ID');
+  await openCoin(lane, sender, 'grin');
+  const d = await openDetail(sender, { kernel: sent.kernel });
+  expect(d, 'the sender sees the Grin send').not.toBeNull();
+  expectSenderDetail('grin', d!, { amountAtomic: sent.amountAtomic, journal: true });
+  expect(d!.fields.Kernel, 'the history names the kernel').toBe(sent.kernel);
+  expect(d!.fields['Slate ID'], 'the history names the slate').toBeTruthy();
+  await sender.footage.result('Grin send in the history sheet');
+  await closeDetail(sender);
+}
+
 /**
- * A Grin payment end to end. `npub` and `address` legs travel through the
- * recipient's Inbox (To sign) and back to the sender's (To finalize). The
- * `pasted` leg hands the slatepack across by hand: the harness copies it from
- * the sender's screen into the recipient's Paste screen, and the reply back.
+ * A Grin payment up to its broadcast. `npub` and `address` legs travel
+ * through the recipient's Inbox (To sign) and back to the sender's (To
+ * finalize). The `pasted` leg hands the slatepack across by hand: the harness
+ * copies it from the sender's screen into the recipient's Paste screen, and
+ * the reply back. Then the sender's history lists the kernel while the
+ * recipient's total grows by the amount.
  */
 export async function grinLeg(lane: LiveLane, leg: GrinLeg): Promise<GrinSent> {
   const sender = lane.wallets[leg.from];
@@ -1110,10 +1448,18 @@ export async function grinLeg(lane: LiveLane, leg: GrinLeg): Promise<GrinSent> {
   const amountAtomic = toAtomic('grin', leg.amount);
   const prior = lane.ledger.completed(leg.id);
   if (prior?.kernel) {
-    lane.progress(`${leg.id}: resuming, already finalized`);
-    return { id: leg.id, from: leg.from, to: leg.to, amountAtomic, kernel: prior.kernel, resumed: true };
+    lane.progress(`${leg.id}: resuming, already finalized; this attempt checks only what follows the broadcast`);
+    return {
+      id: leg.id,
+      from: leg.from,
+      to: leg.to,
+      amountAtomic,
+      kernel: prior.kernel,
+      ...(prior.feeAtomic ? { feeAtomic: BigInt(prior.feeAtomic) } : {}),
+      resumed: true,
+    };
   }
-  const recipientConfirmedBefore = (await openCoin(lane, recipient, 'grin')).confirmed;
+  const recipientBefore = await openCoin(lane, recipient, 'grin');
   const senderBefore = headerTotal(await openCoin(lane, sender, 'grin'));
   let toSignBefore = new Set<string>();
   let toFinalizeBefore = new Set<string>();
@@ -1139,43 +1485,26 @@ export async function grinLeg(lane: LiveLane, leg: GrinLeg): Promise<GrinSent> {
     await recipient.footage.tap(recipient.page.getByTestId('inbox-paste-slatepack-btn'), 'Paste a slatepack');
     await recipient.footage.settled('Paste screen');
     await recipient.footage.fill(recipient.page.getByTestId('paste-dispatch-input'), s1, 'The pasted slatepack');
+    await recipient.footage.settled('Slatepack pasted');
     await recipient.footage.tap(recipient.page.getByTestId('paste-dispatch-submit'), 'Continue');
     await expect(recipient.page.locator('#root')).toContainText('Reply slatepack ready', { timeout: 120_000 });
     const s2 = ((await recipient.page.locator('button').filter({ hasText: /^BEGINSLATEPACK/ }).first().textContent()) ?? '').trim();
     expect(s2.startsWith('BEGINSLATEPACK') && s2 !== s1, 'the recipient produced a reply').toBe(true);
     await signIncoming(recipient, amountAtomic);
     await sender.footage.fill(sender.page.locator('textarea[placeholder^="BEGINSLATEPACK"]'), s2, 'The pasted reply');
+    await sender.footage.settled('Reply pasted, ready to finalize');
   } else {
     await actOnInbox(lane, recipient, 'To sign', leg.amount, toSignBefore);
     await expect(recipient.page.locator('#root')).toContainText('Reply posted to the Smirk relay', { timeout: 120_000 });
     await signIncoming(recipient, amountAtomic);
     await actOnInbox(lane, sender, 'To finalize', leg.amount, toFinalizeBefore);
     await expect(sender.page.locator('#root')).toContainText('Share slatepack', { timeout: 60_000 });
+    await sender.footage.settled('Reply received, ready to finalize');
   }
   const kernel = await grinFinalize(lane, sender, leg);
   if (feeAtomic !== undefined) lane.ledger.annotate(leg.id, { feeAtomic: feeAtomic.toString() });
 
-  // Sender's history: the finalized send by its kernel.
-  await openCoin(lane, sender, 'grin');
-  const d = await openDetail(sender, { kernel });
-  expect(d, 'the sender sees the Grin send').not.toBeNull();
-  expectSenderDetail('grin', d!, { amountAtomic });
-  expect(d!.fields.Kernel, 'the history names the kernel').toBe(kernel);
-  expect(d!.fields['Slate ID'], 'the history names the slate').toBeTruthy();
-  await sender.footage.result('Grin send in the history sheet');
-  await closeDetail(sender);
-
-  // Recipient: the incoming payment, pending until the kernel confirms.
-  const r = await openCoin(lane, recipient, 'grin');
-  expect(r.confirmed + r.pending + r.locked >= recipientConfirmedBefore + amountAtomic - headerTolerance('grin'), 'the recipient shows the incoming Grin').toBe(true);
-  const rd = await openDetail(recipient, { grinIncomingAmount: fromAtomic('grin', amountAtomic, 8) }, 'Open the incoming Grin');
-  expect(rd, 'the recipient sees the incoming Grin').not.toBeNull();
-  expect(rd!.fields.Direction).toBe('Received');
-  expect(rd!.fields.Amount).toBe(`${fromAtomic('grin', amountAtomic, 12)} GRIN`);
-  await recipient.footage.result('Incoming Grin, pending');
-  await closeDetail(recipient);
-
-  return {
+  const sent: GrinSent = {
     id: leg.id,
     from: leg.from,
     to: leg.to,
@@ -1184,40 +1513,166 @@ export async function grinLeg(lane: LiveLane, leg: GrinLeg): Promise<GrinSent> {
     ...(feeAtomic !== undefined ? { feeAtomic } : {}),
     resumed: false,
     senderBefore,
-    recipientConfirmedBefore,
+    recipientBefore,
   };
+  // Both wallets at once, as for the on-chain coins: the sender holds its
+  // receipt and reads its history while the recipient watches the payment
+  // arrive, so a pending state has the best chance of being seen.
+  const [own, arrival] = await Promise.allSettled([grinSenderAfterFinalize(lane, sent), grinIncoming(lane, sent)]);
+  if (own.status === 'rejected') throw own.reason;
+  if (arrival.status === 'rejected') throw arrival.reason;
+  return sent;
 }
 
 /**
- * Wait until the payment is spendable on the recipient's side (mined, so the
- * scan reports it as confirmed), then ten more Grin blocks, then check the
- * sender paid the amount plus a fee under the cap. Grin shows no per-payment
- * confirmation count, so the ten blocks are ten block intervals.
+ * The recipient's Grin total grows by exactly the amount (pending until the
+ * kernel is mined, then spendable), and its history lists the incoming
+ * payment. A total that already held other pending coins cannot pass this:
+ * the comparison is with the recipient's own total from before the leg.
+ */
+async function grinIncoming(lane: LiveLane, sent: GrinSent): Promise<void> {
+  const recipient = lane.wallets[sent.to];
+  if (!sent.recipientBefore) {
+    lane.progress(`${sent.id}: resumed leg: no recipient balance from before it in this attempt, so its arrival is not measured`);
+    return;
+  }
+  const tol = headerTolerance('grin');
+  const before = sent.recipientBefore;
+  const deadline = Date.now() + 30 * 60_000;
+  for (;;) {
+    const r = await openCoin(lane, recipient, 'grin');
+    const gained = headerTotal(r) - headerTotal(before);
+    if (gained >= sent.amountAtomic - tol && gained <= sent.amountAtomic + tol) {
+      const waiting = r.pending + r.locked - (before.pending + before.locked) >= sent.amountAtomic - tol;
+      lane.progress(`${sent.id}: ${sent.to}'s Grin total grew by the amount, ${waiting ? 'still pending' : 'already spendable'}`);
+      await recipient.footage.result(waiting ? 'Incoming Grin, pending' : 'Incoming Grin, spendable');
+      break;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`${sent.id}: ${sent.to}'s Grin total never grew by exactly the payment (last change ${gained > sent.amountAtomic ? 'over' : 'under'} it)`);
+    }
+    await recipient.footage.pollWait(60_000, 'Waiting for the Grin payment to show');
+  }
+  const rd = await openDetail(recipient, { grinIncomingAmount: fromAtomic('grin', sent.amountAtomic, 8) }, 'Open the incoming Grin');
+  expect(rd, 'the recipient lists the incoming Grin').not.toBeNull();
+  expect(rd!.fields.Direction).toBe('Received');
+  expect(rd!.fields.Amount).toBe(`${fromAtomic('grin', sent.amountAtomic, 12)} GRIN`);
+  await recipient.footage.result('Incoming Grin in the history sheet');
+  await closeDetail(recipient);
+}
+
+/** The freshest Grin tip the wallets reported, or a refusal when none is recent. */
+function freshGrinTip(lane: LiveLane, what: string): number {
+  const tip = lane.grinTip.latest();
+  if (!tip) throw new Error(`no Grin tip height observed ${what}: the wallets' height requests never answered`);
+  if (Date.now() - tip.at > GRIN_TIP_FRESH_MS) {
+    throw new Error(`the newest Grin tip height is ${Math.round((Date.now() - tip.at) / 60_000)} min old ${what}; refusing a stale tip`);
+  }
+  return tip.height;
+}
+
+/**
+ * "After 10 confirmations", measured on the chain: wait until the payment is
+ * spendable on the recipient's side (the scan reports it mined and mature),
+ * take the Grin tip at that moment as the height it became spendable, then
+ * wait until the tip is ten blocks past it. The tip comes from the wallets'
+ * own height requests (lane.grinTip); a stalled chain or a silent endpoint
+ * fails the wait rather than passing it on a timer. Then the sender paid
+ * the amount plus a capped fee.
  */
 export async function grinSettled(lane: LiveLane, sent: GrinSent): Promise<void> {
   const recipient = lane.wallets[sent.to];
   const sender = lane.wallets[sent.from];
   const tol = headerTolerance('grin');
-  if (sent.recipientConfirmedBefore !== undefined) {
-    const deadline = Date.now() + CHAIN_WAIT_MS.grin;
+  const deadline = Date.now() + CHAIN_WAIT_MS.grin;
+  let spendableAt: number;
+  if (sent.recipientBefore) {
+    const confirmedBefore = sent.recipientBefore.confirmed;
     for (;;) {
       const h = await openCoin(lane, recipient, 'grin');
-      if (h.confirmed - sent.recipientConfirmedBefore >= sent.amountAtomic - tol) break;
+      if (h.confirmed - confirmedBefore >= sent.amountAtomic - tol) break;
       if (Date.now() > deadline) throw new Error(`${sent.id}: the Grin payment never became spendable for ${sent.to}`);
-      await recipient.footage.hold(POLL_MS, 'Waiting for the kernel to be mined');
+      await recipient.footage.pollWait(POLL_MS, 'Waiting for the kernel to be mined');
     }
-    await recipient.footage.result('Grin received and confirmed');
-    lane.progress(`${sent.id}: ${sent.to} can spend the payment; waiting ten Grin blocks`);
+    spendableAt = freshGrinTip(lane, 'when the payment became spendable');
+    await recipient.footage.result('Grin received and spendable');
+  } else {
+    // Resumed: the leg was finalized by an earlier attempt, so it is at least
+    // as deep as the tip now; ten more blocks from here is conservative.
+    spendableAt = freshGrinTip(lane, 'for the resumed payment');
   }
-  await recipient.footage.hold(10 * GRIN_BLOCK_MS, 'Ten Grin blocks');
+  const target = spendableAt + GRIN_SETTLE_BLOCKS;
+  lane.progress(`${sent.id}: spendable for ${sent.to} at Grin height ${spendableAt}; waiting for height ${target}`);
+  for (;;) {
+    await recipient.footage.pollWait(POLL_MS, 'Waiting for ten more Grin blocks');
+    // Looking at the coin keeps the wallet refreshing, which is what asks for the tip.
+    await openCoin(lane, recipient, 'grin');
+    const tip = freshGrinTip(lane, 'while waiting for ten blocks');
+    if (tip >= target) {
+      lane.progress(`${sent.id}: Grin tip ${tip}, ${tip - spendableAt} blocks past spendable`);
+      await recipient.footage.result('Ten Grin blocks past spendable');
+      break;
+    }
+    if (Date.now() > deadline) throw new Error(`${sent.id}: the Grin tip reached only ${tip} of ${target} in time`);
+  }
   if (sent.senderBefore !== undefined) {
     const s = headerTotal(await openCoin(lane, sender, 'grin'));
     const spent = sent.senderBefore - s;
     const fee = sent.feeAtomic ?? 0n;
     expect(spent >= sent.amountAtomic + fee - tol && spent <= sent.amountAtomic + SPEND_CAPS.grin.feeCap + tol, 'the sender paid the amount and a capped fee').toBe(true);
     await sender.footage.result('Sender Grin balance after the payment');
+  } else {
+    lane.progress(`${sent.id}: resumed leg: the sender's balance movement is not checked in this attempt`);
   }
   lane.progress(`${sent.id}: settled`);
+}
+
+/**
+ * The Grin history sheets once the payment is ten blocks deep. Grin history
+ * is the wallet's own journal, kept per profile; a side whose current profile
+ * did not take part says so in the progress log instead of failing on a row
+ * it cannot have. The sender's "finalized" is the wallet's own label, set when
+ * it broadcast: the chain evidence is the recipient's spendable balance and
+ * the tip height checked by grinSettled.
+ */
+export async function grinHistoryDetail(lane: LiveLane, sent: GrinSent): Promise<void> {
+  const sender = lane.wallets[sent.from];
+  const recipient = lane.wallets[sent.to];
+  const entry = lane.ledger.get(sent.id);
+  if (entry?.senderProfile === sender.profileId) {
+    await openCoin(lane, sender, 'grin');
+    const d = await openDetail(sender, { kernel: sent.kernel }, 'Open the send');
+    expect(d, `${sent.from} lists the Grin send by its kernel`).not.toBeNull();
+    expectSenderDetail('grin', d!, { amountAtomic: sent.amountAtomic, journal: true });
+    expect(d!.fields.Kernel, 'the sheet names the kernel').toBe(sent.kernel);
+    expect(d!.fields['Slate ID'], 'the sheet names the slate').toBeTruthy();
+    expect(d!.fields['Network fee'], 'the sheet shows the fee').toBeTruthy();
+    expect(d!.fields.Status, 'the wallet marks the send finalized').toBe('finalized');
+    await sender.footage.result('Grin send detail: amount, fee, time, kernel, slate');
+    await checkExplorer(sender, sent.kernel);
+    await sender.footage.result('Back on the send detail');
+    await closeDetail(sender);
+  } else {
+    lane.progress(`${sent.id}: ${sent.from}'s current profile did not send it, so its Grin history row cannot exist here`);
+  }
+  if (entry?.recipientProfile === recipient.profileId) {
+    await openCoin(lane, recipient, 'grin');
+    const r = await openDetail(recipient, { grinIncomingAmount: fromAtomic('grin', sent.amountAtomic, 8) }, 'Open the receive');
+    expect(r, `${sent.to} lists the Grin receive`).not.toBeNull();
+    expect(r!.fields.Direction, 'recipient sees Received').toBe('Received');
+    expect(r!.fields.Amount, 'recipient sees the amount').toBe(`${fromAtomic('grin', sent.amountAtomic, 12)} GRIN`);
+    expect(r!.fields.Time, 'the receive has a time').toBeTruthy();
+    expect(['pending', 'finalized'], 'the receive has a status').toContain(r!.fields.Status ?? '');
+    await recipient.footage.result('Grin receive detail: amount, time, status');
+    if (r!.hasExplorer && r!.fields.Kernel) {
+      await checkExplorer(recipient, r!.fields.Kernel);
+      await recipient.footage.result('Back on the receive detail');
+    }
+    await closeDetail(recipient);
+  } else {
+    lane.progress(`${sent.id}: ${sent.to}'s current profile did not receive it, so its Grin history row cannot exist here`);
+  }
+  lane.progress(`${sent.id}: Grin history detail checked`);
 }
 
 /** A GoblinPay pay-link pre-fills Send; checked at Compose, never built or broadcast. */
@@ -1229,6 +1684,7 @@ export async function paylinkPrefill(lane: LiveLane, w: LiveWallet, payee: Walle
     await w.footage.tap(page.getByTestId('inbox-paste-slatepack-btn'), 'Paste a pay-link');
     await w.footage.settled('Paste screen');
     await w.footage.fill(page.getByTestId('paste-dispatch-input'), `goblin:${npub}?amount=${amount}&memo=e2e`, 'A GoblinPay pay-link');
+    await w.footage.settled('Pay-link pasted');
     await w.footage.tap(page.getByTestId('paste-dispatch-submit'), 'Continue');
     const addr = page.getByTestId('send-address-input');
     await expect(addr).toBeVisible({ timeout: 15_000 });
@@ -1248,68 +1704,104 @@ export async function paylinkPrefill(lane: LiveLane, w: LiveWallet, payee: Walle
 }
 
 // ---------------------------------------------------------------------------
-// Dapp payment approval
+// Dapp approvals
 // ---------------------------------------------------------------------------
 
 const SHOP_ORIGIN = 'http://smirk-dummy-shop.test';
 
+/** Answer the approval window's lock screen, if it shows one, and wait for its prompt. */
+async function readyApproval(w: LiveWallet, approval: Page, prompt: string): Promise<void> {
+  await Promise.race([
+    approval.getByTestId('lockscreen-password-input').waitFor({ timeout: 30_000 }).catch(() => {}),
+    approval.getByRole('button', { name: 'Deny' }).waitFor({ timeout: 30_000 }).catch(() => {}),
+  ]);
+  await w.answerPasswordPrompt(approval);
+  await expect(approval.locator('body')).toContainText(prompt, { timeout: 30_000 });
+}
+
 /**
- * The approval popup shows a page's payment request in human units, and Deny
- * reaches the page as a refusal. Broadcasts are blocked throughout.
+ * A shop page, on camera from start to finish: it connects through the
+ * wallet's connect approval (Approve), asks for a payment that the approval
+ * popup must show in human units (Deny, so the shop hears a refusal), then
+ * disconnects. Broadcasts are blocked throughout. The shop first disconnects
+ * so the connect prompt always appears, whatever an earlier attempt left.
  */
-export async function dappPaymentApproval(lane: LiveLane, w: LiveWallet, to: WalletName): Promise<void> {
+export async function dappApprovals(lane: LiveLane, w: LiveWallet, to: WalletName): Promise<void> {
   const address = lane.book.get(to, 'wow');
-  let [sw] = w.context.serviceWorkers();
-  if (!sw) sw = await w.context.waitForEvent('serviceworker');
-  await sw.evaluate(
-    async ({ key, perm }) => {
-      const g = globalThis as unknown as { chrome: { storage: { local: { set(v: Record<string, unknown>): Promise<void> } } } };
-      await g.chrome.storage.local.set({ [key]: perm });
-    },
-    { key: `smirk:dapp:origin:${SHOP_ORIGIN}`, perm: { origin: SHOP_ORIGIN, assets: ['wow'] } },
-  );
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Demo shop</title></head>
 <body style="font-family:sans-serif;padding:24px;max-width:420px;background:#fff">
 <h1 style="font-size:20px">Demo shop checkout</h1>
-<button id="pay" style="padding:12px 18px;font-size:16px">Pay 0.5 WOW</button><pre id="out"></pre>
-<script>document.getElementById('pay').addEventListener('click', async () => {
+<p><button id="disconnect" style="padding:10px 14px;font-size:15px">Disconnect wallet</button></p>
+<p><button id="connect" style="padding:10px 14px;font-size:15px">Connect wallet</button></p>
+<p><button id="pay" style="padding:12px 18px;font-size:16px">Pay 0.5 WOW</button></p>
+<pre id="out"></pre>
+<script>
+const out = document.getElementById('out');
+document.getElementById('disconnect').addEventListener('click', async () => {
+  try { await window.smirk.disconnect(); out.textContent = (await window.smirk.isConnected()) ? 'still connected' : 'disconnected'; }
+  catch (e) { out.textContent = 'err:' + (e && e.message); }
+});
+document.getElementById('connect').addEventListener('click', async () => {
+  try { await window.smirk.connect(['wow']); out.textContent = (await window.smirk.isConnected()) ? 'connected' : 'not connected'; }
+  catch (e) { out.textContent = 'err:' + (e && e.message); }
+});
+document.getElementById('pay').addEventListener('click', async () => {
   try { const r = await window.smirk.requestPayment({ asset: 'wow', amount: '0.5', address: ${JSON.stringify(address)} });
-    document.getElementById('out').textContent = 'ok:' + JSON.stringify(r); }
-  catch (e) { document.getElementById('out').textContent = 'err:' + (e && e.message); }
-});</script></body></html>`;
+    out.textContent = 'paid'; }
+  catch (e) { out.textContent = 'err:' + (e && e.message); }
+});
+</script></body></html>`;
   const shop = await w.context.newPage();
   const shopFootage = w.footageFor(shop, 'shop');
+  const out = shop.locator('#out');
+  const nextApproval = () =>
+    w.context.waitForEvent('page', { predicate: (p) => p.url().includes('#approval'), timeout: 60_000 });
   const { attempted } = await w.broadcasts.blocking(async () => {
     await shop.route(`${SHOP_ORIGIN}/**`, (route) => route.fulfill({ contentType: 'text/html', body: html }));
     await shop.goto(`${SHOP_ORIGIN}/`);
     await shop.waitForFunction(
-      () => typeof (window as unknown as { smirk?: { requestPayment?: unknown } }).smirk?.requestPayment === 'function',
+      () => typeof (window as unknown as { smirk?: { connect?: unknown } }).smirk?.connect === 'function',
       null,
       { timeout: 30_000 },
     );
     await shopFootage.settled('Shop checkout');
-    const approvalOpened = w.context.waitForEvent('page', { predicate: (p) => p.url().includes('#approval'), timeout: 60_000 });
-    await shopFootage.tap(shop.getByRole('button', { name: 'Pay 0.5 WOW' }), 'Pay on the shop');
-    const approval = await approvalOpened;
-    const approvalFootage = w.footageFor(approval, 'approval');
-    await Promise.race([
-      approval.getByTestId('lockscreen-password-input').waitFor({ timeout: 30_000 }).catch(() => {}),
-      approval.getByRole('button', { name: 'Deny' }).waitFor({ timeout: 30_000 }).catch(() => {}),
-    ]);
-    await w.answerPasswordPrompt(approval);
-    const body = approval.locator('body');
-    await expect(body).toContainText('Send WOW?', { timeout: 30_000 });
+
+    await shopFootage.tap(shop.locator('#disconnect'), 'Disconnect first, so Connect must ask');
+    await expect(out).toHaveText('disconnected', { timeout: 30_000 });
+    await shopFootage.result('Shop not connected');
+
+    const connectOpened = nextApproval();
+    await shopFootage.tap(shop.locator('#connect'), 'Connect the wallet');
+    const connect = await connectOpened;
+    const connectFootage = w.footageFor(connect, 'approval');
+    await readyApproval(w, connect, 'Connect this site?');
+    await expect(connect.locator('body')).toContainText(/wow/i);
+    await connectFootage.result('Connect request for WOW');
+    await connectFootage.tap(connect.getByRole('button', { name: 'Approve' }), 'Approve the connection');
+    await expect(out).toHaveText('connected', { timeout: 30_000 });
+    await shopFootage.result('The shop is connected');
+
+    const payOpened = nextApproval();
+    await shopFootage.tap(shop.locator('#pay'), 'Pay on the shop');
+    const pay = await payOpened;
+    const payFootage = w.footageFor(pay, 'approval');
+    await readyApproval(w, pay, 'Send WOW?');
+    const body = pay.locator('body');
     await expect(body).toContainText('0.5 WOW');
     await expect(body).toContainText(address);
     await expect(body).not.toContainText('atomic units');
     await expect(body).not.toContainText('Cannot convert');
-    await approvalFootage.result('Payment approval in human units');
-    await approvalFootage.tap(approval.getByRole('button', { name: 'Deny' }), 'Deny');
-    await expect(shop.locator('#out')).toHaveText(/^err:/, { timeout: 30_000 });
+    await payFootage.result('Payment approval in human units');
+    await payFootage.tap(pay.getByRole('button', { name: 'Deny' }), 'Deny');
+    await expect(out).toHaveText(/^err:/, { timeout: 30_000 });
     await shopFootage.result('The shop hears the payment was denied');
+
+    await shopFootage.tap(shop.locator('#disconnect'), 'Disconnect the wallet');
+    await expect(out).toHaveText('disconnected', { timeout: 30_000 });
+    await shopFootage.result('Shop disconnected again');
   });
-  expect(attempted, 'the approval check broadcast nothing').toBe(0);
+  expect(attempted, 'the approval checks broadcast nothing').toBe(0);
   await shop.close();
   await w.page.bringToFront();
-  lane.progress(`${w.name}: dapp payment approval showed 0.5 WOW to ${to}; denied; nothing broadcast`);
+  lane.progress(`${w.name}: dapp connect approved, payment of 0.5 WOW to ${to} shown in human units and denied, disconnected; nothing broadcast`);
 }

@@ -14,7 +14,7 @@
  * entry is a deliberate, reviewable decision, not a default.
  */
 
-import type { Reporter, TestCase, TestResult, FullResult } from '@playwright/test/reporter';
+import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult } from '@playwright/test/reporter';
 
 /**
  * Specs allowed to skip, and why. Keyed by a substring of the test file path.
@@ -65,12 +65,24 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
  * where the whole suite opts out (bad env, missing secrets) and still exits 0.
  * Deliberately not the full count, so adding a conditional spec is not a
  * tripwire, but high enough that a broken environment cannot slip through.
+ *
+ * `E2E_MIN_EXECUTED=selected` sets the floor to every test the invocation
+ * selected (at least one), for a lane where each test must run and a
+ * `--grep` subset is a legitimate run.
  */
-const MIN_EXECUTED = Number(process.env.E2E_MIN_EXECUTED ?? 21);
+function minExecuted(selected: number): number {
+  if (process.env.E2E_MIN_EXECUTED === 'selected') return Math.max(1, selected);
+  return Number(process.env.E2E_MIN_EXECUTED ?? 21);
+}
 
 export default class SkipGuardReporter implements Reporter {
   private skipped: { title: string; file: string }[] = [];
   private executed = 0;
+  private selected = 0;
+
+  onBegin(_config: FullConfig, suite: Suite): void {
+    this.selected = suite.allTests().length;
+  }
 
   onTestEnd(test: TestCase, result: TestResult): void {
     if (result.status === 'skipped') {
@@ -97,9 +109,10 @@ export default class SkipGuardReporter implements Reporter {
       );
     }
 
-    if (this.executed < MIN_EXECUTED) {
+    const floor = minExecuted(this.selected);
+    if (this.executed < floor) {
       problems.push(
-        `only ${this.executed} test(s) actually ran, expected at least ${MIN_EXECUTED}.\n` +
+        `only ${this.executed} test(s) actually ran, expected at least ${floor}.\n` +
           `  The suite opted out of most of itself, which usually means the\n` +
           `  environment is not set up rather than that the code is healthy.`,
       );

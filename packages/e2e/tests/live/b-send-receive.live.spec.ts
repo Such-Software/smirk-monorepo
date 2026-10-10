@@ -1,25 +1,34 @@
 /**
- * LIVE: sends and receives on all five coins among the three demo wallets.
+ * LIVE: sends, receives and their history on all five coins among the three
+ * demo wallets.
  *
  * THIS SPENDS REAL FUNDS. It runs only in the reviewed live lane
  * (B-send-receive-history.live.config.ts) and only with every gate open:
  * E2E_LIVE=1 registers it, E2E_LIVE_MONEY=1 permits a broadcast, and
  * ALLOW_PROD_WRITES=1 is required against a shared backend. Without
  * E2E_LIVE=1 this file defines no tests at all, so the ordinary suite neither
- * runs nor skips it.
+ * runs nor skips it (the default config also ignores tests/live).
  *
- * Money moves only among alice, bob and carol, in the smallest amounts the
- * scenario names. Destinations come from the wallets' own Receive and Nostr
- * screens (the AddressBook allowlist); every leg is reserved in the spend
- * ledger against per-send and per-run caps before its Send tap; a leg that
- * already broadcast in an earlier attempt of the same run is resumed, never
- * paid twice. Review-only and refusal checks block every broadcast endpoint
- * and assert none was attempted.
+ * Money moves only among alice, bob and carol, in small amounts that
+ * circulate: each coin's three payments form a ring (fixtures/live-send.ts,
+ * RING_AMOUNTS), so a ring costs three network fees. Destinations come from
+ * the wallets' own Receive and Nostr screens (the AddressBook allowlist);
+ * every leg is reserved in the spend ledger against per-send and per-run caps
+ * before its Send tap; a leg that already broadcast in an earlier attempt of
+ * the same run is resumed, never paid twice. Review-only and refusal checks
+ * block every broadcast endpoint and assert none was attempted.
  *
- * Every step asserts an outcome: the receipt's txid, the recipient's pending
- * incoming row and amount, confirmations rising, and both balances moving by
- * the amount (and the fee) once settled. A coin whose demo wallets cannot
- * fund the planned legs skips with the shortfall as its reason.
+ * Order: cheap checks first. Addresses, then the funding check, which reads
+ * every balance and refuses before any money moves if a ring cannot be paid;
+ * then the checks that spend nothing; then the money, coin by coin.
+ *
+ * Every payment is checked end to end in one test, so in one worker and the
+ * browser profiles that made it: the receipt's id, the recipient's pending
+ * incoming row and amount (watched while the sender holds its receipt), the
+ * confirmations, both balances moving by the amount and the fee, and then the
+ * history detail sheet on both sides (recipient, fee, time, confirmations,
+ * txid, the explorer action, and on XMR/WOW the transaction key offered only
+ * masked). Grin waits ten blocks past spendable, measured on the chain.
  *
  * Footage (FOOTAGE=guarded) follows the owner's video policy through the
  * fixture's hooks; see fixtures/B-send-receive-history-footage.ts.
@@ -27,28 +36,39 @@
 
 import { test, expect, LIVE_LANE, type LiveLane } from '../../fixtures/B-send-receive-history-wallets.js';
 import {
-  dappPaymentApproval,
+  RECEIVE_CONFIRMATIONS,
+  dappApprovals,
   ensureDestinations,
-  expectIncoming,
   expectSettledBalances,
-  fundingShortfall,
   goHome,
+  grinHistoryDetail,
   grinLeg,
   grinSettled,
+  historyDetail,
   maxReviewOnly,
   openCoin,
   outgoingRowIds,
   paylinkPrefill,
+  planCoin,
   readNpub,
   readReceiveAddress,
   refusedDestination,
   sendLeg,
   truncId,
   waitConfirmations,
-  type GrinLeg,
-  type SendLeg,
 } from '../../fixtures/B-send-receive-history-flows.js';
-import { LIVE_ASSETS, TICKER, WALLET_NAMES, type LiveAsset, type WalletName } from '../../fixtures/live-send.js';
+import {
+  CHAIN_RING,
+  GRIN_RING,
+  LIVE_ASSETS,
+  TICKER,
+  WALLET_NAMES,
+  type LiveAsset,
+  type PlannedLeg,
+  type WalletName,
+} from '../../fixtures/live-send.js';
+
+const HOUR = 60 * 60_000;
 
 function requireMoney(live: LiveLane): void {
   const gate = live.moneyAllowed();
@@ -58,16 +78,15 @@ function requireMoney(live: LiveLane): void {
   }
 }
 
-async function requireFunding(
-  live: LiveLane,
-  asset: LiveAsset,
-  legs: ReadonlyArray<{ id: string; from: WalletName; to: WalletName; amount: string }>,
-): Promise<void> {
-  const reason = await fundingShortfall(live, asset, legs);
-  if (reason) {
-    live.progress(`skip ${TICKER[asset]}: ${reason}`);
-    test.skip(true, reason);
+/** Plan a coin's ring from the balances now; a ring nobody can fund skips with the shortfall. */
+async function requirePlan(live: LiveLane, asset: LiveAsset): Promise<PlannedLeg[]> {
+  const plan = await planCoin(live, asset, asset === 'grin' ? GRIN_RING : CHAIN_RING);
+  if (!plan.ok) {
+    live.progress(`skip ${TICKER[asset]}: ${plan.reason}`);
+    test.skip(true, plan.reason);
+    return [];
   }
+  return plan.legs;
 }
 
 /** Snapshot every wallet's outgoing rows on a CryptoNote coin, before its legs. */
@@ -103,11 +122,29 @@ async function expectNoDecoySends(live: LiveLane, asset: 'xmr' | 'wow', before: 
   live.progress(`${TICKER[asset]}: no ring decoy appeared as a send on any wallet`);
 }
 
-if (LIVE_LANE) {
-  test.describe('B live: sends and receives on all five coins', () => {
-    test.describe.configure({ timeout: 3 * 60 * 60_000 });
+/** One on-chain coin's ring: each payment sent, received, confirmed, settled and read back in history. */
+async function chainRing(live: LiveLane, asset: Exclude<LiveAsset, 'grin'>, legs: PlannedLeg[]): Promise<void> {
+  for (const [i, leg] of legs.entries()) {
+    const sent = await sendLeg(live, {
+      id: leg.id,
+      asset,
+      from: leg.from,
+      to: leg.to,
+      amount: leg.amount,
+      // BTC: every fee tier and the custom floor, once, on the ring's first payment.
+      feeTour: asset === 'btc' && leg.position === 0,
+    });
+    await waitConfirmations(live, live.wallets[leg.to], asset, { txid: sent.txid }, RECEIVE_CONFIRMATIONS[asset], `${leg.id} receive`);
+    await expectSettledBalances(live, sent);
+    // XMR/WOW: on the first payment, also hold the sheet open while one more block lands.
+    await historyDetail(live, sent, { watchRise: i === 0 });
+  }
+}
 
+if (LIVE_LANE) {
+  test.describe('B live: sends, receives and history on all five coins', () => {
     test('receive screens show each wallet\'s address for every coin, and its npub', async ({ live }) => {
+      test.setTimeout(2 * HOUR);
       // alice and bob through Home's picker, carol from each coin screen,
       // which must open Receive on that coin without the picker.
       for (const asset of LIVE_ASSETS) {
@@ -122,113 +159,44 @@ if (LIVE_LANE) {
       }
     });
 
-    test('BTC: alice pays bob 5,000 sat across every fee tier, bob pays carol 2,500 after a confirmation, carol pays alice 1,500', async ({ live }) => {
-      requireMoney(live);
-      await ensureDestinations(live, 'btc', WALLET_NAMES);
-      const legs: SendLeg[] = [
-        { id: 'btc-1', asset: 'btc', from: 'alice', to: 'bob', amount: '0.00005', feeTour: true },
-        { id: 'btc-2', asset: 'btc', from: 'bob', to: 'carol', amount: '0.000025' },
-        { id: 'btc-3', asset: 'btc', from: 'carol', to: 'alice', amount: '0.000015' },
-      ];
-      await requireFunding(live, 'btc', legs);
-      for (const leg of legs) {
-        const sent = await sendLeg(live, leg);
-        await expectIncoming(live, sent);
-        await waitConfirmations(live, live.wallets[leg.to], 'btc', { txid: sent.txid }, 1, `${leg.id} receive`);
-        await expectSettledBalances(live, sent);
+    test('funding: every coin\'s ring of payments can be paid from the wallets\' balances, before any money moves', async ({ live }) => {
+      test.setTimeout(2 * HOUR);
+      const refused: string[] = [];
+      for (const asset of LIVE_ASSETS) {
+        const plan = await planCoin(live, asset, asset === 'grin' ? GRIN_RING : CHAIN_RING, { show: true });
+        if (!plan.ok) refused.push(plan.reason);
       }
-    });
-
-    test('LTC: alice pays bob 0.02, bob pays carol 0.01, carol pays alice 0.005', async ({ live }) => {
-      requireMoney(live);
-      await ensureDestinations(live, 'ltc', WALLET_NAMES);
-      const legs: SendLeg[] = [
-        { id: 'ltc-1', asset: 'ltc', from: 'alice', to: 'bob', amount: '0.02' },
-        { id: 'ltc-2', asset: 'ltc', from: 'bob', to: 'carol', amount: '0.01' },
-        { id: 'ltc-3', asset: 'ltc', from: 'carol', to: 'alice', amount: '0.005' },
-      ];
-      await requireFunding(live, 'ltc', legs);
-      for (const leg of legs) {
-        const sent = await sendLeg(live, leg);
-        await expectIncoming(live, sent);
-        await waitConfirmations(live, live.wallets[leg.to], 'ltc', { txid: sent.txid }, 1, `${leg.id} receive`);
-        await expectSettledBalances(live, sent);
-      }
-    });
-
-    test('XMR: alice pays bob 0.02, ten blocks, bob pays carol 0.01, ten blocks, carol pays alice 0.005; decoys never show as sends', async ({ live }) => {
-      requireMoney(live);
-      await ensureDestinations(live, 'xmr', WALLET_NAMES);
-      const legs: SendLeg[] = [
-        { id: 'xmr-1', asset: 'xmr', from: 'alice', to: 'bob', amount: '0.02' },
-        { id: 'xmr-2', asset: 'xmr', from: 'bob', to: 'carol', amount: '0.01' },
-        { id: 'xmr-3', asset: 'xmr', from: 'carol', to: 'alice', amount: '0.005' },
-      ];
-      await requireFunding(live, 'xmr', legs);
-      const before = await outgoingSnapshot(live, 'xmr');
-      for (const leg of legs) {
-        const sent = await sendLeg(live, leg);
-        await expectIncoming(live, sent);
-        // CryptoNote outputs unlock after ten confirmations.
-        await waitConfirmations(live, live.wallets[leg.to], 'xmr', { txid: sent.txid }, 10, `${leg.id} receive`);
-        await expectSettledBalances(live, sent);
-      }
-      await expectNoDecoySends(live, 'xmr', before);
-    });
-
-    test('WOW: alice pays bob 2, four blocks, bob pays carol 1, carol pays alice 0.5; decoys never show as sends', async ({ live }) => {
-      requireMoney(live);
-      await ensureDestinations(live, 'wow', WALLET_NAMES);
-      const legs: SendLeg[] = [
-        { id: 'wow-1', asset: 'wow', from: 'alice', to: 'bob', amount: '2' },
-        { id: 'wow-2', asset: 'wow', from: 'bob', to: 'carol', amount: '1' },
-        { id: 'wow-3', asset: 'wow', from: 'carol', to: 'alice', amount: '0.5' },
-      ];
-      await requireFunding(live, 'wow', legs);
-      const before = await outgoingSnapshot(live, 'wow');
-      for (const leg of legs) {
-        const sent = await sendLeg(live, leg);
-        await expectIncoming(live, sent);
-        await waitConfirmations(live, live.wallets[leg.to], 'wow', { txid: sent.txid }, 4, `${leg.id} receive`);
-        await expectSettledBalances(live, sent);
-      }
-      await expectNoDecoySends(live, 'wow', before);
-    });
-
-    test('GRIN: carol pays alice\'s npub over Nostr (alice signs in To sign, carol finalizes in To finalize), then alice pays bob by pasted slatepack, then bob pays carol\'s address', async ({ live }) => {
-      requireMoney(live);
-      for (const name of WALLET_NAMES) {
-        if (!live.book.has(name, 'grin', 'npub')) await readNpub(live, live.wallets[name]);
-      }
-      await ensureDestinations(live, 'grin', WALLET_NAMES);
-      const legs: GrinLeg[] = [
-        { id: 'grin-1', from: 'carol', to: 'alice', amount: '1', via: 'npub' },
-        { id: 'grin-2', from: 'alice', to: 'bob', amount: '0.5', via: 'pasted' },
-        { id: 'grin-3', from: 'bob', to: 'carol', amount: '0.25', via: 'address' },
-      ];
-      await requireFunding(live, 'grin', legs);
-      for (const leg of legs) {
-        const sent = await grinLeg(live, leg);
-        // "After 10 confirmations": mined and spendable, then ten more blocks.
-        await grinSettled(live, sent);
-      }
+      // The reasons are in the progress log too: the reporter withholds assertion values.
+      expect(refused, 'every coin can fund its ring; fund the wallet each reason names').toEqual([]);
     });
 
     test('USD in every coin header, the Home fiat total, and a fresh freshness cue on every wallet', async ({ live }) => {
+      test.setTimeout(2 * HOUR);
       for (const name of WALLET_NAMES) {
         const w = live.wallets[name];
-        await goHome(w);
+        await goHome(w, { strict: true });
         await w.footage.result('Home fiat total');
         for (const asset of LIVE_ASSETS) {
-          // openCoin requires the USD line for every priced coin with a balance,
-          // and goHome requires a resolved total and a fresh cue.
-          await openCoin(live, w, asset);
+          // Strict: the USD line for every priced coin with a balance, and
+          // on the way a resolved Home total and a fresh cue.
+          await openCoin(live, w, asset, { strict: true });
           await w.footage.result('Coin header with its USD value');
         }
       }
     });
 
+    test('malformed and unusable-key destinations are refused before signing, with nothing broadcast', async ({ live }) => {
+      test.setTimeout(HOUR);
+      for (const asset of ['btc', 'xmr', 'wow'] as const) await ensureDestinations(live, asset, ['bob']);
+      const alice = live.wallets.alice;
+      await refusedDestination(live, alice, 'btc', 'malformed', 'bob');
+      await refusedDestination(live, alice, 'xmr', 'malformed', 'bob');
+      await refusedDestination(live, alice, 'xmr', 'unusable-key', 'bob');
+      await refusedDestination(live, alice, 'wow', 'unusable-key', 'bob');
+    });
+
     test('Max on a small balance shows the sweep note and reaches Review, never sent', async ({ live }) => {
+      test.setTimeout(HOUR);
       for (const asset of ['ltc', 'xmr'] as const) {
         // The smallest spendable balance among the three, paid to the next wallet.
         let pick: { name: WalletName; confirmed: bigint } | null = null;
@@ -248,23 +216,65 @@ if (LIVE_LANE) {
       }
     });
 
-    test('malformed and unusable-key destinations are refused before signing, with nothing broadcast', async ({ live }) => {
-      for (const asset of ['btc', 'xmr', 'wow'] as const) await ensureDestinations(live, asset, ['bob']);
-      const alice = live.wallets.alice;
-      await refusedDestination(live, alice, 'btc', 'malformed', 'bob');
-      await refusedDestination(live, alice, 'xmr', 'malformed', 'bob');
-      await refusedDestination(live, alice, 'xmr', 'unusable-key', 'bob');
-      await refusedDestination(live, alice, 'wow', 'unusable-key', 'bob');
-    });
-
     test('a GoblinPay pay-link pre-fills a Grin send to the payee, without building or broadcasting', async ({ live }) => {
+      test.setTimeout(HOUR);
       if (!live.book.has('alice', 'grin', 'npub')) await readNpub(live, live.wallets.alice);
       await paylinkPrefill(live, live.wallets.carol, 'alice', '0.1');
     });
 
-    test('a shop\'s payment request shows the human amount in the approval popup; Deny broadcasts nothing', async ({ live }) => {
+    test('a shop connects through the connect approval, its payment request shows in human units and Deny broadcasts nothing', async ({ live }) => {
+      test.setTimeout(HOUR);
       await ensureDestinations(live, 'wow', ['bob']);
-      await dappPaymentApproval(live, live.wallets.alice, 'bob');
+      await dappApprovals(live, live.wallets.alice, 'bob');
+    });
+
+    test('BTC: a ring of three payments (every fee tier on the first), each confirmed, settled and read back in history', async ({ live }) => {
+      test.setTimeout(8 * HOUR);
+      requireMoney(live);
+      await ensureDestinations(live, 'btc', WALLET_NAMES);
+      await chainRing(live, 'btc', await requirePlan(live, 'btc'));
+    });
+
+    test('LTC: a ring of three payments, each confirmed, settled and read back in history', async ({ live }) => {
+      test.setTimeout(4 * HOUR);
+      requireMoney(live);
+      await ensureDestinations(live, 'ltc', WALLET_NAMES);
+      await chainRing(live, 'ltc', await requirePlan(live, 'ltc'));
+    });
+
+    test('XMR: a ring of three payments, ten blocks each, read back in history with the key masked; decoys never show as sends', async ({ live }) => {
+      test.setTimeout(6 * HOUR);
+      requireMoney(live);
+      await ensureDestinations(live, 'xmr', WALLET_NAMES);
+      const legs = await requirePlan(live, 'xmr');
+      const before = await outgoingSnapshot(live, 'xmr');
+      await chainRing(live, 'xmr', legs);
+      await expectNoDecoySends(live, 'xmr', before);
+    });
+
+    test('WOW: a ring of three payments, four blocks each, read back in history with the key masked; decoys never show as sends', async ({ live }) => {
+      test.setTimeout(6 * HOUR);
+      requireMoney(live);
+      await ensureDestinations(live, 'wow', WALLET_NAMES);
+      const legs = await requirePlan(live, 'wow');
+      const before = await outgoingSnapshot(live, 'wow');
+      await chainRing(live, 'wow', legs);
+      await expectNoDecoySends(live, 'wow', before);
+    });
+
+    test('GRIN: a ring over Nostr npub (To sign, To finalize), pasted slatepack and grin1 address, each ten blocks past spendable and read back in history', async ({ live }) => {
+      test.setTimeout(5 * HOUR);
+      requireMoney(live);
+      for (const name of WALLET_NAMES) {
+        if (!live.book.has(name, 'grin', 'npub')) await readNpub(live, live.wallets[name]);
+      }
+      await ensureDestinations(live, 'grin', WALLET_NAMES);
+      for (const leg of await requirePlan(live, 'grin')) {
+        // Built, exchanged, finalized; the recipient's total grows by the amount.
+        const sent = await grinLeg(live, { id: leg.id, from: leg.from, to: leg.to, amount: leg.amount, via: leg.via! });
+        await grinSettled(live, sent);
+        await grinHistoryDetail(live, sent);
+      }
     });
   });
 }
