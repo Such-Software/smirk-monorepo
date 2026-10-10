@@ -50,15 +50,16 @@
  * this run did not prove. A purchase leaves its wallet premium for a year, so
  * the next purchase run sets G_PREMIUM_PURCHASE_WALLET to another wallet.
  *
- * Run from packages/e2e (the custody file is read in-process, never sourced).
+ * Run from packages/e2e through the lane's own config (the default config
+ * ignores tests/live; the custody file is read in-process, never sourced).
  * Browsing only, scenarios 1 to 3:
- *   E2E_LIVE=1 ALLOW_PROD_WRITES=1 FOOTAGE=guarded E2E_MIN_EXECUTED=3 \
+ *   E2E_LIVE=1 ALLOW_PROD_WRITES=1 FOOTAGE=guarded \
  *   BACKEND_URL=https://api.smirk.cash/api/v1 EXTENSION_DIST=<unpacked staged chrome zip> \
  *   LIVE_WALLET_FILE=<main checkout>/packages/smoke-tests/secrets/smoke-mnemonics.env \
- *   npx playwright test tests/live/g-premium.live.spec.ts
+ *   npx playwright test -c G-premium.live.config.ts
  * The recorded release run, all four: the same, plus E2E_LIVE_MONEY=1
- * E2E_PREMIUM_PURCHASE=1 G_PREMIUM_CHECKOUT_HOST=<owner BTCPay host>, with
- * E2E_MIN_EXECUTED=4.
+ * E2E_PREMIUM_PURCHASE=1 G_PREMIUM_CHECKOUT_HOST=<owner BTCPay host>. The
+ * config sets the skip guard's floor to 3 or 4 to match.
  * Then encode: node scripts/G-premium-footage.mjs --run <footage run directory>
  */
 

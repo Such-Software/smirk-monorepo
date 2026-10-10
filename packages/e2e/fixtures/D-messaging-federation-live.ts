@@ -280,7 +280,8 @@ function footageRoot(runDir: string): string {
  * owner (a scenario the deployment cannot exercise, a policy that refuses by
  * design). Static descriptions only. The private reporter prints statuses
  * alone, so findings also go to a 0600 JSON-lines file beside the footage:
- * ~/Build/smirk-e2e/v<version>-<label>/reports/D-messaging-federation-findings.jsonl
+ * E2E_REPORTS_DIR, or ~/Build/smirk-e2e/v<version>-<label>/reports, then
+ * D-messaging-federation-findings.jsonl
  */
 export function recordFinding(type: string, description: string): void {
   const info = test.info();
@@ -290,7 +291,9 @@ export function recordFinding(type: string, description: string): void {
 
 function appendFinding(title: string, type: string, description: string): void {
   const label = (process.env.E2E_RUN_LABEL ?? 'run').replace(/[^A-Za-z0-9._-]/g, '');
-  const dir = join(homedir(), 'Build', 'smirk-e2e', `v${dExtensionVersion()}-${label}`, 'reports');
+  const dir = process.env.E2E_REPORTS_DIR
+    ? resolve(process.env.E2E_REPORTS_DIR)
+    : join(homedir(), 'Build', 'smirk-e2e', `v${dExtensionVersion()}-${label}`, 'reports');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const line = JSON.stringify({ at: new Date().toISOString(), test: title, type, description });
   appendFileSync(join(dir, 'D-messaging-federation-findings.jsonl'), `${line}\n`, { mode: 0o600 });

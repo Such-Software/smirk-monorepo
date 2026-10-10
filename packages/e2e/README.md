@@ -37,11 +37,62 @@ to UI test IDs need a rebuild. Preflight checks that the bundle targets the same
 backend as the tests and that its capabilities endpoint answers. A network error
 or wrong build refuses; it does not become a skipped success.
 
+## Run the v0.3.1 release run (every live area, recorded)
+
+`npm run test:live-v031 -w @smirk/e2e` runs every live area against the staged
+release candidate (run 11204: the Chrome zip for Chromium, the Firefox zip for
+Firefox) and production, one lane at a time, in the order of the release
+survey. It spends real funds among the demo wallets alice, bob and carol.
+`scripts/live-v031.mjs` holds the order, every gate and every path; `--list`
+prints the plan without touching anything.
+
+| Step | Phase | Lane config | What it proves |
+| --- | --- | --- | --- |
+| 0 | preflight | (runner) | Zip hashes, unpack, capabilities and prices, every offline guard, privacy, disk, custody, decisions. |
+| 1 | baseline | `B-send-receive-history.live.config.ts` | Every balance held 25 s and the funding check, before money moves. |
+| 2 | A | `playwright.live.config.ts` | Onboarding, lock policy, website sign-in, identity. |
+| 3a, 4b, 7, 8 | E | `E-swaps.live.config.ts` | THORChain both ways for real, quotes, Trocador, NonLogs, Where to trade. |
+| 3b, 6, 9, 10 | B | `B-send-receive-history.live.config.ts` | Three hops per coin and every history sheet. |
+| 4b | D | `D-messaging-federation.live.config.ts` | Messaging, background delivery, burners, outside Nostr, backend B. |
+| 3c to 5 | C | `C-tips.live.config.ts` | Link, npub, name and federated tips, forged wraps, claims, clawbacks. |
+| 4b, 11 | G | `G-premium.live.config.ts` | Plan labels, invoices, checking; the purchase when approved. |
+| 4b, 12 | F | `F-legacy-recovery.live.config.ts` | Older addresses, old-server claims; seeded moves when approved. |
+| 13 | H-firefox, H-macos | `tests/live/h-firefox.live.mjs`, `scripts/desktop-smoke-macos.sh` | Firefox, Firefox with RFP prefs, Chromium; the macOS app (on the Mac). |
+| 14 | closeout | `B-send-receive-history.live.config.ts` | Every final balance held 25 s, for reconciliation. |
+
+Each lane stays whole (its own ledger, rescue and teardown), so the survey's
+interleaving becomes this order. The run refuses, naming the cause, unless
+`E2E_LIVE=1`, `E2E_LIVE_MONEY=1`, `ALLOW_PROD_WRITES=1`, `E2E_LIVE_RELAY=1`,
+`FOOTAGE=guarded` and `E2E_WALLET_FILE` (the custody file's path) are set and
+the owner has answered yes or no to each decision: `V031_IDENTITY_WRITES`,
+`V031_FEDERATION_B`, `V031_NONLOGS_SWAP`, `V031_PREMIUM_PURCHASE`,
+`V031_LEGACY_FIXTURE` and `V031_FEED_POST`. None has a default. The macOS
+smoke runs only on the Mac: elsewhere pass `--except H-macos`, then run
+`--only H-macos` there.
+
+Footage, video, ledgers and evidence go to `~/Build/smirk-e2e/v031-run/<UTC
+date>/`, one directory per area, with `run.json`, per-phase attempt records,
+logs and `summary.json`. Each lane's encoder runs after its phase and refuses a
+hold shorter than the owner's policy. A failed phase stops the run; `--resume`
+continues it and never repeats a phase that passed. Reconciling the final
+balances against the baseline, the fees, the swap spread and the premium
+payment, and the evidence note in `~/journal`, remain step 14 by hand.
+
+Every lane's offline guards (recorders on sentinel pages, hold policies,
+encoders, ledgers, spec lints and this runner) run with no wallet or funds,
+and so does a check that no lane's recorder holds less than the owner's video
+policy (6 s before a tap, 12 s settled, 25 s on a key result):
+
+```sh
+npm run test:live-v031-guards -w @smirk/e2e
+```
+
 ## Secret output policy
 
 Playwright capture is closed for the wallet suite and every lane, including
 failed tests. The only footage comes from the separately guarded recorders
-described below (demo capture, and the E-swaps live lane):
+described below (demo capture, and the guarded recorder of each live lane,
+areas A to H):
 
 - Trace, screenshots and video are off. CLI and per-test capture overrides refuse.
 - Accessibility snapshots are suppressed, and error values/call logs are sanitized

@@ -35,9 +35,26 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
  * Any skip fails the run (skip guard): a skipped scenario is not evidence. The
  * cross-server name@domain test skips until a backend B serves both a relay and
  * HTTPS NIP-05, so a green run needs that B or an owner decision on that skip.
+ * That decision is `E2E_LIVE_ACK_GAPS=federation` (the same acknowledgement the
+ * C-tips lane reads): the federation skips are then listed as chosen by the
+ * operator, never counted as evidence, and every other skip still fails. The
+ * findings file names what was not proven either way.
+ *
+ * Findings go to E2E_REPORTS_DIR when set (the v0.3.1 runner puts them beside
+ * the area's footage), else ~/Build/smirk-e2e/v<version>-<label>/reports.
  */
 assertPrivateCapture();
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
+
+/** Skip reasons of the federation file and its cross-server test (fixtures/D-messaging-federation-live.ts, tests/live/d-federation.live.spec.ts). */
+const FEDERATION_GAP_REASONS = [
+  'federation: ',
+  'cross-server delivery by name@domain cannot be exercised',
+  'carol has no handle on backend B',
+  'carol is not linked on backend B',
+];
+const ackGaps = (process.env.E2E_LIVE_ACK_GAPS ?? '').split(',').map((gap) => gap.trim());
+const expectedReasonPrefixes = ackGaps.includes('federation') ? FEDERATION_GAP_REASONS : [];
 
 export default defineConfig({
   testDir: './tests/live',
@@ -51,7 +68,7 @@ export default defineConfig({
   globalSetup: './global-setup.ts',
   // Removes this run's wallet profiles (kept across worker restarts).
   globalTeardown: './fixtures/D-messaging-federation-teardown.ts',
-  reporter: [['./private-reporter.ts'], ['./skip-guard-reporter.ts']],
+  reporter: [['./private-reporter.ts'], ['./skip-guard-reporter.ts', { expectedReasonPrefixes }]],
   quiet: true,
   preserveOutput: 'never',
   // Capture stays off (PRIVATE_USE). Every action is bounded: a tap on a

@@ -2,9 +2,13 @@ import { defineConfig } from '@playwright/test';
 import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
 
 /**
- * The live lane: the release candidate's extension, the owner-approved demo
- * wallets (alice, bob, carol) and the production backend, recorded through
- * the guarded recorder (fixtures/guarded-footage.ts).
+ * The area A live lane (onboarding, lock policy, website sign-in, identity):
+ * the release candidate's extension, the owner-approved demo wallets (alice,
+ * bob, carol) and the production backend, recorded through the guarded
+ * recorder (fixtures/guarded-footage.ts). It collects only the a-*.live.spec.ts
+ * files: every other area under tests/live has its own config, gates and
+ * teardown, and must never run under this one's preflight. The whole v0.3.1
+ * run, every area in order, is `npm run test:live-v031` (scripts/live-v031.mjs).
  *
  * Each gate is its own opt-in:
  *   E2E_LIVE=1           run this lane at all (preflight refuses otherwise)
@@ -43,7 +47,9 @@ process.env.BACKEND_URL ??= 'https://api.smirk.cash/api/v1';
 
 export default defineConfig({
   testDir: './tests/live',
-  testMatch: /\.live\.spec\.ts$/,
+  // Area A's specs only. B to G declare tests under E2E_LIVE=1 too, so a
+  // broader match would run their money scenarios under this preflight.
+  testMatch: /(^|[\\/])a-[^\\/]+\.live\.spec\.ts$/,
   // Confirmation waits in the funds areas can take hours; the whole run about twelve.
   timeout: 3 * 60 * 60_000,
   globalTimeout: 12 * 60 * 60_000,
