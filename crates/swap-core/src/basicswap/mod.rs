@@ -4,11 +4,15 @@
 
 mod envelope;
 mod messages;
+mod outbound;
 mod routes;
 mod wire;
 
 pub use envelope::{receive, ReceivedMessage};
 pub use messages::{Admission, Advertisement, Connect, Offer, OfferBook, Revoke};
+pub use outbound::{
+    prepare_ack, prepare_request, ConnectionDraft, MessageContext, PreparedEnvelope, WorkProgress,
+};
 pub use routes::{PendingRoute, Route};
 pub use wire::WireMessage;
 

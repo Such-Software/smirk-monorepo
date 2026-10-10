@@ -1,6 +1,6 @@
 # Smirk documentation
 
-> Status: stable · Updated 2026-09-27 · Applies to: Smirk v0.3 client source
+> Status: stable · Updated 2026-10-10 · Applies to: Smirk v0.3 client source
 
 ## Build and release
 
@@ -15,6 +15,7 @@
 - [Send, receive and recover chain transactions](SEND_FLOW.md)
 - [Integrate a dapp](DAPP_INTEGRATION.md) and [API package reference](../packages/dapp-api/README.md)
 - [Interaction and copy principles](UI_DESIGN.md)
+- [Proposed P2P swap interaction and recovery](P2P_SWAPS.md)
 - [Accessibility requirements](ACCESSIBILITY.md)
 - [Privacy and light-wallet data boundaries](../PRIVACY.md)
 
@@ -38,7 +39,8 @@
 | Backend selection and capability gating | [Architecture](ARCHITECTURE.md#backend-federation) | backend boot, core API and capability registry |
 | Nostr identities, Feed, encrypted messages and app crypto | [Core package](../packages/core/README.md) and [dapp integration](DAPP_INTEGRATION.md) | core Nostr/messaging; extension routes |
 | Per-origin website permissions | [Dapp API](../packages/dapp-api/README.md) | shared handler and platform approval executors |
-| Swaps | [Swap package](../packages/swap/README.md) | Trocador implementation and native desktop transport |
+| Provider swaps | [Swap package](../packages/swap/README.md) | Provider adapters and native desktop transport |
+| Proposed P2P swaps | [Interaction and recovery](P2P_SWAPS.md), [protocol scope](swap-core.md) | Disabled offline `swap-core` prototype; wallet integration pending |
 | Themes and asset visibility | [UI principles](UI_DESIGN.md) | shared theme/asset registries |
 
 The backend runtime belongs to the separate `smirk-backend-core` repository.

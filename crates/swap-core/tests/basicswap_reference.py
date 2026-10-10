@@ -12,6 +12,7 @@ import copy
 import hashlib
 import hmac
 import json
+import secrets
 from pathlib import Path
 import subprocess
 import sys
@@ -38,17 +39,17 @@ def main():
     from basicswap.messages_npb import OfferMessage, ConnectReqMessage, OfferRevokeMessage
     from basicswap.network.nostr.client import signEvent, verifyEvent
     from basicswap.util.address import pubkeyToAddress
-    from basicswap.util.smsg import smsgEncrypt, smsgDecrypt, smsgGetID
+    from basicswap.util.smsg import smsgEncrypt, smsgDecrypt, smsgGetID, smsgGetPOWHash
 
     maker, taker, broadcast = PrivateKey(), PrivateKey(), PrivateKey()
     maker_route, taker_route, relay_signer = PrivateKey(), PrivateKey(), PrivateKey()
     checks = 0
 
-    def run(envelopes, flow=False, now=NOW, accept=True):
+    def run(envelopes, flow=False, now=NOW, accept=True, outbound=None):
         nonlocal checks
-        request = {"now": now, "prefix": PREFIX, "envelopes": envelopes, "flow": flow}
+        request = {"now": now, "prefix": PREFIX, "envelopes": envelopes, "flow": flow, "outbound": outbound}
         result = subprocess.run([str(args.binary.resolve())], input=json.dumps(request),
-                                text=True, capture_output=True, timeout=20, check=False)
+                                text=True, capture_output=True, timeout=60, check=False)
         if result.returncode != 0:
             raise RuntimeError("fixture adapter exited unsuccessfully")
         try:
@@ -193,6 +194,47 @@ def main():
                             ({}, PrivateKey())]:
         item = envelope(connect_payload(maker, maker_route, ack=True, **changes), maker, taker, signer)
         reference_ack(item, accept=False)
+
+    # Rust sends, the unmodified reference verifies and decrypts.
+    def outgoing(kind, sender, signer, recipient):
+        return {"kind": kind, "sender": sender.secret.hex(), "signer": signer.secret.hex(),
+                "recipient_public": recipient.public_key.format().hex(), "entropy": secrets.token_hex(32)}
+    generated = []
+    for kind, incoming, sender, signer, recipient in [
+        ("request", offer_item, taker, taker_route, maker),
+        ("ack", req_item, maker, maker_route, taker)]:
+        output = run([incoming], outbound=outgoing(kind, sender, signer, recipient))["outbound"]
+        event = output["event"]
+        assert verifyEvent(event), "reference rejected Rust event signature"
+        raw = base64.b64decode(event["content"])
+        assert raw[:4] == smsgGetPOWHash(raw)[:4], "Rust work checksum differs"
+        assert int.from_bytes(smsgGetPOWHash(raw), "little") <= (0xFFFFFF << (8*27)), "Rust SMSG work target failed"
+        assert output["id"] == smsgGetID(raw).hex(), "Rust outbound identifier differs"
+        decoded = smsgDecrypt(recipient.secret, raw, output_dict=True)
+        assert decoded["pubkey_from"] == sender.public_key.format().hex(), "Rust sender recovery differs"
+        payload = bytes.fromhex(decoded["hex"])
+        assert payload[0] == 14, "Rust emitted unsupported message type"
+        msg = ConnectReqMessage(); msg.from_bytes(payload[1:])
+        assert msg.network_type == 3 and msg.network_data == b"bsx", "Rust network differs"
+        assert msg.to_bytes() == payload[1:], "Rust outbound wire encoding is not canonical"
+        data = json.loads(msg.request_data)
+        assert data["offer_id"] == offer_id.hex(), "Rust outbound offer differs"
+        assert data["bsx_address"] == pubkeyToAddress(PREFIX, sender.public_key.format()), "Rust messaging address differs"
+        assert data["nostr_pubkey"] == signer.public_key_xonly.format().hex(), "Rust route announcement differs"
+        item = {"recipient": recipient.secret.hex(), "event": event}
+        compare(item, payload, sender)
+        if kind == "ack":
+            reference_ack(item)
+            assert data["req_pubkey"] == taker_route.public_key_xonly.format().hex(), "Rust ACK key echo differs"
+        else:
+            assert data["amount_from"] == offer.amount_from and data["amount_to"] == offer.amount_to, "Rust request amount differs"
+        generated.append(item)
+    run([offer_item, generated[0], generated[1], revoke_item], flow=True)
+    run([offer_item], outbound=outgoing("request", taker, taker, maker), accept=False)
+    run([offer_item], outbound=outgoing("request", taker, taker_route, taker), accept=False)
+    run([req_item], outbound=outgoing("ack", taker, maker_route, taker), accept=False)
+    bad_ttl = outgoing("request", taker, taker_route, maker); bad_ttl["ttl"] = 1
+    run([offer_item], outbound=bad_ttl, accept=False)
 
     # Commercial direction and both currently recognized swap protocol families.
     for coin_from, coin_to, protocol, swap_type in [(3,9,7,5), (2,6,6,5), (6,2,7,5), (2,3,5,1), (3,2,4,1)]:

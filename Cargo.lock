@@ -4189,6 +4189,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "k256",
+ "rand_chacha 0.3.1",
  "ripemd",
  "serde",
  "serde_json",

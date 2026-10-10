@@ -1,6 +1,6 @@
 # Smirk wallet UI principles
 
-> Status: stable · Updated 2026-09-27 · Applies to: v0.3 extension and desktop clients
+> Status: stable · Updated 2026-10-10 · Applies to: v0.3 extension and desktop clients
 
 This document owns the wallet's interaction and copy principles. Component APIs
 live in [the UI package](../packages/ui/README.md), send behavior in
@@ -77,11 +77,16 @@ items are not v0.3 guarantees.
 
 ## Swaps and tips
 
-Trocador supplies the implemented aggregator flow. Quote, deposit and completion
-are separate stages. Show the selected pair, input amount, output estimate,
-provider, deposit destination and refund destination before sending funds.
+Provider-backed swaps use separate quote, deposit and completion stages. Show
+the selected pair, input amount, output estimate, provider, deposit destination
+and refund destination before sending funds.
 A quote error must identify the failed operation without exposing configuration
-credentials. THORChain and native atomic swaps are not available in v0.3.
+credentials. The current source has Trocador, Nonlogs and THORChain handlers;
+availability depends on explicit capabilities and release qualification.
+
+P2P swaps remain disabled. Their proposed entry, funding review and persistent
+recovery semantics are owned by [P2P_SWAPS.md](P2P_SWAPS.md). A relay receipt,
+peer connection, accepted terms and confirmed settlement are separate states.
 
 Tip Maker is a single composer with recipient, asset and amount. A funded tip is
 not necessarily claimed. Sent Tips retains claim status and the available

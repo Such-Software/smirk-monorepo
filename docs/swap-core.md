@@ -1,6 +1,6 @@
 # swap-core
 
-> Status: experimental · Updated 2026-10-10 · Applies to: Smirk client source
+> Status: draft · Updated 2026-10-10 · Applies to: Smirk client source
 
 `swap-core` contains an offline BasicSwap message compatibility prototype. The
 `basicswap-interop` Cargo feature is disabled by default. There are no wallet UI
@@ -21,6 +21,7 @@ format 2.
 | Message codec | Decode and canonically re-encode offers, offer revocations and Nostr connection requests/ACKs |
 | Advertisements | Recognize BTC/LTC/XMR/WOW identifiers, supported protocol versions, nonzero amounts and basic lifetime/lock declarations |
 | Observation cache | Bound storage, deduplicate SMSG identifiers, retain early revocations, reject clock rollback and refuse capacity exhaustion |
+| Outbound connections | Prepare encrypted requests and ACKs, bounded SMSG work and signed Nostr events with caller-supplied entropy |
 | Route checks | Bind the announced key to the Nostr signature, SMSG sender, address namespace, offer and pending request; reject stale key replacement |
 
 The codec preserves integer atomic amounts. It does not qualify chain-specific
@@ -46,6 +47,19 @@ to the original identifier, not every possible re-encryption of its payload.
 A fresh authenticated negotiation and a fully validated transaction graph remain
 necessary before funding.
 
+Outgoing constructors require distinct caller-owned messaging and route keys.
+Requests use the full advertised amount; partial fills and price negotiation are
+not implemented. Entropy failures refuse preparation. SMSG work uses the pinned
+reference target, at most 4096 attempts per call and a one-million-attempt total
+budget. A worker can yield between calls. This is separate from Nostr NIP-13.
+
+`PreparedEnvelope` holds immutable signed bytes and their identifiers. The caller
+must durably commit those exact bytes with encrypted session state before any
+future publication. Retries reuse the bytes without extending their lifetime.
+Preparation does not prove persistence, peer consent or funding authority. ACKs
+acknowledge a route, not acceptance of a trade. See the proposed
+[P2P interaction and recovery contract](P2P_SWAPS.md).
+
 The observation cache and route objects are in memory. No retry scheduler,
 encrypted recovery store, multi-tab ownership or restart restoration is provided.
 A cache-capacity refusal must stop admission; it must not be treated as an empty
@@ -58,7 +72,7 @@ length-delimited values and ambiguous connection data. It requires one expiratio
 tag matching the SMSG lifetime, rejects timestamps over ten minutes ahead of the
 supplied clock, and limits offers to 48 hours. The Python reference accepts some
 noncanonical inputs that this implementation refuses. Compression, legacy SMSG
-payload format 1, paid messages, message PoW enforcement and SimpleX transport
+payload format 1, paid messages, incoming SMSG PoW enforcement and SimpleX transport
 are not implemented. Transport-level rate limiting remains a prerequisite for
 any network adapter.
 
@@ -86,17 +100,19 @@ The runner uses BasicSwap's actual message serializer, SMSG encryption/decryptio
 and Nostr signing functions. Rust-decoded identifiers, sender keys and canonical
 message bytes must agree; Rust re-encodings are decoded again by BasicSwap. The
 reference connection-request constructor and ACK handler run unchanged with
-in-memory send/database adapters. Negative
-cases exercise altered signatures, recipient keys, payload lengths, MACs,
-padding, expirations, offer bindings and replayed ACKs. Keys are random, unfunded
+in-memory send/database adapters. Rust-generated requests and ACKs are verified
+by the reference event checker, SMSG decryptor, sender recovery, work checksum and
+target checks, canonical decoder and ACK handler. Negative cases exercise altered
+signatures, recipient keys, payload lengths, MACs, padding, expirations, offer
+bindings and replayed ACKs. Keys are random, unfunded
 and process-local; they pass to the fixture executable over stdin and are never
 written to fixtures or logs. No wallet daemon, relay or funded swap is involved.
 CI runs this lane explicitly while the wallet feature remains disabled.
 
 ## Settlement prerequisites
 
-1. Add an outbound codec and isolated peer-session test, then encrypted durable
-   session state, bounded retries, duplicate delivery and restart tests. Keep
+1. Add encrypted durable session state and an outbox, bounded retries, duplicate
+   delivery and restart tests, then an isolated unmodified-peer session. Keep
    messaging, per-route signing and wallet spending keys separate.
 2. Specify the complete WOW/LTC transaction graph against the pinned BasicSwap
    adaptor protocol, including both commercial directions, key-release proofs,
