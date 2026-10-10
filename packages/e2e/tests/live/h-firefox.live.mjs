@@ -60,7 +60,7 @@ import { readWalletPhrase } from '../../demo/capture-demo.mjs';
 import { ASSETS, FOOTAGE_ROOT, RELEASE, makeCanary } from '../../fixtures/H-cross-browser-desktop-policy.mjs';
 import { GuardedRecorder, encodeLane, privateDir } from '../../fixtures/H-cross-browser-desktop-recorder.mjs';
 import { hHeaderHitTest } from '../../fixtures/H-cross-browser-desktop-guard.mjs';
-import { GeckoSession, WebDriverError, toolVersion } from '../../fixtures/H-cross-browser-desktop-webdriver.mjs';
+import { GeckoSession, WebDriverError, resolveFirefoxBinary, toolVersion } from '../../fixtures/H-cross-browser-desktop-webdriver.mjs';
 import { ChromiumAdapter, FirefoxAdapter } from '../../fixtures/H-cross-browser-desktop-adapters.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -96,7 +96,8 @@ const flag = (name) => process.argv.includes(`--${name}`);
 /** Print a driver failure without its message: call logs can quote typed values. */
 function describe(error) {
   if (error instanceof LaneError || error instanceof Skip) return error.message;
-  if (error instanceof WebDriverError) return `browser driver refused (${error.code})`;
+  // Our own text: the error code and the command path, never a body or browser message.
+  if (error instanceof WebDriverError) return `browser driver refused (${error.message})`;
   return `browser driver error (${error?.name ?? 'unknown'})`;
 }
 
@@ -504,12 +505,16 @@ async function launchFirefox(lane, options, work) {
     'browser.formfill.enable': false,
     ...(lane === 'firefox-rfp' ? LIBREWOLF_PREFS : {}),
   };
-  const session = await GeckoSession.start({ geckodriver: options.geckodriver, firefox: options.firefox, prefs, headless: !options.headed, tmpDir: privateDir(join(work, 'tmp')) });
+  // systemAccess: Firefox refuses scripts in moz-extension pages without it (see the driver).
+  const session = await GeckoSession.start({ geckodriver: options.geckodriver, firefox: options.firefoxBinary, prefs, headless: !options.headed, tmpDir: privateDir(join(work, 'tmp')), systemAccess: true });
   try {
     const installed = await session.installTemporaryAddon(zip);
-    await session.setWindowRect(POPUP.width, POPUP.height);
+    // A fresh install opens the setup tab; it is the way in when classic
+    // WebDriver will not navigate a content tab to moz-extension://.
+    await until(async () => (await session.handles()).length > 1, { timeout: 20_000, what: 'the setup tab' }).catch(() => {});
     const adapter = new FirefoxAdapter(session, `moz-extension://${PINNED_UUID}`);
     await adapter.goto('popup.html');
+    await adapter.setSize(POPUP.width, POPUP.height);
     const version = await until(() => adapter.evaluate(() => (globalThis.browser ?? globalThis.chrome).runtime.getManifest().version), { timeout: 30_000, what: 'the extension at its pinned UUID' });
     return { adapter, close: () => session.quit(), facts: { installVia: installed.via, uuidPinned: true, extensionVersion: version, browser: toolVersion(options.firefox) } };
   } catch (error) {
@@ -644,6 +649,8 @@ async function main() {
     if (!flag('allow-version-drift') && (!EXPECT.firefox.test(firefox) || !EXPECT.geckodriver.test(gecko))) {
       throw new LaneError(`expected Firefox 156 and geckodriver 0.37.1, found ${firefox} and ${gecko}`);
     }
+    options.firefoxBinary = resolveFirefoxBinary(options.firefox);
+    if (!options.firefoxBinary) throw new LaneError('could not find the Firefox executable behind its launcher; pass --firefox with its path');
   }
   if (!options.noEncode && spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status !== 0) throw new LaneError('ffmpeg is required to encode footage (or pass --no-encode)');
   // Prove the custody file loads before launching anything, then drop the words.

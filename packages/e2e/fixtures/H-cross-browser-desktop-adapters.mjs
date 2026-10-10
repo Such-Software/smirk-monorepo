@@ -11,7 +11,7 @@
  * masks the named surfaces in the screenshot; Firefox cannot, so it cards the
  * whole frame.
  */
-import { KEYS } from './H-cross-browser-desktop-webdriver.mjs';
+import { KEYS, WebDriverError } from './H-cross-browser-desktop-webdriver.mjs';
 import { CLAIM_LINK_TEXT, MASKS } from './H-cross-browser-desktop-policy.mjs';
 
 export function selector(target) {
@@ -50,13 +50,55 @@ export class FirefoxAdapter {
   kind = 'firefox';
   maskMode = 'card';
   imageExt = 'png';
+  /** @type {{ width: number, height: number } | null} */
+  popup = null;
+  /** The CSS viewport the popup emulation achieved (evidence). */
+  viewport = null;
 
   constructor(session, origin) {
     this.session = session;
     this.origin = origin;
   }
 
-  goto(path) { return this.session.navigate(`${this.origin}/${path}`); }
+  /**
+   * Open a wallet page by navigating from inside an extension page (same
+   * origin), adopting the setup tab the extension opens on install when the
+   * current tab is not one. Classic navigation of a content tab to
+   * moz-extension:// is refused without system access, and with it the tab's
+   * viewport stops following window resizes, which breaks the popup
+   * emulation; it is only the last resort.
+   */
+  async goto(path) {
+    const url = `${this.origin}/${path}`;
+    if (!String(await this.session.currentUrl()).startsWith(this.origin)) {
+      let adopted = false;
+      for (const handle of await this.session.handles()) {
+        await this.session.switchTo(handle);
+        if (String(await this.session.currentUrl()).startsWith(this.origin)) { adopted = true; break; }
+      }
+      if (!adopted) {
+        try {
+          await this.session.navigate(url);
+          return this.#applyPopup();
+        } catch (error) {
+          if (error instanceof WebDriverError) throw new Error('no wallet tab to navigate from');
+          throw error;
+        }
+      }
+    }
+    const token = `h${Date.now()}`;
+    await this.session.execute((mark, target) => {
+      document.documentElement.setAttribute('data-h-nav', mark);
+      location.assign(target);
+    }, token, url);
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const state = await this.session.execute(() => [document.readyState, document.documentElement.getAttribute('data-h-nav'), location.href]).catch(() => null);
+      if (state && state[0] === 'complete' && state[1] !== token && String(state[2]).startsWith(url)) return this.#applyPopup();
+      if (Date.now() > deadline) throw new Error('the wallet page did not load');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
   evaluate(fn, arg) { return arg === undefined ? this.session.execute(fn) : this.session.execute(fn, arg); }
   rootText() { return this.session.execute(rootTextInPage); }
   screenshot() { return this.session.screenshot(); }
@@ -120,7 +162,52 @@ export class FirefoxAdapter {
   current() { return this.session.handle(); }
   switchTo(handle) { return this.session.switchTo(handle); }
   async closeCurrent() { await this.session.closeWindow(); }
-  async setSize(width, height) { await this.session.setWindowRect(width, height); }
+  /**
+   * Emulate the action popup. Firefox will not make a window narrower than
+   * 500 CSS px, so the window is 500 wide and the page is zoomed by 500/380:
+   * the wallet then lays out in exactly a 380x600 CSS viewport, as in the
+   * real popup. Zoom is reapplied after every navigation (resistFingerprinting
+   * turns off site-specific zoom).
+   */
+  async setSize(width, height) {
+    this.popup = { width, height };
+    await this.#applyPopup();
+  }
+
+  async #applyPopup() {
+    if (!this.popup) return;
+    const { width, height } = this.popup;
+    const windowWidth = Math.max(width, 500);
+    const zoom = windowWidth / width;
+    let windowHeight = Math.round(height * zoom) + 86;
+    await this.session.setWindowRect(windowWidth, windowHeight);
+    await this.session.setContext('chrome');
+    try {
+      await this.session.execute((value) => { /** @type {any} */ (window).gBrowser.selectedBrowser.fullZoom = value; }, zoom);
+    } finally {
+      await this.session.setContext('content');
+    }
+    // Headless Firefox relayouts a moment after a resize or zoom; wait for it.
+    const viewport = () => this.session.execute(() => [document.documentElement.getBoundingClientRect().width, document.documentElement.clientHeight]);
+    const settle = async () => {
+      let last = await viewport();
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const next = await viewport();
+        if (next[0] === last[0] && next[1] === last[1] && Math.abs(next[0] - width) <= 4) return next;
+        last = next;
+      }
+      return last;
+    };
+    let [actualWidth, actualHeight] = await settle();
+    // One correction for the window chrome, whose height varies by platform.
+    if (Math.abs(actualHeight - height) > 2) {
+      windowHeight += Math.round((height - actualHeight) * zoom);
+      await this.session.setWindowRect(windowWidth, windowHeight);
+      [actualWidth, actualHeight] = await settle();
+    }
+    this.viewport = { width: actualWidth, height: actualHeight };
+  }
 }
 
 export class ChromiumAdapter {

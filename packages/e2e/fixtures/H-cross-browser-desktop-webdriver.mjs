@@ -8,7 +8,9 @@
  * code and the command path, never a request body or a browser message.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { isAbsolute } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const ELEMENT = 'element-6066-11e4-a52e-4f735466cecf';
@@ -38,21 +40,65 @@ export function toolVersion(binary) {
   return result.status === 0 ? String(result.stdout).split('\n')[0].trim() : null;
 }
 
+/**
+ * The Firefox executable itself. A name on PATH may be a launcher script (the
+ * Ubuntu snap's /usr/bin/firefox is one), which geckodriver refuses, so known
+ * install locations are tried after it.
+ */
+export function resolveFirefoxBinary(binary) {
+  const candidates = [];
+  if (isAbsolute(binary)) candidates.push(binary);
+  else {
+    const found = spawnSync('sh', ['-c', 'command -v "$1"', 'sh', binary], { encoding: 'utf8' });
+    if (found.status === 0) candidates.push(String(found.stdout).trim());
+  }
+  candidates.push('/snap/firefox/current/usr/lib/firefox/firefox', '/usr/lib/firefox/firefox', '/Applications/Firefox.app/Contents/MacOS/firefox');
+  for (const candidate of candidates) {
+    if (!candidate || !existsSync(candidate)) continue;
+    const head = Buffer.alloc(2);
+    const fd = openSync(candidate, 'r');
+    try { readSync(fd, head, 0, 2, 0); } finally { closeSync(fd); }
+    if (head.toString('latin1') !== '#!') return candidate;
+  }
+  return null;
+}
+
 export class GeckoSession {
   /**
    * Start geckodriver and a Firefox session.
-   * @param {{ geckodriver: string, firefox: string, prefs: Record<string, unknown>, headless: boolean, tmpDir: string }} options
+   *
+   * `systemAccess`: Firefox 156 refuses script execution and navigation in
+   * moz-extension:// pages ("System access is required") unless Firefox runs
+   * with -remote-allow-system-access and geckodriver with
+   * --allow-system-access. Only the disposable test profile gets it; the
+   * driver listens on loopback only.
+   * @param {{ geckodriver: string, firefox: string, prefs: Record<string, unknown>, headless: boolean, tmpDir: string, systemAccess?: boolean }} options
    */
-  static async start({ geckodriver, firefox, prefs, headless, tmpDir }) {
+  static async start({ geckodriver, firefox, prefs, headless, tmpDir, systemAccess = false }) {
     const port = await freePort();
     const wsPort = await freePort();
     // TMPDIR: geckodriver creates the temporary profile there, inside the run's
     // owner-only directory, and the runner removes it afterwards.
-    const driver = spawn(geckodriver, ['--port', String(port), '--websocket-port', String(wsPort), '--log', 'fatal'], {
+    // --profile-root: the temporary profile lands in the run's owner-only
+    // directory (also reachable by a snap-confined Firefox, which cannot see
+    // the host /tmp), and the runner removes it afterwards.
+    const driver = spawn(geckodriver, ['--port', String(port), '--websocket-port', String(wsPort), '--log', 'fatal', '--profile-root', tmpDir, ...(systemAccess ? ['--allow-system-access'] : [])], {
       stdio: 'ignore',
       env: { ...process.env, TMPDIR: tmpDir, MOZ_LOG: '', MOZ_HEADLESS: headless ? '1' : '' },
     });
     const session = new GeckoSession(`http://127.0.0.1:${port}`, driver);
+    try {
+      await session.#create({ firefox, prefs, headless, systemAccess });
+    } catch (error) {
+      // A refused session must not leave geckodriver holding the event loop open.
+      await session.quit();
+      throw error;
+    }
+    return session;
+  }
+
+  async #create({ firefox, prefs, headless, systemAccess }) {
+    const session = this;
     for (let i = 0; i < 100; i++) {
       try {
         const status = await fetch(`${session.base}/status`);
@@ -70,6 +116,7 @@ export class GeckoSession {
           timeouts: { implicit: 0, pageLoad: 90_000, script: 120_000 },
           'moz:firefoxOptions': {
             binary: firefox,
+            // geckodriver adds -remote-allow-system-access itself under --allow-system-access.
             args: headless ? ['-headless'] : [],
             prefs,
             log: { level: 'fatal' },
@@ -123,6 +170,8 @@ export class GeckoSession {
   navigate(url) { return this.cmd('POST', '/url', { url }); }
   currentUrl() { return this.cmd('GET', '/url'); }
   setWindowRect(width, height) { return this.cmd('POST', '/window/rect', { width, height }); }
+  /** Switch command context: 'content' (pages) or 'chrome' (browser UI; needs systemAccess). */
+  setContext(context) { return this.cmd('POST', '/moz/context', { context }); }
   handles() { return this.cmd('GET', '/window/handles'); }
   handle() { return this.cmd('GET', '/window'); }
   switchTo(handle) { return this.cmd('POST', '/window', { handle }); }

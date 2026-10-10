@@ -31,7 +31,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readWalletPhrase } from '../demo/capture-demo.mjs';
 import { ASSETS, HOLDS, RELEASE, assertStaticLabel, makeCanary, verifyTimeline } from '../fixtures/H-cross-browser-desktop-policy.mjs';
-import { ffmpeg, filterScriptArgs, findFont, privateDir, wrapLabel } from '../fixtures/H-cross-browser-desktop-recorder.mjs';
+import { drawLines, ffmpeg, filterScriptArgs, findFont, privateDir, wrapLines } from '../fixtures/H-cross-browser-desktop-recorder.mjs';
 
 const WINDOW = { x: 60, y: 60, w: 1024, h: 720 };
 const NAMES = { btc: 'Bitcoin', ltc: 'Litecoin', xmr: 'Monero', wow: 'Wownero', grin: 'Grin' };
@@ -315,36 +315,32 @@ function encodeDesktop(outDir, timeline, fontOption) {
       clips.push(entry.file);
       return;
     }
-    const body = join(work, `card-${i}.txt`);
-    writeFileSync(body, `${wrapLabel(entry.label, 40)}\n\nNothing secret is recorded here.`);
     const clip = join(work, `card-${i}.mp4`);
+    const text = [
+      ...drawLines({ font, lines: ['Redacted'], size: Math.round(h / 12), color: '0xf5c542', x: '(w-text_w)/2', y: `h/2-${Math.round(h / 6)}`, workDir: work, stem: `card-${i}-title` }),
+      ...drawLines({ font, lines: [...wrapLines(entry.label, 40), '', 'Nothing secret is recorded here.'], size: Math.round(h / 26), color: '0xffffff', x: '(w-text_w)/2', y: 'h/2', workDir: work, stem: `card-${i}-body` }),
+    ];
     ffmpeg(['-f', 'lavfi', '-i', `color=c=0x15121f:s=${w}x${h}:r=30:d=${seconds.toFixed(3)}`,
-      '-vf', `drawtext=fontfile='${font}':text='Redacted':fontcolor=0xf5c542:fontsize=${Math.round(h / 12)}:x=(w-text_w)/2:y=h/2-${Math.round(h / 6)},`
-        + `drawtext=fontfile='${font}':textfile='${body}':expansion=none:fontcolor=0xffffff:fontsize=${Math.round(h / 26)}:line_spacing=12:x=(w-text_w)/2:y=h/2`,
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', clip]);
+      '-vf', text.join(','), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', clip]);
     clips.push(clip);
   });
   const t0 = timeline.entries[0].start;
   const marks = timeline.events.map((event) => ({ at: event.start, label: event.label })).sort((a, b) => a.at - b.at);
   const duration = (timeline.stoppedAt - t0) / 1000;
-  const captions = marks.map((mark, i) => {
-    const file = join(work, `caption-${i}.txt`);
-    writeFileSync(file, wrapLabel(mark.label, 24));
+  const captions = marks.flatMap((mark, i) => {
     const from = Math.max(0, (mark.at - t0) / 1000);
     const to = i + 1 < marks.length ? Math.max(from, (marks[i + 1].at - t0) / 1000) : duration + 1;
-    return `drawtext=fontfile='${font}':textfile='${file}':expansion=none:fontcolor=0xffffff:fontsize=42:line_spacing=12:x=60:y=300:enable='between(t,${from.toFixed(3)},${to.toFixed(3)})'`;
+    return drawLines({ font, lines: wrapLines(mark.label, 24), size: 42, color: '0xffffff', x: 60, y: 300, spacing: 12, enable: `between(t,${from.toFixed(3)},${to.toFixed(3)})`, workDir: work, stem: `caption-${i}` });
   });
-  const laneFile = join(work, 'lane.txt');
-  writeFileSync(laneFile, 'Smirk Wallet v0.3.1 (run 11204)\nArea H: macOS desktop');
   const inputs = clips.flatMap((clip) => ['-i', clip]);
-  const normalised = clips.map((_, i) => `[${i}:v]fps=30,scale=${w}:${h},setsar=1[c${i}]`);
+  const normalised = clips.map((_, i) => `[${i}:v]fps=30,scale=${w}:${h},setsar=1,format=yuv420p[c${i}]`);
   const graph = [
     ...normalised,
     `${clips.map((_, i) => `[c${i}]`).join('')}concat=n=${clips.length}:v=1:a=0[raw]`,
     'color=c=0x0d0b14:s=1920x1080:r=30[bg]',
     '[raw]scale=1240:900:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[shot]',
     ['[bg][shot]overlay=x=W-w-60:y=(H-h)/2:shortest=1',
-      `drawtext=fontfile='${font}':textfile='${laneFile}':expansion=none:fontcolor=0xf5c542:fontsize=30:line_spacing=10:x=60:y=120`,
+      ...drawLines({ font, lines: ['Smirk Wallet v0.3.1 (run 11204)', 'Area H: macOS desktop'], size: 30, color: '0xf5c542', x: 60, y: 120, spacing: 10, workDir: work, stem: 'lane' }),
       `drawtext=fontfile='${font}':text='%{pts\\:gmtime\\:${Math.floor(t0 / 1000)}\\:%Y-%m-%d %T} UTC':fontcolor=0xbbbbbb:fontsize=28:x=60:y=h-120`,
       ...captions,
       'format=yuv420p[v]'].join(','),

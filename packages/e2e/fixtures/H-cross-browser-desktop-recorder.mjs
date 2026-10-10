@@ -351,7 +351,7 @@ export function filterScriptArgs(file) {
 }
 
 /** Word-wrap a static label for drawtext, which does not wrap by itself. */
-export function wrapLabel(label, width) {
+export function wrapLines(label, width) {
   const lines = [];
   let line = '';
   for (const word of String(label).split(/\s+/)) {
@@ -363,23 +363,41 @@ export function wrapLabel(label, width) {
     }
   }
   if (line) lines.push(line);
-  return lines.join('\n');
+  return lines;
+}
+
+export function wrapLabel(label, width) {
+  return wrapLines(label, width).join('\n');
+}
+
+/**
+ * One drawtext per line. Newlines inside a drawtext text render as a missing
+ * glyph box in ffmpeg 8, so multi-line text is always split here.
+ * @param {{ font: string, lines: string[], size: number, color: string, x: string | number, y: number | string, spacing?: number, enable?: string, workDir: string, stem: string }} options
+ */
+export function drawLines({ font, lines, size, color, x, y, spacing = Math.round(size / 3), enable, workDir, stem }) {
+  // Empty lines only add spacing; drawtext gets no empty text.
+  return lines.flatMap((line, i) => {
+    if (!line) return [];
+    const file = join(workDir, `${stem}-${i}.txt`);
+    writeFileSync(file, line);
+    const top = typeof y === 'number' ? y + i * (size + spacing) : `${y}+${i * (size + spacing)}`;
+    return [`drawtext=fontfile='${font}':textfile='${file}':expansion=none:fontcolor=${color}:fontsize=${size}:x=${x}:y=${top}${enable ? `:enable='${enable}'` : ''}`];
+  });
 }
 
 /** Render a redaction card the size of the lane's frames. */
 export function renderCard(path, { width, height, label, font, workDir }) {
   const stem = relative(workDir, path).replace(/[^A-Za-z0-9]/g, '_');
-  const title = join(workDir, `${stem}.title.txt`);
-  const body = join(workDir, `${stem}.body.txt`);
   const size = Math.max(12, Math.round(Math.min(height / 22, width / 19)));
   const perLine = Math.max(12, Math.floor(width / (size * 0.62)));
-  writeFileSync(title, 'Redacted');
-  writeFileSync(body, `${wrapLabel(label, perLine)}\n\n${wrapLabel('Nothing secret is recorded here.', perLine)}`);
+  const body = [...wrapLines(label, perLine), '', ...wrapLines('Nothing secret is recorded here.', perLine)];
   ffmpeg([
     '-f', 'lavfi', '-i', `color=c=0x15121f:s=${width}x${height}:d=1`,
     '-vf', [
-      `drawtext=fontfile='${font}':textfile='${title}':expansion=none:fontcolor=0xf5c542:fontsize=${size * 2}:x=(w-text_w)/2:y=h/2-${size * 4}`,
-      `drawtext=fontfile='${font}':textfile='${body}':expansion=none:fontcolor=0xffffff:fontsize=${size}:x=(w-text_w)/2:y=h/2-${size}:line_spacing=${Math.round(size / 2)}`,
+      ...drawLines({ font, lines: ['Redacted'], size: size * 2, color: '0xf5c542', x: '(w-text_w)/2', y: `h/2-${size * 4}`, workDir, stem: `${stem}-title` }),
+      ...drawLines({ font, lines: body, size, color: '0xffffff', x: '(w-text_w)/2', y: `h/2-${size}`, workDir, stem: `${stem}-body` }),
+      'format=rgb24',
     ].join(','),
     '-frames:v', '1', path,
   ]);
@@ -423,22 +441,25 @@ export function encodeLane(outDir, { font: explicitFont } = {}) {
   const t0 = timeline.frames[0].at;
   const marks = timeline.events.map((event) => ({ at: event.start, label: event.label })).sort((a, b) => a.at - b.at);
   const duration = (timeline.stoppedAt - t0) / 1000;
-  const captions = marks.map((mark, i) => {
-    const file = join(work, `caption-${i}.txt`);
-    writeFileSync(file, wrapLabel(mark.label, 30));
+  const captions = marks.flatMap((mark, i) => {
     const from = Math.max(0, (mark.at - t0) / 1000);
     const to = i + 1 < marks.length ? Math.max(from, (marks[i + 1].at - t0) / 1000) : duration + 1;
-    return `drawtext=fontfile='${font}':textfile='${file}':expansion=none:fontcolor=0xffffff:fontsize=52:line_spacing=14:x=100:y=300:enable='between(t,${from.toFixed(3)},${to.toFixed(3)})'`;
+    return drawLines({ font, lines: wrapLines(mark.label, 30), size: 52, color: '0xffffff', x: 100, y: 300, spacing: 14, enable: `between(t,${from.toFixed(3)},${to.toFixed(3)})`, workDir: work, stem: `caption-${i}` });
   });
-  const laneFile = join(work, 'lane.txt');
-  writeFileSync(laneFile, `Smirk Wallet v0.3.1 (run 11204)\nArea H: ${timeline.lane}`);
   const start = Math.floor(t0 / 1000);
+  // Frames may differ in size or pixel format (a window change, a card), and a
+  // filtergraph reinit would restart the canvas and drop held frames. So reinit
+  // is off and every frame is normalised to one size and format first.
+  const even = (value) => Math.max(2, Math.round(value / 2) * 2);
+  const W = even(size.width);
+  const H = even(size.height);
   const graph = [
     'color=c=0x0d0b14:s=1920x1080:r=30[bg]',
-    '[0:v]fps=30,scale=1100:960:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[shot]',
+    `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x15121f,format=rgb24,fps=30,`
+      + 'scale=1100:960:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[shot]',
     [
       '[bg][shot]overlay=x=W-w-100:y=(H-h)/2:shortest=1',
-      `drawtext=fontfile='${font}':textfile='${laneFile}':expansion=none:fontcolor=0xf5c542:fontsize=34:line_spacing=10:x=100:y=120`,
+      ...drawLines({ font, lines: ['Smirk Wallet v0.3.1 (run 11204)', `Area H: ${timeline.lane}`], size: 34, color: '0xf5c542', x: 100, y: 120, spacing: 10, workDir: work, stem: 'lane' }),
       `drawtext=fontfile='${font}':text='%{pts\\:gmtime\\:${start}\\:%Y-%m-%d %T} UTC':fontcolor=0xbbbbbb:fontsize=32:x=100:y=h-140`,
       ...captions,
       'format=yuv420p[v]',
@@ -447,7 +468,7 @@ export function encodeLane(outDir, { font: explicitFont } = {}) {
   const graphFile = join(work, 'filter.txt');
   writeFileSync(graphFile, graph);
   const output = join(outDir, `${timeline.lane}.mp4`);
-  ffmpeg(['-f', 'concat', '-safe', '0', '-i', list, ...filterScriptArgs(graphFile), '-map', '[v]', '-t', duration.toFixed(3),
+  ffmpeg(['-reinit_filter', '0', '-f', 'concat', '-safe', '0', '-i', list, ...filterScriptArgs(graphFile), '-map', '[v]', '-t', duration.toFixed(3),
     '-c:v', 'libx264', '-crf', '20', '-preset', 'veryfast', '-movflags', '+faststart', output]);
   chmodSync(output, 0o600);
 
