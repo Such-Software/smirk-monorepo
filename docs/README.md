@@ -24,7 +24,7 @@
 - [Developer and repository guide](../MONOREPO.md)
 - [Asset registry and per-family adapters](MULTI_ASSET_ARCHITECTURE.md)
 - [Embedded browser boundaries](EMBEDDED_BROWSER.md)
-- [Monero and Wownero](monero-wownero.md), [Grin](grin.md), and [future atomic swaps](swap-core.md)
+- [Monero and Wownero](monero-wownero.md), [Grin](grin.md), and [native swap protocols](swap-core.md)
 - [Core state, key and identity APIs](../packages/core/README.md)
 - [Shared UI](../packages/ui/README.md), [Trocador swaps](../packages/swap/README.md), and [WASM bindings](../packages/wasm/README.md)
 
