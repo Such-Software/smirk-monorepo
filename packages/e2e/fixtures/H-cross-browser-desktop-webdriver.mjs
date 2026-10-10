@@ -89,6 +89,7 @@ export class GeckoSession {
     const session = new GeckoSession(`http://127.0.0.1:${port}`, driver);
     try {
       await session.#create({ firefox, prefs, headless, systemAccess });
+      await session.#assertExclusive(wsPort);
     } catch (error) {
       // A refused session must not leave geckodriver holding the event loop open.
       await session.quit();
@@ -127,6 +128,38 @@ export class GeckoSession {
     session.id = created.sessionId;
     session.capabilities = created.capabilities;
     return session;
+  }
+
+  /**
+   * With --allow-system-access, whoever drives this session can run
+   * chrome-privileged script while the phrase and password are in the page.
+   * The loopback ports take no authentication, so the session must be the
+   * only one either port will serve: commands need its random session id,
+   * which only this process holds (geckodriver's output is discarded and it
+   * has no session listing), and a second session must be refused. Prove the
+   * refusal on both the WebDriver port and the BiDi port; a port that accepts
+   * a second session refuses the lane. A process running as this user could
+   * read the custody file directly, so the boundary defended here is other
+   * users on the host.
+   */
+  async #assertExclusive(wsPort) {
+    let second = null;
+    try {
+      second = await this.cmd('POST', '/session', { capabilities: { alwaysMatch: { browserName: 'firefox' } } }, { noSession: true });
+    } catch (error) {
+      if (!(error instanceof WebDriverError)) throw error;
+    }
+    if (second?.sessionId) {
+      await fetch(`${this.base}/session/${second.sessionId}`, { method: 'DELETE' }).catch(() => {});
+      throw new WebDriverError('second session accepted', 'POST /session');
+    }
+    let bidiSecond = null;
+    try {
+      bidiSecond = await bidi(`ws://127.0.0.1:${wsPort}/session`, 'session.new', { capabilities: {} });
+    } catch (error) {
+      if (!(error instanceof WebDriverError)) throw error;
+    }
+    if (bidiSecond?.sessionId) throw new WebDriverError('second BiDi session accepted', 'session.new');
   }
 
   constructor(base, driver) {
@@ -228,6 +261,10 @@ async function bidi(url, method, params) {
   try {
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new WebDriverError('bidi timeout', method)), 60_000);
+      socket.addEventListener('close', () => {
+        clearTimeout(timer);
+        reject(new WebDriverError('bidi closed', method));
+      }, { once: true });
       socket.addEventListener('message', (event) => {
         let message;
         try { message = JSON.parse(String(event.data)); } catch { return; }

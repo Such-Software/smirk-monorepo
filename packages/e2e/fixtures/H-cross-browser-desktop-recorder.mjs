@@ -3,10 +3,11 @@
  * redaction, owner-policy holds and a timeline the encoder verifies.
  *
  * Per frame (about four a second): run the in-page guard and the canary, take
- * the screenshot (Chromium masks named surfaces; Firefox has no masks, so any
- * hit becomes a full redaction card), run both again, and drop the frame if
- * the two passes disagree. Identical frames are stored once and the timeline
- * keeps their times, so long static holds cost no disk.
+ * the screenshot (Chromium masks named surfaces; the Firefox adapter covers
+ * them with opaque boxes and proves the cover, else the frame becomes a full
+ * redaction card), run both again, and drop the frame if the two passes
+ * disagree. Identical frames are stored once and the timeline keeps their
+ * times, so long static holds cost no disk.
  *
  * Every interaction goes through the helpers below; specs never click or type
  * directly (see the lint in H-cross-browser-desktop-guard.test.mjs):
@@ -15,17 +16,27 @@
  *   choose(target, value, label) 6 s static hold, then a <select> value
  *   settled(label)              waits out Updating/Loading, then 12 s still
  *   result(label)               25 s still, for key results
- *   secret(label, fn)           card frames only while fn types or reveals
- *                               anything secret; resumes after two clean passes
+ *   secret(label, fn)           6 s static hold, then card frames only while
+ *                               fn types or reveals anything secret; resumes
+ *                               after two clean passes
+ *
+ * Every screen an interaction leaves behind is held still for 12 s before the
+ * next interaction: if the spec did not call settled() or result() since the
+ * last interaction, the recorder holds a "Screen settles" still itself (and
+ * counts it in stats.autoSettled), and verifyTimeline refuses a timeline in
+ * which an interaction follows another without a hold in between.
+ *
+ * Each recorder writes into a fresh directory: a frames/ that is not empty,
+ * or an existing timeline.json, refuses, so no run overwrites another's footage.
  *
  * Labels are static strings (assertStaticLabel). Nothing here prints a value.
  */
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, relative } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { CLEAN_PASS_GAP_MS, FRAME_INTERVAL_MS, GUARD_RULES, HOLDS, assertStaticLabel, verifyTimeline } from './H-cross-browser-desktop-policy.mjs';
+import { CLEAN_PASS_GAP_MS, FRAME_INTERVAL_MS, GUARD_RULES, HOLDS, MASKS, MaskUnavailable, POLL_MS, assertStaticLabel, verifyTimeline } from './H-cross-browser-desktop-policy.mjs';
 import { hCanarySnapshot, hSecretVerdict } from './H-cross-browser-desktop-guard.mjs';
 
 /** Create a directory chain owned by this user with mode 0700 at every level we create. */
@@ -65,6 +76,9 @@ export class GuardedRecorder {
     this.lane = assertStaticLabel(lane);
     this.outDir = privateDir(outDir);
     this.frameDir = privateDir(join(outDir, 'frames'));
+    if (readdirSync(this.frameDir).length || existsSync(join(this.outDir, 'timeline.json'))) {
+      throw new FootageError('the footage directory already holds a run; each run records into its own directory');
+    }
     this.canary = canary;
     this.holds = holds;
     this.interval = interval;
@@ -72,8 +86,10 @@ export class GuardedRecorder {
     this.frames = [];
     this.events = [];
     this.files = new Map();
-    this.stats = { captured: 0, stored: 0, cards: 0, dropped: 0, unreadable: 0 };
+    this.stats = { captured: 0, stored: 0, cards: 0, dropped: 0, unreadable: 0, autoSettled: 0 };
     this.secretLabel = null;
+    /** The current screen has not had its settled hold since the last interaction. */
+    this.needsSettle = true;
     this.stopped = true;
     this.loop = null;
     this.startedAt = null;
@@ -120,7 +136,13 @@ export class GuardedRecorder {
     const leak = this.canary.check(snapshot);
     snapshot = null;
     let cardLabel = leak ?? verdict.card[0] ?? null;
-    if (!cardLabel && verdict.mask.length && this.adapter.maskMode === 'card') cardLabel = verdict.mask[0];
+    if (!cardLabel && verdict.mask.length) {
+      // 'mask': the adapter masks every kind. 'overlay': only CSS-addressable
+      // kinds can be covered. 'card': nothing can; the frame becomes a card.
+      const mode = this.adapter.maskMode;
+      const unmaskable = verdict.mask.find((kind) => mode === 'card' || (mode === 'overlay' && !MASKS[kind]));
+      if (unmaskable) cardLabel = unmaskable;
+    }
     return { cardLabel, mask: verdict.mask, key: JSON.stringify([verdict.card, verdict.mask, Boolean(leak)]) };
   }
 
@@ -143,7 +165,9 @@ export class GuardedRecorder {
       if (first.cardLabel) return this.#card(at, first.cardLabel);
       shot = await this.adapter.screenshot(first.mask);
       second = await this.#inspect();
-    } catch {
+    } catch (error) {
+      // The adapter could not prove a mask covered its surface: card the frame.
+      if (error instanceof MaskUnavailable && first?.mask?.length) return this.#card(at, first.mask[0]);
       this.stats.unreadable++;
       return this.#card(at, 'Screen unreadable');
     }
@@ -175,8 +199,30 @@ export class GuardedRecorder {
   /** A static hold: no actions, frames keep coming. */
   async #still(ms) {
     const start = Date.now();
-    while (Date.now() - start < ms) await sleep(Math.min(250, ms - (Date.now() - start)) || 1);
+    for (let left = ms; left > 0; left = ms - (Date.now() - start)) {
+      const tick = Math.min(this.interval, left);
+      await sleep(tick);
+    }
     return Date.now() - start;
+  }
+
+  /** The screen the last interaction left gets its 12 s still before the next one. */
+  async #heldBeforeInteraction() {
+    if (!this.needsSettle) return;
+    this.stats.autoSettled++;
+    await this.settled('Screen settles');
+  }
+
+  /** The screen's still (if it had none), the 6 s pre-tap still, then the action: one tap event. */
+  async #interact(label, action) {
+    assertStaticLabel(label);
+    await this.#heldBeforeInteraction();
+    const start = Date.now();
+    await this.#still(this.holds.preTapMs);
+    const holdMs = Date.now() - start;
+    this.needsSettle = true;
+    await this.exclusive.run(action);
+    this.events.push({ kind: 'tap', label, start, end: Date.now(), holdMs });
   }
 
   chapter(label) {
@@ -185,53 +231,29 @@ export class GuardedRecorder {
     this.events.push({ kind: 'chapter', label, start: at, end: at, holdMs: 0 });
   }
 
-  async tap(target, label) {
-    assertStaticLabel(label);
-    const start = Date.now();
-    await this.#still(this.holds.preTapMs);
-    const holdMs = Date.now() - start;
-    await this.exclusive.run(() => this.adapter.click(target));
-    this.events.push({ kind: 'tap', label, start, end: Date.now(), holdMs });
+  tap(target, label) {
+    return this.#interact(label, () => this.adapter.click(target));
   }
 
   /** Non-secret values only (amounts, public addresses). A canary hit refuses. */
   async type(target, value, label) {
     assertStaticLabel(label);
     if (this.canary.check({ text: '', values: [String(value)] })) throw new Error(`refusing to type a known secret through type(); use secret() (${label})`);
-    const start = Date.now();
-    await this.#still(this.holds.preTapMs);
-    const holdMs = Date.now() - start;
-    await this.exclusive.run(() => this.adapter.fill(target, String(value)));
-    this.events.push({ kind: 'tap', label, start, end: Date.now(), holdMs });
+    return this.#interact(label, () => this.adapter.fill(target, String(value)));
   }
 
-  async choose(target, value, label) {
-    assertStaticLabel(label);
-    const start = Date.now();
-    await this.#still(this.holds.preTapMs);
-    const holdMs = Date.now() - start;
-    await this.exclusive.run(() => this.adapter.choose(target, String(value)));
-    this.events.push({ kind: 'tap', label, start, end: Date.now(), holdMs });
+  choose(target, value, label) {
+    return this.#interact(label, () => this.adapter.choose(target, String(value)));
   }
 
-  /** Any other visible operation (opening a page, reopening the wallet). Same pre-hold as a tap. */
-  async act(label, fn) {
-    assertStaticLabel(label);
-    const start = Date.now();
-    await this.#still(this.holds.preTapMs);
-    const holdMs = Date.now() - start;
-    await this.exclusive.run(fn);
-    this.events.push({ kind: 'tap', label, start, end: Date.now(), holdMs });
+  /** Any other visible operation (opening a page, reopening the wallet). Same holds as a tap. */
+  act(label, fn) {
+    return this.#interact(label, fn);
   }
 
-  /** Key presses such as Escape. Same pre-hold as a tap. */
-  async press(key, label) {
-    assertStaticLabel(label);
-    const start = Date.now();
-    await this.#still(this.holds.preTapMs);
-    const holdMs = Date.now() - start;
-    await this.exclusive.run(() => this.adapter.press(key));
-    this.events.push({ kind: 'tap', label, start, end: Date.now(), holdMs });
+  /** Key presses such as Escape. Same holds as a tap. */
+  press(key, label) {
+    return this.#interact(label, () => this.adapter.press(key));
   }
 
   /** Wait until Updating/Loading leave the screen (bounded), then hold 12 s. */
@@ -241,11 +263,12 @@ export class GuardedRecorder {
     while (Date.now() - waitStart < patience) {
       const text = await this.exclusive.run(() => this.adapter.rootText()).catch(() => '');
       if (!busy.test(text)) break;
-      await sleep(500);
+      await sleep(POLL_MS);
     }
     const start = Date.now();
     await this.#still(this.holds.settledMs);
     this.#event('settled', label, start);
+    this.needsSettle = false;
   }
 
   /** Hold a key result on screen for 25 s. */
@@ -254,16 +277,22 @@ export class GuardedRecorder {
     const start = Date.now();
     await this.#still(this.holds.resultMs);
     this.#event('result', label, start);
+    this.needsSettle = false;
   }
 
   /**
-   * Secret scope: every frame is a redaction card while `fn` runs. `fn` gets
-   * hold-free helpers (tap, fill, choose, press) that work only inside the
-   * scope. Recording resumes after two consecutive clean guard passes.
+   * Secret scope: the screen's still (if it had none) and a 6 s still of it,
+   * then every frame is a redaction card while `fn` runs. `fn` gets hold-free
+   * helpers (tap, fill, choose, press) that work only inside the scope.
+   * Recording resumes after two consecutive clean guard passes.
    */
   async secret(label, fn, { cleanPatience = 120_000 } = {}) {
     assertStaticLabel(label);
+    await this.#heldBeforeInteraction();
     const start = Date.now();
+    await this.#still(this.holds.preTapMs);
+    const preHoldMs = Date.now() - start;
+    this.needsSettle = true;
     this.secretLabel = label;
     let open = true;
     const inside = (action) => {
@@ -287,7 +316,7 @@ export class GuardedRecorder {
     // failed scope the screen may still hold a secret: keep the card on (later
     // frames stay redacted until resume()) and report the scope's own error.
     const resumed = await this.#awaitClean(failure ? 10_000 : cleanPatience);
-    this.#event('secret', label, start, { resumed });
+    this.#event('secret', label, start, { resumed, preHoldMs });
     if (failure) throw failure;
     if (!resumed) throw new FootageError(`a secret surface stayed visible after: ${label}`);
   }

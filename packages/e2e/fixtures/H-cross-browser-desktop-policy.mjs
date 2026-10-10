@@ -35,6 +35,9 @@ export const FRAME_INTERVAL_MS = 250;
 /** Two consecutive clean passes, this far apart, end a secret scope. */
 export const CLEAN_PASS_GAP_MS = 400;
 
+/** Condition polls (until(), busy checks) look again this often. Never a hold. */
+export const POLL_MS = 500;
+
 /** The exact release candidate under test (run 11204, source 14a74e10). */
 export const RELEASE = Object.freeze({
   version: '0.3.1',
@@ -58,8 +61,27 @@ export const RELEASE = Object.freeze({
 /** Machine-local footage root. Never promoted automatically. */
 export const FOOTAGE_ROOT = join(homedir(), 'Build', 'smirk-e2e', 'v0.3.1-run-11204', 'footage');
 
+/**
+ * One directory per invocation, so a run never overwrites an earlier run's
+ * footage, timeline or evidence: <root>/H-cross-browser-desktop/<stamp>/<lane>/.
+ * UTC, sortable, no separators a shell would need to quote.
+ */
+export function runStamp(at = new Date()) {
+  return at.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+}
+
 /** Assets in Home order; test ids are asset-row-<id> and asset-row-<id>-balance. */
 export const ASSETS = Object.freeze(['btc', 'ltc', 'xmr', 'wow', 'grin']);
+
+/**
+ * Assets alice is known to hold, so each must read above zero on every
+ * surface. From ~/journal/ops/handoffs/smirk/2026-10-03 Demo Wallet Balances.md:
+ * about 0.19 XMR and 19.78 WOW, received on chain and never spent by tests.
+ * That note records an LWS outage that showed both as 0 while the coins were
+ * there; a lane that accepts 0 for a funded asset would have passed it. Add
+ * assets with --funded when the owner confirms more (BTC, LTC, GRIN).
+ */
+export const ALICE_FUNDED = Object.freeze(['xmr', 'wow']);
 
 /**
  * Masked surfaces. The in-page guard detects them with these exact selectors
@@ -95,9 +117,26 @@ export const GUARD_RULES = Object.freeze({
     + '|nostr-reveal-[0-9a-f]{64}|nostr-nsec-[0-9a-f]{64}|onboarding-password-input|onboarding-password-confirm-input|operation-password'
     + '|operation-password-confirm|migrate-password|tip-share-url|swap-status-private-link|home-error-relock-btn)$',
   privateKeyText: '(nsec1[02-9ac-hj-np-z]{20,}|[xtyz]prv[1-9A-HJ-NP-Za-km-z]{20,})',
+  // Settings > Security > Export raw keys shows 64-hex private keys with no
+  // test id. Its labels give the revealed panel away (case-insensitive).
+  privateKeyPanelText: '(private keys below|private (spend|view) key|private key \\(secp256k1\\)|slatepack secret key)',
+  // Any 64-hex run while a Settings surface is on screen: the export panel's
+  // public material shares the screen with the reveal, so it cards too.
+  settingsHexText: '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)',
   claimLinkText: CLAIM_LINK_TEXT,
   masks: MASKS,
 });
+
+/** Mask fill colour, the same in the Chromium masks and the Firefox overlays. */
+export const MASK_COLOR = '#1b1726';
+
+/**
+ * Thrown by an adapter that could not prove a masked surface covered in its
+ * screenshot. The recorder turns the frame into a redaction card instead.
+ */
+export class MaskUnavailable extends Error {
+  name = 'MaskUnavailable';
+}
 
 const LABEL = /^[A-Za-z][A-Za-z0-9 ,.:;()'/+&-]{0,79}$/;
 const VALUE_LIKE = /:\/\/|[0-9a-f]{16,}|[1-9A-HJ-NP-Za-km-z]{26,}|\d{5,}/i;
@@ -172,14 +211,28 @@ export function makeCanary({ phraseWords = [], exact = [] } = {}) {
 /**
  * Timeline verifier: every hold meets policy, every frame has a guard verdict
  * and every label is static. Returns violations as static strings.
+ *
+ * Holds are checked as a sequence, not only one by one: every interaction (a
+ * tap, a typed value, a choice, a secret scope) must come after a settled or
+ * result hold on the screen the previous interaction left. A screen that was
+ * tapped through without its 12 s still therefore fails here even if every
+ * event the lane declared met its own floor.
  */
 export function verifyTimeline(timeline, holds = HOLDS) {
   const problems = [];
   const minimum = { tap: holds.preTapMs, settled: holds.settledMs, result: holds.resultMs };
+  let held = false;
   for (const event of timeline.events ?? []) {
     try { assertStaticLabel(event.label); } catch { problems.push(`an ${event.kind} event has a non-static label`); }
     const floor = minimum[event.kind];
     if (floor !== undefined && !(event.holdMs >= floor)) problems.push(`${event.kind} hold shorter than ${floor} ms`);
+    if (event.kind === 'settled' || event.kind === 'result') {
+      if (event.holdMs >= floor) held = true;
+    } else if (event.kind === 'tap' || event.kind === 'secret') {
+      if (!held) problems.push(`a ${event.kind} came before its screen was held still`);
+      if (event.kind === 'secret' && !(event.preHoldMs >= holds.preTapMs)) problems.push(`secret pre-hold shorter than ${holds.preTapMs} ms`);
+      held = false;
+    }
   }
   for (const frame of timeline.frames ?? []) {
     if (!['clean', 'masked', 'card'].includes(frame.verdict)) { problems.push('a frame has no guard verdict'); break; }

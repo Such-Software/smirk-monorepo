@@ -15,20 +15,32 @@
 #      written. Any difference refuses: use a dedicated macOS test user then.
 #   3. Record (scripts/H-cross-browser-desktop-macos-driver.mjs): import alice
 #      with recording stopped, Home balances read from the accessibility tree
-#      and compared with the Chromium reference, lock and unlock with recording
-#      stopped around the password, a history entry whose explorer link opens
-#      the default browser, quit. The real paths are checked again afterwards.
+#      (alice's funded assets above zero) and compared with a fresh Chromium
+#      reference, lock and unlock with recording stopped around the password,
+#      a history entry whose explorer link opens the default browser, quit.
+#      The real paths are checked again afterwards.
+#
+# Run the chromium lane of tests/live/h-firefox.live.mjs right before this: its
+# last step writes the balance reference, and the comparison refuses a
+# reference older than 30 minutes (--reference-max-age-min) or one read while
+# funds were moving. Each run writes to its own directory,
+#   ~/Build/smirk-e2e/v0.3.1-run-11204/footage/H-cross-browser-desktop/<UTC stamp>/macos-desktop/
+# and never overwrites an earlier run's footage or evidence.
 #
 # Usage, from the monorepo root after npm ci:
 #   packages/e2e/scripts/desktop-smoke-macos.sh --verify-only
 #   packages/e2e/scripts/desktop-smoke-macos.sh --isolation-only
 #   E2E_LIVE=1 FOOTAGE=guarded ALLOW_PROD_WRITES=1 \
 #     packages/e2e/scripts/desktop-smoke-macos.sh --wallet-file <custody file> \
-#       [--reference <balances-reference.json>] [--screen <avfoundation index>] [--keep-app]
+#       [--reference <balances-reference.json>] [--reference-max-age-min N] \
+#       [--funded xmr,wow] [--share-signin-budget] [--screen <avfoundation index>] [--keep-app]
 #
-# Needs: Accessibility and Screen Recording permission for the terminal, the
-# installed Smirk Wallet not running, and Focus (Do Not Disturb) on so no
-# notification lands inside the recorded window rectangle.
+# Needs: Accessibility and Screen Recording permission for the terminal, and
+# the installed Smirk Wallet not running. Turn Focus (Do Not Disturb) on as
+# well. Focus cannot be read without Full Disk Access, so the recorder checks
+# what it protects against directly: a segment is stopped and deleted the
+# moment another app's window (a notification banner, a dialog) overlaps the
+# recorded window, or the window moves.
 set -euo pipefail
 
 refuse() { printf 'desktop smoke refused: %s\n' "$*" >&2; exit "${CODE:-1}"; }
@@ -41,12 +53,16 @@ team_id=D8PL9F7X33
 staged="$HOME/Build/smirk-release/v0.3.1-run-11204/staged"
 root="$HOME/Build/smirk-e2e/v0.3.1-run-11204"
 dmg="" wallet_file="" reference="" screen="" font="" mode=full keep_app=0
+max_age="" funded="" share_budget=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dmg) dmg=$2; shift 2 ;;
     --wallet-file) wallet_file=$2; shift 2 ;;
     --reference) reference=$2; shift 2 ;;
+    --reference-max-age-min) max_age=$2; shift 2 ;;
+    --funded) funded=$2; shift 2 ;;
+    --share-signin-budget) share_budget=1; shift ;;
     --screen) screen=$2; shift 2 ;;
     --font) font=$2; shift 2 ;;
     --out-root) root=$2; shift 2 ;;
@@ -58,13 +74,16 @@ while [ $# -gt 0 ]; do
 done
 dmg=${dmg:-$staged/macos/Smirk-Wallet-$version.dmg}
 provenance=$(dirname "$dmg")/RELEASE-PROVENANCE-macos-v$version.json
-reference=${reference:-$root/footage/H-cross-browser-desktop/balances-reference.json}
+area_root="$root/footage/H-cross-browser-desktop"
+reference=${reference:-$area_root/balances-reference.json}
+ledger="$area_root/signin-ledger.jsonl"
 work="$root/work/H-cross-browser-desktop/macos"
-out="$root/footage/H-cross-browser-desktop/macos-desktop"
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+out="$area_root/$stamp/macos-desktop"
 
 # ---- cheap guards first -----------------------------------------------------
 [ "$(uname -s)" = Darwin ] || refuse "this smoke runs on macOS only"
-for tool in hdiutil spctl codesign xcrun ditto shasum plutil node swiftc pgrep stat; do
+for tool in hdiutil spctl codesign xcrun ditto shasum plutil node swiftc pgrep stat lsof; do
   command -v "$tool" >/dev/null 2>&1 || refuse "missing tool: $tool"
 done
 [ -f "$dmg" ] || refuse "no disk image at $dmg"
@@ -77,6 +96,7 @@ if [ "$mode" = full ]; then
   [ -f "$wallet_file" ] && [ ! -L "$wallet_file" ] || refuse "the custody file must be a regular file"
   [ "$(stat -f '%Lp' "$wallet_file")" = 600 ] || refuse "the custody file must have mode 0600"
   [ "$(stat -f '%u' "$wallet_file")" = "$(id -u)" ] || refuse "the custody file must be owned by $(id -un)"
+  [ ! -e "$out" ] || refuse "the output directory for this run already exists; each run records into its own directory"
 fi
 if [ "$mode" != verify ] && pgrep -f 'Smirk Wallet.app/Contents/MacOS/smirk-desktop' >/dev/null 2>&1; then
   refuse "a Smirk Wallet app is running; quit it so nothing shares its data or window focus"
@@ -91,6 +111,26 @@ cleanup() {
   [ "$keep_app" = 1 ] || rm -rf "$app_dir"
 }
 trap cleanup EXIT
+
+# Condition wait, bounded at 60 s: true once nothing runs from the copied app
+# and no process holds a file under any real Smirk path (a late write there is
+# what the comparison below must not miss). A fixed sleep would only guess.
+# Uses real_paths, defined below with the snapshot.
+released() {
+  local tries=0 p held
+  while [ "$tries" -lt 120 ]; do
+    held=0
+    pgrep -f "$app/Contents/MacOS/smirk-desktop" >/dev/null 2>&1 && held=1
+    for p in "${real_paths[@]}"; do
+      [ -d "$HOME/$p" ] && lsof -t +D "$HOME/$p" >/dev/null 2>&1 && held=1
+      [ -f "$HOME/$p" ] && lsof -t "$HOME/$p" >/dev/null 2>&1 && held=1
+    done
+    [ "$held" = 0 ] && return 0
+    tries=$((tries + 1))
+    sleep 0.5 # poll
+  done
+  return 1
+}
 
 # ---- 1. verify the disk image and the app -----------------------------------
 note "1. Verify $(basename "$dmg")"
@@ -153,7 +193,7 @@ rm -rf "$probe_home" && mkdir -p "$probe_home/Library"
 snapshot_real >"$work/real-before.txt"
 CODE=3 node "$here/H-cross-browser-desktop-macos-driver.mjs" --probe --ax "$bin/ax" --app "$app" --home "$probe_home" \
   || { CODE=3 refuse "the isolated launch did not reach a fresh welcome screen; use a dedicated macOS test user"; }
-sleep 3
+released || CODE=3 refuse "60 s after the app quit, a process still runs from the copy or holds a file in a real Smirk path; isolation cannot be proven"
 snapshot_real >"$work/real-after.txt"
 if ! cmp -s "$work/real-before.txt" "$work/real-after.txt"; then
   changed=$(diff "$work/real-before.txt" "$work/real-after.txt" | grep '^[<>]' | sed -E 's/^[<>] //; s/\|.*//' | sed "s#$HOME/##" | sort -u | head -5 | tr '\n' ' ')
@@ -173,16 +213,17 @@ if [ -z "$screen" ]; then
 fi
 ffmpeg -hide_banner -loglevel error -y -f avfoundation -framerate 30 -i "$screen:none" -frames:v 1 -f null - \
   || refuse "screen capture failed; grant Screen Recording to this terminal (System Settings > Privacy & Security)"
-mkdir -p "$out" && chmod 700 "$out"
+mkdir -p "$out" && chmod 700 "$area_root" "$area_root/$stamp" "$out"
 home="$work/home"
 rm -rf "$home" && mkdir -p "$home/Library"
 snapshot_real >"$work/real-before.txt"
 set +e
 node "$here/H-cross-browser-desktop-macos-driver.mjs" --ax "$bin/ax" --app "$app" --home "$home" --out "$out" \
-  --wallet-file "$wallet_file" --reference "$reference" --screen "$screen" ${font:+--font "$font"}
+  --wallet-file "$wallet_file" --reference "$reference" --ledger "$ledger" --screen "$screen" \
+  ${max_age:+--reference-max-age-min "$max_age"} ${funded:+--funded "$funded"} ${share_budget:+--share-signin-budget} ${font:+--font "$font"}
 status=$?
 set -e
-sleep 3
+released || refuse "60 s after the app quit, a process still runs from the copy or holds a file in a real Smirk path; the real Library check would be premature"
 snapshot_real >"$work/real-after.txt"
 cmp -s "$work/real-before.txt" "$work/real-after.txt" || refuse "the recorded run changed the real Library; treat its data as shared and investigate"
 note "   real Library paths unchanged after the run"

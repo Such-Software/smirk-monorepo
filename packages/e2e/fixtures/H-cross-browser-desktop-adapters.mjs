@@ -8,11 +8,16 @@
  *   { aria: 'Lock wallet' }   → button[aria-label="Lock wallet"]
  *
  * `maskMode` tells the recorder what a mask-level guard hit means: Chromium
- * masks the named surfaces in the screenshot; Firefox cannot, so it cards the
- * whole frame.
+ * ('mask') masks the named surfaces in the screenshot. Firefox ('overlay')
+ * has no screenshot masks, so it covers each CSS-addressable surface with an
+ * opaque box for the one screenshot, proves the cover before and after it,
+ * and throws MaskUnavailable when it cannot (the recorder then cards the
+ * frame). A kind with no CSS selector (claim link text) cards the frame.
  */
+import { randomBytes } from 'node:crypto';
 import { KEYS, WebDriverError } from './H-cross-browser-desktop-webdriver.mjs';
-import { CLAIM_LINK_TEXT, MASKS } from './H-cross-browser-desktop-policy.mjs';
+import { CLAIM_LINK_TEXT, MASKS, MASK_COLOR, MaskUnavailable } from './H-cross-browser-desktop-policy.mjs';
+import { hMaskCovered, hMaskOverlay, hMaskRemove } from './H-cross-browser-desktop-guard.mjs';
 
 export function selector(target) {
   if (typeof target === 'string') return `[data-testid="${target}"]`;
@@ -30,11 +35,16 @@ function visibleIndexes(css) {
   }).filter((index) => index >= 0);
 }
 
-/** Set a <select> to a value and fire the change event Preact listens for. */
-function chooseInPage(css, value) {
+/**
+ * Set a <select> to a value and fire the change event Preact listens for. It
+ * scrolls the control into view first, so the recording shows the choice.
+ * Takes [css, value]: both adapters pass one argument.
+ */
+function chooseInPage([css, value]) {
   const element = document.querySelector(css);
   if (!element || element.tagName !== 'SELECT') return false;
   if (![...element.options].some((option) => option.value === value)) return false;
+  element.scrollIntoView({ block: 'center' });
   element.value = value;
   element.dispatchEvent(new Event('input', { bubbles: true }));
   element.dispatchEvent(new Event('change', { bubbles: true }));
@@ -48,7 +58,7 @@ function rootTextInPage() {
 
 export class FirefoxAdapter {
   kind = 'firefox';
-  maskMode = 'card';
+  maskMode = 'overlay';
   imageExt = 'png';
   /** @type {{ width: number, height: number } | null} */
   popup = null;
@@ -101,8 +111,37 @@ export class FirefoxAdapter {
   }
   evaluate(fn, arg) { return arg === undefined ? this.session.execute(fn) : this.session.execute(fn, arg); }
   rootText() { return this.session.execute(rootTextInPage); }
-  screenshot() { return this.session.screenshot(); }
   async url() { return this.session.currentUrl(); }
+
+  /**
+   * The viewport, with every masked surface under an opaque box. The cover is
+   * proven in the page before the screenshot and again after it (a re-render
+   * in between could move a field out from under its box); either failure
+   * throws MaskUnavailable and the screenshot is discarded.
+   */
+  async screenshot(maskKinds = []) {
+    if (!maskKinds.length) return this.session.screenshot();
+    const selectors = maskKinds.map((kind) => MASKS[kind]?.css);
+    if (selectors.some((css) => !css)) throw new MaskUnavailable('no selector for a masked surface');
+    const token = randomBytes(8).toString('hex');
+    try {
+      await this.session.execute(hMaskOverlay, selectors, MASK_COLOR, token);
+      if (!(await this.session.execute(hMaskCovered, selectors, token))) throw new MaskUnavailable('a masked surface is not covered');
+      let shot = await this.session.screenshot();
+      if (!(await this.session.execute(hMaskCovered, selectors, token))) {
+        shot = null;
+        throw new MaskUnavailable('a masked surface moved during the screenshot');
+      }
+      return shot;
+    } finally {
+      await this.session.execute(hMaskRemove, token).catch(() => {});
+    }
+  }
+
+  /** Remove any overlay a failed frame left behind, before an action lands on it. */
+  async #clearMasks() {
+    await this.session.execute(hMaskRemove, null).catch(() => {});
+  }
 
   async #visible(target) {
     const css = selector(target);
@@ -126,12 +165,14 @@ export class FirefoxAdapter {
   }
 
   async click(target) {
+    await this.#clearMasks();
     const element = await this.#waitVisible(target);
     if (!element) throw new Error('target not visible');
     await this.session.click(element);
   }
 
   async fill(target, value) {
+    await this.#clearMasks();
     const element = await this.#waitVisible(target);
     if (!element) throw new Error('field not visible');
     await this.session.clear(element);
@@ -139,7 +180,7 @@ export class FirefoxAdapter {
   }
 
   async choose(target, value) {
-    if (!(await this.session.execute(chooseInPage, selector(target), value))) throw new Error('select option not available');
+    if (!(await this.session.execute(chooseInPage, [selector(target), value]))) throw new Error('select option not available');
   }
 
   async text(target) {
@@ -242,7 +283,7 @@ export class ChromiumAdapter {
 
   screenshot(maskKinds = []) {
     const mask = maskKinds.map((kind) => (MASKS[kind] ? this.live.locator(MASKS[kind].css) : this.live.getByText(new RegExp(CLAIM_LINK_TEXT))));
-    return this.live.screenshot({ type: 'jpeg', quality: 90, mask, maskColor: '#1b1726', animations: 'allow', caret: 'initial', timeout: 15_000 });
+    return this.live.screenshot({ type: 'jpeg', quality: 90, mask, maskColor: MASK_COLOR, animations: 'allow', caret: 'initial', timeout: 15_000 });
   }
 
   count(target) { return this.live.locator(selector(target)).filter({ visible: true }).count(); }
@@ -251,14 +292,7 @@ export class ChromiumAdapter {
   fill(target, value) { return this.#locator(target).fill(value, { timeout: 15_000 }); }
 
   async choose(target, value) {
-    if (!(await this.live.evaluate(([css, v]) => {
-      const element = document.querySelector(css);
-      if (!element || element.tagName !== 'SELECT' || ![...element.options].some((option) => option.value === v)) return false;
-      element.value = v;
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-      element.dispatchEvent(new Event('change', { bubbles: true }));
-      return element.value === v;
-    }, [selector(target), value]))) throw new Error('select option not available');
+    if (!(await this.live.evaluate(chooseInPage, [selector(target), value]))) throw new Error('select option not available');
   }
 
   async text(target) {

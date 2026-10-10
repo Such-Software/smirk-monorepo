@@ -8,11 +8,19 @@
 // Secret handling: `type` reads its text from stdin (never argv), types it into
 // the focused field and prints nothing about it. `snapshot` never returns text
 // field values, and returns no static text at all while a guard label applies
-// (a password being typed, a phrase grid, a recovery phrase screen).
+// (a password being typed, a phrase grid, a recovery phrase screen, the raw
+// key export). `match` answers only true or false.
+//
+// `overlap` lists the owners of on-screen windows of other apps that sit in
+// front of the app's window and intersect it (a notification banner, a
+// dialog). Focus (Do Not Disturb) cannot be read without Full Disk Access, so
+// the recorder checks the thing Focus is for directly: nothing foreign over
+// the recorded rectangle.
 //
 // Every command prints one JSON object on stdout.
 import ApplicationServices
 import Cocoa
+import CoreGraphics
 
 func emit(_ object: [String: Any]) {
     let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
@@ -85,7 +93,36 @@ func guardLabel(_ nodes: [Node]) -> String? {
     let joined = nodes.filter { $0.role == "AXStaticText" }.map(\.value).joined(separator: "\n")
     if matches(joined, "(recovery phrase|write these words|seed phrase|12 words)") { return "Recovery phrase screen" }
     if joined.range(of: "(nsec1[02-9ac-hj-np-z]{20,}|[xtyz]prv[1-9A-HJ-NP-Za-km-z]{20,})", options: .regularExpression) != nil { return "Private key text" }
+    // Settings > Security > Export raw keys: 64-hex private keys with labels
+    // that give the revealed panel away; its public material shares the
+    // screen, so any 64-hex run on a Settings screen counts too.
+    if matches(joined, "(private keys below|private (spend|view) key|private key \\(secp256k1\\)|slatepack secret key)") { return "Private key panel" }
+    if matches(joined, "(Auto-lock wallet after|Export raw keys)")
+        && joined.range(of: "(^|[^0-9a-fA-F])[0-9a-fA-F]{64}([^0-9a-fA-F]|$)", options: .regularExpression) != nil { return "Long hex in Settings" }
     return nil
+}
+
+func intersects(_ a: CGRect, _ b: CGRect) -> Bool { a.intersects(b) && !a.intersection(b).isEmpty }
+
+/// Windows of other apps in front of the app's largest normal window that
+/// intersect it, front to back. Owner names only.
+func foreignWindowsOver(_ pid: pid_t) -> (CGRect?, [String]) {
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return (nil, ["Window list unavailable"]) }
+    func bounds(_ info: [String: Any]) -> CGRect? {
+        guard let raw = info[kCGWindowBounds as String] as? NSDictionary, let rect = CGRect(dictionaryRepresentation: raw) else { return nil }
+        return rect
+    }
+    let owned = list.enumerated().filter { ($0.element[kCGWindowOwnerPID as String] as? Int) == Int(pid) && ($0.element[kCGWindowLayer as String] as? Int) == 0 }
+    guard let main = owned.max(by: { (bounds($0.element)?.width ?? 0) * (bounds($0.element)?.height ?? 0) < (bounds($1.element)?.width ?? 0) * (bounds($1.element)?.height ?? 0) }),
+          let frame = bounds(main.element) else { return (nil, []) }
+    var covering: [String] = []
+    for info in list[..<main.offset] {
+        if (info[kCGWindowOwnerPID as String] as? Int) == Int(pid) { continue }
+        if ((info[kCGWindowAlpha as String] as? Double) ?? 1) <= 0.01 { continue }
+        guard let rect = bounds(info), rect.width > 1, rect.height > 1, intersects(rect, frame) else { continue }
+        covering.append((info[kCGWindowOwnerName as String] as? String) ?? "unknown")
+    }
+    return (frame, covering)
 }
 
 func point(_ element: AXUIElement, _ name: String) -> CGPoint {
@@ -199,6 +236,31 @@ case "press":
     activate(pid)
     let result = AXUIElementPerformAction(hits[nth].element, kAXPressAction as CFString)
     emit(["ok": result == .success])
+
+case "overlap":
+    // overlap <pid>: the app window's frame and the owners of foreign windows over it.
+    guard args.count >= 2 else { fail("usage: overlap <pid>") }
+    let (_, pid) = app(args[1])
+    let (frame, covering) = foreignWindowsOver(pid)
+    guard let frame else { emit(["window": false, "covering": covering]); exit(0) }
+    emit(["window": true, "x": frame.origin.x, "y": frame.origin.y, "w": frame.width, "h": frame.height, "covering": covering])
+
+case "match":
+    // match <pid> <regex>: true when a static text in the window matches. Never returns text.
+    guard args.count >= 3 else { fail("usage: match <pid> <regex>") }
+    let (application, _) = app(args[1])
+    guard let window = mainWindow(application) else { emit(["window": false, "match": false]); exit(0) }
+    let found = walk(window).contains { $0.role == "AXStaticText" && matches($0.value, args[2]) }
+    emit(["window": true, "match": found])
+
+case "find-after":
+    // find-after <pid> <anchor text regex> <role>: whether press-after would find a control. Presses nothing.
+    guard args.count >= 4 else { fail("usage: find-after <pid> <anchor> <role>") }
+    let (application, _) = app(args[1])
+    guard let window = mainWindow(application) else { fail("no window") }
+    let nodes = walk(window)
+    guard let anchor = nodes.firstIndex(where: { $0.role == "AXStaticText" && matches($0.value, args[2]) }) else { emit(["ok": false, "anchor": false]); exit(0) }
+    emit(["ok": nodes[(anchor + 1)...].contains(where: { $0.role == args[3] }), "anchor": true])
 
 case "press-after":
     // press-after <pid> <anchor text regex> <role>: the first control after a static text.

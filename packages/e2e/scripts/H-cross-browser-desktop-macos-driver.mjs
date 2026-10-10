@@ -9,33 +9,48 @@
  *   --probe   launch with the scratch HOME, require the fresh welcome screen
  *             (an installed wallet would show its lock screen), quit. No wallet.
  *   (default) the recorded flow: import alice with recording stopped, Home
- *             balances read from the accessibility tree and compared with the
- *             Chromium reference, lock and unlock with recording stopped around
- *             the password, a history entry, its explorer link opening the
- *             default browser (verified out of frame), quit.
+ *             balances read from the accessibility tree (alice's funded assets
+ *             above zero) and compared with the Chromium reference, lock and
+ *             unlock with recording stopped around the password, a history
+ *             entry, its explorer link opening the default browser (verified
+ *             out of frame), quit.
  *
  * The app runs with HOME, CFFIXED_USER_HOME and TMPDIR pointed at the scratch
  * home, so its store and web data land there, not in the user's Library.
  *
  * Recording: ffmpeg avfoundation records only the app window's rectangle, and
- * only while the app is frontmost and the accessibility guard is clean. A
- * watchdog stops and DELETES a segment the moment a guard label appears or
- * another app comes to the front. Secret steps run with recording stopped and
- * a redaction card in the timeline.
+ * only while the app is frontmost, no other app's window (a notification
+ * banner, a dialog) overlaps it, the window has not moved since its crop was
+ * measured, and the accessibility guard is clean. A watchdog stops and
+ * DELETES a segment the moment any of that changes. Secret steps run with
+ * recording stopped and a redaction card in the timeline. Every screen gets
+ * its 12 s still before the next interaction and every tap its 6 s still, as
+ * in the browser recorder.
+ *
+ * Sign-ins: the import and the unlock spend the backend's per-IP restore
+ * budget, shared with every other run on this host. Before launching, the
+ * driver waits (bounded) for other e2e runs and for the budget, using the
+ * same ledger as the browser lanes.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readWalletPhrase } from '../demo/capture-demo.mjs';
-import { ASSETS, HOLDS, RELEASE, assertStaticLabel, makeCanary, verifyTimeline } from '../fixtures/H-cross-browser-desktop-policy.mjs';
+import { ALICE_FUNDED, ASSETS, HOLDS, POLL_MS, RELEASE, assertStaticLabel, makeCanary, verifyTimeline } from '../fixtures/H-cross-browser-desktop-policy.mjs';
 import { drawLines, ffmpeg, filterScriptArgs, findFont, privateDir, wrapLines } from '../fixtures/H-cross-browser-desktop-recorder.mjs';
+import { MOVING_TEXT, REFERENCE_MAX_AGE_MS, amount, compareWithReference, readReference } from '../fixtures/H-cross-browser-desktop-reference.mjs';
+import { BudgetError, SIGNIN, SignInLedger, admitLane, pause } from '../fixtures/H-cross-browser-desktop-signin.mjs';
 
 const WINDOW = { x: 60, y: 60, w: 1024, h: 720 };
 const NAMES = { btc: 'Bitcoin', ltc: 'Litecoin', xmr: 'Monero', wow: 'Wownero', grin: 'Grin' };
 const TICKERS = { btc: 'BTC', ltc: 'LTC', xmr: 'XMR', wow: 'WOW', grin: 'GRIN' };
+/** The watchdog looks again this often, on top of its own checks (about 0.3 s). */
+const WATCH_MS = 150;
+/** A still's granularity; it changes nothing on screen. */
+const STILL_TICK_MS = 250;
 
 class SmokeError extends Error {}
 
@@ -61,7 +76,7 @@ function ax(binary, args, input) {
   }
 }
 
-async function until(probe, { timeout = 30_000, every = 750, what }) {
+async function until(probe, { timeout = 30_000, every = POLL_MS, what }) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
@@ -72,11 +87,6 @@ async function until(probe, { timeout = 30_000, every = 750, what }) {
   }
   throw new SmokeError(`timed out waiting for ${what}`);
 }
-
-const amount = (text) => {
-  const match = /(\d[\d,]*(?:\.\d+)?)/.exec(String(text ?? ''));
-  return match ? Number(match[1].replace(/,/g, '')) : Number.NaN;
-};
 
 /** Default https handler from LaunchServices; Safari when none is set. */
 function defaultBrowser() {
@@ -113,11 +123,14 @@ class Desktop {
     await until(() => this.ax('window', this.pid).found, { timeout: 60_000, what: 'the app window' });
     this.ax('place', this.pid, WINDOW.x, WINDOW.y, WINDOW.w, WINDOW.h);
     this.ax('activate', this.pid);
-    await sleep(1_500);
+    // Recording needs the app in front; the recorder's guard cards any moment it is not.
+    await until(() => this.frontmost(), { timeout: 15_000, what: 'the app to come to the front' }).catch(() => this.ax('activate', this.pid));
   }
 
   snapshot() { return this.ax('snapshot', this.pid); }
   frontmost() { return this.ax('frontmost').pid === this.pid; }
+  /** True or false only: a static text matches, guard or not. */
+  match(pattern) { return this.ax('match', this.pid, pattern).match === true; }
   hasText(pattern) {
     const shot = this.snapshot();
     return !shot.guard && shot.texts.some((value) => pattern.test(value));
@@ -133,11 +146,13 @@ class Desktop {
     if (!result.ok) throw new SmokeError(`no ${role === 'any' ? 'control' : role} matching ${pattern}`);
   }
 
+  exited() { return !this.child || this.child.exitCode !== null || this.child.signalCode !== null; }
+
   async quit() {
-    if (!this.child || this.child.exitCode !== null) return;
+    if (this.exited()) return;
     this.child.kill('SIGTERM');
-    for (let i = 0; i < 50 && this.child.exitCode === null; i++) await sleep(100);
-    if (this.child.exitCode === null) this.child.kill('SIGKILL');
+    await until(() => this.exited(), { timeout: 5_000, what: 'the app to quit' }).catch(() => false);
+    if (!this.exited()) this.child.kill('SIGKILL');
   }
 }
 
@@ -147,6 +162,9 @@ class SegmentRecorder {
     this.desktop = desktop;
     this.outDir = privateDir(outDir);
     this.segmentDir = privateDir(join(outDir, 'segments'));
+    if (readdirSync(this.segmentDir).length || existsSync(join(this.outDir, 'timeline.json')) || existsSync(join(this.outDir, 'evidence.json'))) {
+      throw new SmokeError('the output directory already holds a run; each run records into its own directory');
+    }
     this.screenIndex = screenIndex;
     this.canary = canary;
     this.holds = holds;
@@ -154,22 +172,26 @@ class SegmentRecorder {
     this.events = [];
     this.current = null;
     this.startedAt = null;
+    /** The first segment's crop sets the encoded size; later ones are fitted to it. */
     this.crop = null;
+    /** The window frame (points) the current segment's crop was measured from. */
+    this.frame = null;
+    this.needsSettle = true;
+    this.stats = { autoSettled: 0, discarded: 0 };
   }
 
+  /** Why the window must not be recorded now (a static label), or null. */
   clean() {
     if (!this.desktop.frontmost()) return 'Another app in front';
+    const over = this.desktop.ax('overlap', this.desktop.pid);
+    if (!over.window) return 'No window';
+    if (over.covering?.length) return 'Another window over the app';
+    const frame = this.frame;
+    if (frame && (over.x !== frame.x || over.y !== frame.y || over.w !== frame.w || over.h !== frame.h)) return 'The window moved';
     const shot = this.desktop.snapshot();
     if (!shot.window) return 'No window';
     if (shot.guard) return shot.guard;
     return this.canary.check({ text: shot.texts.join(' '), values: [] });
-  }
-
-  cropFor() {
-    const scale = this.desktop.ax('scale').scale;
-    const win = this.desktop.ax('window', this.desktop.pid);
-    const even = (value) => Math.max(2, Math.floor(value / 2) * 2);
-    return { w: even(win.w * scale), h: even(win.h * scale), x: even(win.x * scale), y: even(win.y * scale) };
   }
 
   card(label) {
@@ -183,27 +205,35 @@ class SegmentRecorder {
   async start(label) {
     assertStaticLabel(label);
     if (this.current) return;
+    // Measure the window again for every segment: it may have moved or resized.
+    this.frame = null;
     const verdict = this.clean();
     if (verdict) return this.card(verdict);
-    this.crop ??= this.cropFor();
+    const over = this.desktop.ax('overlap', this.desktop.pid);
+    if (!over.window) return this.card('No window');
+    this.frame = { x: over.x, y: over.y, w: over.w, h: over.h };
+    const scale = this.desktop.ax('scale').scale;
+    const even = (value) => Math.max(2, Math.floor(value / 2) * 2);
+    const crop = { w: even(over.w * scale), h: even(over.h * scale), x: even(over.x * scale), y: even(over.y * scale) };
+    this.crop ??= crop;
     const file = join(this.segmentDir, `${String(this.entries.length).padStart(4, '0')}.mp4`);
-    const { w, h, x, y } = this.crop;
     const child = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'avfoundation', '-capture_cursor', '1', '-framerate', '30',
-      '-i', `${this.screenIndex}:none`, '-vf', `crop=${w}:${h}:${x}:${y}`, '-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', file],
+      '-i', `${this.screenIndex}:none`, '-vf', `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y}`, '-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', file],
     { stdio: ['pipe', 'ignore', 'ignore'] });
     this.startedAt ??= Date.now();
     const entry = { kind: 'segment', label, file, start: Date.now(), discarded: false };
     this.current = { child, entry, watching: true };
     this.entries.push(entry);
-    // Watchdog: a guard label or a foreign window ends and deletes the segment.
+    // Watchdog: a guard label, a foreign window, a moved window or another app
+    // in front ends and deletes the segment.
     this.current.watch = (async () => {
       while (this.current?.entry === entry && this.current.watching) {
-        const verdict = (() => { try { return this.clean(); } catch { return 'Screen unreadable'; } })();
-        if (verdict && this.current?.entry === entry) {
-          await this.#discard(verdict);
+        const found = (() => { try { return this.clean(); } catch { return 'Screen unreadable'; } })();
+        if (found && this.current?.entry === entry) {
+          await this.#discard(found);
           return;
         }
-        await sleep(400);
+        await sleep(WATCH_MS);
       }
     })();
   }
@@ -211,8 +241,9 @@ class SegmentRecorder {
   async #discard(reason) {
     const { child, entry } = this.current;
     this.current = null;
+    this.stats.discarded++;
     child.kill('SIGKILL');
-    await new Promise((done) => (child.exitCode !== null ? done() : child.once('exit', done)));
+    await new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done() : child.once('exit', done)));
     rmSync(entry.file, { force: true });
     entry.discarded = true;
     entry.kind = 'card';
@@ -229,7 +260,7 @@ class SegmentRecorder {
     this.current = null;
     child.stdin.write('q');
     child.stdin.end();
-    await new Promise((done) => (child.exitCode !== null ? done() : child.once('exit', done)));
+    await new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done() : child.once('exit', done)));
     entry.end = Date.now();
     if (!existsSync(entry.file) || statSync(entry.file).size < 1024) {
       entry.kind = 'card';
@@ -239,23 +270,44 @@ class SegmentRecorder {
 
   async #still(ms) {
     const start = Date.now();
-    while (Date.now() - start < ms) await sleep(Math.min(250, ms - (Date.now() - start)) || 1);
+    for (let left = ms; left > 0; left = ms - (Date.now() - start)) {
+      const tick = Math.min(STILL_TICK_MS, left);
+      await sleep(tick);
+    }
+  }
+
+  /** The screen the last interaction left gets its 12 s still before the next one. */
+  async #heldBeforeInteraction() {
+    if (!this.needsSettle) return;
+    this.stats.autoSettled++;
+    await this.settled('Screen settles');
   }
 
   async tap(label, action) {
     assertStaticLabel(label);
+    await this.#heldBeforeInteraction();
     const start = Date.now();
     await this.#still(this.holds.preTapMs);
     const holdMs = Date.now() - start;
+    this.needsSettle = true;
     await action();
     this.events.push({ kind: 'tap', label, start, end: Date.now(), holdMs });
   }
 
-  async settled(label) {
+  /** Wait until Updating/Loading leave the window (bounded), then hold 12 s. */
+  async settled(label, { patience = 90_000 } = {}) {
     assertStaticLabel(label);
+    const waitStart = Date.now();
+    while (Date.now() - waitStart < patience) {
+      let busy = false;
+      try { busy = this.desktop.match('(Updating…|Loading)'); } catch { busy = false; }
+      if (!busy) break;
+      await sleep(POLL_MS);
+    }
     const start = Date.now();
     await this.#still(this.holds.settledMs);
     this.events.push({ kind: 'settled', label, start, end: Date.now(), holdMs: Date.now() - start });
+    this.needsSettle = false;
   }
 
   async result(label) {
@@ -263,13 +315,21 @@ class SegmentRecorder {
     const start = Date.now();
     await this.#still(this.holds.resultMs);
     this.events.push({ kind: 'result', label, start, end: Date.now(), holdMs: Date.now() - start });
+    this.needsSettle = false;
   }
 
-  /** Recording stopped and a card shown while fn runs; resumes after two clean passes. */
+  /**
+   * A 6 s still of the screen it starts from, then recording stopped and a
+   * card shown while fn runs; resumes after two clean passes.
+   */
   async secret(label, fn, resumeLabel) {
     assertStaticLabel(label);
-    await this.stop();
+    await this.#heldBeforeInteraction();
     const start = Date.now();
+    await this.#still(this.holds.preTapMs);
+    const preHoldMs = Date.now() - start;
+    this.needsSettle = true;
+    await this.stop();
     this.card(label);
     try {
       await fn();
@@ -282,10 +342,10 @@ class SegmentRecorder {
         clean = verdict ? 0 : clean + 1;
         if (clean < 2) {
           if (Date.now() > deadline) throw new SmokeError(`a secret surface stayed visible after: ${label}`);
-          await sleep(500);
+          await sleep(POLL_MS);
         }
       }
-      this.events.push({ kind: 'secret', label, start, end: Date.now(), holdMs: Date.now() - start });
+      this.events.push({ kind: 'secret', label, start, end: Date.now(), holdMs: Date.now() - start, preHoldMs });
     }
     if (resumeLabel) await this.start(resumeLabel);
   }
@@ -293,7 +353,7 @@ class SegmentRecorder {
   async finish() {
     await this.stop();
     const stoppedAt = Date.now();
-    const timeline = { area: 'H-cross-browser-desktop', lane: 'macos-desktop', startedAt: this.startedAt, stoppedAt, crop: this.crop, entries: this.entries, events: this.events };
+    const timeline = { area: 'H-cross-browser-desktop', lane: 'macos-desktop', startedAt: this.startedAt, stoppedAt, crop: this.crop, entries: this.entries, events: this.events, stats: this.stats };
     writeFileSync(join(this.outDir, 'timeline.json'), JSON.stringify(timeline, null, 1), { mode: 0o600 });
     return timeline;
   }
@@ -309,8 +369,8 @@ function encodeDesktop(outDir, timeline, fontOption) {
   const { w, h } = timeline.crop;
   const clips = [];
   timeline.entries.forEach((entry, i) => {
-    const until = timeline.entries[i + 1]?.start ?? timeline.stoppedAt;
-    const seconds = Math.max(0.5, (until - entry.start) / 1000);
+    const next = timeline.entries[i + 1]?.start ?? timeline.stoppedAt;
+    const seconds = Math.max(0.5, (next - entry.start) / 1000);
     if (entry.kind === 'segment') {
       clips.push(entry.file);
       return;
@@ -333,7 +393,8 @@ function encodeDesktop(outDir, timeline, fontOption) {
     return drawLines({ font, lines: wrapLines(mark.label, 24), size: 42, color: '0xffffff', x: 60, y: 300, spacing: 12, enable: `between(t,${from.toFixed(3)},${to.toFixed(3)})`, workDir: work, stem: `caption-${i}` });
   });
   const inputs = clips.flatMap((clip) => ['-i', clip]);
-  const normalised = clips.map((_, i) => `[${i}:v]fps=30,scale=${w}:${h},setsar=1,format=yuv420p[c${i}]`);
+  // A segment measured after the window moved or resized is fitted, not stretched.
+  const normalised = clips.map((_, i) => `[${i}:v]fps=30,scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x15121f,setsar=1,format=yuv420p[c${i}]`);
   const graph = [
     ...normalised,
     `${clips.map((_, i) => `[c${i}]`).join('')}concat=n=${clips.length}:v=1:a=0[raw]`,
@@ -364,17 +425,28 @@ function encodeDesktop(outDir, timeline, fontOption) {
   return { output, seconds: duration };
 }
 
-function readBalances(texts) {
+/**
+ * Home rows from the accessibility tree: name, ticker, balance in that order.
+ * A row's sublines ("↑ 0.1 XMR sending", "🔒 0.1 XMR locked", "+0.1 XMR
+ * pending") follow its balance and name its ticker; a few texts after the
+ * balance, up to the next row, are checked for them.
+ */
+export function readBalances(texts) {
   const balances = {};
+  const moving = [];
   for (const asset of ASSETS) {
     for (let i = 1; i + 1 < texts.length; i++) {
       if (texts[i] === TICKERS[asset] && texts[i - 1] === NAMES[asset] && /^[\d.,]+$/.test(texts[i + 1])) {
         balances[asset] = texts[i + 1];
+        const nextRow = texts.findIndex((text, at) => at > i + 1 && Object.values(NAMES).includes(text));
+        const end = Math.min(i + 6, nextRow === -1 ? texts.length : nextRow);
+        const ticker = new RegExp(`\\b${TICKERS[asset]}\\b`);
+        if (texts.slice(i + 2, end).some((text) => MOVING_TEXT.test(text) && ticker.test(text))) moving.push(asset);
         break;
       }
     }
   }
-  return balances;
+  return { balances, moving };
 }
 
 async function probe(desktop) {
@@ -389,7 +461,11 @@ async function probe(desktop) {
 }
 
 async function flow(desktop, options) {
-  const evidence = { area: 'H-cross-browser-desktop', lane: 'macos-desktop', release: RELEASE.version, startedAt: new Date().toISOString(), steps: [] };
+  const evidence = { area: 'H-cross-browser-desktop', lane: 'macos-desktop', release: RELEASE.version, startedAt: new Date().toISOString(), funded: options.funded, steps: [] };
+  // Cheap first: other e2e runs and the sign-in budget, before reading the phrase or launching.
+  const ledger = new SignInLedger(options.ledger, { lane: 'macos-desktop' });
+  const waited = await admitLane(ledger, SIGNIN.plan.desktop, { shareBudget: options.shareBudget, say: (line) => console.log(`  wait  ${line}`) });
+  evidence.signinPreflight = { planned: SIGNIN.plan.desktop, budget: ledger.budget, usedAtStart: ledger.used().length, waitedMs: waited };
   const words = readWalletPhrase(options.walletFile, 'SMOKE_ALICE_MNEMONIC');
   const password = randomBytes(24).toString('base64url');
   const canary = makeCanary({ phraseWords: words, exact: [password] });
@@ -402,20 +478,38 @@ async function flow(desktop, options) {
       console.log(`  pass  ${name}`);
       return true;
     } catch (error) {
-      const reason = error instanceof SmokeError ? error.message : `driver error (${error?.name ?? 'unknown'})`;
+      const reason = error instanceof SmokeError || error instanceof BudgetError ? error.message : `driver error (${error?.name ?? 'unknown'})`;
       evidence.steps.push({ name, status: 'fail', reason, ms: Date.now() - started });
       console.log(`  fail  ${name}: ${reason}`);
       return false;
     }
   };
   const homeShown = () => desktop.hasText(/^Bitcoin$/) && desktop.hasText(/^BTC$/);
+  /**
+   * Home after a sign-in. A rate-limited sign-in is not counted by the
+   * backend: wait it out (bounded) and press Try again; without a Try again
+   * to press, stop with the cause.
+   */
+  const signedIn = async (where) => {
+    for (let waits = 0; ; waits++) {
+      const state = await until(() => (desktop.match('rate limited') ? 'limited' : homeShown() ? 'home' : null), { timeout: 180_000, every: 3_000, what: `Home after ${where}` });
+      if (state === 'home') return;
+      if (waits >= SIGNIN.maxBackoffs) throw new SmokeError(`${where}: the backend still rate-limits sign-ins after ${waits} waits`);
+      evidence.rateLimitBackoffs = (evidence.rateLimitBackoffs ?? 0) + 1;
+      console.log(`  wait  ${where}: the backend rate-limited the sign-in; waiting ${SIGNIN.backoffMs / 60_000} min`);
+      await pause(SIGNIN.backoffMs);
+      if (!desktop.ax('press', desktop.pid, 'AXButton', '^Try again$').ok) throw new SmokeError(`${where}: the backend rate-limited the sign-in and the app offers no Try again`);
+      ledger.record(`${where}: retry`);
+    }
+  };
   const unlock = async () => {
     await footage.secret('Unlock with the password', async () => {
       await until(() => desktop.snapshot().secureFields >= 1, { what: 'the password field' });
       if (!desktop.ax('focus', desktop.pid, 'secure', 0).ok) throw new SmokeError('could not focus the password field');
       desktop.axSecret(['type', desktop.pid], password);
       desktop.press('AXButton', '^Unlock$');
-      await until(homeShown, { timeout: 90_000, what: 'Home after unlock' });
+      ledger.record('desktop unlock');
+      await signedIn('the desktop unlock');
     }, 'Home after unlock');
   };
 
@@ -427,45 +521,64 @@ async function flow(desktop, options) {
       await footage.settled('Welcome screen');
     });
     ok = ok && await step('Import alice, recording stopped', async () => {
-      await footage.tap('Tap Import existing', async () => {
-        await footage.secret('Import alice: phrase and password entry', async () => {
-          desktop.press('AXButton', '^Import existing$');
-          await until(() => desktop.ax('press', desktop.pid, 'AXButton', '^Continue$').ok, { what: 'the import warning' });
-          await until(() => desktop.ax('focus', desktop.pid, 'text', 0).ok, { what: 'the first phrase field' });
-          // Space moves to the next word field, so one typed line fills the grid.
-          desktop.axSecret(['type', desktop.pid], words.join(' '));
-          desktop.press('AXButton', '^Continue$');
-          await until(() => desktop.snapshot().secureFields >= 2, { timeout: 60_000, what: 'the password step' });
-          for (const index of [0, 1]) {
-            if (!desktop.ax('focus', desktop.pid, 'secure', index).ok) throw new SmokeError('could not focus a password field');
-            desktop.axSecret(['type', desktop.pid], password);
-          }
-          desktop.press('AXButton', '^Import wallet$');
-          await until(async () => {
-            if (homeShown()) return true;
-            desktop.ax('press', desktop.pid, 'AXButton', '^(Continue|Skip for now)$');
-            return false;
-          }, { timeout: 180_000, every: 3_000, what: 'Home after import' });
-        });
+      await footage.secret('Import alice: phrase and password entry', async () => {
+        desktop.press('AXButton', '^Import existing$');
+        await until(() => desktop.ax('press', desktop.pid, 'AXButton', '^Continue$').ok, { what: 'the import warning' });
+        await until(() => desktop.ax('focus', desktop.pid, 'text', 0).ok, { what: 'the first phrase field' });
+        // Space moves to the next word field, so one typed line fills the grid.
+        desktop.axSecret(['type', desktop.pid], words.join(' '));
+        desktop.press('AXButton', '^Continue$');
+        await until(() => desktop.snapshot().secureFields >= 2, { timeout: 60_000, what: 'the password step' });
+        for (const index of [0, 1]) {
+          if (!desktop.ax('focus', desktop.pid, 'secure', index).ok) throw new SmokeError('could not focus a password field');
+          desktop.axSecret(['type', desktop.pid], password);
+        }
+        desktop.press('AXButton', '^Import wallet$');
+        ledger.record('desktop import: restore check');
+        // The desktop wizard cannot be re-entered safely once its password
+        // fields are filled, so a rate limit here stops with its cause; the
+        // pre-flight above is what keeps the budget clear.
+        const imported = await until(() => {
+          if (desktop.match('rate limited')) return 'limited';
+          if (homeShown()) return 'home';
+          desktop.ax('press', desktop.pid, 'AXButton', '^(Continue|Skip for now)$');
+          return null;
+        }, { timeout: 180_000, every: 3_000, what: 'Home after import' });
+        if (imported === 'limited') throw new SmokeError(`the backend rate-limited the desktop import (check-restore allows ${SIGNIN.perHour} an hour per IP); rerun after the hour clears`);
+        ledger.record('desktop import: register');
       });
       words.fill('');
       await footage.start('Home after import');
     });
-    ok = ok && await step('Home balances match Chromium (accessibility tree)', async () => {
-      const balances = await until(() => {
-        const read = readBalances(desktop.snapshot().texts ?? []);
-        return Object.keys(read).length === ASSETS.length ? read : null;
-      }, { timeout: 300_000, every: 3_000, what: 'every Home balance in the accessibility tree' });
-      evidence.balances = balances;
+    ok = ok && await step('Home balances above zero and equal to a fresh Chromium reference', async () => {
+      let home = { balances: {}, moving: [] };
+      const zeroFunded = () => options.funded.filter((asset) => asset in home.balances && !(amount(home.balances[asset]) > 0));
+      try {
+        await until(() => {
+          home = readBalances(desktop.snapshot().texts ?? []);
+          return Object.keys(home.balances).length === ASSETS.length && zeroFunded().length === 0;
+        }, { timeout: 300_000, every: 3_000, what: 'every Home balance in the accessibility tree, funded ones above zero' });
+      } catch (error) {
+        if (zeroFunded().length) throw new SmokeError(`alice's funded ${zeroFunded().map((asset) => TICKERS[asset]).join(' and ')} read 0 on the desktop Home`);
+        throw error;
+      }
+      const readAt = Date.now();
+      // The reference is read now, right after the desktop read, and compared
+      // only if both reads are comparable (fresh, nothing moving).
+      const reference = readReference(options.reference);
+      const compared = compareWithReference(reference, { ...home, readAt }, { maxAgeMs: options.referenceMaxAgeMs });
+      evidence.balances = home.balances;
+      evidence.moving = home.moving;
+      evidence.reference = {
+        readAt: reference?.readAt ?? null,
+        runStamp: reference?.runStamp ?? null,
+        ageMinutes: compared.ageMs === null ? null : Number((compared.ageMs / 60_000).toFixed(1)),
+        maxAgeMinutes: Math.round(options.referenceMaxAgeMs / 60_000),
+      };
       await footage.settled('Home with balances');
       await footage.result('Desktop Home balances');
-      if (!options.reference || !existsSync(options.reference)) throw new SmokeError('no Chromium balance reference; run the chromium lane of h-firefox.live.mjs first');
-      const reference = JSON.parse(readFileSync(options.reference, 'utf8'));
-      const ageHours = (Date.now() - Date.parse(reference.at)) / 3_600_000;
-      evidence.reference = { at: reference.at, ageHours: Number(ageHours.toFixed(2)) };
-      const differ = ASSETS.filter((asset) => amount(reference.balances?.[asset]) !== amount(balances[asset]));
-      if (differ.length) throw new SmokeError(`desktop and Chromium differ on ${differ.map((asset) => `${asset} (${balances[asset]} vs ${reference.balances?.[asset]})`).join(', ')}`);
-      return { assets: ASSETS.length, referenceAgeHours: evidence.reference.ageHours };
+      if (!compared.ok) throw new SmokeError(compared.reason);
+      return { assets: ASSETS.length, referenceAgeMinutes: evidence.reference.ageMinutes };
     });
     ok = ok && await step('Lock and unlock, recording stopped around the password', async () => {
       await footage.tap('Tap Lock wallet', async () => desktop.press('AXButton', '^Lock wallet$'));
@@ -480,12 +593,16 @@ async function flow(desktop, options) {
       let opened = false;
       for (const asset of ['wow', 'xmr', 'btc', 'ltc', 'grin']) {
         await footage.tap('Open an asset', async () => desktop.press('AXButton', `^${NAMES[asset]}\\b`));
-        await sleep(3_000);
-        const row = desktop.ax('press-after', desktop.pid, '^Activity$', 'AXButton');
-        if (!row.ok) {
+        await until(() => desktop.hasText(/^Activity$/), { what: 'the asset screen' });
+        await footage.settled('Asset screen');
+        if (!desktop.ax('find-after', desktop.pid, '^Activity$', 'AXButton').ok) {
           await footage.tap('Back to Home', async () => desktop.press('AXButton', '^(◀ )?Back$'));
+          await until(homeShown, { what: 'Home again' });
           continue;
         }
+        await footage.tap('Open the latest activity entry', async () => {
+          if (!desktop.ax('press-after', desktop.pid, '^Activity$', 'AXButton').ok) throw new SmokeError('the latest activity entry did not open');
+        });
         await until(() => desktop.snapshot().buttons?.some((label) => /View in block explorer/.test(label)), { what: 'the history detail' });
         await footage.settled('History detail');
         await footage.result('History detail');
@@ -493,7 +610,11 @@ async function flow(desktop, options) {
           desktop.press('AXButton', '^View in block explorer$');
           await until(() => desktop.ax('frontmost').bundle.toLowerCase() === browser, { timeout: 30_000, what: 'the default browser to come to the front' });
           opened = true;
-          await sleep(3_000);
+          // The browser shows a window for the page before the wallet comes back.
+          await until(() => {
+            const front = desktop.ax('frontmost');
+            return front.bundle.toLowerCase() === browser && desktop.ax('window', front.pid).found;
+          }, { timeout: 30_000, what: 'the browser window' });
           desktop.ax('activate', desktop.pid);
           await until(() => desktop.frontmost(), { what: 'the wallet to come back to the front' });
         }, 'Back from the explorer');
@@ -509,7 +630,7 @@ async function flow(desktop, options) {
       await footage.stop();
       footage.card('The app quits');
       await desktop.quit();
-      if (desktop.child.exitCode === null && desktop.child.signalCode === null) throw new SmokeError('the app did not quit');
+      if (!desktop.exited()) throw new SmokeError('the app did not quit');
     });
   } finally {
     words.fill('');
@@ -517,6 +638,7 @@ async function flow(desktop, options) {
     await desktop.quit();
   }
   const timeline = await footage.finish();
+  evidence.recorder = footage.stats;
   try {
     const encoded = encodeDesktop(options.out, timeline, options.font);
     evidence.footage = { file: 'macos-desktop.mp4', seconds: Math.round(encoded.seconds), chapters: 'CHAPTERS-macos-desktop.md' };
@@ -524,31 +646,40 @@ async function flow(desktop, options) {
     evidence.footage = { error: error instanceof Error ? error.message.split('\n')[0] : 'encode failed' };
   }
   evidence.finishedAt = new Date().toISOString();
-  evidence.ok = evidence.steps.every((entry) => entry.status === 'pass');
+  evidence.ok = evidence.steps.length > 0 && evidence.steps.every((entry) => entry.status === 'pass');
   writeFileSync(join(options.out, 'evidence.json'), JSON.stringify(evidence, null, 1), { mode: 0o600 });
   return evidence;
 }
 
 async function main() {
+  const out = argument('out') ? resolve(argument('out')) : null;
   const options = {
     axBinary: resolve(argument('ax')),
     app: resolve(argument('app')),
     home: resolve(argument('home')),
-    out: argument('out') ? resolve(argument('out')) : null,
+    out,
     walletFile: argument('wallet-file') ? resolve(argument('wallet-file')) : null,
     reference: argument('reference') ? resolve(argument('reference')) : null,
+    referenceMaxAgeMs: Number(argument('reference-max-age-min', String(REFERENCE_MAX_AGE_MS / 60_000))) * 60_000,
+    ledger: argument('ledger') ? resolve(argument('ledger')) : null,
+    shareBudget: process.argv.includes('--share-signin-budget'),
+    funded: argument('funded', ALICE_FUNDED.join(',')).split(',').map((asset) => asset.trim().toLowerCase()).filter(Boolean),
     screen: argument('screen', '0'),
     font: argument('font', undefined),
   };
   const desktop = new Desktop(options);
   if (process.argv.includes('--probe')) return probe(desktop);
-  if (!options.out || !options.walletFile) throw new SmokeError('--out and --wallet-file are required for the recorded flow');
+  if (!options.out || !options.walletFile || !options.ledger) throw new SmokeError('--out, --wallet-file and --ledger are required for the recorded flow');
+  if (!(options.referenceMaxAgeMs > 0)) throw new SmokeError('--reference-max-age-min must be a positive number of minutes');
+  for (const asset of options.funded) if (!ASSETS.includes(asset)) throw new SmokeError(`--funded: unknown asset ${asset}`);
   const evidence = await flow(desktop, options);
   console.log(`macOS desktop: ${evidence.ok ? 'OK' : 'FAILED'}; evidence ${join(options.out, 'evidence.json')}`);
   if (!evidence.ok) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(`desktop driver refused: ${error instanceof SmokeError ? error.message : `driver error (${error?.name ?? 'unknown'})`}`);
-  process.exit(1);
-});
+if (process.argv[1]?.endsWith('H-cross-browser-desktop-macos-driver.mjs')) {
+  main().catch((error) => {
+    console.error(`desktop driver refused: ${error instanceof SmokeError || error instanceof BudgetError ? error.message : `driver error (${error?.name ?? 'unknown'})`}`);
+    process.exit(1);
+  });
+}
