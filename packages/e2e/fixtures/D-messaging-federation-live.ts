@@ -18,13 +18,19 @@
  * `readWalletPhrase` (one NAME=value line, regular 0600 file owned by this
  * user, 12 or 24 lowercase words). It is never placed in the environment, so no
  * child process (the browsers included) inherits it, and browsers launch with
- * secret-looking variables scrubbed. Each wallet gets a random in-memory
- * password. After import the word arrays are zeroed; only the canary's
- * shingle digests and the account-0 PUBLIC key remain. Profiles live under a
- * 0700 scratch directory and are deleted at teardown.
+ * secret-looking variables scrubbed. Each wallet's password is derived in
+ * memory from its phrase and a random per-run salt, so a worker restarted
+ * after a failure can unlock the profile instead of importing again (the
+ * backend allows 30 history lookups an hour per IP); it is never stored.
+ * After import the word arrays are zeroed; only the canary's shingle digests
+ * and the account-0 PUBLIC key remain. Profiles live in a 0700 run directory,
+ * removed by the config's global teardown (or, after a crash, by the next run).
  *
  * Nothing here prints a phrase, password, key or page text. A failed import
- * reports its stage only, never the underlying message.
+ * reports its stage and the visible screen's test IDs (plus its text, never on
+ * a phrase screen), and only with E2E_LIVE_DIAGNOSE=1, to the findings file.
+ *
+ * Funds: nothing in this lane moves funds. `E2E_LIVE_MONEY` is not consulted.
  *
  * Relay guard: every WebSocket a wallet page opens goes through
  * `context.routeWebSocket`. An outbound EVENT frame is forwarded only when
