@@ -191,6 +191,36 @@ for (const theme of THEMES) {
   });
 }
 
+// Release v0.3.1 cross-browser check (area H): in the default theme and in
+// Windows XP, at every scale, a real click on EACH header control reaches it.
+// The cases above prove hit-testing; this proves each handler actually fires.
+const SHELL_CLICKS: Record<string, string> = {
+  'Switch identity': 'identity',
+  'Open in a browser tab': 'tab',
+  'Open in its own window': 'popout',
+  'Lock wallet': 'lock',
+};
+for (const theme of ['default', 'winxp']) {
+  for (const s of SCALES) {
+    test(`popup 380x600, theme ${theme} at ${s.name}: every header control takes a real click`, async ({ browser }) => {
+      const context = await browser.newContext({ viewport: { width: 380, height: 600 }, deviceScaleFactor: s.scale });
+      const page = await context.newPage();
+      await open(page, { firefoxOuterWidth: s.outer, theme, layout: 'popup' });
+      await expect(page.getByTestId('app-shell-root')).toHaveAttribute('data-layout', 'popup');
+      const expected: string[] = [];
+      for (const label of HEADER_CONTROLS) {
+        // A trial click fails if anything would intercept it; then click for real.
+        const button = page.getByRole('button', { name: label, exact: true });
+        await button.click({ trial: true });
+        await button.click();
+        expected.push(SHELL_CLICKS[label]!);
+      }
+      expect(await page.evaluate(() => window.__shellClicks)).toEqual(expected);
+      await context.close();
+    });
+  }
+}
+
 test('auto layout (no popup context) at 380x600 with Firefox outerWidth is compact', async ({ browser }) => {
   // The measured fallback for surfaces that do not declare themselves. It
   // reads the page's own size, which resistFingerprinting deliberately rounds,
