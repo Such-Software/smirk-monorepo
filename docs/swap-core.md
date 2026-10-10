@@ -85,7 +85,8 @@ PYTHONDONTWRITEBYTECODE=1 python crates/swap-core/tests/basicswap_reference.py \
 The runner uses BasicSwap's actual message serializer, SMSG encryption/decryption
 and Nostr signing functions. Rust-decoded identifiers, sender keys and canonical
 message bytes must agree; Rust re-encodings are decoded again by BasicSwap. The
-reference ACK handler runs unchanged with an in-memory database adapter. Negative
+reference connection-request constructor and ACK handler run unchanged with
+in-memory send/database adapters. Negative
 cases exercise altered signatures, recipient keys, payload lengths, MACs,
 padding, expirations, offer bindings and replayed ACKs. Keys are random, unfunded
 and process-local; they pass to the fixture executable over stdin and are never

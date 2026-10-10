@@ -174,6 +174,10 @@ struct ConnectData {
     nostr_pubkey: String,
     #[serde(default)]
     req_pubkey: Option<String>,
+    #[serde(default)]
+    amount_from: Option<u64>,
+    #[serde(default)]
+    amount_to: Option<u64>,
 }
 #[derive(Debug)]
 pub struct Connect {
@@ -214,7 +218,10 @@ impl Connect {
         }
         let requested_key = data.req_pubkey.as_deref().map(hex_array).transpose()?;
         match (msg.message.integer(3)?, requested_key.is_some()) {
-            (1, false) | (2, true) => {}
+            (1, false)
+                if data.amount_from.is_some_and(|n| n > 0)
+                    && data.amount_to.is_some_and(|n| n > 0) => {}
+            (2, true) if data.amount_from.is_none() && data.amount_to.is_none() => {}
             _ => return Err(Error("invalid connection request type or key echo")),
         }
         Ok(Self {

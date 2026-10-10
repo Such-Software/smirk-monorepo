@@ -99,12 +99,32 @@ def main():
     offer_id = smsgGetID(base64.b64decode(offer_item["event"]["content"]))
     compare(offer_item, offer_payload, maker)
 
+    # Use the reference request constructor with the amount fields supplied by
+    # BasicSwap.prepareMessageRoute's callers. No message is transmitted.
+    route_tree = ast.parse((ref / "basicswap/network/nostr/routes.py").read_text())
+    send_handler = next(node for node in route_tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "sendNostrConnectReq")
+    send_namespace = {"json": json, "ConnectReqMessage": ConnectReqMessage,
+                      "MessageNetworks": SimpleNamespace(NOSTR=3),
+                      "MessageTypes": SimpleNamespace(CONNECT_REQ=14),
+                      "ConnectionRequestTypes": SimpleNamespace(BID=1)}
+    exec(compile(ast.Module(body=[send_handler], type_ignores=[]), "reference request constructor", "exec"), send_namespace)
+
     def connect_payload(sender, route, ack=False, **changes):
         data = {"offer_id": offer_id.hex(), "bsx_address": pubkeyToAddress(PREFIX, sender.public_key.format()),
                 "nostr_pubkey": route.public_key_xonly.format().hex()}
         if ack:
             data["req_pubkey"] = taker_route.public_key_xonly.format().hex()
+        else:
+            data["amount_from"] = offer.amount_from
+            data["amount_to"] = offer.amount_to
         data.update(changes)
+        if not ack:
+            peer = SimpleNamespace(SMSG_SECONDS_IN_HOUR=3600,
+                sendMessage=lambda addr_from, addr_to, payload_hex, *args, **kwargs: bytes.fromhex(payload_hex))
+            route_data = {"connect_req_data": data, "local_privkey": route.secret.hex()}
+            return send_namespace["sendNostrConnectReq"](peer, data["bsx_address"],
+                pubkeyToAddress(PREFIX, maker.public_key.format()), route_data, None)
         msg = ConnectReqMessage(network_type=3, network_data=b"bsx", request_type=2 if ack else 1,
                                 request_data=json.dumps(data).encode())
         return b"\x0e" + msg.to_bytes()
