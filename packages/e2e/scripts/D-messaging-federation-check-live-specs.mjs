@@ -1,0 +1,121 @@
+#!/usr/bin/env node
+/**
+ * Static check for the area D live specs (tests/live/d-*.live.spec.ts) and the
+ * helpers they call (fixtures/D-messaging-federation-{flows,live}.ts).
+ *
+ * The video policy is enforced by the footage fixture, so a spec that taps,
+ * types or pauses on its own silently escapes it: no 6 s pre-tap hold, no
+ * redaction scope around a password, a sleep where a hold belongs. This check
+ * refuses those patterns, and labels that are not plain string literals.
+ *
+ * The helpers may drive the page directly (inside the fixture's own holds and
+ * redaction scopes), but they may not sleep a fixed time on the page clock: a
+ * `waitForTimeout` stands in for a signal it should wait on (a locator, a poll,
+ * a relay-guard event). A deliberate retry backoff goes through `retryBackoff`.
+ *
+ *   node packages/e2e/scripts/D-messaging-federation-check-live-specs.mjs
+ *
+ * Exits 1 and names file:line and the rule for each violation; prints no code.
+ */
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const specDir = join(root, 'tests', 'live');
+
+/** Helper modules the live specs call, relative to packages/e2e. */
+export const HELPERS = ['fixtures/D-messaging-federation-flows.ts', 'fixtures/D-messaging-federation-live.ts'];
+
+export const RULES = [
+  {
+    pattern: /(?<!footage)\.(click|dblclick|fill|press|pressSequentially|check|uncheck|selectOption|setInputFiles|tap|type|hover|dragTo)\(/,
+    rule: 'interacts directly; use w.footage.tap or w.footage.type so the pre-tap hold and redaction apply',
+  },
+  {
+    pattern: /waitForTimeout\(|(?<!test\.)setTimeout\(|\bsleep\(/,
+    rule: 'pauses ad hoc; holds belong to the footage fixture (settled, result)',
+  },
+  {
+    pattern: /\.screenshot\(|\brecordVideo\b|\btracing\./,
+    rule: 'captures outside the guarded recorder',
+  },
+  {
+    pattern: /console\.(log|info|debug|warn|error)\(/,
+    rule: 'prints; output can carry values (findings go through recordFinding)',
+  },
+  {
+    pattern: /\.(chapter|settled|result|secret|mark)\(\s*`/,
+    rule: 'builds a footage label from a template; labels are static string literals',
+  },
+  {
+    pattern: /footage\.(tap|type)\([^)]*,\s*`[^`]*`\s*(,\s*\{[^}]*\})?\)/,
+    rule: 'builds a footage label from a template; labels are static string literals',
+  },
+];
+
+export const HELPER_RULES = [
+  {
+    pattern: /\bwaitForTimeout\(/,
+    rule: 'sleeps a fixed time; wait on a locator, a poll or a relay-guard event (a retry backoff goes through retryBackoff)',
+  },
+  {
+    pattern: /\.screenshot\(|\brecordVideo\b|\btracing\./,
+    rule: 'captures outside the guarded recorder',
+  },
+  {
+    pattern: /console\.(log|info|debug|warn|error)\(/,
+    rule: 'prints; output can carry values (findings go through recordFinding)',
+  },
+];
+
+function scan(source, rules) {
+  const out = [];
+  source.split('\n').forEach((text, index) => {
+    const code = text.replace(/\/\/.*$/, '');
+    if (/^\s*\*/.test(code)) return; // block comment body
+    for (const { pattern, rule } of rules) {
+      if (pattern.test(code)) out.push({ line: index + 1, rule });
+    }
+  });
+  return out;
+}
+
+/** Violations in one live spec: [{ line, rule }]. */
+export function check(source) {
+  return scan(source, RULES);
+}
+
+/** Violations in one helper module: [{ line, rule }]. */
+export function checkHelper(source) {
+  return scan(source, HELPER_RULES);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const files = readdirSync(specDir).filter((name) => /^d-.*\.live\.spec\.ts$/.test(name));
+  if (files.length === 0) {
+    console.error('no area D live specs found; refusing to report a clean check of nothing');
+    process.exit(1);
+  }
+  let failures = 0;
+  for (const name of files) {
+    for (const { line, rule } of check(readFileSync(join(specDir, name), 'utf8'))) {
+      failures++;
+      console.error(`tests/live/${name}:${line}: ${rule}`);
+    }
+  }
+  for (const rel of HELPERS) {
+    const path = join(root, rel);
+    if (!existsSync(path)) {
+      failures++;
+      console.error(`${rel}: missing; refusing to report a clean check of nothing`);
+      continue;
+    }
+    for (const { line, rule } of checkHelper(readFileSync(path, 'utf8'))) {
+      failures++;
+      console.error(`${rel}:${line}: ${rule}`);
+    }
+  }
+  if (failures) process.exit(1);
+  console.log(`area D live specs: ${files.length} files and ${HELPERS.length} helpers follow the footage policy`);
+}

@@ -14,7 +14,7 @@
  * entry is a deliberate, reviewable decision, not a default.
  */
 
-import type { Reporter, TestCase, TestResult, FullResult } from '@playwright/test/reporter';
+import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult } from '@playwright/test/reporter';
 
 /**
  * Specs allowed to skip, and why. Keyed by a substring of the test file path.
@@ -24,7 +24,12 @@ import type { Reporter, TestCase, TestResult, FullResult } from '@playwright/tes
  * NOTE: this reporter only runs when it is REGISTERED. Passing `--reporter` overrides are refused by preflight. The private reporter and
  * this skip guard are both required; generic reporters can disclose secrets.
  */
-const EXPECTED_SKIPS: { match: string; reason: string }[] = [
+const EXPECTED_SKIPS: {
+  match: string;
+  reason: string;
+  /** When set, only a skip whose own reason matches is excused; any other skip in that file still fails the run. */
+  skipReason?: RegExp;
+}[] = [
   {
     match: 'feed.spec',
     reason: 'requires a backend advertising the Nostr feed capability',
@@ -49,6 +54,15 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
     match: 'marketing-shots.spec',
     reason: 'legacy capture is closed; wallet secret flows must not produce store artifacts',
   },
+  // The F-legacy-recovery live lane (F-legacy-recovery.live.config.ts). Its tests
+  // skip only when an owner approval is not given ("opt-in: ") or the fixture
+  // they need does not exist ("no fixture: ", e.g. no stuck old-server claim).
+  // Any other skip there, such as a funder short of coins, is not excused.
+  {
+    match: 'f-legacy-recovery.live.spec',
+    skipReason: /^(opt-in|no fixture): /,
+    reason: 'live lane: an owner approval not given, or a legacy fixture that does not exist',
+  },
 ];
 
 /**
@@ -65,41 +79,88 @@ const EXPECTED_SKIPS: { match: string; reason: string }[] = [
  * where the whole suite opts out (bad env, missing secrets) and still exits 0.
  * Deliberately not the full count, so adding a conditional spec is not a
  * tripwire, but high enough that a broken environment cannot slip through.
+ *
+ * `E2E_MIN_EXECUTED=selected` sets the floor to every test the invocation
+ * selected (at least one), for a lane where each test must run and a
+ * `--grep` subset is a legitimate run.
  */
-const MIN_EXECUTED = Number(process.env.E2E_MIN_EXECUTED ?? 21);
+const DEFAULT_MIN_EXECUTED = 21;
+
+function minExecuted(selected: number): number {
+  if (process.env.E2E_MIN_EXECUTED === 'selected') return Math.max(1, selected);
+  return Number(process.env.E2E_MIN_EXECUTED ?? DEFAULT_MIN_EXECUTED);
+}
+
+/**
+ * Options a lane config may pass (`['./skip-guard-reporter.ts', { ... }]`):
+ * `expectedReasonPrefixes` excuses skips whose own reason starts with one of
+ * them, for a lane whose operator chose the skip explicitly (an optional
+ * rehearsal, an acknowledged gap). Every such skip is still listed at the end.
+ */
+export interface SkipGuardOptions {
+  expectedReasonPrefixes?: string[];
+}
+
+/** A skip's own reason, shortened: skip reasons are authored text, never values. */
+function skipReason(test: TestCase, result: TestResult): string {
+  const annotation = [...(result.annotations ?? []), ...test.annotations].find((a) => a.type === 'skip');
+  return (annotation?.description ?? '').replace(/\s+/g, ' ').slice(0, 200);
+}
 
 export default class SkipGuardReporter implements Reporter {
-  private skipped: { title: string; file: string }[] = [];
+  private skipped: { title: string; file: string; reason: string }[] = [];
   private executed = 0;
+  private selected = 0;
+  private readonly prefixes: string[];
+
+  constructor(options: SkipGuardOptions = {}) {
+    this.prefixes = options.expectedReasonPrefixes ?? [];
+  }
+
+  onBegin(_config: FullConfig, suite: Suite): void {
+    this.selected = suite.allTests().length;
+  }
 
   onTestEnd(test: TestCase, result: TestResult): void {
     if (result.status === 'skipped') {
-      this.skipped.push({ title: test.title, file: test.location.file });
+      // A runtime `test.skip(condition, reason)` records its reason as a 'skip' annotation.
+      this.skipped.push({ title: test.title, file: test.location.file, reason: skipReason(test, result) });
     } else {
       this.executed += 1;
     }
   }
 
   async onEnd(result: FullResult): Promise<{ status: FullResult['status'] } | void> {
+    const byReason = (s: { reason: string }) => this.prefixes.some((p) => s.reason.startsWith(p));
     const unexpected = this.skipped.filter(
-      (s) => !EXPECTED_SKIPS.some((e) => s.file.includes(e.match)),
+      (s) =>
+        !EXPECTED_SKIPS.some((e) => s.file.includes(e.match) && (!e.skipReason || e.skipReason.test(s.reason))) &&
+        !byReason(s),
     );
+    const chosen = this.skipped.filter((s) => byReason(s));
+    if (chosen.length) {
+      console.log(
+        `[skip-guard] ${chosen.length} skip(s) the operator chose (not evidence):\n` +
+          chosen.map((s) => `    - ${s.title}: ${s.reason}`).join('\n'),
+      );
+    }
 
     const problems: string[] = [];
 
     if (unexpected.length) {
       problems.push(
         `${unexpected.length} spec(s) skipped without an expected reason:\n` +
-          unexpected.map((s) => `    - ${s.title}`).join('\n') +
+          unexpected.map((s) => `    - ${s.title}${s.reason ? `: ${s.reason}` : ''}`).join('\n') +
           `\n  A skip is not a pass. Either fix the environment (see\n` +
           `  docs/private/E2E_ENV.md, usually missing smoke mnemonics or an\n` +
           `  unreachable node) or add the spec to EXPECTED_SKIPS with a reason.`,
       );
     }
 
-    if (this.executed < MIN_EXECUTED) {
+    const floor = minExecuted(this.selected);
+    if (this.executed < floor) {
       problems.push(
-        `only ${this.executed} test(s) actually ran, expected at least ${MIN_EXECUTED}.\n` +
+        `only ${this.executed} test(s) actually ran, expected at least ${floor}.\n` +
           `  The suite opted out of most of itself, which usually means the\n` +
           `  environment is not set up rather than that the code is healthy.`,
       );

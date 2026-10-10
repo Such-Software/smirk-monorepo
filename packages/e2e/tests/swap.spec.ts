@@ -1,5 +1,16 @@
-import { test, expect } from '../fixtures/extension.js';
+import { randomBytes } from 'node:crypto';
+import type { Page } from '@playwright/test';
+import { test, expect, BACKEND_URL } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import {
+  THOR_GATEWAY_HOST,
+  recordRequests,
+  stubNeroswap,
+  stubNonlogs,
+  stubSwapCapabilities,
+  stubThorchain,
+} from '../fixtures/E-swaps-stubs.js';
+import { FOREIGN_ADDRESS } from '../fixtures/E-swaps-providers.js';
 
 /**
  * Swap wizard: open the Trocador Swap wizard and drive PairStep →
@@ -28,6 +39,12 @@ import { importAndUnlock } from '../fixtures/onboard.js';
  * Playwright's page/context response listeners, so any
  * `waitForResponse('/auth/extension')` always times out. See
  * fixtures/onboard.ts for the full rationale.
+ *
+ * The scenarios after the first cover THORChain, NonLogs and the Where to
+ * trade panel the same way: the real popup against the real backend, with
+ * the providers' answers taken from recorded fixtures
+ * (fixtures/E-swaps-stubs.ts) and the backend's `swaps` capability set by the
+ * test. tests/live/e-swaps.live.spec.ts runs the same scenarios live.
  *
  * Requires the extension built with VITE_SMIRK_BACKEND_URL pointed at
  * the local backend (dist already is). Source the seeds first:
@@ -171,4 +188,204 @@ test('open Swap wizard → activate Trocador → get a quote (reach QuoteStep)',
     'QUOTE_STEP>>>',
     (await page.locator('#root').innerText()).replace(/\s+/g, ' ').slice(0, 700),
   );
+});
+
+
+// ---------------------------------------------------------------------------
+// THORChain, NonLogs and Where to trade, with recorded provider answers.
+// ---------------------------------------------------------------------------
+
+const BACKEND_HOST = new URL(BACKEND_URL).host;
+const thirdParty = (seen: { host: string; at: number }[], since = 0) =>
+  [...new Set(seen.filter((e) => e.at >= since && e.host !== BACKEND_HOST).map((e) => e.host))].sort();
+
+/** The message line rendered just above a button (step error rows). */
+async function lineAbove(page: Page, button: string): Promise<string | null> {
+  const lines = (await page.locator('#root').innerText()).split('\n').map((l) => l.trim()).filter(Boolean);
+  const at = lines.lastIndexOf(button);
+  return at > 0 ? lines[at - 1]! : null;
+}
+
+/** Open the THORChain card (a first tap checks it) and its wizard. */
+async function openThorchainWizard(page: Page): Promise<string> {
+  await page.getByTestId('nav-tab-swap').click();
+  const card = page.getByTestId('swap-provider-thorchain');
+  await card.click();
+  await expect(card).toContainText('Live now', { timeout: 20_000 });
+  const text = (await card.innerText()).replace(/\s+/g, ' ');
+  await card.click();
+  await expect(page.getByTestId('swap-wizard-step')).toHaveText('1/4');
+  return text;
+}
+
+/** Pick a pair and amount and get to the quote step. */
+async function quote(page: Page, from: string, to: string, amount: string): Promise<void> {
+  await page.getByTestId(`swap-pair-from-${from}`).click();
+  await page.getByTestId(`swap-pair-to-${to}`).click();
+  await page.getByTestId('swap-pair-amount').fill(amount);
+  const button = page.getByTestId('swap-pair-get-quote');
+  await expect(button, `the wallet's ${from} balance covers ${amount}`).toBeEnabled();
+  await button.click();
+  await expect(page.getByTestId('swap-wizard-step')).toHaveText('2/4', { timeout: 20_000 });
+}
+
+const notices = (page: Page) => page.getByTestId('swap-quote-notices').locator('li').allInnerTexts();
+
+test('THORChain quotes show fee lines from the destination coin, no affiliate line, and never XMR', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  // XMR is listed by this THORChain stub: only the wallet's policy keeps it out.
+  await stubThorchain(page, { xmrPool: true });
+  await stubSwapCapabilities(page, { thorchain: { enabled: true }, nonlogs: { enabled: false } });
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+
+  const card = await openThorchainWizard(page);
+  expect(card).toMatch(/Live now: BTC, LTC\./);
+  expect(card).not.toContain('XMR');
+  await expect(page.getByTestId('swap-pair-from-XMR')).toHaveCount(0);
+  await expect(page.getByTestId('swap-pair-to-XMR')).toHaveCount(0);
+
+  // BTC to LTC: quote_btc_to_ltc in the recorded fixture, fees in LTC.
+  await quote(page, 'BTC', 'LTC', '0.00001');
+  await expect(page.getByTestId('swap-quote-fee')).toHaveText('≈ 0.03164706 LTC, included in the estimate');
+  await expect(page.locator('#root')).toContainText('12.45633282 LTC');
+  let lines = await notices(page);
+  expect(lines).toContain("THORChain's fees (liquidity 0.02789891 LTC, outbound 0.00374815 LTC) are already taken out of the estimate.");
+  expect(lines.some((n) => n.startsWith('Smirk fee')), 'no affiliate: the server names none').toBe(false);
+  expect(lines.some((n) => n.includes('sets a price limit 3% below the estimate'))).toBe(true);
+  expect(lines.some((n) => n.includes(THOR_GATEWAY_HOST))).toBe(true);
+
+  // LTC to BTC: quote_ltc_to_btc, fees in BTC.
+  await page.getByTestId('swap-wizard-back').click();
+  await quote(page, 'LTC', 'BTC', '0.0001');
+  await expect(page.getByTestId('swap-quote-fee')).toHaveText('≈ 0.00001829 BTC, included in the estimate');
+  lines = await notices(page);
+  expect(lines).toContain("THORChain's fees (liquidity 0.00000159 BTC, outbound 0.0000167 BTC) are already taken out of the estimate.");
+  expect(lines.some((n) => n.startsWith('Smirk fee'))).toBe(false);
+});
+
+test('a THORChain affiliate named by the wallet server gets its own fee line', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  const { quotes } = await stubThorchain(page);
+  await stubSwapCapabilities(page, { thorchain: { enabled: true, affiliate: { name: 't', bps: 50 } }, nonlogs: { enabled: false } });
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await openThorchainWizard(page);
+  await quote(page, 'BTC', 'LTC', '0.00001');
+  // The request named the affiliate, and the screen says what it costs.
+  const last = quotes.at(-1)!;
+  expect(last.get('affiliate')).toBe('t');
+  expect(last.get('affiliate_bps')).toBe('50');
+  await expect(page.getByTestId('swap-quote-fee')).toHaveText('≈ 0.09394746 LTC, included in the estimate');
+  const lines = await notices(page);
+  expect(lines).toContain('Smirk fee 0.5% (0.0623004 LTC), also already taken out of the estimate.');
+});
+
+test('NonLogs lists only wallet coins, walks the order book, warns on depth, and pays only this wallet', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  const nonlogs = await stubNonlogs(page);
+  await stubSwapCapabilities(page, { thorchain: { enabled: false }, nonlogs: { enabled: true } });
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+  await page.getByTestId('nav-tab-swap').click();
+
+  // The asset list: NonLogs also lists GRIN, which never swaps in-app.
+  const card = page.getByTestId('swap-provider-nonlogs');
+  await expect(card).toContainText('Live now: BTC, LTC, XMR, WOW.', { timeout: 20_000 });
+  await expect(card).not.toContainText('GRIN');
+  await card.click();
+  await expect(page.getByTestId('swap-pair-from-GRIN')).toHaveCount(0);
+
+  // A quote with the order-book walk (the recorded WOW-XMR book).
+  await quote(page, 'XMR', 'WOW', '0.0001');
+  const book = page.getByTestId('swap-book-analysis');
+  await expect(book).toBeVisible();
+  await expect(book).toContainText('Route');
+  await expect(book).toContainText('WOW-XMR');
+  await expect(book).toContainText('0.15% taker per leg (1), 0.8% convenience fee');
+  expect(Number((await page.getByTestId('swap-book-expected').innerText()).match(/([\d.]+)/)?.[1])).toBeGreaterThan(0);
+  await expect(book).not.toContainText('larger than the visible order book');
+  expect(await notices(page)).toContain('NonLogs minimum for this pair: 0.01.');
+
+  // Foreign payout, then foreign refund: both refused before any swap exists.
+  await page.getByTestId('swap-quote-to-address').fill(FOREIGN_ADDRESS.wow);
+  await page.getByTestId('swap-quote-confirm').click();
+  await expect.poll(() => lineAbove(page, 'Confirm swap')).toMatch(/pay only to this wallet/);
+  await page.getByTestId('swap-quote-use-my-to-address').click();
+  await page.getByTestId('swap-quote-refund-address').fill(FOREIGN_ADDRESS.xmr);
+  await page.getByTestId('swap-quote-confirm').click();
+  await expect.poll(() => lineAbove(page, 'Confirm swap')).toMatch(/refunds only to this wallet/);
+  await expect(page.getByTestId('swap-wizard-step')).toHaveText('2/4');
+  expect(nonlogs.created, 'no NonLogs swap was created').toHaveLength(0);
+
+  // The same amount against a thin book: the depth warning, never executed.
+  nonlogs.setBook('thin');
+  await page.getByTestId('swap-wizard-back').click();
+  await page.getByTestId('swap-pair-get-quote').click();
+  await expect(page.getByTestId('swap-wizard-step')).toHaveText('2/4', { timeout: 20_000 });
+  await expect(book).toContainText('This order is larger than the visible order book. At most 0.000017 XMR fills at the posted prices');
+  expect(nonlogs.created).toHaveLength(0);
+});
+
+test('the Swap tab asks no provider until a tap, and Where to trade asks for prices only on its own', async ({ context, extensionId }) => {
+  const page = await context.newPage();
+  const seen = recordRequests(page);
+  await stubThorchain(page);
+  await stubNeroswap(page);
+  await stubSwapCapabilities(page, { thorchain: { enabled: true }, nonlogs: { enabled: false } });
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+
+  const opened = Date.now();
+  await page.getByTestId('nav-tab-swap').click();
+  const card = page.getByTestId('swap-provider-thorchain');
+  await expect(card).toContainText(THOR_GATEWAY_HOST);
+  await expect(page.getByTestId('swap-where-to-trade')).toContainText('BasicSwap');
+  // The tab's mount effects have run once NonLogs' own mount read (the
+  // wallet server's capabilities) has answered. A provider request fired
+  // later, before its tap, is caught by the per-host checks below, and any
+  // other host by the final host list.
+  await expect(page.getByTestId('swap-provider-nonlogs')).toContainText('Not offered by this wallet server.', { timeout: 20_000 });
+  expect(thirdParty(seen, opened), 'only the wallet server before any tap').toEqual([]);
+
+  const thorTap = Date.now();
+  await card.click();
+  await expect(card).toContainText('Live now', { timeout: 20_000 });
+  expect(thirdParty(seen, opened)).toEqual([THOR_GATEWAY_HOST]);
+  expect(seen.filter((e) => e.host === THOR_GATEWAY_HOST && e.at < thorTap)).toHaveLength(0);
+
+  const pricesTap = Date.now();
+  await page.getByTestId('swap-where-to-trade-show-prices').click();
+  await expect(page.getByTestId('swap-where-to-trade')).toContainText('WOW-BTC: bid 0.0000012, ask 0.0000013', { timeout: 20_000 });
+  expect(thirdParty(seen, opened)).toEqual([THOR_GATEWAY_HOST, 'neroswap.com'].sort());
+  expect(seen.filter((e) => e.host === 'neroswap.com' && e.at < pricesTap)).toHaveLength(0);
+});
+
+test('a THORChain swap started in the popup is back on its deposit step after the popup reopens', async ({ context, extensionId }) => {
+  // Context-wide stubs, so the reopened popup gets them too.
+  await stubThorchain(context);
+  await stubSwapCapabilities(context, { thorchain: { enabled: true }, nonlogs: { enabled: false } });
+  const password = randomBytes(24).toString('base64url');
+  let page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC!, password });
+  await openThorchainWizard(page);
+  await quote(page, 'BTC', 'LTC', '0.00001');
+  await page.getByTestId('swap-quote-use-my-to-address').click();
+  await page.getByTestId('swap-quote-confirm').click();
+  await expect(page.getByTestId('swap-wizard-step')).toHaveText('3/4', { timeout: 20_000 });
+  await expect(page.getByTestId('swap-deposit-memo-warning')).toBeVisible();
+  const receive = await page.getByTestId('swap-deposit-receive').innerText();
+
+  // Close the popup and open it again.
+  await page.close();
+  page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  const lock = page.getByTestId('lockscreen-root');
+  await expect(lock.or(page.getByTestId('bottom-nav'))).toBeVisible({ timeout: 30_000 });
+  if (await lock.isVisible()) {
+    await page.getByTestId('lockscreen-password-input').fill(password);
+    await page.getByTestId('lockscreen-unlock-btn').click();
+    await expect(lock).toHaveCount(0, { timeout: 60_000 });
+  }
+  const step = page.getByTestId('swap-wizard-step');
+  if (!(await step.isVisible().catch(() => false))) await page.getByTestId('nav-tab-swap').click();
+  await expect(step).toHaveText('3/4', { timeout: 30_000 });
+  await expect(page.getByTestId('swap-deposit-memo-warning')).toBeVisible();
+  await expect(page.getByTestId('swap-deposit-receive')).toHaveText(receive);
 });

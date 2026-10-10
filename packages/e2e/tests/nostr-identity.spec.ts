@@ -1,6 +1,7 @@
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
+import { copiedExactly, recordClipboardWrites } from '../fixtures/A-onboarding-identity-helpers.js';
 
 /**
  * nostr-identity: Settings → Nostr identities (the P2 multi-identity switcher).
@@ -86,4 +87,51 @@ test('Settings → Nostr identities: switcher CRUD + link round-trip', async ({
     await page.getByTestId('nostr-link-btn').click();
   }
   await expect(badge).toBeVisible({ timeout: 20_000 });
+});
+
+/**
+ * The seed identity is derived, not stored: copying it yields exactly the npub
+ * on screen, and locking and unlocking derives the same one again.
+ */
+test('the seed npub copies exactly and survives lock and unlock', async ({ context, extensionId }) => {
+  const caps = await getCapabilities();
+  test.skip(
+    !caps.features.nostr_identity,
+    'backend feature nostr_identity is off, so the Nostr identity screen is not in use on this config',
+  );
+  const PASSWORD = 'e2e-test-password-123';
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC!, password: PASSWORD });
+
+  const openScreen = async () => {
+    await page.getByTestId('nav-tab-settings').click();
+    await page.getByTestId('settings-nostr-nav').click();
+    await expect(page.getByTestId('settings-nostr-screen')).toBeVisible({ timeout: 15_000 });
+  };
+  await openScreen();
+  const npub = ((await page.getByTestId('nostr-npub').textContent()) ?? '').trim();
+  expect(npub).toMatch(/^npub1[02-9ac-hj-np-z]{58}$/);
+
+  // Copy through the seed row's own copy control. What the page hands to the
+  // clipboard is recorded in the page as it happens, so this holds in every
+  // browser mode; the system clipboard itself is never read.
+  const seedRow = page.locator('[data-testid^="nostr-identity-"]').filter({ hasText: /\bseed\b/ }).first();
+  const seedHex = ((await seedRow.getAttribute('data-testid')) ?? '').replace('nostr-identity-', '');
+  expect(seedHex).toMatch(/^[0-9a-f]{64}$/);
+  await recordClipboardWrites(page);
+  await page.getByTestId(`nostr-copy-npub-${seedHex}`).click();
+  await expect.poll(() => copiedExactly(page, npub), {
+    timeout: 10_000,
+    message: 'copy npub did not successfully copy exactly the npub shown',
+  }).toBe(true);
+
+  // Lock, unlock, and the same identity comes back.
+  await page.getByTestId('nav-tab-settings').click();
+  await page.getByTestId('nav-tab-settings').click();
+  await page.getByTestId('settings-lock-now-btn').click();
+  await page.getByTestId('lockscreen-password-input').fill(PASSWORD);
+  await page.getByTestId('lockscreen-unlock-btn').click();
+  await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
+  await openScreen();
+  await expect(page.getByTestId('nostr-npub')).toHaveText(npub, { timeout: 15_000 });
 });

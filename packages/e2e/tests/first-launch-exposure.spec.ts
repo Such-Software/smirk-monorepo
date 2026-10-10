@@ -19,6 +19,7 @@
  */
 
 import { test, expect } from '../fixtures/extension.js';
+import { settleInstallTab } from '../fixtures/A-onboarding-identity-helpers.js';
 
 /** Requests a cold launch is allowed to make. Empty on purpose: the target is
  *  zero. Adding an entry here is a deliberate, reviewable privacy decision. */
@@ -77,4 +78,43 @@ test('cold first launch contacts zero network endpoints', async ({ context, exte
     offenders.map((o) => `${o.method} ${o.url}`),
     'a cold launch must contact nothing before the user acts',
   ).toEqual([]);
+});
+
+/**
+ * The create hand-off is not consent either. Pressing Create in the popup only
+ * opens the tab; the tab lands on the welcome screen and must stay silent until
+ * the user acts there. A tab that registers, fetches capabilities or prices on
+ * load would announce the install exactly as a startup beacon does.
+ */
+test('handing Create to a tab contacts nothing before the user acts in the tab', async ({ context, extensionId }) => {
+  const contacted: string[] = [];
+  context.on('request', (req) => {
+    const url = req.url();
+    if (!isLocal(url)) contacted.push(`${req.method()} ${url}`);
+  });
+
+  // A fresh install opens setup in a tab by itself; that load is covered by the
+  // listener above too. Let it land so the page awaited below is the hand-off.
+  await settleInstallTab(context);
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  const existing = new Set(context.pages());
+  const [tab] = await Promise.all([
+    context.waitForEvent('page', { predicate: (page) => !existing.has(page) }),
+    popup.getByTestId('onboarding-create-btn').click(),
+  ]);
+  await tab.waitForLoadState('domcontentloaded');
+  expect(tab.url()).toContain('ctx=tab');
+  await expect(tab.getByTestId('onboarding-create-btn')).toBeVisible({ timeout: 30_000 });
+  // Same window as the cold-launch check: a delayed beacon is still a beacon.
+  await tab.waitForTimeout(5000);
+
+  const offenders = contacted.filter((c) => {
+    try {
+      return !ALLOWED_ORIGINS.includes(new URL(c.split(' ')[1] ?? '').origin);
+    } catch {
+      return true;
+    }
+  });
+  expect(offenders, 'the create hand-off contacted the network before the user acted in the tab').toEqual([]);
 });

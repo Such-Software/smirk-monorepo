@@ -23,9 +23,12 @@
  * control goes back to being a no-op.
  */
 
-import { test, expect } from '../fixtures/extension.js';
+import { randomBytes } from 'node:crypto';
+import { test, expect, skipDestructiveOnShared } from '../fixtures/extension.js';
 import type { Page } from '@playwright/test';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import { getCapabilities } from '../fixtures/capabilities.js';
+import { createFreshWallet } from '../fixtures/A-onboarding-identity-helpers.js';
 
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
@@ -242,4 +245,47 @@ test('warm resume: the link control asks for the password instead of going inert
   expect(said.toLowerCase()).toContain('password');
   console.log(`[identity] warm-resume control reported: ${said}`);
   footage.mark('warm-resume-prompts', 'control asks for the password instead of no-opping');
+});
+
+/**
+ * The post-onboarding claim path, end to end on a wallet that has never had a
+ * handle: the absent state offers a claim, the claim lands on the backend, and
+ * the screen then shows `name@domain`. Creates a user row, so it is refused on
+ * a shared backend unless ALLOW_PROD_WRITES=1.
+ */
+test('a brand-new wallet claims a handle and the identity screen shows it', async ({
+  context,
+  extensionId,
+}) => {
+  test.skip(
+    skipDestructiveOnShared(),
+    'creates a wallet and claims a handle; set ALLOW_PROD_WRITES=1 to run against a shared host on purpose',
+  );
+  const caps = await getCapabilities();
+  test.skip(
+    caps.registration.payment_required || caps.registration.invite_required,
+    'needs an open registration path to create the wallet that claims the handle',
+  );
+  test.setTimeout(6 * 60_000);
+  const password = randomBytes(24).toString('base64url');
+  const page = await context.newPage();
+  await createFreshWallet(page, extensionId, password);
+  await openIdentity(page);
+
+  await expect(page.getByTestId('nostr-handle-absent'), 'a brand-new wallet already shows a handle').toBeVisible({ timeout: 30_000 });
+  const handle = `e2e_${new Date().toISOString().slice(2, 10).replace(/-/g, '')}_${randomBytes(3).toString('hex')}`;
+  await page.getByTestId('nostr-claim-handle-input').fill(handle);
+  await page.getByTestId('nostr-claim-handle-btn').click();
+  // A confirmation policy may ask for the password first.
+  const confirm = page.getByTestId('operation-password');
+  if (await confirm.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false)) {
+    await confirm.fill(password);
+    await page.getByTestId('operation-password-confirm').click();
+  }
+  const shown = page.getByTestId('nostr-handle');
+  const refused = page.getByTestId('nostr-claim-handle-error');
+  await expect(shown.or(refused).first()).toBeVisible({ timeout: 60_000 });
+  await expect(refused, 'the claim was refused').toHaveCount(0);
+  await expect(shown).toContainText(`${handle}@`);
+  await expect(page.getByTestId('nostr-handle-absent')).toHaveCount(0);
 });

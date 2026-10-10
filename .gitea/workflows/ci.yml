@@ -228,6 +228,19 @@ jobs:
           done
           node --test scripts/__tests__/*.test.mjs
 
+      # The guards of every live E2E lane (areas A to H) and of the v0.3.1
+      # release runner: the frame guards and recorders (in real Chromium), the
+      # owner's dead-air policy, the build proofs, the swap and tip ledgers, the
+      # encoders' admission rules (ffmpeg), the live spec lints, and the runner's
+      # order, gates and decisions. The lanes themselves need a backend and
+      # funded wallets and stay out of CI; their guards need neither, so CI
+      # enforces them. test:e-swaps-guards is part of this suite.
+      - name: E2E lane guards (all live areas)
+        run: |
+          sudo apt-get install -y ffmpeg
+          npx playwright install --with-deps chromium
+          npm run test:live-v031-guards -w @smirk/e2e
+
   openapi-drift:
     name: API client is current
     runs-on: ubuntu-latest

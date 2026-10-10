@@ -1,4 +1,8 @@
+import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/extension.js';
+import { importAndUnlock } from '../fixtures/onboard.js';
+import { readUserId } from '../fixtures/live-wallets.js';
+import { launchExtensionContext } from '../fixtures/A-onboarding-identity-helpers.js';
 
 /**
  * Phase 0b: import an existing wallet and read REAL balances from the backend.
@@ -31,11 +35,14 @@ test('import wallet → authenticate → real balances from the backend', async 
   // seed words
   const words = MNEMONIC!.split(/\s+/);
   for (let i = 0; i < words.length; i++) {
-    await page.getByTestId(`onboarding-import-word-${i}`).fill(words[i]);
+    await page.getByTestId(`onboarding-import-word-${i}`).fill(words[i]!);
   }
   await page.getByTestId('onboarding-import-continue').click();
 
   // password → submit (runs bootstrap-auth in the offscreen doc → /auth/extension)
+  // Both fields mask what is typed.
+  await expect(page.getByTestId('onboarding-password-input')).toHaveAttribute('type', 'password');
+  await expect(page.getByTestId('onboarding-password-confirm-input')).toHaveAttribute('type', 'password');
   await page.getByTestId('onboarding-password-input').fill(PASSWORD);
   await page.getByTestId('onboarding-password-confirm-input').fill(PASSWORD);
   await page.getByTestId('onboarding-set-password-submit').click();
@@ -76,4 +83,46 @@ test('import wallet → authenticate → real balances from the backend', async 
   // Both of them, not just whichever arrived first.
   await expect(root).toContainText(/Monero\s*XMR\s*0*\.?0*[1-9]/);
   await expect(root).toContainText(/Wownero\s*WOW\s*0*\.?0*[1-9]/);
+
+  // Returning-user bootstrap: no error screen, and the wallet resolved to a
+  // backend account (only the id leaves the page, never the token).
+  await expect(page.getByTestId('bootstrap-error')).toHaveCount(0);
+  await expect.poll(() => readUserId(page), { timeout: 90_000 }).toBeTruthy();
+});
+
+/**
+ * A returning wallet imported into a second, clean install must land on the
+ * SAME account with the SAME Nostr identity. If the backend minted a second
+ * identity instead, the handle, tips and premium would stay behind on the old
+ * one while everything on screen looked fine.
+ */
+test('importing the same phrase into a second clean profile resolves to the same account and npub', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(5 * 60_000);
+  const readIdentity = async (page: Page) => {
+    await expect.poll(() => readUserId(page), { timeout: 90_000 }).toBeTruthy();
+    const userId = await readUserId(page);
+    await page.getByTestId('nav-tab-settings').click();
+    await page.getByTestId('settings-nostr-nav').click();
+    const npub = page.getByTestId('nostr-npub');
+    await expect(npub).toContainText(/npub1[0-9a-z]{20,}/, { timeout: 20_000 });
+    return { userId, npub: ((await npub.textContent()) ?? '').trim() };
+  };
+
+  const first = await context.newPage();
+  await importAndUnlock(first, { extensionId, mnemonic: MNEMONIC! });
+  const original = await readIdentity(first);
+
+  const second = await launchExtensionContext();
+  try {
+    const page = await second.context.newPage();
+    await importAndUnlock(page, { extensionId: second.extensionId, mnemonic: MNEMONIC! });
+    const again = await readIdentity(page);
+    expect(again.userId, 'the second install resolved to a different account: a new identity was minted').toBe(original.userId);
+    expect(again.npub, 'the second install derived a different npub from the same phrase').toBe(original.npub);
+  } finally {
+    await second.context.close();
+  }
 });

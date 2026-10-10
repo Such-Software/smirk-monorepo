@@ -1,6 +1,8 @@
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
+import { BroadcastMonitor } from '../fixtures/live-send.js';
+import { npubToHex } from '../fixtures/B-send-receive-history-flows.js';
 
 /**
  * goblin-paylink: the "Magick Market buyer wallet" path (P3). Pasting a GoblinPay
@@ -39,4 +41,41 @@ test('GoblinPay pay-link pre-fills the Grin Send flow', async ({ context, extens
   // …and the amount carried through from the link.
   await page.getByTestId('send-address-continue').click();
   await expect(page.getByTestId('send-amount-input')).toHaveValue('1.5', { timeout: 15_000 });
+});
+
+/**
+ * The pre-filled recipient is exactly the link's key, the flow stops at
+ * Compose with the slatepack as the next step (nothing is built, delivered or
+ * broadcast), and text that is neither a slatepack nor a pay-link is refused
+ * on the paste screen.
+ */
+test('GoblinPay pay-link pre-fills the payee key and amount, builds nothing, and junk is refused', async ({
+  context,
+  extensionId,
+}) => {
+  const caps = await getCapabilities();
+  test.skip(!caps.chains.grin?.enabled, 'grin disabled on this backend (/capabilities chains.grin)');
+  const trip = await BroadcastMonitor.attach(context, 'block');
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+
+  await page.getByTestId('nav-tab-inbox').click();
+  await expect(page.getByTestId('inbox-tab')).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId('inbox-paste-slatepack-btn').click();
+  const input = page.getByTestId('paste-dispatch-input');
+  await input.fill('https://example.invalid/not-a-pay-link');
+  await page.getByTestId('paste-dispatch-submit').click();
+  await expect(page.locator('#root')).toContainText("Doesn't look like a slatepack or a pay-link");
+  await expect(page.getByTestId('send-address-input')).toHaveCount(0);
+
+  await input.fill(`goblin:${NPUB}?amount=0.25&memo=e2e`);
+  await page.getByTestId('paste-dispatch-submit').click();
+  const addr = page.getByTestId('send-address-input');
+  await expect(addr).toBeVisible({ timeout: 15_000 });
+  await expect(addr, 'the recipient is the link\'s key').toHaveValue(new RegExp(`^${npubToHex(NPUB)}$`, 'i'));
+  await page.getByTestId('send-address-continue').click();
+  await expect(page.getByTestId('send-amount-input')).toHaveValue('0.25', { timeout: 15_000 });
+  await expect(page.getByTestId('send-compose-continue')).toHaveText('Continue to slatepack');
+  await expect(page.locator('#root')).not.toContainText('Share slatepack');
+  expect(trip.count(), 'nothing was broadcast').toBe(0);
 });

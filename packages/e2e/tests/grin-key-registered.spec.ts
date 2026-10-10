@@ -19,33 +19,25 @@
  * onboarded and settled, the backend holds a GRIN key for it. It is deliberately
  * an assertion about the BACKEND's state, not about the wallet's UI, because the
  * backend is what the sign-in page consults.
+ *
+ * It runs once per demo wallet (alice, bob, carol): each was registered on its
+ * own path and on a different client version, and one wallet passing says
+ * nothing about the others.
  */
+import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/extension.js';
 import { BACKEND_URL } from '../fixtures/extension.js';
 import { getCapabilities } from '../fixtures/capabilities.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
 
-// Carol is the grin-carrying smoke wallet; fall back to alice, which the other
-// grin specs use, so this still runs wherever only alice is provisioned.
-const MNEMONIC = (
-  process.env.SMOKE_CAROL_MNEMONIC ?? process.env.SMOKE_ALICE_MNEMONIC
-)?.trim();
+const WALLETS = [
+  ['alice', 'SMOKE_ALICE_MNEMONIC'],
+  ['bob', 'SMOKE_BOB_MNEMONIC'],
+  ['carol', 'SMOKE_CAROL_MNEMONIC'],
+] as const;
 
-test('an onboarded wallet has its GRIN key registered with the backend', async ({
-  context,
-  extensionId,
-}) => {
-  test.skip(!MNEMONIC, 'no smoke mnemonic set — source secrets/smoke-mnemonics.env');
-  // Registration mines on a pow_required backend, so allow more than the
-  // default per-test timeout, though not much: the work itself is quick.
-  test.setTimeout(4 * 60_000);
-  const caps = await getCapabilities();
-  test.skip(!caps.chains.grin?.enabled, 'grin disabled on this backend (/capabilities chains.grin)');
-
-  const page = await context.newPage();
-  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
-  await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
-
+/** Poll the backend for this wallet's GRIN key; fail with the specific cause. */
+async function assertGrinKeyRegistered(page: Page): Promise<void> {
   // The canonical-GRIN registration is deferred behind unlock + wasm, so poll
   // rather than sampling once: a bare assertion here would be racing the very
   // effect under test and would flake in both directions.
@@ -92,4 +84,24 @@ test('an onboarded wallet has its GRIN key registered with the backend', async (
     'no GRIN key registered for this user: smirk.cash GRIN sign-in would answer ' +
       '"User not found. Please register with Smirk extension first."',
   ).toBeTruthy();
-});
+}
+
+for (const [name, variable] of WALLETS) {
+  test(`an onboarded wallet has its GRIN key registered with the backend (${name})`, async ({
+    context,
+    extensionId,
+  }) => {
+    const mnemonic = process.env[variable]?.trim();
+    test.skip(!mnemonic, `${variable} not set; source secrets/smoke-mnemonics.env`);
+    // Registration mines on a pow_required backend, so allow more than the
+    // default per-test timeout, though not much: the work itself is quick.
+    test.setTimeout(4 * 60_000);
+    const caps = await getCapabilities();
+    test.skip(!caps.chains.grin?.enabled, 'grin disabled on this backend (/capabilities chains.grin)');
+
+    const page = await context.newPage();
+    await importAndUnlock(page, { extensionId, mnemonic: mnemonic! });
+    await expect(page.getByTestId('bottom-nav')).toBeVisible({ timeout: 40_000 });
+    await assertGrinKeyRegistered(page);
+  });
+}

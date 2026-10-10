@@ -8,8 +8,8 @@ import { getCapabilities } from '../fixtures/capabilities.js';
  *
  * Drives the REAL TipMaker composer (packages/ui/src/components/TipMaker.tsx)
  * and the REAL Grin voucher builder (tip-handler.ts::createGrinTip →
- * @smirk/wasm grin_create_grin_voucher). Import alice → Home → Tip → flip
- * PUBLIC → pick GRIN → amount → submit.
+ * @smirk/wasm grin_create_grin_voucher). Import alice → Home → Tip → leave
+ * the recipient empty (a link tip) → pick GRIN → amount → submit.
  *
  * Why the assertion is the PENDING state, not a live URL:
  *   Grin is confirmation-gated, so `createGrinTip` returns
@@ -80,6 +80,7 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
   let createAsset: string | undefined;
   let createHadGrinCommitment = false;
   let grinBroadcastCalled = false;
+  const created: { body?: Record<string, unknown> } = {};
 
   await context.route('**/api/v1/tips/social', async (route) => {
     // Phase 1: create draft. Capture the body so we can assert the composer
@@ -91,6 +92,7 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
       };
       createAsset = body?.asset;
       createHadGrinCommitment = typeof body?.grin_commitment === 'string';
+      created.body = body as Record<string, unknown>;
     } catch {
       /* body parse best-effort */
     }
@@ -178,10 +180,10 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
   await page.getByTestId('home-action-tip').click();
   await expect(page.getByTestId('tip-submit-btn')).toBeVisible();
 
-  // Public tip: on a public-only backend the composer already defaults to a
-  // public share-URL tip (the targeted toggle is hidden, since the backend can't
-  // serve targeted tips), so there's nothing to flip: the flow mints a share
-  // URL / claim link out of the box.
+  // A link tip: the recipient stays empty, so the composer offers no message
+  // and names the link on its submit button.
+  await expect(page.getByTestId('tip-recipient-hint')).toContainText('Leave empty to make a link anyone can claim');
+  await expect(page.getByTestId('tip-memo-input')).toHaveCount(0);
 
   // Force the funding asset to GRIN (default is largest-balance).
   await page.getByTestId('tip-asset-dropdown').click();
@@ -192,12 +194,16 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
   await expect(page.locator('#root')).toContainText('Available: 5 GRIN');
   await page.getByTestId('tip-amount-input').fill('0.5');
 
+  // Reclaimable after 30 days instead of the default 7.
+  await page.getByTestId('tip-expiry-30d').click();
   const submit = page.getByTestId('tip-submit-btn');
+  await expect(submit).toHaveText('Create tip link');
   await expect(submit).toBeEnabled();
   await submit.click();
 
   // --- Meaningful outcome: success screen in the Grin "pending" state ---
-  await expect(page.getByTestId('tip-success-heading')).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByTestId('tip-success-heading')).toHaveText('Tip link created', { timeout: 40_000 });
+  await expect(page.locator('#root')).toContainText('0.5 GRIN');
 
   // Grin is confirmation-gated → the success screen shows the "waiting for
   // funding to confirm" affordance, NOT a live smirk.cash claim URL.
@@ -217,4 +223,12 @@ test('public GRIN voucher tip → success screen in the shareUrlPending state', 
   expect(createAsset, 'create POST asset should be grin').toBe('grin');
   expect(createHadGrinCommitment, 'create POST should carry grin_commitment').toBe(true);
   expect(grinBroadcastCalled, 'voucher tx should have been broadcast').toBe(true);
+  // A link tip: public, 0.5 GRIN in nanogrin, and no message for the backend.
+  expect(created.body?.is_public).toBe(true);
+  expect(created.body?.amount).toBe(500_000_000);
+  expect(created.body && 'memo' in created.body).toBe(false);
+
+  // Done returns Home; the link waits under Tips sent until funding confirms.
+  await page.getByTestId('tip-success-done-btn').click();
+  await expect(page.getByTestId('home-action-tip')).toBeVisible({ timeout: 15_000 });
 });

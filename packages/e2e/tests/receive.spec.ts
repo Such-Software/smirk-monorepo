@@ -1,5 +1,7 @@
 import { test, expect } from '../fixtures/extension.js';
 import { importAndUnlock } from '../fixtures/onboard.js';
+import { getCapabilities } from '../fixtures/capabilities.js';
+import { LIVE_ASSETS, looksLikeReceiveAddress, type LiveAsset } from '../fixtures/live-send.js';
 
 /**
  * receive. Drive the REAL Receive surface from Home: open the Receive
@@ -82,4 +84,59 @@ test('Receive → XMR → derived address renders (offline, no daemon)', async (
   footage.mark('receive-address-shown', 'XMR receive address + copy button visible');
 
   console.log('RECEIVE_XMR_ADDR len=', addrText.length, 'prefix=', addrText.slice(0, 6));
+});
+
+/**
+ * Every coin, both entry points. Home → Receive → picker shows a well-formed
+ * address per coin (bech32 bc1/ltc1, 95-char Monero, 97-char Wownero, grin1
+ * slatepack), the five are distinct, and Receive opened from a coin's own
+ * screen skips the picker and shows the same address. Client-side
+ * derivation only; nothing is sent.
+ */
+test('Receive shows a well-formed address for every coin, and a coin screen opens Receive on that coin', async ({
+  context,
+  extensionId,
+}) => {
+  // Only the coins this backend enables are listed.
+  const caps = await getCapabilities();
+  const assets = LIVE_ASSETS.filter((a) => caps.chains[a]?.enabled !== false);
+  const page = await context.newPage();
+  await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC! });
+
+  const home = async () => {
+    await page.getByTestId('nav-tab-home').click();
+    if (!(await page.getByTestId('home-total-balance').isVisible().catch(() => false))) {
+      await page.getByTestId('nav-tab-home').click();
+    }
+    await expect(page.getByTestId('home-total-balance')).toBeVisible({ timeout: 30_000 });
+  };
+  const shown = async () => {
+    const el = page.getByTestId('receive-address');
+    await expect(el).toBeVisible({ timeout: 30_000 });
+    await expect(el).not.toHaveText('Loading address…', { timeout: 30_000 });
+    await expect(page.getByTestId('receive-copy-btn')).toBeVisible();
+    return (await el.innerText()).trim();
+  };
+
+  const seen = new Map<LiveAsset, string>();
+  for (const asset of assets) {
+    await home();
+    await page.getByTestId('home-action-receive').click();
+    await expect(page.locator('#root')).toContainText('Choose asset', { timeout: 15_000 });
+    await page.getByTestId(`receive-asset-${asset}`).click();
+    const address = await shown();
+    expect(looksLikeReceiveAddress(asset, address), `${asset} receive address has its coin's shape`).toBe(true);
+    seen.set(asset, address);
+  }
+  expect(new Set(seen.values()).size, 'a distinct address per coin').toBe(assets.length);
+
+  for (const asset of assets) {
+    await home();
+    await page.getByTestId(`asset-row-${asset}`).click();
+    await expect(page.getByTestId('asset-detail-balance')).toBeVisible({ timeout: 30_000 });
+    await page.locator('button', { hasText: /^↙\s*Receive$/ }).click();
+    // Preselected: no asset picker, straight to this coin's address.
+    await expect(page.locator('[data-testid^="receive-asset-"]')).toHaveCount(0);
+    expect(await shown(), `${asset} Receive from its coin screen shows the same address`).toBe(seen.get(asset));
+  }
 });

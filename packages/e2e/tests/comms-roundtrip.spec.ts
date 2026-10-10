@@ -38,7 +38,10 @@
  *     FEATURE_FEED=true
  *
  * Do NOT point these at the production relay: the feed test publishes a public
- * kind-1 note, which would appear in the real announcements feed.
+ * kind-1 note, which would appear in the real announcements feed. Both tests
+ * skip unless the relay is a local one. Production messaging is exercised only
+ * by the recorded, transport-guarded live lane
+ * (tests/live/d-messaging.live.spec.ts, D-messaging-federation.live.config.ts).
  */
 
 import { test, expect } from '../fixtures/extension.js';
@@ -47,6 +50,9 @@ import { importAndUnlock } from '../fixtures/onboard.js';
 import { deriveNostrIdentity } from '@smirk/core';
 import { getCapabilities } from '../fixtures/capabilities.js';
 import { isLocalPublishRelay, publishRelaySkipReason } from '../fixtures/relay-guard.js';
+import { closeNostrReader, hasDmInbox, inboxWraps, newInboxWraps } from '../fixtures/D-messaging-federation-nostr.js';
+
+test.afterAll(() => closeNostrReader());
 
 const MNEMONIC = process.env.SMOKE_ALICE_MNEMONIC ?? '';
 test.skip(!MNEMONIC, 'SMOKE_ALICE_MNEMONIC not set — source secrets/smoke-mnemonics.env');
@@ -78,7 +84,7 @@ test('an encrypted DM survives a round trip through the relay', async ({
 }) => {
   const caps = (await getCapabilities()) as unknown as {
     features?: { nostr_relay?: boolean };
-    messaging?: { relay_url?: string };
+    messaging?: { relay_url?: string; inbound_pow_bits?: number };
   };
   test.skip(
     !caps.features?.nostr_relay || !caps.messaging?.relay_url,
@@ -91,6 +97,7 @@ test('an encrypted DM survives a round trip through the relay', async ({
     !isLocalPublishRelay(caps.messaging?.relay_url),
     publishRelaySkipReason(caps.messaging?.relay_url),
   );
+  const relayUrl = caps.messaging!.relay_url!;
 
   const page = await context.newPage();
   await importAndUnlock(page, { extensionId, mnemonic: MNEMONIC });
@@ -116,8 +123,16 @@ test('an encrypted DM survives a round trip through the relay', async ({
   // `.textContent()` auto-waits, so on Messages it silently consumed the entire
   // test budget before the `.catch()` could fire. The failure then presented as
   // a timeout somewhere else entirely.
-  const npub = deriveNostrIdentity(MNEMONIC, 0).npub;
+  const self = deriveNostrIdentity(MNEMONIC, 0);
+  const npub = self.npub;
+  const selfHex = self.pubkeyHex;
+  self.privateKey.fill(0);
   await page.getByTestId('dm-recipient-input').fill(npub);
+
+  // What the relay must hold afterwards, and whether the wallet can know where
+  // we read (our own kind-10050 inbox list).
+  const before = await inboxWraps(relayUrl, selfHex);
+  const inbox = await hasDmInbox(relayUrl, selfHex);
 
   const body = marker('dm');
   await page.getByTestId('dm-text-input').fill(body);
@@ -125,10 +140,30 @@ test('an encrypted DM survives a round trip through the relay', async ({
   await page.getByTestId('dm-send-btn').click();
 
   // A send error is a real failure: with a relay advertised there is no
-  // legitimate reason for the publish to be refused.
+  // legitimate reason for the publish to be refused. Success clears the box.
   const err = page.getByTestId('messages-error');
-  if (await err.isVisible({ timeout: 5_000 }).catch(() => false)) {
+  await expect
+    .poll(async () => (await err.isVisible()) || (await page.getByTestId('dm-text-input').inputValue()) === '', {
+      timeout: 60_000,
+      message: 'the send never resolved',
+    })
+    .toBe(true);
+  if (await err.isVisible()) {
     throw new Error(`DM send reported an error: ${(await err.textContent())?.trim()}`);
+  }
+
+  // The reach notice is honest: it shows exactly when no inbox list exists.
+  const notice = page.getByTestId('messages-reach-notice');
+  if (inbox) await expect(notice, 'the wallet warned about an inbox that exists').toBeHidden();
+  else await expect(notice, 'no inbox list exists, so the wallet must say it reached only this relay').toBeVisible();
+
+  // The relay holds the wrap, mined to the difficulty it advertises.
+  const fresh = await newInboxWraps(relayUrl, selfHex, before);
+  expect(fresh.size, 'the relay holds no new gift wrap after a reported send').toBeGreaterThan(0);
+  for (const bits of fresh.values()) {
+    expect(bits, 'the gift wrap carries less proof-of-work than the relay advertises').toBeGreaterThanOrEqual(
+      caps.messaging?.inbound_pow_bits ?? 0,
+    );
   }
 
   // The message must come BACK: retrieved from the relay and decrypted. This is
