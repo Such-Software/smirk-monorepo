@@ -205,6 +205,27 @@ test('the recorder dedupes still frames, cards secret scopes and masks, and drop
   }
 });
 
+test('a failed secret scope reports its own error and keeps the card until the screen is clean', async () => {
+  const out = mkdtempSync(join(tmpdir(), 'h-recorder-'));
+  const adapter = new FakeAdapter('mask');
+  const recorder = new GuardedRecorder({ adapter, lane: 'failure test', outDir: out, canary: makeCanary(), holds: { preTapMs: 50, settledMs: 80, resultMs: 100 }, interval: 20 });
+  try {
+    adapter.verdicts = [{ card: ['Recovery phrase entry'], mask: [] }];
+    recorder.start();
+    await assert.rejects(recorder.secret('Import alice: phrase and password entry', async () => { throw new Error('scope failed'); }), /scope failed/);
+    assert.equal(recorder.secretLabel, 'Import alice: phrase and password entry', 'the card stays on while the phrase is visible');
+    const shots = adapter.shots;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(adapter.shots, shots, 'no screenshots while the failed scope is open');
+    adapter.verdicts = [{ card: [], mask: [] }];
+    assert.equal(await recorder.resume(), true);
+    assert.equal(recorder.secretLabel, null);
+  } finally {
+    if (!recorder.stopped) await recorder.stop();
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
 test('without masks (Firefox) a mask-level surface becomes a full card', async () => {
   const out = mkdtempSync(join(tmpdir(), 'h-recorder-'));
   const adapter = new FakeAdapter('card');

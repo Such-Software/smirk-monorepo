@@ -66,7 +66,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readWalletPhrase } from '../../demo/capture-demo.mjs';
 import { ASSETS, FOOTAGE_ROOT, RELEASE, makeCanary } from '../../fixtures/H-cross-browser-desktop-policy.mjs';
-import { GuardedRecorder, encodeLane, privateDir } from '../../fixtures/H-cross-browser-desktop-recorder.mjs';
+import { FootageError, GuardedRecorder, encodeLane, privateDir } from '../../fixtures/H-cross-browser-desktop-recorder.mjs';
 import { hHeaderHitTest } from '../../fixtures/H-cross-browser-desktop-guard.mjs';
 import { GeckoSession, WebDriverError, resolveFirefoxBinary, toolVersion } from '../../fixtures/H-cross-browser-desktop-webdriver.mjs';
 import { ChromiumAdapter, FirefoxAdapter } from '../../fixtures/H-cross-browser-desktop-adapters.mjs';
@@ -103,7 +103,7 @@ const flag = (name) => process.argv.includes(`--${name}`);
 
 /** Print a driver failure without its message: call logs can quote typed values. */
 function describe(error) {
-  if (error instanceof LaneError || error instanceof Skip) return error.message;
+  if (error instanceof LaneError || error instanceof Skip || error instanceof FootageError) return error.message;
   // Our own text: the error code and the command path, never a body or browser message.
   if (error instanceof WebDriverError) return `browser driver refused (${error.message})`;
   return `browser driver error (${error?.name ?? 'unknown'})`;
@@ -201,32 +201,60 @@ class Lane {
     await until(() => this.ui.visible('onboarding-import-btn'), { timeout: 60_000, what: 'the welcome screen' });
     this.footage.chapter('Welcome screen');
     await this.footage.settled('Welcome screen');
+    let stage = 'open the import wizard';
     await this.footage.secret('Import alice: phrase and password entry', async (ops) => {
-      await ops.tap('onboarding-import-btn');
-      await ops.tap('onboarding-import-warning-continue');
-      for (let i = 0; i < words.length; i++) await ops.fill(`onboarding-import-word-${i}`, words[i]);
-      await ops.tap('onboarding-import-continue');
-      // The wizard fails closed until sign-up requirements resolve and then
-      // rebuilds the step empty. Retry only that race: other refusals count
-      // against the backend's per-wallet restore budget.
-      for (let attempt = 0; attempt < 4; attempt++) {
-        await until(() => this.ui.visible('onboarding-password-input'), { what: 'the password step' });
-        await ops.fill('onboarding-password-input', this.password);
-        await ops.fill('onboarding-password-confirm-input', this.password);
-        await ops.tap('onboarding-set-password-submit');
-        await sleep(3_000);
-        if (!(await this.ui.visible('onboarding-set-password-submit'))) break;
-        if (!/sign-up requirements/.test(await this.ui.rootText())) throw new LaneError('import refused at the password step');
-        await sleep(5_000);
-      }
       try {
-        await until(() => this.ui.visible('onboarding-setup-finish-btn'), { timeout: 25_000, what: 'the setup step' });
-        await ops.tap('onboarding-setup-finish-btn');
-      } catch { /* no setup step for this wallet */ }
-      await until(() => this.ui.visible('home-total-balance'), { timeout: 90_000, what: 'Home after import' });
+        await this.#importSteps(ops, words, (next) => { stage = next; });
+      } catch (error) {
+        throw await this.#importFailure(stage, error);
+      }
     });
     words.fill('');
     await this.homeLoaded();
+  }
+
+  /** Why the redacted import stopped, without any value from the screen. */
+  async #importFailure(stage, error) {
+    const text = await this.ui.rootText().catch(() => '');
+    if (/rate limited/i.test(text)) {
+      return new LaneError(`import stopped at "${stage}": the backend rate-limited the sign-in (check-restore allows 30 an hour per IP)`);
+    }
+    const ids = await this.ui.evaluate(() => [...document.querySelectorAll('[data-testid]')]
+      .filter((element) => element.getBoundingClientRect().width > 0)
+      .map((element) => (element.getAttribute('data-testid') || '').replace(/[0-9a-f]{16,}/g, '<hex>'))
+      .slice(0, 25)).catch(() => []);
+    return new LaneError(`import stopped at "${stage}" (${describe(error)}); visible test ids: ${ids.join(', ') || 'none'}`);
+  }
+
+  async #importSteps(ops, words, at) {
+    await ops.tap('onboarding-import-btn');
+    at('confirm the import warning');
+    await ops.tap('onboarding-import-warning-continue');
+    at('enter the phrase');
+    for (let i = 0; i < words.length; i++) await ops.fill(`onboarding-import-word-${i}`, words[i]);
+    at('submit the phrase');
+    await ops.tap('onboarding-import-continue');
+    at('set the password');
+    // The wizard fails closed until sign-up requirements resolve and then
+    // rebuilds the step empty. Retry only that race: other refusals count
+    // against the backend's per-wallet restore budget.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await until(() => this.ui.visible('onboarding-password-input'), { what: 'the password step' });
+      await ops.fill('onboarding-password-input', this.password);
+      await ops.fill('onboarding-password-confirm-input', this.password);
+      await ops.tap('onboarding-set-password-submit');
+      await sleep(3_000);
+      if (!(await this.ui.visible('onboarding-set-password-submit'))) break;
+      if (!/sign-up requirements/.test(await this.ui.rootText())) throw new LaneError('import refused at the password step');
+      await sleep(5_000);
+    }
+    at('finish setup');
+    try {
+      await until(() => this.ui.visible('onboarding-setup-finish-btn'), { timeout: 25_000, what: 'the setup step' });
+      await ops.tap('onboarding-setup-finish-btn');
+    } catch { /* no setup step for this wallet */ }
+    at('reach Home');
+    await until(() => this.ui.visible('home-total-balance'), { timeout: 90_000, what: 'Home after import' });
   }
 
   async readBalances() {

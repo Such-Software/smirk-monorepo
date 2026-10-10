@@ -35,6 +35,11 @@ export function privateDir(path) {
   return path;
 }
 
+/** The recorder's own refusals: static text, safe to print. */
+export class FootageError extends Error {
+  name = 'FootageError';
+}
+
 /** One-at-a-time section shared by actions and frame captures. */
 class Exclusive {
   /** @type {Promise<unknown>} */
@@ -271,27 +276,41 @@ export class GuardedRecorder {
       choose: (target, value) => inside(() => this.adapter.choose(target, value)),
       press: (key) => inside(() => this.adapter.press(key)),
     };
+    let failure = null;
     try {
       await fn(ops);
-    } finally {
-      open = false;
-      // Stay on the card until the screen is clean twice in a row.
-      let clean = 0;
-      const deadline = Date.now() + cleanPatience;
-      while (clean < 2) {
-        const pass = await this.exclusive.run(() => this.#inspect()).catch(() => ({ cardLabel: 'Screen unreadable' }));
-        clean = pass.cardLabel ? 0 : clean + 1;
-        if (clean < 2) {
-          if (Date.now() > deadline) {
-            this.#event('secret', label, start, { resumed: false });
-            throw new Error(`a secret surface stayed visible after: ${label}`);
-          }
-          await sleep(CLEAN_PASS_GAP_MS);
-        }
-      }
-      this.secretLabel = null;
-      this.#event('secret', label, start, { resumed: true });
+    } catch (error) {
+      failure = error;
     }
+    open = false;
+    // Stay on the card until the screen is clean twice in a row. After a
+    // failed scope the screen may still hold a secret: keep the card on (later
+    // frames stay redacted until resume()) and report the scope's own error.
+    const resumed = await this.#awaitClean(failure ? 10_000 : cleanPatience);
+    this.#event('secret', label, start, { resumed });
+    if (failure) throw failure;
+    if (!resumed) throw new FootageError(`a secret surface stayed visible after: ${label}`);
+  }
+
+  /** Leave a card that a failed secret scope left on, once the screen is clean. */
+  async resume({ patience = 30_000 } = {}) {
+    if (!this.secretLabel) return true;
+    return this.#awaitClean(patience);
+  }
+
+  async #awaitClean(patience) {
+    let clean = 0;
+    const deadline = Date.now() + patience;
+    while (clean < 2) {
+      const pass = await this.exclusive.run(() => this.#inspect()).catch(() => ({ cardLabel: 'Screen unreadable' }));
+      clean = pass.cardLabel ? 0 : clean + 1;
+      if (clean < 2) {
+        if (Date.now() > deadline) return false;
+        await sleep(CLEAN_PASS_GAP_MS);
+      }
+    }
+    this.secretLabel = null;
+    return true;
   }
 }
 
