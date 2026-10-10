@@ -13,6 +13,10 @@ scripts/env-stub.cjs
 
 # Node
 node_modules/
+# Vite bundles a TypeScript config into a temporary file beside it while loading it. The
+# extension's build stamp runs git status during that load, so an unignored temp file
+# marked every release build as -dirty (v0.3.1 run 11204).
+vite.config.*.timestamp-*
 .npm/
 .pnpm-store/
 build/

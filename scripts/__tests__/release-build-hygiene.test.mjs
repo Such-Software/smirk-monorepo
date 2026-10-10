@@ -48,3 +48,28 @@ test('the build stamp excludes only release output, from the directory vite runs
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("vite's temporary config bundle never marks the build dirty", () => {
+  const config = readFileSync(join(root, 'packages/extension/vite.config.ts'), 'utf8');
+  const pathspecs = config.match(/"git status --porcelain -- ([^"]+)"/)[1]
+    .split(/\s+/).map((spec) => spec.replace(/^'|'$/g, ''));
+  const repo = mkdtempSync(join(tmpdir(), 'stamp-vite-'));
+  try {
+    const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+    git('init', '-q');
+    writeFileSync(join(repo, '.gitignore'), readFileSync(join(root, '.gitignore'), 'utf8'));
+    mkdirSync(join(repo, 'packages/extension'), { recursive: true });
+    writeFileSync(join(repo, 'packages/extension/vite.config.ts'), 'export default {};\n');
+    git('add', '.');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'fixture');
+    const status = () => execFileSync('git', ['-c', 'core.excludesFile=/dev/null', 'status', '--porcelain', '--', ...pathspecs],
+      { cwd: join(repo, 'packages/extension'), encoding: 'utf8' }).trim();
+    // The exact name shape Vite wrote in run 11204's extension job.
+    writeFileSync(join(repo, 'packages/extension/vite.config.ts.timestamp-1791627745979-1aa597e04e3a8.mjs'), '// temp\n');
+    assert.equal(status(), '', "vite's temp config bundle must not mark the build dirty");
+    writeFileSync(join(repo, 'packages/extension/new-source.ts'), 'export {};\n');
+    assert.match(status(), /new-source\.ts/, 'a real untracked source file must still mark the build dirty');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
