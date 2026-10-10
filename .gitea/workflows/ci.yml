@@ -125,15 +125,13 @@ jobs:
           cargo check --locked -p swap-core --features basicswap-interop --target wasm32-unknown-unknown
           cargo build --locked -p swap-core --features basicswap-interop --example basicswap_fixture
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: BasicSwap reference compatibility (fundless)
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           git clone --depth 1 --branch v0.19.0 https://github.com/basicswap/basicswap.git "$RUNNER_TEMP/basicswap-reference"
-          python -m venv "$RUNNER_TEMP/basicswap-fixtures"
+          python3 -c 'import sys; (3, 11) <= sys.version_info < (3, 14) or sys.exit("BasicSwap fixtures require Python 3.11 through 3.13")'
+          python3 -m venv "$RUNNER_TEMP/basicswap-fixtures"
           "$RUNNER_TEMP/basicswap-fixtures/bin/pip" install --only-binary=:all: -r crates/swap-core/tests/reference-requirements.txt
           "$RUNNER_TEMP/basicswap-fixtures/bin/python" crates/swap-core/tests/basicswap_reference.py \
             --reference "$RUNNER_TEMP/basicswap-reference" --binary target/debug/examples/basicswap_fixture

@@ -73,7 +73,7 @@ cargo check --locked -p swap-core --features basicswap-interop --target wasm32-u
 cargo build --locked -p swap-core --features basicswap-interop --example basicswap_fixture
 ```
 
-The differential runner requires Python 3.12, the pinned dependencies in
+The differential runner requires Python 3.11 through 3.13, the pinned dependencies in
 `crates/swap-core/tests/reference-requirements.txt`, and a clean BasicSwap checkout
 at the reference commit:
 
