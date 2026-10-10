@@ -459,17 +459,38 @@ function toBook(pair: string, raw: unknown): OrderBook {
   return { pair, bids: side(o['bids']), asks: side(o['asks']) };
 }
 
-/** Symbols NonLogs lists as swappable, and each one's first network. */
-function swappable(raw: unknown): { symbols: Set<string>; networks: Record<string, string> } {
+/**
+ * The object holding NonLogs' asset catalogue. The API docs put
+ * `creation_enabled` and `assets` at the top; NonLogs' own guest-swap catalogue
+ * nests them under `swap` with the flag named `enabled`. Accept both, and a
+ * `data` or `result` envelope, so a wrapped body does not read as "no coins".
+ */
+function catalogueRoot(o: Record<string, unknown>): Record<string, unknown> | null {
+  if (Array.isArray(o['assets'])) return o;
+  for (const k of ['swap', 'data', 'result']) {
+    const inner = obj(o[k]);
+    if (Array.isArray(inner['assets'])) return inner;
+  }
+  return null;
+}
+
+/** Symbols NonLogs lists as swappable, and each one's first network. Closed
+ *  unless an explicit `true` creation flag is present, under either name. */
+export function swappable(raw: unknown): { symbols: Set<string>; networks: Record<string, string> } {
   const o = obj(raw);
   const symbols = new Set<string>();
   const networks: Record<string, string> = {};
-  if (o['creation_enabled'] !== true) return { symbols, networks };
-  const assets = Array.isArray(o['assets']) ? o['assets'] : [];
+  const root = catalogueRoot(o);
+  if (!root) return { symbols, networks };
+  const open = [root, o].some((x) => x['creation_enabled'] === true || x['enabled'] === true);
+  if (!open) return { symbols, networks };
+  const assets = root['assets'] as unknown[];
   for (const a of assets) {
     const e = obj(a);
     const symbol = typeof e['symbol'] === 'string' ? e['symbol'].toUpperCase() : null;
     if (!symbol) continue;
+    // Coins NonLogs cannot swap address-only (Grin, Beam) are `supported: false`.
+    if (e['supported'] === false) continue;
     const flags = [e['available'], e['enabled'], e['swap_enabled']].filter((x) => typeof x === 'boolean');
     if (flags.length > 0 && flags[0] === false) continue;
     symbols.add(symbol);

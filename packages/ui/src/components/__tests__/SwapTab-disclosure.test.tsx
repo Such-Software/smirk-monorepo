@@ -72,10 +72,17 @@ test('an unchecked THORChain card is a tap target that names what the tap contac
   assert.equal(checks, 0, 'rendering the tab asks nothing');
 });
 
-test('without a check to offer, a THORChain card with no live pair stays disabled', () => {
-  const thor = card(swapTab({ unavailableReason: 'turned off by this wallet server' }), 'thorchain');
+test('a THORChain card the wallet server turned off is disabled and reads as paused', () => {
+  const thor = card(swapTab({ offered: false, unavailableReason: 'Turned off by this wallet server.' }), 'thorchain');
   assert.match(thor, /disabled/);
   assert.match(thor, />Paused</);
+});
+
+test('an offered THORChain card with no live pair and no check is unavailable, not paused', () => {
+  const thor = card(swapTab({ unavailableReason: 'No live pair right now.' }), 'thorchain');
+  assert.match(thor, /disabled/);
+  assert.match(thor, />Unavailable now</);
+  assert.doesNotMatch(thor, />Paused</);
 });
 
 test('the WOW/GRIN panel offers live prices on a tap that names neroswap.com', () => {

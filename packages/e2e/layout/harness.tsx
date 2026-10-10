@@ -32,6 +32,12 @@ const layoutParam = params.get('layout');
 const layout = layoutParam === 'popup' || layoutParam === 'wide' ? layoutParam : 'auto';
 // Mirror the extension: an action popup stamps its surface before rendering.
 if (layout === 'popup') document.documentElement.setAttribute('data-surface', 'popup');
+// The real popup's brand carries a 16px logo (brand=text drops it, to cover a
+// shell without one). A data URI keeps the harness a single file.
+const BRAND_ICON =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#facc15"/></svg>');
+const brand = params.get('brand') === 'text' ? { label: 'Smirk Wallet' } : { label: 'Smirk Wallet', iconUrl: BRAND_ICON };
 
 window.__shellClicks = [];
 const clicked = (name: string) => () => {
@@ -76,6 +82,7 @@ render(
       onOpenInTab: clicked('tab'),
       onPopOut: clicked('popout'),
       onLock: clicked('lock'),
+      brand,
       headerActions: h(
         'button',
         {

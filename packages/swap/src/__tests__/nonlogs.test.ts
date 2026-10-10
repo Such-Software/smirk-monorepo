@@ -8,6 +8,7 @@ import {
   NonlogsSwap,
   NonlogsBackendError,
   mapStatus,
+  swappable,
   atomicToDecimal,
   decimalToAtomic,
   type NonlogsBackend,
@@ -188,4 +189,56 @@ test('status: waiting, confirming, converting, paid, refunded, expired', () => {
   );
   assert.equal(mapStatus({ payments: [{}], refunds: [{ tx_hash: 'r' }] }, now, 11).state, 'refunded');
   assert.equal(mapStatus({ payments: [], funding_expires_at: '2026-10-07T00:00:00Z' }, now, 11).state, 'failed');
+});
+
+// NonLogs' own guest-swap catalogue (recorded 2026-10-10 from
+// /api/guest-swaps/catalog, trimmed): nested under `swap`, flag `enabled`.
+// The v0.3.1 RC read only a top-level `creation_enabled`, so a body shaped like
+// this offered no coins at all.
+const nestedCatalogue = {
+  swap: {
+    enabled: true,
+    assets: [
+      { id: 4, symbol: 'BTC', network: 'bitcoin', available: true, supported: true },
+      { id: 9, symbol: 'LTC', network: 'litecoin', available: true, supported: true },
+      { id: 7, symbol: 'XMR', network: 'monero', available: true, supported: true },
+      { id: 8, symbol: 'WOW', network: 'wownero', available: false, supported: true },
+      { id: 6, symbol: 'GRIN', network: 'grin', available: false, supported: false },
+    ],
+    defaults: { from_id: 4, to_id: 7 },
+  },
+  csrf: 'not-a-secret-fixture',
+};
+
+test('swappable reads the nested catalogue NonLogs actually serves', () => {
+  const { symbols, networks } = swappable(nestedCatalogue);
+  assert.deepEqual([...symbols].sort(), ['BTC', 'LTC', 'XMR']);
+  assert.equal(networks['XMR'], 'monero');
+});
+
+test('swappable stays closed on every shape without an explicit true flag', () => {
+  const assets = [{ symbol: 'BTC', available: true }];
+  for (const body of [
+    { swap: { enabled: false, assets } },
+    { swap: { assets } },
+    { data: { creation_enabled: 'yes', assets } },
+    { enabled: true },
+    [],
+    null,
+  ]) {
+    assert.equal(swappable(body).symbols.size, 0, `opened on ${JSON.stringify(body)}`);
+  }
+  assert.deepEqual([...swappable({ creation_enabled: true, assets }).symbols], ['BTC']);
+  assert.deepEqual([...swappable({ data: { creation_enabled: true, assets } }).symbols], ['BTC']);
+});
+
+test('an unsupported coin is never swappable even if marked available', () => {
+  const body = { creation_enabled: true, assets: [{ symbol: 'GRIN', available: true, supported: false }] };
+  assert.equal(swappable(body).symbols.size, 0);
+});
+
+test('availableAssets offers our coins from the nested catalogue', async () => {
+  const { backend } = fakeBackend({ assets: async () => nestedCatalogue });
+  const swap = new NonlogsSwap({ backend });
+  assert.deepEqual((await swap.availableAssets()).sort(), ['btc', 'ltc', 'xmr']);
 });
