@@ -11,20 +11,23 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
  * targets BACKEND_URL. Footage, when FOOTAGE=guarded, comes only from the
  * guarded recorder (fixtures/E-swaps-footage.ts).
  *
- * Confirmation waits make single tests long (up to a few hours) and the whole
- * run up to about twelve. One worker; the wallets are worker-scoped.
+ * Each test's timeout is the sum of what it may wait for (a real swap: up to
+ * about six hours in the worst case), and the run's is E2E_GLOBAL_TIMEOUT_H.
+ * Typical runs take a fraction of either. One worker; the wallets are
+ * worker-scoped.
  */
 assertPrivateCapture();
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
 // Registers the live tests; the main suite leaves this unset.
 process.env.E2E_LANE = 'live';
-// The lane has nine tests; the skip guard's default floor is the main suite's.
-process.env.E2E_MIN_EXECUTED ??= '9';
+// The lane has ten tests; the skip guard's default floor is the main suite's.
+process.env.E2E_MIN_EXECUTED ??= '10';
 // One id for the whole run, inherited by every worker (a failed test restarts
-// the worker), so a wallet that could not be imported is not retried.
+// the worker): the run's directory, evidence and timelines are keyed by it,
+// and a wallet that could not be imported is not retried within it.
 process.env.E_SWAPS_RUN_ID ??= String(Date.now());
 
-const hours = Number(process.env.E2E_GLOBAL_TIMEOUT_H ?? '12');
+const hours = Number(process.env.E2E_GLOBAL_TIMEOUT_H ?? '20');
 
 export default defineConfig({
   testDir: './tests/live',

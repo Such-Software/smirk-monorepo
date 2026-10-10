@@ -1,6 +1,6 @@
 # Wallet browser integration tests
 
-> Status: active · Updated 2026-09-27 · Applies to: Smirk client source
+> Status: active · Updated 2026-10-10 · Applies to: Smirk client source
 
 Playwright drives the real MV3 extension against an explicitly selected backend.
 The suite supplies release evidence for the scenarios that execute. It does not
@@ -39,7 +39,9 @@ or wrong build refuses; it does not become a skipped success.
 
 ## Secret output policy
 
-Capture is closed for the wallet suite, including failed tests:
+Playwright capture is closed for the wallet suite and every lane, including
+failed tests. The only footage comes from the separately guarded recorders
+described below (demo capture, and the E-swaps live lane):
 
 - Trace, screenshots and video are off. CLI and per-test capture overrides refuse.
 - Accessibility snapshots are suppressed, and error values/call logs are sanitized
@@ -66,6 +68,60 @@ unlock happen before any capture, Settings' root is never recorded, and a guard
 showing a password, phrase, recovery, export or nsec surface. Output stays in
 `~/Build/smirk-marketing`; nothing is promoted automatically. Re-enabling
 full-suite capture or cropping a completed recording is still not admitted.
+
+### E-swaps live lane capture (pending owner review)
+
+`E-swaps.live.config.ts` runs `tests/live/e-swaps.live.spec.ts` against a real
+backend with the demo wallets alice, bob and carol, and can record the run for
+the owner's release review (`FOOTAGE=guarded`). Its gates, paths and outputs
+are listed in `fixtures/E-swaps-live.ts`. It differs from demo capture in one
+reviewed way, and that difference needs the owner's explicit approval before
+its footage is treated as admitted release evidence:
+
+- **Mask and continue, not refuse.** A long live run meets the lock screen,
+  the operation password prompt and the NonLogs private status link during
+  ordinary swaps, so a guard that refuses the whole run on any such surface
+  cannot record one. `fixtures/E-swaps-guard.mjs` classifies every frame
+  instead: clean; masked (password fields, tx key, tip share URL, pasted tips,
+  nsec surfaces are covered by screenshot masks, and the frame is kept only if
+  two guard passes agree); or a redaction card (recovery phrase screens,
+  private key text, tip claim links: no screenshot is taken at all). A canary
+  holds only hashes of each phrase's three-word runs, the run's random wallet
+  password and any registered bearer link, and turns a frame showing one into
+  a card.
+- **Same start as demo capture.** A wallet's recorder starts on Home, after
+  the import and unlock and two clean guard passes; the import is a card in
+  the timeline and is never captured. A reopened popup records from its lock
+  screen with the password field masked. Typing a password happens only
+  inside a secret scope, with the recorder paused and frames already in
+  flight dropped.
+- **Dead air by rule.** `fixtures/E-swaps-policy.mjs` holds the owner's video
+  policy: 6 s still before every tap or typed field, 12 s settled on every
+  screen an action leads to, 25 s on key results. The recorder applies it to
+  every action, and `scripts/E-swaps-encode.mjs` refuses a timeline with a
+  short hold or with a screen that was never held. The one reviewed exception
+  is Send's done screen, which closes itself after 12 s: "Stay on this screen"
+  is tapped after its 6 s hold and the kept screen is then held 25 s.
+- **One run, one proved build.** A recorded run (and any test that spends)
+  requires `EXTENSION_ZIP`; every file of that release zip must match the
+  unpacked build byte for byte. The run's directory holds its evidence (the
+  zip's SHA-256, the test source commit, public results) and its timelines,
+  and the encoder reads only the run it is told to (`--run <id>` or
+  `--latest`), never an earlier one.
+
+Footage and evidence stay under `~/Build/smirk-e2e` (0700 directories, 0600
+files); nothing is uploaded or promoted. The lane's guards run in CI with no
+backend or wallet:
+
+```sh
+npm run test:e-swaps-guards -w @smirk/e2e
+```
+
+Real swaps are entered in an in-flight ledger (`fixtures/E-swaps-ledger.mjs`,
+`~/Build/smirk-e2e/E-swaps-inflight.json`) just before their Send tap and leave
+it only when the provider finishes them. While an entry is open no run starts
+that swap again; clear one with `E_SWAPS_CLEAR_INFLIGHT=<provider:from-to>`
+only after checking the swap at the provider.
 
 The capture regression deliberately fails a browser assertion with a generated
 sentinel in the input and page. It checks output and files without printing that

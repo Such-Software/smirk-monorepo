@@ -7,11 +7,30 @@
 /** The wallet's default gateway (DEFAULT_THORNODE_URL in @smirk/swap). */
 export const THORNODE = process.env.E2E_THORNODE_URL ?? 'https://gateway.liquify.com/chain/thorchain_api';
 
+/** At least this long between the runner's own THORChain requests, as the wallet spaces its own. */
+const SPACING_MS = 1_100;
+let lastRequestAt = 0;
+
+/**
+ * One spaced GET to THORChain, retried once on a rate limit or server error.
+ * Returns the response; network failures throw.
+ */
+async function thorFetch(path: string): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const wait = lastRequestAt + SPACING_MS * (attempt + 1) - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastRequestAt = Date.now();
+    const res = await fetch(`${THORNODE}${path}`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (attempt === 0 && (res.status === 429 || res.status >= 500)) continue;
+    return res;
+  }
+}
+
 async function thor<T>(path: string): Promise<T> {
-  const res = await fetch(`${THORNODE}${path}`, {
-    headers: { accept: 'application/json' },
-    signal: AbortSignal.timeout(20_000),
-  });
+  const res = await thorFetch(path);
   if (!res.ok) throw new Error(`THORChain ${path.split('?')[0]} answered HTTP ${res.status}`);
   return (await res.json()) as T;
 }
@@ -39,6 +58,43 @@ export async function thorObservedTx(txid: string): Promise<ThorObserved | null>
   const tx = status.tx;
   if (!tx?.memo || !tx.to_address) return null;
   return { chain: tx.chain ?? '', toAddress: tx.to_address, memo: tx.memo };
+}
+
+/** THORChain's answer to the quote a wallet is about to ask for. */
+export type ThorProbe = { ok: true; recommendedMinIn: bigint | null } | { ok: false; reason: string };
+
+/**
+ * Planning only, before any wallet is chosen: ask THORChain's public quote
+ * endpoint the question the wallet's own quote will ask (same pools, amount
+ * in 1e8 units, the wallet's 3% tolerance, the affiliate the wallet server
+ * names, no destination). The wallet's own answer stays authoritative.
+ */
+export async function thorQuoteProbe(
+  from: 'BTC' | 'LTC',
+  to: 'BTC' | 'LTC',
+  amountAtomic: bigint,
+  affiliate: { name: string; bps: number } | null,
+): Promise<ThorProbe> {
+  const q = new URLSearchParams({
+    from_asset: `${from}.${from}`,
+    to_asset: `${to}.${to}`,
+    amount: amountAtomic.toString(),
+    tolerance_bps: '300',
+  });
+  if (affiliate) {
+    q.set('affiliate', affiliate.name);
+    q.set('affiliate_bps', String(affiliate.bps));
+  }
+  let res: Response;
+  try {
+    res = await thorFetch(`/thorchain/quote/swap?${q.toString()}`);
+  } catch {
+    return { ok: false, reason: 'THORChain did not answer the planning quote' };
+  }
+  const body = (await res.json().catch(() => null)) as { recommended_min_amount_in?: string } | null;
+  if (!res.ok) return { ok: false, reason: `THORChain refused the planning quote (HTTP ${res.status})` };
+  const min = body?.recommended_min_amount_in;
+  return { ok: true, recommendedMinIn: min && /^\d+$/.test(min) ? BigInt(min) : null };
 }
 
 /** `=:ASSET:DEST[/REFUND]:LIMIT[...]`, as THORChain writes swap memos. */

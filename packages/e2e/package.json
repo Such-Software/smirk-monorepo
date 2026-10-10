@@ -10,6 +10,7 @@
     "test:headed": "playwright test --headed",
     "e2e": "bash scripts/build-extension.sh && playwright test",
     "test:privacy": "node --test scripts/test-private-capture.mjs",
+    "test:e-swaps-guards": "node --test fixtures/E-swaps-guard.test.mjs fixtures/E-swaps-page.test.mjs fixtures/E-swaps-policy.test.mjs fixtures/E-swaps-build.test.mjs fixtures/E-swaps-ledger.test.mjs scripts/E-swaps-encode.test.mjs && node scripts/E-swaps-check-live-spec.mjs",
     "test:layout": "playwright test -c playwright.layout.config.ts"
   },
   "devDependencies": {

@@ -1,33 +1,44 @@
 #!/usr/bin/env node
 /**
- * Encode the E-swaps live lane's guarded frames into video, at 1.0x, with no
- * trimming: every hold the run made stays on screen for as long as it lasted.
+ * Encode one run of the E-swaps live lane's guarded frames into video, at
+ * 1.0x, with no trimming: every hold the run made stays on screen for as long
+ * as it lasted.
  *
- * Input: <area>/<wallet>/timeline.json and frames/ (fixtures/E-swaps-footage.ts).
- * Output, in <area> (0700, files 0600):
- *   E-swaps-<wallet>.mp4    the wallet's column with a caption bar (test,
- *                           operation, wallet, UTC clock);
- *   CHAPTERS-E-swaps.md     one line per test with its start offset.
+ * Input: one run directory, <area>/run-<id>/ (fixtures/E-swaps-live.ts), with
+ * evidence.json and a <wallet>/ directory (timeline.json, frames/) per wallet
+ * session. Only that run is read: an earlier run's sessions, deposits or
+ * completions can never appear in this run's video.
+ * Output, in the run directory (files 0600):
+ *   E-swaps-<session>.mp4   each wallet session's column with a caption bar
+ *                           (test, operation, wallet, UTC clock);
+ *   CHAPTERS-E-swaps.md     the build under test, then one line per test with
+ *                           its start offset, per video.
  *
  * Refusals, each before any video is written:
+ *   - a timeline or evidence file from another run, or a build that was not
+ *     proved against its release zip;
  *   - a frame without a guard verdict of clean or masked, or a missing file;
- *   - a hold shorter than the owner's policy for its kind;
+ *   - a hold shorter than the owner's policy for its kind, or a screen an
+ *     action led to that was never held settled (E-swaps-policy.mjs);
  *   - a label that is not static words.
  * Secret scopes and card intervals render as a labelled redaction card.
  * Nothing is uploaded or promoted; copying a video anywhere is a manual step.
  *
- * Usage: node packages/e2e/scripts/E-swaps-encode.mjs [--area <dir>] [--font <ttf>]
- * Default area: ~/Build/smirk-e2e/<E2E_RUN_LABEL or v0.3.1-run-11204>/footage/E-swaps
+ * Usage: node packages/e2e/scripts/E-swaps-encode.mjs (--run <id> | --latest)
+ *          [--area <dir>] [--font <ttf>]
+ * Default area: E2E_FOOTAGE_DIR/E-swaps, or
+ *   ~/Build/smirk-e2e/<E2E_RUN_LABEL or v0.3.1-run-11204>/footage/E-swaps
  */
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { assertStaticLabel } from '../fixtures/E-swaps-guard.mjs';
+import { holdRefusals } from '../fixtures/E-swaps-policy.mjs';
 
-const POLICY_MS = { tap: 6_000, type: 6_000, settled: 12_000, result: 25_000 };
 const FRAME = { w: 760, h: 1200 };
 const BAR = 150;
+const SESSION = /^(alice|bob|carol)(\.\d+)?$/;
 
 function argument(name, fallback) {
   const at = process.argv.indexOf(`--${name}`);
@@ -42,19 +53,49 @@ function ffmpeg(args) {
   if (result.status !== 0) throw new Error(`ffmpeg failed (${result.status})`);
 }
 
+/** The run directory to encode: named explicitly, or the newest on request. */
+export function selectRun(areaDir, { run, latest }) {
+  if (run && latest) throw new Error('pass --run <id> or --latest, not both');
+  const runs = existsSync(areaDir)
+    ? readdirSync(areaDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && /^run-\d+$/.test(d.name))
+        .map((d) => d.name.slice(4))
+        .sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0))
+    : [];
+  if (run) {
+    if (!/^\d+$/.test(run) || !runs.includes(run)) throw new Error(`no run ${String(run).slice(0, 24)} in the area directory`);
+    return { id: run, dir: join(areaDir, `run-${run}`) };
+  }
+  if (latest) {
+    const id = runs.at(-1);
+    if (!id) throw new Error('no runs in the area directory');
+    return { id, dir: join(areaDir, `run-${id}`) };
+  }
+  throw new Error(`name the run to encode: --run <id> (runs here: ${runs.slice(-5).join(', ') || 'none'}) or --latest`);
+}
+
+/** The run's evidence, which must name this run and a proved build. */
+export function runEvidence(runDir, id) {
+  const file = join(runDir, 'evidence.json');
+  if (!existsSync(file)) throw new Error('the run has no evidence.json');
+  const evidence = JSON.parse(readFileSync(file, 'utf8'));
+  if (evidence.runId !== id) throw new Error('evidence.json belongs to another run');
+  if (!evidence.build?.zip?.matchesDist || !/^[0-9a-f]{64}$/.test(evidence.build.zip.sha256 ?? '')) {
+    throw new Error('the run did not prove its build against a release zip (EXTENSION_ZIP)');
+  }
+  return evidence;
+}
+
 /** Every reason this timeline must not become video. Empty means admissible. */
-export function refusals(timeline, framesDir) {
+export function refusals(timeline, framesDir, id) {
   const out = [];
   if (timeline.version !== 1 || timeline.area !== 'E-swaps') out.push('not an E-swaps timeline');
+  if (id !== undefined && timeline.runId !== id) out.push('a timeline from another run');
   for (const f of timeline.frames ?? []) {
     if (f.verdict !== 'clean' && f.verdict !== 'masked') out.push(`frame ${f.file} has no guard verdict`);
     if (framesDir && !existsSync(join(framesDir, f.file))) out.push(`frame ${f.file} is missing`);
   }
-  for (const h of timeline.holds ?? []) {
-    const need = POLICY_MS[h.kind];
-    if (need === undefined) out.push(`hold of unknown kind ${String(h.kind).slice(0, 20)}`);
-    else if (h.until - h.from < need || h.requiredMs < need) out.push(`a ${h.kind} hold lasted ${h.until - h.from} ms, under the ${need} ms policy`);
-  }
+  out.push(...holdRefusals(timeline));
   for (const label of [...(timeline.markers ?? []).map((m) => m.label), ...(timeline.holds ?? []).map((h) => h.label)]) {
     try {
       assertStaticLabel(label);
@@ -122,14 +163,17 @@ const srtTime = (ms) => {
   return `${pad(Math.floor(t / 3_600_000))}:${pad(Math.floor(t / 60_000) % 60)}:${pad(Math.floor(t / 1000) % 60)},${pad(t % 1000, 3)}`;
 };
 
-function encodeWallet(areaDir, wallet, font) {
-  const dir = join(areaDir, wallet);
+function readSession(runDir, session, id) {
+  const dir = join(runDir, session);
   const timeline = JSON.parse(readFileSync(join(dir, 'timeline.json'), 'utf8'));
   const framesDir = join(dir, 'frames');
-  const problems = refusals(timeline, framesDir);
-  if (problems.length) throw new Error(`refusing ${wallet}: ${problems.slice(0, 5).join('; ')}`);
-  if (timeline.frames.length === 0) throw new Error(`refusing ${wallet}: no frames`);
+  const problems = refusals(timeline, framesDir, id);
+  if (problems.length) throw new Error(`refusing ${session}: ${problems.slice(0, 5).join('; ')}`);
+  if (timeline.frames.length === 0) throw new Error(`refusing ${session}: no frames`);
+  return { dir, timeline, framesDir };
+}
 
+function encodeSession(runDir, session, font, { dir, timeline, framesDir }) {
   const work = join(dir, 'encode');
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true, mode: 0o700 });
@@ -165,6 +209,7 @@ function encodeWallet(areaDir, wallet, font) {
     .join('\n');
   writeFileSync(join(work, 'captions.srt'), srt, { mode: 0o600 });
 
+  const wallet = session.split('.')[0];
   const clock = `drawtext=fontfile='${font}':text='${wallet}   %{pts\\:gmtime\\:${Math.floor(start / 1000)}\\:%Y-%m-%d %H\\\\\\:%M\\\\\\:%S} UTC':fontcolor=0xffffff:fontsize=26:x=24:y=h-44`;
   const graph = [
     `scale=${FRAME.w}:${FRAME.h}:force_original_aspect_ratio=decrease`,
@@ -175,15 +220,19 @@ function encodeWallet(areaDir, wallet, font) {
     clock,
     'format=yuv420p',
   ].join(',');
-  const outFile = join(areaDir, `E-swaps-${wallet}.mp4`);
+  const outFile = join(runDir, `E-swaps-${session}.mp4`);
   // -reinit_filter 0: cards and frames may differ in size or pixel format, and
   // a filter reinit would restart the timeline (the video came out short).
-  ffmpeg(['-f', 'concat', '-safe', '0', '-reinit_filter', '0', '-i', join(work, 'list.txt'), '-vf', graph, '-c:v', 'libx264', '-crf', '20', '-preset', 'veryfast', '-movflags', '+faststart', outFile]);
+  // -t: the concat demuxer gives the repeated last still its duration again,
+  // which ran the video (and its clock) past the real end by that much. The
+  // list's durations sum to exactly end - start, so cut there: 1.0x.
+  const seconds = ((end - start) / 1000).toFixed(3);
+  ffmpeg(['-f', 'concat', '-safe', '0', '-reinit_filter', '0', '-i', join(work, 'list.txt'), '-vf', graph, '-t', seconds, '-c:v', 'libx264', '-crf', '20', '-preset', 'veryfast', '-movflags', '+faststart', outFile]);
   chmodSync(outFile, 0o600);
   // Diagnostics only: the work files hold labels and frame names, no values.
   if (!process.env.E_SWAPS_KEEP_ENCODE) rmSync(work, { recursive: true, force: true });
   const tests = timeline.segments.filter((s) => s.kind === 'test').sort((a, b) => a.from - b.from);
-  return { outFile, start, end, tests };
+  return { outFile, start, tests };
 }
 
 function main() {
@@ -191,23 +240,35 @@ function main() {
   const areaDir = resolve(argument('area', process.env.E2E_FOOTAGE_DIR ? join(process.env.E2E_FOOTAGE_DIR, 'E-swaps') : join(homedir(), 'Build', 'smirk-e2e', label, 'footage', 'E-swaps')));
   const font = argument('font', ['/System/Library/Fonts/Supplemental/Arial Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'].find(existsSync) ?? '');
   if (!font || !existsSync(font)) throw new Error('caption font not found; pass --font');
-  const wallets = readdirSync(areaDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && existsSync(join(areaDir, d.name, 'timeline.json')))
-    .map((d) => d.name);
-  if (wallets.length === 0) throw new Error('no wallet timelines in the area directory');
-  const chapters = ['# E-swaps chapters', ''];
-  for (const wallet of wallets) {
-    const { outFile, start, tests } = encodeWallet(areaDir, wallet, font);
-    chapters.push(`## ${wallet}: ${outFile.split('/').pop()}`, '');
+  const { id, dir: runDir } = selectRun(areaDir, { run: argument('run', undefined), latest: process.argv.includes('--latest') });
+  const evidence = runEvidence(runDir, id);
+  const sessions = readdirSync(runDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && SESSION.test(d.name) && existsSync(join(runDir, d.name, 'timeline.json')))
+    .map((d) => d.name)
+    .sort();
+  if (sessions.length === 0) throw new Error('no wallet timelines in the run directory');
+  // Check every session before writing any video.
+  const read = sessions.map((s) => [s, readSession(runDir, s, id)]);
+  const b = evidence.build;
+  const chapters = [
+    '# E-swaps chapters',
+    '',
+    `Run ${id}. Build under test: ${b.manifestName} ${b.manifestVersion}, ${b.zip.file} SHA-256 ${b.zip.sha256} (all ${b.zip.entries} files match the unpacked build).`,
+    evidence.testSource ? `Test source ${evidence.testSource.commit}${evidence.testSource.dirty ? ' with local changes' : ''}. Backend ${evidence.backend}.` : `Backend ${evidence.backend}.`,
+    '',
+  ];
+  for (const [session, input] of read) {
+    const { outFile, start, tests } = encodeSession(runDir, session, font, input);
+    chapters.push(`## ${session}: ${outFile.split('/').pop()}`, '');
     for (const t of tests) {
       const s = Math.round((t.from - start) / 1000);
       const stamp = `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
       chapters.push(`- ${stamp} ${t.label} (${Math.round((t.until - t.from) / 60_000)} min)`);
     }
     chapters.push('');
-    console.log(`encoded ${wallet}`);
+    console.log(`encoded ${session} of run ${id}`);
   }
-  writeFileSync(join(areaDir, 'CHAPTERS-E-swaps.md'), chapters.join('\n'), { mode: 0o600 });
+  writeFileSync(join(runDir, 'CHAPTERS-E-swaps.md'), chapters.join('\n'), { mode: 0o600 });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

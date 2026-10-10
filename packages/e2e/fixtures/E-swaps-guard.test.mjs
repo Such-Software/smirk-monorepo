@@ -1,9 +1,10 @@
 // The E-swaps frame guard: each rule, in real Chromium, plus the canary.
-// Run: node --test packages/e2e/fixtures/E-swaps-guard.test.mjs
+// Run: npm run test:e-swaps-guards -w @smirk/e2e (CI runs it after
+// `npx playwright install --with-deps chromium`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { chromium } from 'playwright-core';
+import { chromium } from '@playwright/test';
 import { CARD_PATTERNS, Canary, MASK_SELECTORS, assertStaticLabel, frameSurface } from './E-swaps-guard.mjs';
 
 const hex = 'ab'.repeat(32);

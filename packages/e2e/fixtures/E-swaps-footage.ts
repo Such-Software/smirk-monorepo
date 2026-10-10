@@ -16,11 +16,18 @@
  * Identical frames are stored once with the interval they cover, so the long
  * static holds the owner asked for cost no disk.
  *
- * DEAD AIR is enforced here, not by ad hoc sleeps in specs: `tap` and `fill`
- * hold the screen still for HOLD.preTapMs first, `settled` waits for loading
- * text to clear and holds HOLD.settledMs, `result` holds HOLD.resultMs. Every
- * hold is written to the timeline with its measured length, and the encoder
- * (scripts/E-swaps-encode.mjs) refuses a timeline with a short hold.
+ * A page's recorder takes no frame until `start()`. A wallet's first page
+ * starts on Home, after the import and unlock, as the demo lane does; the
+ * import is a redaction card in the timeline, never frames.
+ *
+ * DEAD AIR is enforced here, not by ad hoc sleeps in specs, with the numbers
+ * in E-swaps-policy.mjs: `tap` and `fill` hold the screen still for
+ * HOLD.preTapMs first; the screen any action leads to is held settled for
+ * HOLD.settledMs before the next action (or the end of the test) whether or
+ * not the spec asks for it; `result` holds HOLD.resultMs. Every hold is
+ * written to the timeline with its measured length, and the encoder
+ * (scripts/E-swaps-encode.mjs) refuses a timeline with a short hold or with a
+ * screen that was never held.
  *
  * Labels are static strings chosen in source. `assertStaticLabel` refuses
  * anything that looks like a value: digits runs, URLs, addresses.
@@ -34,23 +41,18 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { CARD_PATTERNS, Canary, MASK_SELECTORS, assertStaticLabel, frameSurface, type FrameSurface } from './E-swaps-guard.mjs';
+import { loadingProbe } from './E-swaps-page.mjs';
+import { AUTO_CLOSE_TAPS, HOLD } from './E-swaps-policy.mjs';
 
-export { Canary, assertStaticLabel };
-
-/** Owner's dead-air policy, in milliseconds. */
-export const HOLD = Object.freeze({
-  /** Static screen before every tap or typed field. */
-  preTapMs: 6_000,
-  /** Every settled screen. */
-  settledMs: 12_000,
-  /** Key results: balances, confirmations, swap status, history detail. */
-  resultMs: 25_000,
-});
+export { Canary, HOLD, assertStaticLabel };
 
 /** Target cadence of the frame loop (about four frames a second). */
 export const FRAME_INTERVAL_MS = 250;
 
-/** Text that means a screen is still loading. */
+/**
+ * Text that means a screen is still loading. A live provider card's leftover
+ * "Checking NonLogs…" note does not count (see loadingProbe).
+ */
 const LOADING_TEXT = /Updating…|Loading|Checking THORChain…|Checking NonLogs…|Quoting…|Creating trade…|Sending…|Estimating…|Unlocking…/;
 
 export type HoldKind = 'tap' | 'type' | 'settled' | 'result';
@@ -71,6 +73,8 @@ export interface HoldRecord {
   from: number;
   until: number;
   requiredMs: number;
+  /** A tap on a screen that closes itself (AUTO_CLOSE_TAPS): no settle first. */
+  beforeAutoClose?: boolean;
 }
 
 export interface SegmentRecord {
@@ -84,6 +88,7 @@ export interface Timeline {
   version: 1;
   area: 'E-swaps';
   wallet: string;
+  runId: string;
   startedAt: number;
   stoppedAt: number | null;
   policy: typeof HOLD & { frameIntervalMs: number };
@@ -111,12 +116,13 @@ export class WalletTimeline {
   private openCard: SegmentRecord | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
 
-  constructor(readonly dir: string, wallet: string, readonly enabled: boolean) {
+  constructor(readonly dir: string, wallet: string, runId: string, readonly enabled: boolean) {
     this.framesDir = join(dir, 'frames');
     this.data = {
       version: 1,
       area: 'E-swaps',
       wallet,
+      runId,
       startedAt: Date.now(),
       stoppedAt: null,
       policy: { ...HOLD, frameIntervalMs: FRAME_INTERVAL_MS },
@@ -198,19 +204,25 @@ export async function surfaceOf(page: Page): Promise<FrameSurface> {
   return page.evaluate(frameSurface, { masks: MASK_SELECTORS, patterns: CARD_PATTERNS });
 }
 
-/** The frame loop for one page. */
+/** The frame loop for one page. Takes no frame until `start()`. */
 export class PageRecorder {
   private stopped = false;
+  private started = false;
   private pausedDepth = 0;
-  private readonly loop: Promise<void>;
+  private loop: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly page: Page,
     private readonly role: string,
     private readonly timeline: WalletTimeline,
     private readonly canary: Canary,
-  ) {
-    this.loop = timeline.enabled ? this.run() : Promise.resolve();
+  ) {}
+
+  /** Begin taking frames, once. A no-op when footage is off. */
+  start(): void {
+    if (this.started || this.stopped || !this.timeline.enabled) return;
+    this.started = true;
+    this.loop = this.run();
   }
 
   pause(): void {
@@ -272,6 +284,12 @@ export class PageRecorder {
  * getter because reopening the popup replaces the page.
  */
 export class WalletFootage {
+  /**
+   * The label of the last action whose screen has not been held settled yet.
+   * The next action, or the end of the test, holds it first.
+   */
+  private unheld: string | null = null;
+
   constructor(
     private readonly timeline: WalletTimeline,
     private readonly canary: Canary,
@@ -282,11 +300,11 @@ export class WalletFootage {
     return this.timeline.enabled;
   }
 
-  private async hold(kind: HoldKind, label: string, requiredMs: number): Promise<void> {
+  private async hold(kind: HoldKind, label: string, requiredMs: number, extra: Pick<HoldRecord, 'beforeAutoClose'> = {}): Promise<void> {
     if (!this.enabled) return;
     const from = Date.now();
     await sleep(requiredMs);
-    this.timeline.hold({ kind, label, from, until: Date.now(), requiredMs });
+    this.timeline.hold({ kind, label, from, until: Date.now(), requiredMs, ...extra });
   }
 
   /** Fail closed when the screen shows something no mask can cover. */
@@ -299,24 +317,50 @@ export class WalletFootage {
     }
   }
 
-  /** Hold the screen still, check it, then tap. */
-  async tap(label: string, target: Locator, options: { timeout?: number } = {}): Promise<void> {
-    assertStaticLabel(label);
-    await target.waitFor({ state: 'visible', timeout: options.timeout ?? 60_000 });
-    await this.hold('tap', label, HOLD.preTapMs);
-    await this.assertActionable(label);
-    this.timeline.marker(label);
-    await target.click({ timeout: options.timeout ?? 60_000 });
+  /**
+   * Hold the screen the last action led to, if nothing has held it yet.
+   * Called before every action and at the end of each test.
+   */
+  async settleIfUnheld(): Promise<void> {
+    if (this.unheld === null) return;
+    await this.settled(`screen after: ${this.unheld}`.slice(0, 80).trimEnd());
   }
 
-  /** Hold, then type a public value (an amount, an address). */
+  /**
+   * Hold the previous screen settled if it was not, hold this one still, check
+   * it, then tap. `beforeAutoClose` (only for AUTO_CLOSE_TAPS) skips the
+   * settle on a screen that would close itself during it. `beforeClick` runs
+   * after every check, immediately before the click.
+   */
+  async tap(
+    label: string,
+    target: Locator,
+    options: { timeout?: number; beforeAutoClose?: boolean; beforeClick?: () => void } = {},
+  ): Promise<void> {
+    assertStaticLabel(label);
+    if (options.beforeAutoClose && !AUTO_CLOSE_TAPS.includes(label)) {
+      throw new Error(`"${label}" is not a reviewed auto-close tap; it must wait for the settle`);
+    }
+    if (!options.beforeAutoClose) await this.settleIfUnheld();
+    await target.waitFor({ state: 'visible', timeout: options.timeout ?? 60_000 });
+    await this.hold('tap', label, HOLD.preTapMs, options.beforeAutoClose ? { beforeAutoClose: true } : {});
+    await this.assertActionable(label);
+    this.timeline.marker(label);
+    options.beforeClick?.();
+    await target.click({ timeout: options.timeout ?? 60_000 });
+    this.unheld = label;
+  }
+
+  /** As `tap`, then type a public value (an amount, an address). */
   async fill(label: string, target: Locator, value: string): Promise<void> {
     assertStaticLabel(label);
+    await this.settleIfUnheld();
     await target.waitFor({ state: 'visible', timeout: 60_000 });
     await this.hold('type', label, HOLD.preTapMs);
     await this.assertActionable(label);
     this.timeline.marker(label);
-    await target.fill(value);
+    await target.fill(value, { timeout: 30_000 });
+    this.unheld = label;
   }
 
   /** Wait for loading text to clear, then hold the settled screen. */
@@ -325,18 +369,20 @@ export class WalletFootage {
     const { page } = this.current();
     const deadline = Date.now() + (options.patienceMs ?? 45_000);
     while (Date.now() < deadline) {
-      const text = await page.locator('#root').innerText({ timeout: 5_000 }).catch(() => '');
-      if (!LOADING_TEXT.test(text)) break;
+      const loading = await page.evaluate(loadingProbe, LOADING_TEXT.source).catch(() => true);
+      if (!loading) break;
       await sleep(500);
     }
     await this.hold('settled', label, HOLD.settledMs);
+    this.unheld = null;
   }
 
-  /** Hold a key result on screen. */
+  /** Hold a key result on screen (it also counts as the settled hold). */
   async result(label: string): Promise<void> {
     assertStaticLabel(label);
     this.timeline.marker(label);
     await this.hold('result', label, HOLD.resultMs);
+    this.unheld = null;
   }
 
   mark(label: string): void {
@@ -347,6 +393,7 @@ export class WalletFootage {
    * Record a redaction card while `fn` handles a secret (phrase entry,
    * password typing). Capture resumes only after two consecutive clean guard
    * passes; if the screen never clears, recording stays off and this throws.
+   * The screen left behind is held settled before the next action.
    */
   async secret<T>(label: string, fn: () => Promise<T>): Promise<T> {
     assertStaticLabel(label);
@@ -356,6 +403,7 @@ export class WalletFootage {
     try {
       return await fn();
     } finally {
+      this.unheld = label;
       // `fn` may have replaced the page; the scope ends on whichever is current.
       const now = this.current();
       if (now.recorder !== first) now.recorder.pause();

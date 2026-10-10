@@ -228,6 +228,16 @@ jobs:
           done
           node --test scripts/__tests__/*.test.mjs
 
+      # The guards of the E-swaps live E2E lane: the frame guard (in real
+      # Chromium), the owner's dead-air policy, the build proof, the in-flight
+      # swap ledger, the encoder's admission rules and the live spec lint. The
+      # lane itself needs a backend and funded wallets and stays out of CI; its
+      # guards need neither, so CI enforces them.
+      - name: E2E lane guards (E-swaps)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e-swaps-guards -w @smirk/e2e
+
   openapi-drift:
     name: API client is current
     runs-on: ubuntu-latest

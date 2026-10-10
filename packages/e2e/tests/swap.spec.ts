@@ -337,8 +337,11 @@ test('the Swap tab asks no provider until a tap, and Where to trade asks for pri
   const card = page.getByTestId('swap-provider-thorchain');
   await expect(card).toContainText(THOR_GATEWAY_HOST);
   await expect(page.getByTestId('swap-where-to-trade')).toContainText('BasicSwap');
-  // Long enough for any mount effect, and for a deferred one to fire.
-  await page.waitForTimeout(3_000);
+  // The tab's mount effects have run once NonLogs' own mount read (the
+  // wallet server's capabilities) has answered. A provider request fired
+  // later, before its tap, is caught by the per-host checks below, and any
+  // other host by the final host list.
+  await expect(page.getByTestId('swap-provider-nonlogs')).toContainText('Not offered by this wallet server.', { timeout: 20_000 });
   expect(thirdParty(seen, opened), 'only the wallet server before any tap').toEqual([]);
 
   const thorTap = Date.now();
