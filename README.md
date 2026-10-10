@@ -16,7 +16,7 @@ Start with [the documentation map](docs/README.md), [build instructions](docs/BU
 | `crates/smirk-wasm/` | Working: single WASM bundle exposing Monero/Wownero/Grin crypto to JS |
 | `crates/grin-ext/` | Working: seed derivation, slatepack address (Grim-verified), Schnorr (single + multi-party + adaptor), slate v4 (JSON + compact binary), Pedersen + Bulletproofs, slatepack codec (armor + bin + age encryption), kernels (incl. NRD), full slate construction (standard + invoice flow), transaction wire-format assembly, payment proofs, 6 high-level wallet orchestrators, cross-validated against `grin_wallet_libwallet` 5.4.0 |
 | `crates/btc-ext/` | Working: BIP32/BIP39 derivation, P2WPKH (BIP84) + P2TR (BIP86) addresses for BTC + LTC, PSBT construction + signing + extraction. Built on rust-bitcoin |
-| `crates/swap-core/` | Stub: atomic swap state machine, implementation pending (future work) |
+| `crates/swap-core/` | Experimental BasicSwap message codec; settlement implementation pending |
 | `packages/wasm/` | Working: `@smirk/wasm` TS bindings around the WASM crypto bundle (BTC PSBT, XMR/WOW signing, full Grin surface incl. wallet orchestrators) |
 | `packages/core/` | Working: shared TS lib (API client, crypto, BIP-137 signing, address codecs, HD derivation, session-state + wizard scaffold, pendingOutgoing reconciliation, wallet-flow composition) |
 | `packages/assets/` | Working: `@smirk/assets` registry: pure-data definitions (decimals, family, capabilities, networks) for every chain Smirk supports. |
@@ -46,7 +46,7 @@ smirk-monorepo/
 │   ├── smirk-wasm/           # wasm-bindgen wrapper, single WASM bundle for JS consumers
 │   ├── grin-ext/             # Grin / Mimblewimble protocol implementation
 │   ├── btc-ext/              # BTC + LTC: BIP32, P2WPKH/P2TR addresses, PSBT signing
-│   └── swap-core/            # atomic swap state machine (stub)
+│   └── swap-core/            # experimental native swap protocols
 ├── packages/                 # npm workspace (TypeScript)
 │   ├── wasm/                 # @smirk/wasm: TS bindings around crates/smirk-wasm/pkg/
 │   ├── core/                 # @smirk/core: API client, crypto, HD derivation, codecs
