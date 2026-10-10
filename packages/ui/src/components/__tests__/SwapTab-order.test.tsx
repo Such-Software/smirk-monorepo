@@ -1,9 +1,10 @@
 /**
  * The Swap tab lists providers the wallet server offers with the live ones,
  * right after Trocador, and never as "Paused": live, a "Tap to check" target,
- * or "Unavailable now". Coming-soon routes follow, and only providers the
- * server turned off read as paused, last. The v0.3.1 release candidate put
- * THORChain and NonLogs after three coming-soon cards, and NonLogs as paused.
+ * or "Unavailable now". Coming-soon routes follow. A provider the server does
+ * not offer is not listed at all, and Trocador always is. The v0.3.1 release
+ * candidate put THORChain and NonLogs after three coming-soon cards, and
+ * NonLogs as paused.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -55,19 +56,27 @@ test('live providers are active with their tickers and no badge', () => {
   }
 });
 
-test('providers the wallet server turned off read as paused and sort last', () => {
+test('providers the wallet server does not offer are not listed; Trocador always is', () => {
   const cards = swapProviderCards(
     handlers({ offered: false, unavailableReason: 'Turned off by this wallet server.' }),
     handlers({ offered: false }),
   );
-  assert.deepEqual(ids(cards), ['trocador', ...comingSoon, 'thorchain', 'nonlogs']);
-  assert.equal(cards.at(-1)!.badge, 'Paused');
-  assert.equal(cards.at(-2)!.badge, 'Paused');
+  assert.deepEqual(ids(cards), ['trocador', ...comingSoon]);
+  for (const c of cards) assert.notEqual(c.badge, 'Paused', `${c.id} must not read as paused`);
 });
 
-test('a provider the consumer did not wire at all is paused, not offered', () => {
+test('one provider off and one offered: only the offered one is listed', () => {
+  const cards = swapProviderCards(
+    handlers({ onCheck: () => {}, unavailableReason: 'Tap to check.' }),
+    handlers({ offered: false }),
+  );
+  assert.deepEqual(ids(cards), ['trocador', 'thorchain', ...comingSoon]);
+  assert.equal(cards.find((c) => c.id === 'thorchain')!.badge, 'Tap to check');
+});
+
+test('a provider the consumer did not wire at all is not listed', () => {
   const cards = swapProviderCards(undefined, undefined);
-  assert.deepEqual(ids(cards), ['trocador', ...comingSoon, 'thorchain', 'nonlogs']);
+  assert.deepEqual(ids(cards), ['trocador', ...comingSoon]);
 });
 
 test('coming-soon copy promises no version numbers', () => {
@@ -104,5 +113,32 @@ test('the rendered tab shows that order', () => {
   const order = ['trocador', 'thorchain', 'nonlogs', ...comingSoon].map(at);
   assert.ok(order.every((x) => x >= 0), 'every card rendered');
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'rendered in display order');
+  assert.doesNotMatch(html, />Paused</);
+});
+
+test('the rendered tab omits a provider the wallet server turned off', () => {
+  const store = new SessionStateStore(new InMemoryStorage());
+  const router = new RouteController(store);
+  const html = render(
+    h(
+      StateProvider,
+      { store, router },
+      h(SwapTab, {
+        fromAssets: [],
+        toAssets: [],
+        resolveBalance: () => null,
+        parseAmount: () => null,
+        onTrocadorQuote: noop,
+        onTrocadorConfirm: noop,
+        onOpenSend: () => {},
+        thorchain: handlers({ onCheck: () => {}, unavailableReason: 'Tap to check.' }),
+        nonlogs: handlers({ offered: false, unavailableReason: 'Not offered by this wallet server.' }),
+      }),
+    ),
+  );
+  store.destroy();
+  assert.match(html, /data-testid="swap-provider-trocador"/);
+  assert.match(html, /data-testid="swap-provider-thorchain"/);
+  assert.doesNotMatch(html, /data-testid="swap-provider-nonlogs"/);
   assert.doesNotMatch(html, />Paused</);
 });
