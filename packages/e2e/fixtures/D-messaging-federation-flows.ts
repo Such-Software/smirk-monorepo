@@ -522,6 +522,36 @@ export async function waitForRebootstrap(w: DWallet): Promise<void> {
 }
 
 /**
+ * After "Use this backend" or "Reset to the default", wait for the switch to
+ * finish, then for the wallet. The switch runs after the tap, and until it
+ * completes the old shell, bottom nav included, is still on screen: waiting for
+ * the nav straight after the tap passes before anything has switched. The
+ * picker closes once the switch is done and stays open, with its error, if it
+ * failed.
+ */
+export async function waitForBackendSwitch(w: DWallet): Promise<void> {
+  const picker = w.page.getByTestId('backend-picker');
+  const error = w.page.getByTestId('backend-error');
+  await expect
+    .poll(async () => (await error.isVisible()) || !(await picker.isVisible()), {
+      timeout: 180_000,
+      message: 'the backend switch never finished: the picker is still open',
+    })
+    .toBe(true);
+  expect(await error.isVisible(), 'the wallet refused the backend switch').toBe(false);
+  await waitForRebootstrap(w);
+}
+
+/** Settings, then Backend: the picker must name `host` as the connected backend and not `left`. */
+export async function expectConnectedBackend(w: DWallet, host: string, left: string): Promise<void> {
+  await openBackendPicker(w);
+  const current = w.page.getByTestId('backend-current');
+  await expect(current, 'Settings does not show the backend the wallet switched to').toContainText(host);
+  await expect(current, 'Settings still shows the backend the wallet left').not.toContainText(left);
+  await w.footage.result('connected backend');
+}
+
+/**
  * Put the wallet back on the default backend, from wherever it is: the lock
  * screen, the bootstrap-error screen (which has no bottom nav, only its own
  * escape to Backend settings), or any tab. A storage read that fails is not
@@ -541,7 +571,7 @@ export async function restoreDefaultBackend(w: DWallet): Promise<void> {
     await openBackendPicker(w);
   }
   await w.footage.tap(reset, 'back to the default backend');
-  await waitForRebootstrap(w);
+  await waitForBackendSwitch(w);
   expect(await storageValue(w, BACKEND_CONFIG_KEY), 'the default backend should leave no stored override').toBeFalsy();
 }
 

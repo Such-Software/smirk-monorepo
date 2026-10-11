@@ -54,7 +54,7 @@ async function bootstrapAgainst(
           if (request.type === 'subscribe') {
             const state = {
               id: 'job-1', kind: 'bootstrap-auth', status: 'done', finishedAt: Date.now(),
-              result: { accessToken: 'tok', bootstrap: { userId: 'user-1', isNew: false, restoreState: 'existing' } },
+              result: { accessToken: 'tok', backendUrl: api.getBaseUrl(), bootstrap: { userId: 'user-1', isNew: false, restoreState: 'existing' } },
             } as JobState<'bootstrap-auth'>;
             onMessage({ type: 'event', subscriptionId: 'job-1', state });
           }

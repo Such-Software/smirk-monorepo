@@ -124,6 +124,18 @@ function friendlyRegisterError(result: {
 export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
   kind: 'bootstrap-auth',
   async run(input, ctx) {
+    // The runner points this context at the job's backend before calling us.
+    // Check it before anything leaves: a sign-in sends the wallet's public keys
+    // and a signed proof, and the token it returns is valid only where it was
+    // minted, so it must happen at the backend the window will present it to.
+    const backendUrl = api.getBaseUrl();
+    if (!input.backend?.url || input.backend.url !== backendUrl) {
+      throw new Error(
+        `Refused to sign in: this job is for ${input.backend?.url || 'no named backend'}, ` +
+          `but the background context is pointed at ${backendUrl}. Reopen Smirk and try again.`,
+      );
+    }
+
     // Read restore evidence before deriving a new birthday or starting PoW.
     const restore = await requireRestoreState(api, {
       fingerprint: input.fingerprint,
@@ -247,6 +259,7 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
         ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
       },
       accessToken: result.data.accessToken,
+      backendUrl,
     };
   },
 };

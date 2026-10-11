@@ -54,6 +54,13 @@ export interface JobKindMap {
    */
   'bootstrap-auth': {
     input: {
+      /**
+       * The backend this sign-in is for: the one the calling window will
+       * present the token to. The coordinator refuses it unless it is the
+       * wallet's durable selection, and runs the job against it rather than
+       * against whatever the service worker last pointed at.
+       */
+      backend: JobBackend;
       fingerprint: string;
       keys: ReadonlyArray<{ asset: string; publicKey: string }>;
       signedTimestamp: number;
@@ -79,8 +86,17 @@ export interface JobKindMap {
         wowStartHeight?: number;
       };
       accessToken: string;
+      /** The backend that minted `accessToken`. The popup presents the token
+       *  only to this backend. */
+      backendUrl: string;
     };
   };
+}
+
+/** A backend a job runs against (the shape `initSmirkApi` takes). */
+export interface JobBackend {
+  url: string;
+  apiStyle: WalletApiStyle;
 }
 
 /**
@@ -198,11 +214,11 @@ export type OffscreenJobRequest = {
   kind: JobKind;
   input: unknown;
   /**
-   * The backend the SW is pointed at, forwarded so the offscreen (which can't
-   * read chrome.storage to resolve the durable selection) auths against the SAME
-   * backend the user chose, not just the build default. See runner.ts.
+   * The backend the coordinator admitted for this job (the wallet's durable
+   * selection, read when the job starts), forwarded because the offscreen
+   * document cannot read chrome.storage itself. See runner.ts.
    */
-  backend?: { url: string; apiStyle: WalletApiStyle };
+  backend?: JobBackend;
 };
 
 /** Messages the offscreen runner sends back. */

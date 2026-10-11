@@ -23,7 +23,7 @@
  */
 
 import { jobs } from './';
-import type { JobState } from '../../background/jobs/types';
+import type { JobBackend, JobState } from '../../background/jobs/types';
 
 const BOOTSTRAP_DEDUP_PREFIX = 'bootstrap-auth:';
 const REUSE_WINDOW_MS = 4 * 60 * 1000;
@@ -38,6 +38,33 @@ export interface BootstrapJobResult {
     wowStartHeight?: number;
   };
   accessToken: string;
+  /** The backend that minted `accessToken`. */
+  backendUrl: string;
+}
+
+/**
+ * The dedup key for one wallet's sign-in at one backend. The backend is part of
+ * the key because a token is only valid where it was minted: keyed by wallet
+ * alone, a switch to another operator within the reuse window replayed the
+ * previous operator's completed sign-in and sent its token to the new one.
+ */
+export function bootstrapDedupKey(
+  backendUrl: string,
+  fingerprint: string,
+  dedupSuffix?: string,
+): string {
+  return `${BOOTSTRAP_DEDUP_PREFIX}${backendUrl}#${fingerprint}${dedupSuffix ? `:${dedupSuffix}` : ''}`;
+}
+
+/** Hand a job's token back only when `backend` minted it; refuse otherwise. */
+function mintedBy(result: BootstrapJobResult, backend: JobBackend): BootstrapJobResult {
+  if (result?.backendUrl !== backend.url) {
+    throw new Error(
+      `Refused a sign-in token minted by ${result?.backendUrl || 'an unnamed backend'} ` +
+        `for use with ${backend.url}. Reopen Smirk and try again.`,
+    );
+  }
+  return result;
 }
 
 /**
@@ -54,6 +81,8 @@ export interface BootstrapJobResult {
  */
 export async function runBootstrapInBackground(
   input: {
+    /** The backend this window will present the token to (its `api`). */
+    backend: JobBackend;
     fingerprint: string;
     keys: ReadonlyArray<{ asset: string; publicKey: string }>;
     signedTimestamp: number;
@@ -70,9 +99,7 @@ export async function runBootstrapInBackground(
    */
   dedupSuffix?: string,
 ): Promise<BootstrapJobResult> {
-  const dedupKey = `${BOOTSTRAP_DEDUP_PREFIX}${input.fingerprint}${
-    dedupSuffix ? `:${dedupSuffix}` : ''
-  }`;
+  const dedupKey = bootstrapDedupKey(input.backend.url, input.fingerprint, dedupSuffix);
 
   // ---- 1. Look for a reusable existing job ----
   const existing = await jobs.list({
@@ -89,7 +116,8 @@ export async function runBootstrapInBackground(
         j.kind === 'bootstrap-auth' &&
         j.status === 'done' &&
         typeof j.finishedAt === 'number' &&
-        now - j.finishedAt < REUSE_WINDOW_MS,
+        now - j.finishedAt < REUSE_WINDOW_MS &&
+        j.result?.backendUrl === input.backend.url,
     )
     .sort(
       (a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0),
@@ -98,7 +126,7 @@ export async function runBootstrapInBackground(
     // Reuse authentication, but a completed job cannot create a later scan at tip.
     const bootstrap = { ...reusableDone.result.bootstrap };
     if (bootstrap.restoreState === 'new') delete bootstrap.restoreState;
-    return { ...reusableDone.result, bootstrap };
+    return mintedBy({ ...reusableDone.result, bootstrap }, input.backend);
   }
 
   // 1b. Still-running job. Attach to it via awaitJob: the SW's
@@ -108,7 +136,7 @@ export async function runBootstrapInBackground(
     (j) => j.status === 'running' || j.status === 'pending',
   );
   if (inflight) {
-    return await jobs.awaitJob<'bootstrap-auth'>(inflight.id);
+    return mintedBy(await jobs.awaitJob<'bootstrap-auth'>(inflight.id), input.backend);
   }
 
   // ---- 2. Nothing reusable: start fresh ----
@@ -117,5 +145,5 @@ export async function runBootstrapInBackground(
     input,
     { dedupKey },
   );
-  return await jobs.awaitJob<'bootstrap-auth'>(id);
+  return mintedBy(await jobs.awaitJob<'bootstrap-auth'>(id), input.backend);
 }

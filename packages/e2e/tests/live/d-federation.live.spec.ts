@@ -54,6 +54,7 @@ import {
   claimHandle,
   deliverDm,
   ensureLinkState,
+  expectConnectedBackend,
   expectMessage,
   goTab,
   hubHandle,
@@ -67,6 +68,7 @@ import {
   restoreDefaultBackend,
   runText,
   storageValue,
+  waitForBackendSwitch,
   waitForBalances,
   waitForRebootstrap,
   type DmRecord,
@@ -118,7 +120,7 @@ async function switchToB(carol: DWallet): Promise<void> {
   await expect(carol.page.getByTestId('backend-current')).toContainText(new URL(D_BACKEND_URL).host);
   await probeBackend(carol, D_FED_URL, { relay: !!capsB.features?.nostr_relay, chains: enabledChains(capsB) });
   await carol.footage.tap(carol.page.getByTestId('backend-use-btn'), 'use this backend');
-  await waitForRebootstrap(carol);
+  await waitForBackendSwitch(carol);
   const stored = JSON.stringify((await storageValue(carol, BACKEND_CONFIG_KEY)) ?? null);
   expect(stored, 'the wallet did not persist the chosen operator: it silently fell back to the default').toContain(
     new URL(dFedApiBase()).host,
@@ -206,8 +208,10 @@ test('carol federates to backend B and back: honest Messages, reach notice, bala
   await openBackendPicker(carol);
   await expect(carol.page.getByTestId('backend-current')).toContainText(hostB);
   await carol.footage.tap(carol.page.getByTestId('backend-reset-default'), 'back to the default backend');
-  await waitForRebootstrap(carol);
+  await waitForBackendSwitch(carol);
   expect(await storageValue(carol, BACKEND_CONFIG_KEY), 'the default backend should leave no stored override').toBeFalsy();
+  // The screen, not just storage: Settings names the default as connected.
+  await expectConnectedBackend(carol, new URL(D_BACKEND_URL).host, hostB);
   await goTab(carol, 'home');
   await expect
     .poll(async () => JSON.stringify(await waitForBalances(carol)), {
