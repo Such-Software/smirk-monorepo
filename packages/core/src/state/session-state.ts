@@ -310,6 +310,166 @@ export function canonicalJson(value: unknown): string {
   });
 }
 
+// ----------------------------------------------------------------------------
+// Changes: what an update did, applied to what storage holds when it is
+// written rather than to a cache that may be behind it.
+// ----------------------------------------------------------------------------
+
+/**
+ * Top-level keys whose children change independently: one preference, one
+ * scroll offset, one wizard each. A wizard is one unit, so a Send draft is
+ * never assembled from two windows' halves. Every other top-level key (the
+ * route, the version) is one unit.
+ */
+const MERGED_BY_CHILD: ReadonlySet<string> = new Set(['ui', 'scroll', 'wizards']);
+
+/**
+ * The top-level list merged by entry (asset and tx hash): a send another window
+ * recorded survives this window removing a settled one, and the reverse.
+ */
+const MERGED_BY_ENTRY = 'pendingOutgoing';
+
+/**
+ * One unit a write changed: a top-level key, or one child or entry of a key
+ * merged by child or by entry. `value` undefined means the write removed it.
+ */
+interface Change {
+  key: string;
+  child?: string;
+  value: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return canonicalJson(a) === canonicalJson(b);
+}
+
+function copyJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function entryKey(entry: unknown): string | null {
+  if (!isRecord(entry) || typeof entry.asset !== 'string' || typeof entry.txHash !== 'string') return null;
+  return `${entry.asset}:${entry.txHash}`;
+}
+
+/** Entries by key, or null when the list is not one of keyed, distinct entries. */
+function entriesByKey(list: unknown): Map<string, unknown> | null {
+  if (!Array.isArray(list)) return null;
+  const out = new Map<string, unknown>();
+  for (const entry of list) {
+    const key = entryKey(entry);
+    if (key === null || out.has(key)) return null;
+    out.set(key, entry);
+  }
+  return out;
+}
+
+/** The units `after` changed relative to `before`. */
+function diffStates(before: unknown, after: unknown): Change[] {
+  const from = isRecord(before) ? before : {};
+  const to = isRecord(after) ? after : {};
+  const changes: Change[] = [];
+  for (const key of new Set([...Object.keys(from), ...Object.keys(to)])) {
+    const a = from[key];
+    const b = to[key];
+    if (sameJson(a, b)) continue;
+    if (MERGED_BY_CHILD.has(key) && isRecord(a) && isRecord(b)) {
+      for (const child of new Set([...Object.keys(a), ...Object.keys(b)])) {
+        if (!sameJson(a[child], b[child])) changes.push({ key, child, value: b[child] });
+      }
+      continue;
+    }
+    const aEntries = key === MERGED_BY_ENTRY ? entriesByKey(a) : null;
+    const bEntries = key === MERGED_BY_ENTRY ? entriesByKey(b) : null;
+    if (aEntries && bEntries) {
+      for (const child of new Set([...aEntries.keys(), ...bEntries.keys()])) {
+        if (!sameJson(aEntries.get(child), bEntries.get(child))) {
+          changes.push({ key, child, value: bEntries.get(child) });
+        }
+      }
+      continue;
+    }
+    changes.push({ key, value: b });
+  }
+  return changes;
+}
+
+/** `state` with `changes` applied on top, as a fresh copy. */
+function applyChanges(state: SessionState, changes: readonly Change[]): SessionState {
+  const out = copyJson(state) as unknown as Record<string, unknown>;
+  for (const { key, child, value } of changes) {
+    const written = value === undefined ? undefined : copyJson(value);
+    if (child === undefined) {
+      if (written === undefined) delete out[key];
+      else out[key] = written;
+    } else if (key === MERGED_BY_ENTRY) {
+      const list = Array.isArray(out[key]) ? (out[key] as unknown[]) : [];
+      const at = list.findIndex((entry) => entryKey(entry) === child);
+      if (written === undefined) {
+        if (at >= 0) list.splice(at, 1);
+      } else if (at >= 0) {
+        list[at] = written;
+      } else {
+        list.push(written);
+      }
+      out[key] = list;
+    } else {
+      const parent = isRecord(out[key]) ? (out[key] as Record<string, unknown>) : {};
+      if (written === undefined) delete parent[child];
+      else parent[child] = written;
+      out[key] = parent;
+    }
+  }
+  return out as unknown as SessionState;
+}
+
+// ----------------------------------------------------------------------------
+// Cross-window lock
+// ----------------------------------------------------------------------------
+
+/**
+ * Runs a task while no other window of this origin runs one under the same
+ * name. Every page of one extension shares an origin, so `navigator.locks`
+ * serializes the popup, a pop-out, a tab and an approval window.
+ */
+export interface CrossWindowLock {
+  run<T>(name: string, task: () => Promise<T>): Promise<T>;
+}
+
+/** How long an update waits for another window's before going ahead unlocked. */
+const LOCK_WAIT_MS = 5_000;
+
+/** The Web Locks API as a {@link CrossWindowLock}, or null where it is absent. */
+export function webLocks(): CrossWindowLock | null {
+  const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
+  if (!locks || typeof locks.request !== 'function') return null;
+  return {
+    async run<T>(name: string, task: () => Promise<T>): Promise<T> {
+      let granted = false;
+      const signal =
+        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(LOCK_WAIT_MS)
+          : undefined;
+      try {
+        return await locks.request(name, signal ? { signal } : {}, () => {
+          granted = true;
+          return task();
+        });
+      } catch (e) {
+        if (granted) throw e;
+        // Another window has held the lock for seconds (a hung write). A late
+        // update beats a UI that stops saving.
+        console.warn('[session-state] went ahead without the cross-window lock:', e);
+        return task();
+      }
+    },
+  };
+}
+
 /**
  * Typed reactive store for the session state. Wraps a [`PlatformStorage`]
  * backend with:
@@ -322,9 +482,16 @@ export function canonicalJson(value: unknown): string {
  * Framework-agnostic: exposes `subscribe(listener)` so any UI layer
  * can wire it up. The Preact hooks live in `@smirk/ui/state`.
  *
- * Windows share one stored state and the last write wins. Storage offers no
- * compare-and-swap, so when two windows both change the state within the same
- * few milliseconds, one change can be lost.
+ * Windows share one stored state. Storage offers no compare-and-swap, so an
+ * update does not write its whole cached state: it records what its mutator
+ * changed and, under a lock every window of the extension shares
+ * (`navigator.locks`), reads storage and writes those changes over what it
+ * holds. Another window's change is kept even when it lands between two of
+ * this window's updates, before this window has read it: a send recorded by a
+ * dapp approval window while the popup was writing used to be lost that way.
+ * Without the lock (a runtime that lacks it), an update still writes over
+ * what it reads, but another window's write between that read and this write
+ * can be lost.
  */
 export class SessionStateStore {
   private cached: SessionState | null = null;
@@ -382,9 +549,14 @@ export class SessionStateStore {
    */
   private updateChain: Promise<unknown> = Promise.resolve();
 
+  /**
+   * @param lock serializes updates with the other windows; the Web Locks API
+   *   by default, absent where the runtime has none.
+   */
   constructor(
     private readonly storage: PlatformStorage,
     private readonly key: string = STORAGE_KEY,
+    private readonly lock: CrossWindowLock | null = webLocks(),
   ) {
     // Listen for cross-context writes (e.g. extension pop-out window
     // updating state while the popup is open, or a Tauri second window).
@@ -496,6 +668,11 @@ export class SessionStateStore {
    * saved this window's whole cached state back over storage: a change
    * another window had just made, announced but not yet read here, was
    * reverted in every window.
+   *
+   * What the mutator changed (one preference, scroll offset or wizard, one
+   * pending send, otherwise a top-level key) is written over what storage
+   * holds, read under the cross-window lock, so the cache being behind
+   * another window costs nothing. The state returned is the one written.
    */
   async update(
     mutator: (state: SessionState) => void | SessionState | Promise<void | SessionState>,
@@ -505,9 +682,9 @@ export class SessionStateStore {
       const draft: SessionState = JSON.parse(JSON.stringify(current));
       const result = await mutator(draft);
       const next = (result === undefined ? draft : result) as SessionState;
-      if (canonicalJson(next) === canonicalJson(current)) return next;
-      await this.save(next);
-      return next;
+      const changes = diffStates(current, next);
+      if (changes.length === 0) return next;
+      return this.commit(changes);
     };
     const next = this.updateChain.then(run, run);
     // Keep the chain alive across rejections so one failing mutator
@@ -516,6 +693,31 @@ export class SessionStateStore {
     // it never observes the value.
     this.updateChain = next.catch(() => {});
     return next;
+  }
+
+  /**
+   * Under the cross-window lock, apply `changes` to what storage holds and
+   * write the result. The lock is held until the write settles, so the next
+   * window's read sees it.
+   */
+  private commit(changes: readonly Change[]): Promise<SessionState> {
+    const task = async (): Promise<SessionState> => {
+      const state = applyChanges(await this.readCurrent(), changes);
+      await this.save(state);
+      return state;
+    };
+    return this.lock ? this.lock.run(`smirk:session-state:${this.key}`, task) : task();
+  }
+
+  /** What storage holds now, or the cache when it cannot be read. */
+  private async readCurrent(): Promise<SessionState> {
+    try {
+      const raw = await this.storage.get<unknown>(this.key);
+      if (raw !== null) return fromStored(raw);
+    } catch (e) {
+      console.warn('[session-state] storage could not be read; the update goes over the cached state:', e);
+    }
+    return this.cached ?? { ...DEFAULT_SESSION_STATE };
   }
 
   /**

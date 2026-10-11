@@ -47,6 +47,11 @@ the public `smirk-backend-core` repo and aren't echoed here.
   auto-lock, hiding balances or a Send recipient, is no longer undone by
   another. A balance refresh in the other window could save its older copy
   over the change a moment after it was made.
+- Wallet open in more than one window: a change one window saves while
+  another is saving several in a row is kept. A payment approved in a site's
+  approval window could drop out of the wallet's list of sends in flight that
+  way, and the next send could then pick coins that payment had already
+  spent.
 
 ## [0.3.1] - 2026-10-09
 
