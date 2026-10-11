@@ -13,7 +13,8 @@
  * page before its promise settles, a read is answered in order with the
  * writes, keys sorted. Announcements to the other windows can arrive late.
  * The windows share one navigator.locks, whose grants travel apart from
- * storage's messages.
+ * storage's messages. Without it (Node 22 in CI has none), an update writes
+ * one window's whole state, never pieces of two (#54's handoff relies on it).
  */
 
 import { test } from 'node:test';
@@ -67,6 +68,8 @@ class Extension {
   readonly lock = new SharedLock();
   /** Writes of each key, counted. */
   readonly writes = new Map<string, number>();
+  /** Every session state stored, in order, without its stamp. */
+  readonly history: SessionState[] = [];
   private readonly data = new Map<string, unknown>();
   private readonly pages = new Set<Page>();
 
@@ -92,6 +95,7 @@ class Extension {
   apply(key: string, value: unknown, writer: Page): void {
     if (value === undefined) this.data.delete(key);
     else this.data.set(key, sortedCopy(value));
+    if (key === 'k' && value !== undefined) this.history.push(withoutWriteStamp(sortedCopy(value)) as SessionState);
     this.writes.set(key, (this.writes.get(key) ?? 0) + 1);
     for (const page of this.pages) {
       page.deliver(() => page.announce(key), page === writer ? 0 : this.lag);
@@ -239,7 +243,7 @@ for (const lag of [0, 3]) {
     popout.destroy();
   });
 
-  test(`${when}: another window's write while an update's mutator waits is kept`, async () => {
+  test(`${when}: another window's update while this window's mutator waits lands after it, not under it`, async () => {
     const { extension, popup, popout } = await twoWindows(lag);
     let release!: () => void;
     const released = new Promise<void>((r) => (release = r));
@@ -248,11 +252,12 @@ for (const lag of [0, 3]) {
       s.scroll.home = 120;
     });
     await tick();
-    await popout.update((s) => {
+    const foreign = popout.update((s) => {
       s.ui.denomination = 'BTC';
     });
+    for (let i = 0; i < 20; i++) await tick();
     release();
-    await slow;
+    await Promise.all([slow, foreign]);
     await settled();
     assert.equal(extension.stored().ui.denomination, 'BTC', "the pop-out's change survived");
     assert.equal(extension.stored().scroll.home, 120, "the popup's update applied");
@@ -290,6 +295,72 @@ for (const lag of [0, 3]) {
         }
         popup.destroy();
         popout.destroy();
+      }
+    });
+  }
+
+  test(`${when}: a check inside the mutator holds for the state the write replaces`, async () => {
+    // The pop-out saves a Send draft; the popup, not yet told, opens Send on
+    // something else only if Send is empty (the swap and pay-link handoffs).
+    const { extension, popup, popout } = await twoWindows(lag);
+    await popout.update((s) => {
+      s.wizards.send = { step: 2, startedAt: 1, fields: { toAddress: 'typed-in-popout' } };
+    });
+    const refused = await popup
+      .update((s) => {
+        if (s.wizards.send) throw new Error('Send has a draft');
+        s.wizards.send = { step: 1, startedAt: 2, fields: { toAddress: 'handoff' } };
+        s.route = { current: 'home/send' };
+      })
+      .then(
+        () => false,
+        () => true,
+      );
+    await settled();
+    assert.equal(refused, true, 'the popup saw the draft it would have replaced');
+    assert.equal(extension.stored().wizards.send?.fields.toAddress, 'typed-in-popout');
+    await assertConverged(extension, popup, popout);
+    popup.destroy();
+    popout.destroy();
+  });
+
+  for (const locked of [true, false]) {
+    test(`${when}, ${locked ? 'with' : 'without'} the lock: no stored state pairs one window's route with another's swap step`, async () => {
+      // The popup opens Send on a swap deposit, then moves the swap on to its
+      // status step; another window saves a preference at every offset.
+      for (let off = 0; off < 16; off++) {
+        const extension = new Extension(lag);
+        const popup = windowOf(extension, locked);
+        await popup.update((s) => {
+          s.route = { current: 'swap' };
+          s.wizards.swap = { step: 0, startedAt: 1, fields: { step: 2 } };
+        });
+        await settled();
+        const other = windowOf(extension, locked);
+        await other.load();
+        const saved = (async () => {
+          for (let i = 0; i < off; i++) await tick();
+          await other.update((s) => {
+            s.ui.balanceHidden = !s.ui.balanceHidden;
+          });
+        })();
+        await popup.update((s) => {
+          s.wizards.send = { step: 2, startedAt: 2, fields: { toAddress: 'deposit' } };
+          s.route = { current: 'home/send' };
+        });
+        await popup.update((s) => {
+          s.wizards.swap!.fields = { step: 3 };
+        });
+        await saved;
+        await settled();
+        for (const stored of extension.history) {
+          if (stored.wizards.swap?.fields.step === 3) {
+            assert.equal(stored.route.current, 'home/send', `offset ${off}: status step without Send open`);
+          }
+        }
+        await assertConverged(extension, popup, other);
+        popup.destroy();
+        other.destroy();
       }
     });
   }
