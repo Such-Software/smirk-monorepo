@@ -694,7 +694,9 @@ export async function expectSentDetail(
   if (phase === 'reclaimed') await expect(timeline).toContainText(/Reclaimed\s*returned to the sender/);
   await expect(detail).toContainText(TICKER[tip.asset]);
   await expect(detail).toContainText(tip.recipientDisplay ? recipientPattern(tip) : /to link/);
-  if (tip.memo) await expect(detail.getByTestId('tip-detail-memo')).toContainText(tip.memo);
+  // The message travels in the sender's own gift-wrap copy, which is published
+  // only after the delivery to the recipient succeeds.
+  if (tip.memo && !tip.deliveryRefused) await expect(detail.getByTestId('tip-detail-memo')).toContainText(tip.memo);
   await expect(detail).toContainText('Created');
   await expect(detail).toContainText('Tip id');
   await expect(detail).toContainText(tip.tipId);
@@ -1009,7 +1011,9 @@ export async function reclaim(lane: TipLane, tip: CreatedTip, expectStatus: stri
   expect(RECLAIMABLE.has(state?.status ?? ''), 'the tip is reclaimable').toBe(true);
   await openSentTips(lane, w);
   await expectSentRow(lane, w, tip, state!.status);
-  if (state!.status === 'pending') await expectSentDetail(lane, w, tip, pendingPhase(state!));
+  // A rescue (no expected status) only has to get the funds back; the detail
+  // sheet is checked by the run's own reclaim tests.
+  if (state!.status === 'pending' && expectStatus) await expectSentDetail(lane, w, tip, pendingPhase(state!));
   const detail = await openSentDetail(lane, w, tip);
   const message = sentCard(w, tip).getByTestId('sent-tip-row-message');
   await lane.footage.tap(detail.getByTestId('sent-tip-clawback-btn'), 'Cancel and reclaim', { settle: false });
