@@ -643,6 +643,11 @@ function escapeRegExp(text: string): string {
 export function recipientPattern(tip: CreatedTip): RegExp {
   if (!tip.recipientDisplay) return /→ link/;
   const options = [tip.recipientDisplay, ...(tip.recipient ? [tip.recipient.shortNpub] : [])].map(escapeRegExp);
+  // A person tip whose delivery was refused has no gift-wrap copy of its own
+  // to name the recipient once the local key backup is gone (a claim or a
+  // reclaim), so the row then reads "link", as the wallet documents for a
+  // relay outage. Its send test already failed for the refusal.
+  if (tip.deliveryRefused) options.push('link');
   return new RegExp(`(${options.join('|')})`);
 }
 
