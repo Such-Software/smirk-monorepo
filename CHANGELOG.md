@@ -35,6 +35,14 @@ the public `smirk-backend-core` repo and aren't echoed here.
   in a single step, so Send can no longer open without the deposit. It also no
   longer asks to replace a Send draft when Send only holds the receipt of a
   send that already went out.
+- Swaps: answering Cancel to "Replace your Send draft?" after that tap keeps
+  the swap on its deposit step. It used to move on to the status screen, which
+  has no way back and no way to pay, so the quoted deposit could no longer be
+  paid from the wallet.
+- Inbox: pasting a GoblinPay pay link asks before replacing a Send draft, as
+  the swap tap does, and opens Send in a single step. Neither ever replaces a
+  Grin payment waiting for the recipient's reply, which could not be finalized
+  afterwards; they say so instead.
 - Wallet open in more than one window: a change made in one window, such as
   auto-lock, hiding balances or a Send recipient, is no longer undone by
   another. A balance refresh in the other window could save its older copy

@@ -92,6 +92,7 @@ export {
   NONLOGS_WIZARD_ID,
   swapProviderCards,
   swapSettled,
+  openSendFromDeposit,
 } from './components/SwapTab';
 export { WhereToTrade, TRADE_VENUES } from './components/WhereToTrade';
 export type { TradePairPrice, TradeVenue, WhereToTradeProps } from './components/WhereToTrade';
@@ -99,6 +100,7 @@ export type {
   SwapTabProps,
   SwapQuoteSummary,
   SwapInFlight,
+  OpenSendHandler,
   SwapKindBadge,
   SwapProviderStatus,
   ThorchainHandlers,
