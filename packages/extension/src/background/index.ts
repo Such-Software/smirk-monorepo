@@ -30,7 +30,7 @@ import { installJobsCoordinator } from './jobs/coordinator';
 
 // Point the API at the configured backend: build default → durable user
 // selection → re-applied on a cross-context switch. See backend-boot.ts.
-bootBackendSelection();
+void bootBackendSelection();
 
 // Diagnostic breadcrumbs at SW startup + install. `console.debug`
 // keeps these out of the default extension console view; developers

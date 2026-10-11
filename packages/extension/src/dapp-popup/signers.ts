@@ -147,7 +147,7 @@ export function signMessageWithUnlocked(
 const NIP98_HTTP_AUTH_KIND = 27235;
 
 /**
- * Refuse to sign a NIP-98 token aimed at the user's OWN backend.
+ * Refuse to sign a NIP-98 token aimed at one of the user's OWN backends.
  *
  * This is the Nostr twin of the `smirk-` message reservation in
  * {@link signMessageWithUnlocked}. `POST /auth/nostr` mints a full session
@@ -158,10 +158,19 @@ const NIP98_HTTP_AUTH_KIND = 27235;
  * path has refused the equivalent since the auth-replay hardening; this closes
  * the same hole on the Nostr side.
  *
- * Only events targeting OUR configured backend are refused: signing NIP-98 for
- * some other service is a legitimate thing for a dapp to ask.
+ * "Own" means every backend the wallet holds an account at, not only the one
+ * selected now: the account-0 npub is the same at each, so after a switch the
+ * account at the backend just left was open to the same replay.
+ * `protectedBackends` lists those (the extension remembers them in
+ * `backend-accounts.ts`); the selected backend is always included.
+ *
+ * Only events targeting our backends are refused: signing NIP-98 for some
+ * other service is a legitimate thing for a dapp to ask.
  */
-function assertNotSelfAuthToken(event: UnsignedNostrEvent): void {
+function assertNotSelfAuthToken(
+  event: UnsignedNostrEvent,
+  protectedBackends: readonly string[],
+): void {
   if (event.kind !== NIP98_HTTP_AUTH_KIND) return;
   const uTag = event.tags?.find((t) => t[0] === 'u')?.[1];
   if (!uTag) {
@@ -175,13 +184,15 @@ function assertNotSelfAuthToken(event: UnsignedNostrEvent): void {
   } catch {
     throw new Error('Refusing to sign a NIP-98 event with an unparseable `u` tag.');
   }
-  let ours: string;
-  try {
-    ours = new URL(api.getBaseUrl()).host.toLowerCase();
-  } catch {
-    return; // No configured backend to protect.
+  const ours = new Set<string>();
+  for (const backend of [api.getBaseUrl(), ...protectedBackends]) {
+    try {
+      ours.add(new URL(backend).host.toLowerCase());
+    } catch {
+      // Not a URL: nothing there to protect.
+    }
   }
-  if (target === ours) {
+  if (ours.has(target)) {
     throw new Error(
       'Refusing to sign a Smirk backend sign-in token through the dapp interface.',
     );
@@ -199,11 +210,13 @@ function assertNotSelfAuthToken(event: UnsignedNostrEvent): void {
 export function signNostrEventWith(
   identity: NostrIdentity | null,
   event: UnsignedNostrEvent,
+  /** Backends the wallet holds an account at besides the selected one. */
+  protectedBackends: readonly string[] = [],
 ): SignedNostrEvent {
   if (!identity) {
     throw new Error('The selected Nostr signing identity is unavailable. Unlock the wallet to continue.');
   }
-  assertNotSelfAuthToken(event);
+  assertNotSelfAuthToken(event, protectedBackends);
   return signNostrEvent(event, identity);
 }
 

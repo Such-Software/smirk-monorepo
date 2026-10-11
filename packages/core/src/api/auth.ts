@@ -420,6 +420,11 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
     },
 
     async nostrRegister(params) {
+      // The nonce, the proof and the register body all belong to one backend.
+      // If the client is re-pointed while the challenge is in flight (a backend
+      // switch or reset), the body (keys, invite code, payment invoice) must not
+      // go to the new one with the old one's nonce.
+      const base = client.getBaseUrl();
       // 1. Unauthenticated single-use register nonce (no JWT; npub-first create).
       const challenge = await client.request<{ nonce: string }>(
         '/auth/nostr/register-challenge',
@@ -427,6 +432,13 @@ export function createAuthMethods(client: ApiClient): AuthMethods {
       );
       if (!challenge.data?.nonce) {
         return challenge as unknown as ApiResponse<AuthResponseCamel>;
+      }
+      if (client.getBaseUrl() !== base) {
+        return {
+          error:
+            `Registration with ${base} was stopped because the client now points at ` +
+            `${client.getBaseUrl()}; nothing was sent there.`,
+        };
       }
       const nonce = challenge.data.nonce;
 

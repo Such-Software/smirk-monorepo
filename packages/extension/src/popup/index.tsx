@@ -211,6 +211,13 @@ import { maybeAutoLegacyCheck, readLegacyCheck } from './legacy-funds';
 import { LegacyFundsBanner } from './routes/legacy-funds';
 import { lockWalletContexts, subscribeWalletLock } from './session-lock';
 import { readBootstrapCache, writeBootstrapCache, clearBootstrapCache } from './bootstrap-cache';
+import {
+  advanceBackendGeneration,
+  backendScope,
+  followBackendSelection,
+  onBackendMovedElsewhere,
+} from './backend-generation';
+import { adoptBackendCapabilities } from './backend-capabilities';
 import { browserController } from './browser-controller';
 import { probeBackend, BackendRoute } from './routes/backend';
 import { FeedRoute } from './routes/feed';
@@ -790,7 +797,12 @@ function App() {
   ) => {
     const token = api.getAccessToken();
     if (token) {
-      await writeBootstrapCache(wallet.fingerprint, token, onboardBootstrap);
+      await writeBootstrapCache({
+        fingerprint: wallet.fingerprint,
+        backendUrl: api.getBaseUrl(),
+        accessToken: token,
+        bootstrap: onboardBootstrap,
+      });
     }
     try {
       const [nameRes, socialsRes] = await Promise.all([
@@ -856,21 +868,15 @@ function App() {
   useEffect(() => {
     if (walletState?.kind !== 'unlocked') return undefined;
     let cancelled = false;
-    void loadCapabilities(api).then((c) => {
-      if (cancelled) return;
+    // Also configures the relay set for every surface, unless this window
+    // moved to another backend while the read was in flight: applying it then
+    // put the previous operator's relay back (see backend-capabilities.ts).
+    void adoptBackendCapabilities(api).then((adopted) => {
+      if (cancelled || adopted.stale) return;
+      const c = adopted.caps;
       setCaps(c);
       // Reflect feed availability into the nav (BottomNav reads this flag).
       (globalThis as { __smirk_feed__?: boolean }).__smirk_feed__ = capHasFeed(c);
-      // Configure the relay set for EVERY surface, not just Messages.
-      // `messagingRelays()` used to fall back to hardcoded third-party relays
-      // when nothing had configured it, so the Grin Nostr payment path (which
-      // never called this) published gift-wraps to damus/nos.lol on an instance
-      // whose operator may run neither. The fallback is gone, so this init is
-      // now load-bearing: without it those paths correctly have no relay.
-      initSmirkMessaging({
-        ...(c?.messaging?.relay_url ? { relayUrl: c.messaging.relay_url } : {}),
-        publicRelays: [],
-      });
     });
     return () => {
       cancelled = true;
@@ -896,6 +902,13 @@ function App() {
    * Balances and prices fire in parallel after auth completes.
    */
   const startSession = async (wallet: UnlockedWallet) => {
+    // Not before the stored backend selection is applied at boot.
+    await backendSelectionApplied;
+    // This session belongs to the backend the window is on now. A switch, here
+    // or in another window, starts a new session; this one must then stop
+    // rather than write the old backend's token, cache, snapshot or error over
+    // it. Checked after every await below.
+    const scope = backendScope(api);
     // Hydrate from the balance snapshot BEFORE awaiting anything so
     // the user sees their last-known numbers within a paint. The
     // refresh path below replaces these with fresh values when the
@@ -903,7 +916,8 @@ function App() {
     // header spinner spin so users know the numbers are being
     // re-fetched. Bootstrap-less placeholder so the existing render
     // path doesn't blow up; the real bootstrap lands in the try below.
-    const snap = await readBalanceSnapshot(wallet.fingerprint, api.getBaseUrl());
+    const snap = await readBalanceSnapshot(wallet.fingerprint, scope.url);
+    if (!scope.current()) return;
     if (snap) {
       setSession({
         bootstrap: { userId: '', isNew: false },
@@ -941,7 +955,7 @@ function App() {
       // Promise.all clears. Guarded on prev so we never resurrect a torn-down
       // session; the final setSession below still commits the authoritative view.
       void pricesPromise.then((p) => {
-        if (!p) return;
+        if (!p || !scope.current()) return;
         setSession((prev) => (prev ? { ...prev, prices: p } : prev));
       });
 
@@ -952,7 +966,10 @@ function App() {
       // the cached token gets rejected by the first balance call, so
       // a server-side rotation can't strand us.
       let bootstrap: BootstrapAuthResult;
-      const warm = await readBootstrapCache(wallet.fingerprint);
+      // Only a sign-in cached for THIS backend: a token is valid only where it
+      // was minted.
+      const warm = await readBootstrapCache(wallet.fingerprint, scope.url);
+      if (!scope.current()) return;
       if (warm) {
         api.setAccessToken(warm.accessToken);
         bootstrap = warm.bootstrap;
@@ -962,12 +979,21 @@ function App() {
         // packages/extension/src/background/jobs/handlers/bootstrap-auth.ts
         // for the handler; the popup-side wrapper handles dedup +
         // reuse of recently-completed jobs from a prior popup mount.
+        // It installs its token only while the window is still on the backend
+        // it signed in at.
         bootstrap = await bootstrapAuthInExtension(api, wallet);
+        if (!scope.current()) return;
         const tok = api.getAccessToken();
         if (tok) {
-          await writeBootstrapCache(wallet.fingerprint, tok, bootstrap);
+          await writeBootstrapCache({
+            fingerprint: wallet.fingerprint,
+            backendUrl: scope.url,
+            accessToken: tok,
+            bootstrap,
+          });
         }
       }
+      if (!scope.current()) return;
       // Progressive render: as each per-asset balance resolves, patch
       // it into session.balances immediately. UI updates one row at a
       // time, so BTC/LTC/Grin landing in 1-2s don't wait for an
@@ -979,6 +1005,7 @@ function App() {
       // BTC/LTC scan set + gap discovery. `null` (and therefore no extra keys
       // at all) whenever ENABLE_BTCLTC_FRESH_ADDRS is off, which is the default.
       const utxoScan = await buildUtxoScanContext(wallet);
+      if (!scope.current()) return;
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         // Prices the grin rescan; without it a priced operator rejects the scan
@@ -995,10 +1022,11 @@ function App() {
           ? { utxoAddressRefs: utxoScan.refs, onUtxoActivity: utxoScan.onUtxoActivity }
           : {}),
         visibleAssetIds: visible,
-        backendUrl: api.getBaseUrl(),
+        backendUrl: scope.url,
         ...(grinRewindHash ? { grinRewindHash } : {}),
         grinPending: grinOverlay,
         onAssetBalance: (assetId, balance) => {
+          if (!scope.current()) return;
           setSession((prev) => {
             if (!prev) return prev;
             const base = prev.balances ?? {
@@ -1020,6 +1048,7 @@ function App() {
         },
       });
       const prices = await pricesPromise;
+      if (!scope.current()) return;
       // Merge the fresh fetch over the pre-fetch snapshot so an asset whose fetch
       // errored keeps its last-known number (flagged stale) instead of flashing 0.
       const merged = mergeBalancesKeepLastKnown(snap?.balances ?? null, balances);
@@ -1036,8 +1065,12 @@ function App() {
         lastSuccessAt: failed ? (prev?.lastSuccessAt ?? snap?.cachedAt ?? null) : Date.now(),
       }));
       // Persist the merged (last-known) view for instant, non-zero next-open.
-      void writeBalanceSnapshot(wallet.fingerprint, api.getBaseUrl(), merged, prices);
+      void writeBalanceSnapshot(wallet.fingerprint, scope.url, merged, prices);
     } catch (e) {
+      // A session the window has moved on from fails quietly: the cache and
+      // the session now belong to the new backend's session. This is also
+      // where a sign-in that lost its backend ends (BackendChangedError).
+      if (!scope.current()) return;
       // If a warm-path balance call rejected (auth error), drop the
       // cache and force a fresh bootstrap on the next render. Surface
       // the error so the user sees something rather than a silent
@@ -1074,6 +1107,9 @@ function App() {
 
   /** Refresh balances + prices; assumes a session already exists. */
   const refreshBalances = async (wallet: UnlockedWallet, bootstrap: BootstrapAuthResult) => {
+    // Like startSession: numbers fetched from one backend never land in the
+    // session, or the snapshot, of the backend this window has moved to.
+    const scope = backendScope(api);
     setSession((prev) => (prev ? { ...prev, refreshing: true } : prev));
     try {
       // Same progressive-render pattern as startSession. Prices are
@@ -1090,6 +1126,7 @@ function App() {
       // BTC/LTC scan set + gap discovery. `null` (and therefore no extra keys
       // at all) whenever ENABLE_BTCLTC_FRESH_ADDRS is off, which is the default.
       const utxoScan = await buildUtxoScanContext(wallet);
+      if (!scope.current()) return;
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         // Prices the grin rescan; without it a priced operator rejects the scan
@@ -1106,10 +1143,11 @@ function App() {
           ? { utxoAddressRefs: utxoScan.refs, onUtxoActivity: utxoScan.onUtxoActivity }
           : {}),
         visibleAssetIds: visible,
-        backendUrl: api.getBaseUrl(),
+        backendUrl: scope.url,
         ...(grinRewindHash ? { grinRewindHash } : {}),
         grinPending: grinOverlay,
         onAssetBalance: (assetId, balance) => {
+          if (!scope.current()) return;
           setSession((prev) => {
             if (!prev || !prev.balances) return prev;
             const prior = prev.balances[assetId];
@@ -1129,6 +1167,7 @@ function App() {
         wow: null,
         grin: null,
       };
+      if (!scope.current()) return;
       // Reconcile pendingOutgoing against the freshly-fetched balances
       // before storing. Two-pass:
       //   1. Per-asset, run reconcilePendingOutgoing against the new
@@ -1179,8 +1218,10 @@ function App() {
             }
           : prev;
       });
-      void writeBalanceSnapshot(wallet.fingerprint, api.getBaseUrl(), mergedForSnapshot, prices);
+      if (!scope.current()) return;
+      void writeBalanceSnapshot(wallet.fingerprint, scope.url, mergedForSnapshot, prices);
     } catch (e) {
+      if (!scope.current()) return;
       // A whole-refresh failure keeps the last-known balances (already in
       // session) and just surfaces the error + starts the stale clock.
       setSession((prev) =>
@@ -1633,7 +1674,12 @@ function App() {
           const bootstrap = await bootstrapAuthInExtension(api, wallet);
           const token = api.getAccessToken();
           if (token) {
-            await writeBootstrapCache(wallet.fingerprint, token, bootstrap);
+            await writeBootstrapCache({
+              fingerprint: wallet.fingerprint,
+              backendUrl: api.getBaseUrl(),
+              accessToken: token,
+              bootstrap,
+            });
           }
           // Link the NEW seed-derived Nostr identity (v0.2 had none) to the
           // re-pointed user. Idempotent: a 409 (already linked) is fine.
@@ -1770,6 +1816,8 @@ function App() {
               return paymentInvoiceDetailsRef.current;
             }
             const btcPub = bytesToHex(wallet.keys.btc.publicKey);
+            // The invoice is redeemable only at the backend that mints it.
+            const mintedAt = api.getBaseUrl();
             const inv = await api.createPaymentInvoice(btcPub);
             if (inv.error || !inv.data) {
               // Already registered on this backend (a re-import): no payment
@@ -1792,6 +1840,7 @@ function App() {
             // unlock (the fee is never stranded).
             await setPendingRegistrationInvoice(
               wallet.fingerprint,
+              mintedAt,
               inv.data.invoiceId,
             );
             return details;
@@ -2067,6 +2116,10 @@ function App() {
    * DM watch armed and the dapp bridge's backend URL pointing at it.
    */
   const dropBackendSession = async () => {
+    // A session still starting against the previous backend stops here: its
+    // sign-in, cache write and balance fetch would otherwise land on top of the
+    // session the new backend is about to get.
+    advanceBackendGeneration();
     // The JWT is per-backend; drop it + the caches + the session so the
     // unlocked-shell effect re-bootstraps against the new backend.
     api.setAccessToken(null);
@@ -3811,9 +3864,33 @@ function parseApprovalId(): string | null {
 // invoked by `executeApproval`. Same code, single source of truth,
 // reused by the desktop BrowseTab modal.
 
+/**
+ * The wallet UI, started over whenever another context moves this window to a
+ * different backend.
+ *
+ * Everything the window holds for a backend lives in React state: the session
+ * (that backend's user id and scan heights), its capabilities, an open
+ * Messages subscription to its relay, the Feed's relay connection, inbox
+ * items. `bootBackendSelection` re-points `api` when another window switches
+ * or resets, but none of that state followed, so a second window kept polling
+ * the old backend's user id against the new one and kept its relays. Keying
+ * the app on the move remounts it: every effect's cleanup closes what it
+ * opened, and the new mount signs in at the new backend.
+ *
+ * A switch made in THIS window does not come through here (the subscription
+ * skips a context already on the selection); `dropBackendSession` handles it.
+ */
+function BackendScopedApp() {
+  const [moves, setMoves] = useState(0);
+  useEffect(() => onBackendMovedElsewhere(() => setMoves((n) => n + 1)), []);
+  return <App key={moves} />;
+}
+
 // Configure the API backend before the UI bootstraps: build default → durable
-// user selection → re-applied on a cross-context switch. See backend-boot.ts.
-bootBackendSelection();
+// user selection → re-applied on a cross-context switch or reset, which also
+// starts the wallet UI over (BackendScopedApp). See backend-boot.ts. Sessions
+// wait for the durable selection (`startSession`).
+const backendSelectionApplied = followBackendSelection(bootBackendSelection);
 
 const root = document.getElementById('root');
 if (root) {
@@ -3821,6 +3898,6 @@ if (root) {
   if (approvalId) {
     render(<ApprovalApp approvalId={approvalId} />, root);
   } else {
-    render(<App />, root);
+    render(<BackendScopedApp />, root);
   }
 }

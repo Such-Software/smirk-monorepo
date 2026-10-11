@@ -90,9 +90,17 @@ export interface ExecuteApprovalDeps {
     tipId: string,
     fragmentKey: string,
   ) => Promise<{ ok: boolean; txid?: string; error?: string }>;
+  /** The cached sign-in for `fingerprint` at the backend `api` points at, or
+   *  null. Never another backend's: the token would be presented to `api`. */
   readBootstrapCache: (
     fingerprint: string,
   ) => Promise<{ accessToken: string; bootstrap: { userId: string } } | null>;
+  /**
+   * Every backend the wallet holds an account at (see `backend-accounts.ts`).
+   * The NIP-98 guard refuses sign-in tokens for each of them, not only for the
+   * backend selected now.
+   */
+  knownBackends: () => Promise<readonly string[]>;
   api: {
     setAccessToken(token: string): void;
   };
@@ -359,7 +367,7 @@ export async function executeApproval(
         request.identityPubkey,
       );
       deps.assertOperationSession(deps.wallet);
-      const result = signNostrEventWith(identity, request.event);
+      const result = signNostrEventWith(identity, request.event, await deps.knownBackends());
       // Forward a "remember for this session" grant (money-tier kinds are filtered
       // out downstream by the wallet-handler's mergeNostrSession).
       return {

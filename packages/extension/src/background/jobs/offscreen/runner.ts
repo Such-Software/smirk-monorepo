@@ -41,7 +41,7 @@ import type {
 // which silently breaks every self-hosted / non-production deployment (the token
 // it returns is then rejected by the actual configured backend). It happens to
 // be masked in production only because the default already IS production.
-bootBackendSelection();
+void bootBackendSelection();
 
 // Track in-flight aborts so a 'cancel' from the SW (via a future
 // message, not implemented today) can stop a running job.

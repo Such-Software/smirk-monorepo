@@ -1,7 +1,13 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { api } from '@smirk/core';
 import { bootstrapAuthHandler } from '../bootstrap-auth';
+import { signInClients } from '../sign-in-client';
+
+// These tests stub the sign-in's requests on the shared `api` singleton, so the
+// handler's per-job client is that singleton here. Which backend the requests
+// reach is covered by backend-binding.test.ts.
+mock.method(signInClients, 'for', () => api);
 
 /** The backend this context points at: the one a job may sign in to. */
 const here = () => ({ url: api.getBaseUrl(), apiStyle: api.getWalletApiStyle() });

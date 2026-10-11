@@ -22,6 +22,7 @@ import { confirmThorchainSwap, thorchainGatewayHost, thorchainOffered, thorchain
 import { nonlogsOffered, nonlogsSwap, ownAddressesOnly } from '../nonlogs';
 import { findSwapDeposit, journalKeyFor, recordSend } from '../send-journal';
 import { openSwapDepositInSend } from '../swap-handoff';
+import { fetchTrocadorSwapStatus, SWAP_TRACKED_AT } from '../swap-status';
 
 /**
  * SwapRouter: wires the @smirk/ui SwapTab to the TrocadorSwap library
@@ -456,6 +457,8 @@ export function SwapRouter({
         // because resuming means "I already sent"; DepositStep
         // would offer to re-pre-fill the Send wizard, which is
         // wrong for a resumed swap.
+        // Listed by the backend this window is on, so recorded there.
+        const trackedAt = api.getBaseUrl();
         await store.update((s) => {
           const w = s.wizards[TROCADOR_WIZARD_ID];
           const inFlight: SwapInFlight = {
@@ -468,11 +471,11 @@ export function SwapRouter({
             state: { state: 'pending', reason: 'awaiting_deposit' },
           };
           if (w) {
-            w.fields = { ...w.fields, inFlight, step: 3 };
+            w.fields = { ...w.fields, inFlight, step: 3, [SWAP_TRACKED_AT]: trackedAt };
           } else {
             s.wizards[TROCADOR_WIZARD_ID] = {
               step: 0,
-              fields: { step: 3, inFlight },
+              fields: { step: 3, inFlight, [SWAP_TRACKED_AT]: trackedAt },
               startedAt: Date.now(),
             };
           }
@@ -560,10 +563,13 @@ export function SwapRouter({
           depositAddress: started.depositAddress,
           state: { state: 'pending', reason: 'awaiting_deposit' },
         };
+        // The backend this trade is recorded at: the only one later asked
+        // about it (see swap-status.ts).
+        const trackedAt = api.getBaseUrl();
         await store.update((s) => {
           const w = s.wizards[TROCADOR_WIZARD_ID];
           if (w) {
-            w.fields = { ...w.fields, inFlight: sw, step: 2 };
+            w.fields = { ...w.fields, inFlight: sw, step: 2, [SWAP_TRACKED_AT]: trackedAt };
           }
         });
 
@@ -573,6 +579,11 @@ export function SwapRouter({
         // UI's direct-poll-on-Trocador path still works.
         let backendTrackingOk = true;
         try {
+          // Not to a backend the window moved to after the write above: the
+          // trade is tracked at `trackedAt`, and nowhere else learns of it.
+          if (api.getBaseUrl() !== trackedAt) {
+            throw new Error('the backend changed before the swap could be recorded');
+          }
           const res = await api.createSwap({
             trade_id: started.id,
             from_asset: quote.fromAsset,
@@ -605,157 +616,14 @@ export function SwapRouter({
       }}
       onTrocadorFetchStatus={async (id) => {
         if (!trocador) throw new Error(connectionError ?? 'Trocador is unavailable in this app.');
-        // Hybrid: backend for identities (from/to/amount/address),
-        // Trocador direct for state. v0.3.0 originally trusted the
-        // backend's `status` column unconditionally, but the only
-        // signal that flips it is Trocador's webhook into
-        // `/api/v1/webhook/trocador`, and there's no backend poller
-        // to backstop a missed delivery. Real failure mode dogfooded
-        // 2026-06-04: LTC→XMR swap completed on Trocador's side, no
-        // webhook landed, backend stayed at `status='new'`, wallet
-        // showed "Waiting for your deposit" forever.
-        //
-        // Fix: when backend has a record but its status is
-        // non-terminal, ALSO query Trocador direct and prefer the
-        // direct state. Terminal backend statuses (finished /
-        // refunded / expired / error) are trusted as-is because the
-        // backend mirror won't regress past those. If both calls
-        // fail, fall through to whichever returned data.
-        const backend = await api.getSwap(id).catch(() => null);
-        if (backend && backend.data) {
-          const r = backend.data;
-          const backendTerminal =
-            r.status === 'finished' ||
-            r.status === 'refunded' ||
-            r.status === 'expired' ||
-            r.status === 'error';
-          // Take the backend's identities + last-known state as the
-          // baseline. `mapBackendStatus` uses these to render real
-          // copy on terminal states (final to-amount on `finished`,
-          // refund-address hint on `refunded`/`expired`).
-          let state = mapBackendStatus(r.status, {
-            ...(r.amount_to_atomic ? { amountToAtomic: r.amount_to_atomic } : {}),
-            ...(r.refund_address ? { refundAddress: r.refund_address } : {}),
-          });
-          if (!backendTerminal) {
-            // Augment with Trocador direct. Best-effort: a Trocador
-            // outage shouldn't tank the polling loop; keep the
-            // backend's state as a fallback.
-            try {
-              const live = await trocador.status(id);
-              state = live;
-            } catch (e) {
-              console.warn(
-                '[swap] Trocador direct status fallback failed; using backend state',
-                e,
-              );
-            }
-          }
-          return {
-            id,
-            fromAsset: r.from_asset,
-            toAsset: r.to_asset,
-            fromAmountAtomic: r.amount_from_atomic,
-            toAmountEstimateAtomic: r.amount_to_atomic ?? '0',
-            depositAddress: r.deposit_address,
-            state,
-          };
-        }
-        // Backend doesn't know about this swap; go direct.
-        const s = await trocador.status(id);
-        return {
-          id,
-          // Identity fields aren't available from Trocador's /trade
-          // response in a stable shape; the wizard merges via
-          // onUpdate which preserves the persisted fields and only
-          // overwrites `state` with the values we return.
-          fromAsset: '',
-          toAsset: '',
-          fromAmountAtomic: '0',
-          toAmountEstimateAtomic: '0',
-          depositAddress: '',
-          state: s,
-        };
+        // The backend's record is consulted only at the backend that recorded
+        // this trade (see swap-status.ts).
+        const fields = (await store.load()).wizards[TROCADOR_WIZARD_ID]?.fields as
+          | Partial<{ inFlight: { id?: string }; [SWAP_TRACKED_AT]: string }>
+          | undefined;
+        const trackedAt = fields?.inFlight?.id === id ? fields[SWAP_TRACKED_AT] : undefined;
+        return fetchTrocadorSwapStatus({ api, trocador }, id, trackedAt);
       }}
     />
   );
-}
-
-/** Translate the backend's status string (a verbatim mirror of
- *  Trocador's lifecycle) into the SwapInFlight discriminated union
- *  the UI renders. Kept here so the popup is the only place that
- *  knows the Trocador-string ↔ structured-state mapping.
- *
- *  `extra` carries the parts of the persisted SwapRecord that the
- *  status alone can't supply: the final to-amount (Trocador stores
- *  this on the row at terminal-transition; pre-2026-06-13 the
- *  mapper hardcoded '0' so every completed swap showed
- *  "Completed — 0 LTC sent"), and the refund address (needed so the
- *  'expired' state can tell the user where their deposit will return
- *  to if they did broadcast). Both are optional (the caller may
- *  not have them yet) and the mapper falls back to neutral copy
- *  when they're absent. */
-function mapBackendStatus(
-  status: string,
-  extra?: { amountToAtomic?: string; refundAddress?: string },
-): SwapInFlight['state'] {
-  switch (status) {
-    case 'new':
-    case 'waiting':
-      return { state: 'pending', reason: 'awaiting_deposit' };
-    case 'confirming':
-      return { state: 'pending', reason: 'awaiting_confirmations' };
-    case 'exchanging':
-    case 'sending':
-      return { state: 'pending', reason: 'in_progress' };
-    case 'finished':
-      return {
-        state: 'completed',
-        outboundTxId: '',
-        toAmount: extra?.amountToAtomic ?? '0',
-      };
-    case 'refunded': {
-      // Surface the refund destination when we have it: gives the
-      // user a chain address to watch instead of "trust us, it's on
-      // its way back."
-      const reason = extra?.refundAddress
-        ? `Refunded by provider to ${extra.refundAddress}`
-        : 'Refunded by provider';
-      return { state: 'refunded', refundTxId: '', reason };
-    }
-    case 'expired': {
-      // Trocador's `expired` covers TWO real-world cases: (a) the
-      // quote validity window elapsed before any deposit arrived
-      // (no money moved), and (b) deposit landed but the underlying
-      // provider couldn't complete in time, refund in flight. We
-      // don't have a reliable backend signal to discriminate (we'd
-      // need historical state transitions or amount-observed
-      // logging), so the copy here informs both cases honestly
-      // rather than asserting "Quote expired before deposit" which
-      // is actively wrong half the time. Refund address is surfaced
-      // when we know it, so case (b) users can watch the right
-      // chain.
-      const refundHint = extra?.refundAddress
-        ? ` If you deposited, funds will be returned to ${extra.refundAddress}.`
-        : ' If you deposited, funds will be returned to your refund address.';
-      return {
-        state: 'failed',
-        reason: `Quote expired or provider could not complete in time.${refundHint}`,
-      };
-    }
-    case 'error':
-      return { state: 'failed', reason: 'Provider reported error' };
-    default:
-      // Unknown status from the backend mirror. Surface it as a
-      // failure with the raw value so the user (and Smirk support)
-      // can act on it, rather than silently parking on
-      // "in_progress" which the wizard renders as "Provider
-      // exchanging" forever: that's how the 2026-06-04 audit
-      // found a future-Trocador-status would manifest as a stuck
-      // visual on a swap that actually completed.
-      return {
-        state: 'failed',
-        reason: `Unknown provider status: ${status || '(empty)'}`,
-      };
-  }
 }

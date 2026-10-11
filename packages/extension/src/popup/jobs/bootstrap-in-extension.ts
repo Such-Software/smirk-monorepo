@@ -10,7 +10,9 @@
  * problem; this wrapper exists specifically for the extension.
  *
  * Side effects:
- *   - `api.setAccessToken(token)` on success.
+ *   - `api.setAccessToken(token)` on success, and only while `api` still
+ *     points at the backend the sign-in started on (see `pinBackend`): a
+ *     token goes to no backend but the one that minted it.
  *   - No cache writes here: the caller decides what cache layer to
  *     populate (the popup already calls `writeBootstrapCache` and
  *     we don't want to step on that flow).
@@ -21,8 +23,9 @@
  * inline bootstrap failure.
  */
 
-import type { SmirkApi } from '@smirk/core';
+import type { PinnedBackend, SmirkApi } from '@smirk/core';
 import {
+  pinBackend,
   bytesToHex,
   signBitcoinMessage,
   deriveNostrIdentity,
@@ -45,6 +48,7 @@ import {
   getPendingRegistrationInvoice,
   clearPendingRegistrationInvoice,
 } from '../pending-registration-invoice';
+import { rememberBackendAccount } from '../../backend-accounts';
 
 /** Internal signal: the npub bootstrap determined this wallet is already
  *  registered on the backend and must authenticate via the BTC path instead. */
@@ -94,16 +98,24 @@ export async function bootstrapAuthInExtension(
     pollAttempt?: number;
   },
 ): Promise<BootstrapJobResult['bootstrap']> {
+  // Everything below, and the token it ends with, belongs to the backend `api`
+  // points at now. The window can switch backend (or another window can reset
+  // it) while any await below is pending; a token installed after that went to
+  // the new operator as a bearer for the old one. Checked after every await.
+  const pinned = pinBackend(api);
   const keys = buildKeysList(wallet);
 
   // Resume a pay-to-register that was interrupted mid-payment: if no invoice was
-  // passed explicitly but one is persisted for this wallet, include it so a plain
-  // unlock completes registration once the operator's processor settles it. A
-  // returning (already-registered) wallet bypasses the gate server-side, so a
-  // stale record is harmless and gets cleared on the success below.
+  // passed explicitly but one is persisted for this wallet AT THIS BACKEND,
+  // include it so a plain unlock completes registration once the operator's
+  // processor settles it. A returning (already-registered) wallet bypasses the
+  // gate server-side, so a stale record is harmless and gets cleared on the
+  // success below. Another backend's invoice is never sent here.
   let paymentInvoiceId = gate?.paymentInvoiceId;
   if (!paymentInvoiceId) {
-    paymentInvoiceId = (await getPendingRegistrationInvoice(wallet.fingerprint)) ?? undefined;
+    paymentInvoiceId =
+      (await getPendingRegistrationInvoice(wallet.fingerprint, pinned.url)) ?? undefined;
+    pinned.assertCurrent();
   }
   const effectiveGate = paymentInvoiceId ? { ...gate, paymentInvoiceId } : gate;
 
@@ -122,6 +134,7 @@ export async function bootstrapAuthInExtension(
   const caps = await api.getCapabilities().catch((e: unknown) => {
     throw capabilitiesUnreadable(e instanceof Error ? e.message : String(e));
   });
+  pinned.assertCurrent();
   if (caps.error || !caps.data) {
     throw capabilitiesUnreadable(caps.error ?? 'empty /capabilities response');
   }
@@ -132,8 +145,8 @@ export async function bootstrapAuthInExtension(
     // Missing material must never switch this wallet to another auth identity.
     requireNostrKeySource(wallet);
     try {
-      const bootstrap = await bootstrapViaNostr(api, wallet, keys, effectiveGate);
-      await clearPendingRegistrationInvoice(wallet.fingerprint);
+      const bootstrap = await bootstrapViaNostr(api, pinned, wallet, keys, effectiveGate);
+      await signedIn(wallet, pinned);
       return bootstrap;
     } catch (e) {
       // A wallet already registered on THIS backend (its seed is known, e.g. it
@@ -152,8 +165,9 @@ export async function bootstrapAuthInExtension(
       // seed's account carries an npub other than this wallet's, the backend
       // refuses the BTC sign-in too (409); bootstrapAuth reports that as
       // NOSTR_IDENTITY_CONFLICT and solves nothing.
+      pinned.assertCurrent();
       const bootstrap = await bootstrapAuth(api, wallet);
-      await clearPendingRegistrationInvoice(wallet.fingerprint);
+      await signedIn(wallet, pinned);
       return bootstrap;
     }
   }
@@ -167,14 +181,14 @@ export async function bootstrapAuthInExtension(
   // server that advertises the hardened merge gets one (`legacy_merge_v2`): an
   // older server lets a planted key row fold into this account.
   const rotation = wallet.seed && capHasLegacyMergeV2(caps.data)
-    ? legacyBtcRotationProof(wallet.seed, bytesToHex(wallet.keys.btc.publicKey), timestamp, api.getBaseUrl())
+    ? legacyBtcRotationProof(wallet.seed, bytesToHex(wallet.keys.btc.publicKey), timestamp, pinned.url)
     : null;
 
   const result = await runBootstrapInBackground(
     {
       // The token comes back for THIS client's backend, and only that backend
       // may mint it (see runBootstrapInBackground).
-      backend: { url: api.getBaseUrl(), apiStyle: api.getWalletApiStyle() },
+      backend: { url: pinned.url, apiStyle: api.getWalletApiStyle() },
       fingerprint: wallet.fingerprint,
       keys,
       signedTimestamp: timestamp,
@@ -186,10 +200,25 @@ export async function bootstrapAuthInExtension(
     gate?.pollAttempt !== undefined ? `pay:${gate.pollAttempt}` : undefined,
   );
 
-  api.setAccessToken(result.accessToken);
-  // Registration succeeded: any pending pay-to-register record is now spent.
-  await clearPendingRegistrationInvoice(wallet.fingerprint);
+  // The job's token was minted at `pinned.url` (runBootstrapInBackground
+  // refuses any other); install it only if this window is still there.
+  pinned.installToken(result.accessToken);
+  await signedIn(wallet, pinned);
   return result.bootstrap;
+}
+
+/**
+ * Bookkeeping after a sign-in at `pinned.url` succeeded: the pending
+ * pay-to-register record there is spent, and the wallet now holds an account
+ * there, which the dapp signer must protect (see `backend-accounts.ts`).
+ */
+async function signedIn(wallet: UnlockedWallet, pinned: PinnedBackend): Promise<void> {
+  await clearPendingRegistrationInvoice(wallet.fingerprint, pinned.url);
+  try {
+    await rememberBackendAccount(pinned.url);
+  } catch (e) {
+    console.warn('[bootstrap] could not record the signed-in backend for the dapp signing guard', e);
+  }
 }
 
 /**
@@ -204,6 +233,7 @@ export async function bootstrapAuthInExtension(
  */
 async function bootstrapViaNostr(
   api: SmirkApi,
+  pinned: PinnedBackend,
   wallet: UnlockedWallet,
   keys: ReadonlyArray<{ asset: string; publicKey: string }>,
   gate?: { inviteCode?: string; paymentInvoiceId?: string },
@@ -214,6 +244,7 @@ async function bootstrapViaNostr(
     fingerprint: wallet.fingerprint,
     keys: keys.map((key) => ({ asset: key.asset, publicKey: key.publicKey })),
   });
+  pinned.assertCurrent();
   const isKnown = restore.exists;
   const xmrStartHeight = isKnown ? restore.xmrStartHeight ?? undefined : undefined;
   const wowStartHeight = isKnown ? restore.wowStartHeight ?? undefined : undefined;
@@ -232,8 +263,9 @@ async function bootstrapViaNostr(
     }
   };
   // Each call fetches a fresh single-use nonce and signs a fresh NIP-98 action.
-  const register = (altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>>) =>
-    api.nostrRegister({
+  const register = (altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>>) => {
+    pinned.assertCurrent();
+    return api.nostrRegister({
       identity,
       keys: keys.map((k) => ({ asset: k.asset, publicKey: k.publicKey })),
       seedFingerprint: wallet.fingerprint,
@@ -244,9 +276,13 @@ async function bootstrapViaNostr(
       ...(gate?.inviteCode ? { inviteCode: gate.inviteCode } : {}),
       ...(gate?.paymentInvoiceId ? { paymentInvoiceId: gate.paymentInvoiceId } : {}),
     });
+  };
 
   let altchaSolution = isKnown ? null : await solve();
   let res = await register(altchaSolution);
+  // An answer that arrives after the window moved is not this backend's to act
+  // on, whatever it says.
+  pinned.assertCurrent();
 
   // A new wallet whose own solve failed above went out without a solution. If
   // the backend insists, solve once more and resend. A KNOWN fingerprint with
@@ -256,6 +292,7 @@ async function bootstrapViaNostr(
   if ((res.error || !res.data) && !isKnown && altchaSolution === null && isPowRequiredRejection(res)) {
     altchaSolution = await solve();
     if (altchaSolution) res = await register(altchaSolution);
+    pinned.assertCurrent();
   }
 
   if (res.error || !res.data) {
@@ -286,7 +323,8 @@ async function bootstrapViaNostr(
     throw new Error(res.error ?? 'Registration failed');
   }
 
-  api.setAccessToken(res.data.accessToken);
+  // Minted at `pinned.url`; installed only while this window is still there.
+  pinned.installToken(res.data.accessToken);
   // A known wallet may have been split from its pre-v0.3 identity by an earlier
   // import; with the seed in hand, ask the backend to merge it back. Best-effort,
   // and skipped unless the server advertises the hardened merge.

@@ -19,6 +19,7 @@ import {
   resolveNostrIdentityForOrigin,
   listNostrIdentitiesForPicker,
 } from '../nostr-vault';
+import { backendScope } from '../backend-generation';
 
 /**
  * Settings → Messages (Identity/messaging plane). Basic NIP-17 encrypted DMs over
@@ -65,10 +66,17 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
     let cancelled = false;
     setMessages([]);
     void (async () => {
+      // The relay belongs to the backend this read goes to. If the window moves
+      // to another backend while it is in flight (another window's reset, which
+      // also remounts this screen), the answer names a relay the wallet has left:
+      // configuring it, or arming the DM watch with it, would keep talking to
+      // that operator.
+      const scope = backendScope(api);
       const caps = await api.getCapabilities();
+      if (cancelled || !scope.current()) return;
       const relayUrl = caps.data?.messaging?.relay_url;
       if (!caps.data?.features?.nostr_relay || !relayUrl) {
-        if (!cancelled) setReady('off');
+        setReady('off');
         return;
       }
       // Local-only for now: the Smirk relay is the inbox; public interop relays
@@ -84,13 +92,16 @@ export function MessagesRoute({ wallet, onBack }: { wallet: UnlockedWallet; onBa
         }
         return;
       }
-      if (cancelled) return;
+      if (cancelled || !scope.current()) return;
       setIdentity(id);
 
       // Kick off background delivery (persists after this screen closes) and load
       // any encrypted wraps the background poller already collected while away.
+      // The background arms it only for the backend it sees selected, and only
+      // with a relay that backend advertises (dm-watch.ts); `backendUrl` says
+      // which backend this relay came from.
       void chrome.runtime
-        .sendMessage({ type: 'DM_WATCH_SET', npubHex: id.pubkeyHex, relayUrl })
+        .sendMessage({ type: 'DM_WATCH_SET', npubHex: id.pubkeyHex, relayUrl, backendUrl: scope.url })
         .catch(() => {});
       void chrome.runtime
         .sendMessage({ type: 'DM_WRAPS_GET' })

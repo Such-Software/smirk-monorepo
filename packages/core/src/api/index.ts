@@ -31,6 +31,7 @@ export * from './parse';
 export * from './capabilities';
 export * from './capabilities-cache';
 export * from './backend-config';
+export * from './sign-in-backend';
 
 export type { AuthMethods } from './auth';
 export type { KeysMethods } from './keys';

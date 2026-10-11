@@ -41,6 +41,7 @@ import {
 
 import type { JobHandler } from '../types';
 import { PAYMENT_PENDING_SENTINEL } from '../types';
+import { signInClients } from './sign-in-client';
 
 /** The backend signals a minted+bound-but-not-yet-Settled pay-to-register invoice
  *  with the stable `PAYMENT_PENDING` code (auth.rs `verify_payment_settled`).
@@ -135,11 +136,17 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
           `but the background context is pointed at ${backendUrl}. Reopen Smirk and try again.`,
       );
     }
+    // Every request below goes through a client bound to that backend, never
+    // the shared singleton, which other work can re-point while this job
+    // awaits the network (see ./sign-in-client.ts). So the backend named in
+    // the result is the one every request went to, including the one that
+    // minted the token.
+    const client = signInClients.for(input.backend);
 
     // Read restore evidence before deriving a new birthday or starting PoW.
-    const restore = await requireRestoreState(api, {
+    const restore = await requireRestoreState(client, {
       fingerprint: input.fingerprint,
-      keys: input.keys as Parameters<typeof api.checkRestore>[0]['keys'],
+      keys: input.keys as Parameters<typeof client.checkRestore>[0]['keys'],
     });
     const isKnownWallet = restore.exists;
     const xmrStartHeight = isKnownWallet ? restore.xmrStartHeight ?? undefined : undefined;
@@ -165,7 +172,7 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
     // bare `Solution` is a TS compile error, not a runtime 422.
     let altchaSolution: Awaited<ReturnType<typeof solvePowChallenge>> = null;
     if (!isKnownWallet) {
-      altchaSolution = await solvePowChallenge(api, { signal: ctx.signal });
+      altchaSolution = await solvePowChallenge(client, { signal: ctx.signal });
     }
 
     // ---- 3. extensionRegister (+ optional registration-gate credentials) ----
@@ -173,9 +180,9 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
     // signature, exactly as the new-wallet path does after its own solve. The
     // backend accepts a signed timestamp for 300 s and binds no nonce to it.
     const register = (solution: typeof altchaSolution) =>
-      api.extensionRegister({
+      client.extensionRegister({
         keys: input.keys as Parameters<
-          typeof api.extensionRegister
+          typeof client.extensionRegister
         >[0]['keys'],
         seedFingerprint: input.fingerprint,
         signedTimestamp: input.signedTimestamp,
@@ -203,7 +210,7 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
       altchaSolution === null &&
       isPowRequiredRejection(result)
     ) {
-      altchaSolution = await solvePowChallenge(api, { signal: ctx.signal });
+      altchaSolution = await solvePowChallenge(client, { signal: ctx.signal });
       if (altchaSolution !== null) result = await register(altchaSolution);
     }
 
@@ -259,7 +266,7 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
         ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
       },
       accessToken: result.data.accessToken,
-      backendUrl,
+      backendUrl: client.getBaseUrl(),
     };
   },
 };

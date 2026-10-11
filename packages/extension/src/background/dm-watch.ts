@@ -21,10 +21,19 @@
  * the dapp public cache (see `./dapp/provider`): the popup writes it on every
  * transition to unlocked and clears it on lock, "Forget this wallet", backend
  * switch, and browser restart.
+ *
+ * The relay comes from the popup, but the watch is armed only with the relay
+ * the entitled backend itself advertises, checked against that backend's
+ * capabilities when arming. It used to take the popup's relay on trust and bind
+ * it to whichever backend the background saw: a window whose capabilities read
+ * from the previous operator resolved during a reset armed {that operator's
+ * relay, the default backend}, which passed every entitlement check and
+ * beaconed the npub to the old relay every five minutes until lock.
  */
 
 import {
   BACKEND_CONFIG_KEY,
+  SmirkApi,
   fetchDmWraps,
   initSmirkMessaging,
   type BackendConfig,
@@ -112,6 +121,42 @@ async function stillEntitled(watch: WatchConfig): Promise<boolean> {
   return watch.fingerprint === now.fingerprint && watch.backendUrl === now.backendUrl;
 }
 
+/**
+ * Why `requested` may not be watched for the entitled backend, or null when it
+ * may. Cheap check first: the popup names the backend it read the relay from,
+ * and a window still on another backend is refused without a request. Then the
+ * entitled backend's own capabilities must advertise exactly that relay; a
+ * read that fails refuses rather than trusting the popup.
+ */
+async function relayRefusal(
+  backendUrl: string,
+  requested: { relayUrl: unknown; backendUrl: unknown },
+): Promise<string | null> {
+  if (typeof requested.relayUrl !== 'string' || !requested.relayUrl) {
+    return 'the request names no relay';
+  }
+  if (requested.backendUrl !== backendUrl) {
+    return (
+      `the relay was read from ${String(requested.backendUrl || 'an unnamed backend')}, ` +
+      `but the wallet's backend is ${backendUrl}`
+    );
+  }
+  let caps: Awaited<ReturnType<SmirkApi['getCapabilities']>>;
+  try {
+    caps = await new SmirkApi(backendUrl).getCapabilities();
+  } catch (e) {
+    return `could not read ${backendUrl}'s capabilities (${e instanceof Error ? e.message : String(e)})`;
+  }
+  if (caps.error || !caps.data) {
+    return `could not read ${backendUrl}'s capabilities (${caps.error ?? 'empty response'})`;
+  }
+  const advertised = caps.data.features?.nostr_relay ? caps.data.messaging?.relay_url : undefined;
+  if (advertised !== requested.relayUrl) {
+    return `${backendUrl} does not advertise the relay ${requested.relayUrl}`;
+  }
+  return null;
+}
+
 /** Drop the config + alarm. The collected wraps are left alone: they are still
  *  encrypted, and dropping them would lose messages across a plain auto-lock. */
 async function stopWatching(): Promise<void> {
@@ -185,6 +230,17 @@ export function installDmWatcher(): void {
           // attribute this npub to. Refuse rather than beacon.
           await stopWatching();
           sendResponse({ ok: false });
+          return;
+        }
+        const refusal = await relayRefusal(ent.backendUrl, {
+          relayUrl: msg.relayUrl,
+          backendUrl: msg.backendUrl,
+        });
+        if (refusal) {
+          // Any watch already armed stays as it was: it was checked when armed
+          // and is re-checked before every poll.
+          console.warn(`[smirk] DM watch not armed: ${refusal}`);
+          sendResponse({ ok: false, error: refusal });
           return;
         }
         const cfg: WatchConfig = {

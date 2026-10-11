@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import {
+  api,
   connectBackend,
   readBackendConfig,
   writeBackendConfig,
@@ -10,6 +11,20 @@ import {
 import { BackendPicker, type BackendProbeInfo } from '@smirk/ui';
 import { storage } from '../singletons';
 import { DEFAULT_BACKEND } from '../../backend-boot';
+import { rememberBackendAccount } from '../../backend-accounts';
+
+/**
+ * The wallet may hold an account at the backend it is leaving, signed in
+ * before that backend was remembered at sign-in. Remember it, so the dapp
+ * signer keeps refusing sign-in tokens for it after the switch.
+ */
+async function rememberBackendLeft(): Promise<void> {
+  try {
+    await rememberBackendAccount(api.getBaseUrl());
+  } catch (e) {
+    console.warn('[backend] could not record the backend being left for the dapp signing guard', e);
+  }
+}
 
 /**
  * Validate + probe a candidate backend, mapping core `connectBackend`
@@ -79,6 +94,7 @@ export function BackendRoute({
 
   const onUse = async (info: BackendProbeInfo) => {
     const apiStyle = info.apiStyle as WalletApiStyle;
+    await rememberBackendLeft();
     await writeBackendConfig(storage, {
       url: info.url,
       apiStyle,
@@ -91,6 +107,7 @@ export function BackendRoute({
   };
 
   const onResetDefault = async () => {
+    await rememberBackendLeft();
     await clearBackendConfig(storage);
     applyBackendConfig(DEFAULT_BACKEND);
     await onSwitched();
