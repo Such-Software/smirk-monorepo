@@ -30,6 +30,10 @@ the public `smirk-backend-core` repo and aren't echoed here.
   in a single step, so Send can no longer open without the deposit. It also no
   longer asks to replace a Send draft when Send only holds the receipt of a
   send that already went out.
+- Wallet open in more than one window: a change made in one window, such as
+  auto-lock, hiding balances or a Send recipient, is no longer undone by
+  another. A balance refresh in the other window could save its older copy
+  over the change a moment after it was made.
 
 ## [0.3.1] - 2026-10-09
 

@@ -20,6 +20,7 @@ import {
   RouteController,
   SessionStateStore,
   Wizard,
+  withoutWriteStamp,
   type PlatformStorage,
   type SessionState,
   type WizardState,
@@ -51,7 +52,8 @@ function sortedCopy<T>(value: T): T {
 /**
  * chrome.storage.local as an extension page sees it: writes applied in order
  * and announced to the writing page before their promise settles, reads
- * answered in order with keys sorted. Every state ever stored is kept.
+ * answered in order with keys sorted. Every state ever stored is kept, without
+ * the stamp naming the window that wrote it.
  */
 class ChromeLikeStorage implements PlatformStorage {
   readonly history: SessionState[] = [];
@@ -65,7 +67,7 @@ class ChromeLikeStorage implements PlatformStorage {
 
   async set<T>(key: string, value: T): Promise<void> {
     this.data.set(key, sortedCopy(value));
-    if (key === KEY) this.history.push(sortedCopy(value) as unknown as SessionState);
+    if (key === KEY) this.history.push(withoutWriteStamp(sortedCopy(value)) as SessionState);
     return new Promise((resolve) => {
       setImmediate(() => {
         for (const l of this.listeners) l(key);

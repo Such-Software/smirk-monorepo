@@ -267,6 +267,35 @@ const STORAGE_KEY = 'smirk:popup-state';
 const MAX_OWN_WRITES = 64;
 
 /**
+ * Field every stored state carries naming the store instance and the write
+ * that produced it. It lives only in storage: reads drop it before the state
+ * reaches the cache, and every write replaces it.
+ */
+const WRITE_STAMP_FIELD = 'writeStamp';
+
+/** A random id for one store instance, so two windows never share stamps. */
+function newWriterId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (typeof c?.randomUUID === 'function') return c.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * A stored session state without its write stamp. Anything that is not a
+ * plain object is returned as it is, for `migrate` to judge.
+ */
+export function withoutWriteStamp(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw) || !(WRITE_STAMP_FIELD in raw)) return raw;
+  const { [WRITE_STAMP_FIELD]: _stamp, ...state } = raw as Record<string, unknown>;
+  return state;
+}
+
+/** The state a stored value holds: defaults when nothing is stored. */
+function fromStored(raw: unknown): SessionState {
+  return raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(withoutWriteStamp(raw));
+}
+
+/**
  * JSON with every object's keys in sorted order, so two encodings of one state
  * compare equal. chrome.storage returns objects with their keys sorted, not in
  * the order they were written, so a plain `JSON.stringify` of a read never
@@ -292,6 +321,10 @@ export function canonicalJson(value: unknown): string {
  *
  * Framework-agnostic: exposes `subscribe(listener)` so any UI layer
  * can wire it up. The Preact hooks live in `@smirk/ui/state`.
+ *
+ * Windows share one stored state and the last write wins. Storage offers no
+ * compare-and-swap, so when two windows both change the state within the same
+ * few milliseconds, one change can be lost.
  */
 export class SessionStateStore {
   private cached: SessionState | null = null;
@@ -309,8 +342,21 @@ export class SessionStateStore {
    * change put an older state back into the cache, and the next update built
    * on it: the Swap tab's "Open Send" lost its Send draft that way (live run
    * 2026-10-10). Pruned up to the newest write a read has returned.
+   *
+   * Each entry includes its write stamp ({@link writerId} and
+   * {@link writeSeq}), so it matches only the exact write this store made.
+   * Matching content alone mistook another window's state for an echo
+   * whenever it equalled one of ours: a window that set auto-lock to an hour
+   * and back to "every time" restored this window's earlier state exactly,
+   * this window ignored it, kept the hour, and wrote it back.
    */
   private ownWrites: string[] = [];
+
+  /** Names this store instance in the stamp of every write it makes. */
+  private readonly writerId = newWriterId();
+
+  /** Number of writes this store has made; the newest write's stamp ends in it. */
+  private writeSeq = 0;
 
   /** `save()` calls whose storage write has not settled yet. */
   private writesInFlight = 0;
@@ -371,7 +417,7 @@ export class SessionStateStore {
           this.resyncAfterWrites = true;
           return;
         }
-        const next = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
+        const next = fromStored(raw);
         this.cached = next;
         for (const l of this.listeners) l(next);
       })
@@ -403,19 +449,27 @@ export class SessionStateStore {
   async load(): Promise<SessionState> {
     if (this.cached) return this.cached;
     const raw = await this.storage.get<unknown>(this.key);
-    this.cached ??= raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
+    this.cached ??= fromStored(raw);
     return this.cached;
   }
 
-  /** Replace the entire state. Most callers want [`update`] instead. */
+  /**
+   * Replace the entire state. Most callers want [`update`] instead.
+   *
+   * Storage receives the state with a stamp naming this store and this write
+   * (see {@link ownWrites}); the cache and every listener get it without one.
+   */
   async save(state: SessionState): Promise<void> {
-    const json = canonicalJson(state);
-    this.cached = state;
+    const clean = withoutWriteStamp(state) as SessionState;
+    this.writeSeq += 1;
+    const stored = { ...clean, [WRITE_STAMP_FIELD]: `${this.writerId}:${this.writeSeq}` };
+    const json = canonicalJson(stored);
+    this.cached = clean;
     this.ownWrites.push(json);
     if (this.ownWrites.length > MAX_OWN_WRITES) this.ownWrites.splice(0, this.ownWrites.length - MAX_OWN_WRITES);
     this.writesInFlight += 1;
     try {
-      await this.storage.set(this.key, state);
+      await this.storage.set(this.key, stored);
     } finally {
       this.writesInFlight -= 1;
       if (this.writesInFlight === 0 && this.resyncAfterWrites) {
@@ -423,7 +477,7 @@ export class SessionStateStore {
         this.syncFromStorage();
       }
     }
-    for (const l of this.listeners) l(state);
+    for (const l of this.listeners) l(clean);
   }
 
   /**
@@ -436,6 +490,12 @@ export class SessionStateStore {
    * of every prior `update()`. Mutator throws propagate to the
    * caller but don't break the chain: the next queued update runs
    * with the pre-throw state (no partial write).
+   *
+   * An update that changes nothing writes nothing. Every balance refresh
+   * runs one, focus and visibility refreshes included, and a write there
+   * saved this window's whole cached state back over storage: a change
+   * another window had just made, announced but not yet read here, was
+   * reverted in every window.
    */
   async update(
     mutator: (state: SessionState) => void | SessionState | Promise<void | SessionState>,
@@ -445,6 +505,7 @@ export class SessionStateStore {
       const draft: SessionState = JSON.parse(JSON.stringify(current));
       const result = await mutator(draft);
       const next = (result === undefined ? draft : result) as SessionState;
+      if (canonicalJson(next) === canonicalJson(current)) return next;
       await this.save(next);
       return next;
     };
