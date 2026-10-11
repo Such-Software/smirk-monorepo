@@ -2058,6 +2058,43 @@ function App() {
     }
   };
 
+  /**
+   * Everything a session holds that belongs to one backend, dropped after a
+   * switch (to another operator or back to the default) so the shell
+   * re-bootstraps against the new one. Both ways into the backend picker use
+   * it: Settings, and the bootstrap-error screen's escape. The escape used to
+   * drop only the session, so a reset from there kept the previous operator's
+   * DM watch armed and the dapp bridge's backend URL pointing at it.
+   */
+  const dropBackendSession = async () => {
+    // The JWT is per-backend; drop it + the caches + the session so the
+    // unlocked-shell effect re-bootstraps against the new backend.
+    api.setAccessToken(null);
+    // Capabilities are per-backend too; drop the memoized copy so gating
+    // re-evaluates against the new instance's advertisement.
+    invalidateCapabilities();
+    await clearBootstrapCache();
+    // Its `backendUrl` names the backend the session was opened on; the dm
+    // watcher and the dapp bridge's getBackend() read it.
+    await clearDappPublicCache();
+    // The watcher is pinned to the OLD instance's relay, so leaving it running
+    // would keep beaconing this npub to a relay the user just navigated away
+    // from. Messages re-arms it against the new one.
+    await stopDmWatch();
+    // Drop the balance snapshot too: it's keyed by the OLD backend, so the
+    // re-bootstrap against the new instance must not paint stale cross-backend
+    // numbers on first open.
+    await clearBalanceSnapshot();
+    // And the relay set, which is a module global that otherwise SURVIVES the
+    // switch: the wallet would keep publishing DMs and payments to the previous
+    // operator's relay while believing it had moved. Cleared here and
+    // repopulated by the capabilities effect from the new instance's
+    // advertisement.
+    initSmirkMessaging({ publicRelays: [] });
+    setSession(null);
+    await refresh();
+  };
+
   // Render a "Setting up wallet…" placeholder only while we have
   // NOTHING to show: no balance snapshot, no live data. If a
   // snapshot is in `session.balances` (the typical case after the
@@ -2081,7 +2118,7 @@ function App() {
           <BackendRoute
             onSwitched={async () => {
               setBootstrapBackendEscape(false);
-              setSession(null);
+              await dropBackendSession();
             }}
             onBack={() => setBootstrapBackendEscape(false)}
           />
@@ -2243,32 +2280,7 @@ function App() {
                 await storage.remove(LEGACY_WALLET_KEY);
                 await refresh();
               }}
-              onBackendSwitched={async () => {
-                // The JWT is per-backend; drop it + the caches + the session so
-                // the unlocked-shell effect re-bootstraps against the new backend.
-                api.setAccessToken(null);
-                // Capabilities are per-backend too; drop the memoized copy so
-                // gating re-evaluates against the new instance's advertisement.
-                invalidateCapabilities();
-                await clearBootstrapCache();
-                await clearDappPublicCache();
-                // The watcher is pinned to the OLD instance's relay, so leaving it
-                // running would keep beaconing this npub to a relay the user just
-                // navigated away from. Messages re-arms it against the new one.
-                await stopDmWatch();
-                // Drop the balance snapshot too: it's keyed by the OLD backend, so
-                // the re-bootstrap against the new instance must not paint stale
-                // cross-backend numbers on first open.
-                await clearBalanceSnapshot();
-                // And the relay set, which is a module global that otherwise
-                // SURVIVES the switch: the wallet would keep publishing DMs and
-                // payments to the previous operator's relay while believing it had
-                // moved. Cleared here and repopulated by the capabilities effect
-                // from the new instance's advertisement.
-                initSmirkMessaging({ publicRelays: [] });
-                setSession(null);
-                await refresh();
-              }}
+              onBackendSwitched={dropBackendSession}
             />
           ),
           // `browse` is desktop-only: the desktop shell installs

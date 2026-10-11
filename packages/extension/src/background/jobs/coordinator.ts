@@ -48,7 +48,10 @@ import {
   OFFSCREEN_PATH,
 } from './types';
 import { HANDLERS } from './handlers/registry';
-import { api } from '@smirk/core';
+import { admitJobBackend } from './backend';
+import type { JobBackend } from './types';
+import { ChromeLocalStorage, initSmirkApi, resolveBackend } from '@smirk/core';
+import { DEFAULT_BACKEND } from '../../backend-boot';
 
 const DEDUP_PREFIX = `${JOBS_STORAGE_PREFIX}dedup:`;
 const RESULT_TTL_MS = 10 * 60 * 1000;
@@ -126,6 +129,16 @@ async function clearDedup(key: string): Promise<void> {
   await chrome.storage.session.remove(`${DEDUP_PREFIX}${key}`);
 }
 
+/**
+ * The wallet's durable backend selection, read from storage on every call. Not
+ * this worker's `api` singleton: that is a cache of the selection, and a stale
+ * cache is how a reset to the default once sent sign-ins to the old operator.
+ */
+async function selectedBackend(): Promise<JobBackend> {
+  const { url, apiStyle } = await resolveBackend(new ChromeLocalStorage(), DEFAULT_BACKEND);
+  return { url, apiStyle };
+}
+
 // ============================================================================
 // Offscreen lifecycle
 // ============================================================================
@@ -190,11 +203,15 @@ async function ensureOffscreen(): Promise<void> {
  *
  * Mirrors offscreen/runner.ts: same registry lookup, same `JobContext`, same
  * progress/done/error reporting, except the results go straight into the state
- * writers rather than round-tripping through `chrome.runtime` messages. The
- * backend does not need forwarding either: this context IS the one whose
- * `api` singleton the offscreen request would have copied.
+ * writers rather than round-tripping through `chrome.runtime` messages. Like
+ * the runner, it points this context at the admitted backend first.
  */
-function runJobLocally(id: string, kind: JobKind, input: unknown): void {
+function runJobLocally(
+  id: string,
+  kind: JobKind,
+  input: unknown,
+  backend: JobBackend,
+): void {
   const handler = HANDLERS[kind];
   if (!handler) {
     void onJobError(id, {
@@ -203,6 +220,9 @@ function runJobLocally(id: string, kind: JobKind, input: unknown): void {
     });
     return;
   }
+
+  // Same as the offscreen runner: run against the admitted backend.
+  initSmirkApi({ baseUrl: backend.url, walletApiStyle: backend.apiStyle });
 
   const controller = new AbortController();
   const ctx: JobContext = {
@@ -239,6 +259,10 @@ async function startJob<K extends JobKind>(args: {
   input: unknown;
   dedupKey?: string;
 }): Promise<string> {
+  // Which backend this job runs against, checked before anything else: a
+  // sign-in for a backend the wallet is no longer pointed at refuses here.
+  const backend = admitJobBackend(args.kind, args.input, await selectedBackend());
+
   // Dedup: if a job with this key is already running, return it.
   if (args.dedupKey) {
     const existingId = await readDedup(args.dedupKey);
@@ -286,7 +310,7 @@ async function startJob<K extends JobKind>(args: {
 
   if (!offscreenAvailable) {
     // Firefox MV3 (no chrome.offscreen): run it here. See runJobLocally.
-    runJobLocally(id, args.kind, args.input);
+    runJobLocally(id, args.kind, args.input, backend);
     return id;
   }
 
@@ -295,9 +319,9 @@ async function startJob<K extends JobKind>(args: {
     id,
     kind: args.kind,
     input: args.input,
-    // Forward the SW's resolved backend so the offscreen auths against the user's
-    // chosen backend (it can't read chrome.storage to resolve it itself).
-    backend: { url: api.getBaseUrl(), apiStyle: api.getWalletApiStyle() },
+    // Forward the admitted backend: the offscreen cannot read chrome.storage to
+    // resolve the selection itself.
+    backend,
   };
   // The offscreen runner is listening on chrome.runtime.onMessage;
   // its `sendMessage` reply isn't used (offscreen reports via its

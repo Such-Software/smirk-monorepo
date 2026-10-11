@@ -25,6 +25,9 @@ const NOSTR_ROW_ADOPT_REFUSAL = {
 
 const KEYS = [{ asset: 'btc', publicKey: '02'.padEnd(66, 'a') }];
 
+/** The backend this context points at: the one a job may sign in to. */
+const here = () => ({ url: api.getBaseUrl(), apiStyle: api.getWalletApiStyle() });
+
 function knownWallet(t: TestContext) {
   const mock = (method: string, impl: (...a: never[]) => unknown): void => {
     t.mock.method(api as unknown as Record<string, () => unknown>, method, impl as () => unknown);
@@ -61,6 +64,7 @@ test('a known fingerprint refused for want of PoW solves once and resends the sa
   });
 
   const input = {
+    backend: here(),
     fingerprint: 'fp-test',
     keys: KEYS,
     signedTimestamp: 1_790_000_000,
@@ -95,6 +99,7 @@ test('an unknown fingerprint never sends a rotation proof', async (t) => {
   });
   await bootstrapAuthHandler.run(
     {
+      backend: here(),
       fingerprint: 'fp-new',
       keys: KEYS,
       signedTimestamp: 1_790_000_000,
@@ -120,7 +125,7 @@ test('a registration failure is logged without the seed fingerprint', async (t) 
   const fingerprint = `fp-${crypto.randomUUID()}`;
   await assert.rejects(
     bootstrapAuthHandler.run(
-      { fingerprint, keys: KEYS, signedTimestamp: 1_790_000_000, signature: 'sig' },
+      { backend: here(), fingerprint, keys: KEYS, signedTimestamp: 1_790_000_000, signature: 'sig' },
       { signal: new AbortController().signal } as never,
     ),
     /Invalid signature/,
@@ -140,7 +145,7 @@ test('an adopt refused for another Nostr identity is neither solved nor resent, 
   t.mock.method(console, 'error', () => undefined);
   await assert.rejects(
     bootstrapAuthHandler.run(
-      { fingerprint: 'fp-test', keys: KEYS, signedTimestamp: 1_790_000_000, signature: 'sig' },
+      { backend: here(), fingerprint: 'fp-test', keys: KEYS, signedTimestamp: 1_790_000_000, signature: 'sig' },
       { signal: new AbortController().signal } as never,
     ),
     (e: unknown) =>
@@ -164,7 +169,7 @@ test('when no solve can run, the job fails as retryable, not as advice to upgrad
   t.mock.method(console, 'error', () => undefined);
   await assert.rejects(
     bootstrapAuthHandler.run(
-      { fingerprint: 'fp-test', keys: KEYS, signedTimestamp: 1_790_000_000, signature: 'sig' },
+      { backend: here(), fingerprint: 'fp-test', keys: KEYS, signedTimestamp: 1_790_000_000, signature: 'sig' },
       { signal: new AbortController().signal } as never,
     ),
     (e: unknown) => e instanceof Error && /proof-of-work/i.test(e.message) && !/upgrade|update|newer|latest/i.test(e.message),

@@ -1,18 +1,20 @@
 import './_chrome-stub';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runBootstrapInBackground, type BootstrapJobResult } from '../jobs/bootstrap-auth';
+import { bootstrapDedupKey, runBootstrapInBackground, type BootstrapJobResult } from '../jobs/bootstrap-auth';
 import type { JobsPortRequest, JobState } from '../../background/jobs/types';
 
 test('first background completion keeps new-wallet evidence while completed-job replay retains authentication only', async (t) => {
   const fingerprint = crypto.randomUUID();
+  const backend = { url: 'http://127.0.0.1:18701/api/v1', apiStyle: 'namespaced' as const };
   const result: BootstrapJobResult = {
     accessToken: crypto.randomUUID(),
+    backendUrl: backend.url,
     bootstrap: { userId: 'test-user', isNew: true, restoreState: 'new', xmrStartHeight: 0 },
   };
   const state = {
     id: crypto.randomUUID(), kind: 'bootstrap-auth', status: 'done',
-    dedupKey: `bootstrap-auth:${fingerprint}`, finishedAt: Date.now(), result,
+    dedupKey: bootstrapDedupKey(backend.url, fingerprint), finishedAt: Date.now(), result,
   } as JobState<'bootstrap-auth'>;
   let completed = false;
   let startCalls = 0;
@@ -43,7 +45,7 @@ test('first background completion keeps new-wallet evidence while completed-job 
     onDisconnect();
     (chrome as unknown as { runtime?: unknown }).runtime = runtime;
   });
-  const input = { fingerprint, keys: [], signedTimestamp: 0, signature: crypto.randomUUID() };
+  const input = { backend, fingerprint, keys: [], signedTimestamp: 0, signature: crypto.randomUUID() };
   const first = await runBootstrapInBackground(input);
   assert.equal(first.bootstrap.restoreState, 'new');
   const callsAfterFirst = startCalls;

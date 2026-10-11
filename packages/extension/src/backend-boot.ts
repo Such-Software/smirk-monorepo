@@ -19,6 +19,8 @@
 import {
   ChromeLocalStorage,
   initSmirkApi,
+  initSmirkMessaging,
+  invalidateCapabilities,
   loadAndApplyBackend,
   subscribeBackend,
   type WalletApiStyle,
@@ -76,6 +78,14 @@ export function bootBackendSelection(onChange?: () => void): void {
   // (2) Durable override. Fire-and-forget: the first real request (auth
   // bootstrap, balances) happens well after this resolves.
   void loadAndApplyBackend(storage, FALLBACK);
-  // (3) Cross-context re-apply on switch.
-  subscribeBackend(storage, () => onChange?.());
+  // (3) Cross-context re-apply on switch, INCLUDING a reset to the default
+  // (which clears the stored selection, so FALLBACK is what applies). When this
+  // context is re-pointed, the previous operator's capabilities and relay set
+  // go too: until this context reloads them from the new backend it has no
+  // relay, rather than the previous operator's.
+  subscribeBackend(storage, FALLBACK, () => {
+    invalidateCapabilities();
+    initSmirkMessaging({ publicRelays: [] });
+    onChange?.();
+  });
 }

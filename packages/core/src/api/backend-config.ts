@@ -58,40 +58,85 @@ export function applyBackendConfig(cfg: {
   api.setAccessToken(null);
 }
 
+/** The backend a context should be talking to, and whether the user chose it. */
+export interface BackendSelection {
+  url: string;
+  apiStyle: WalletApiStyle;
+  /** False when nothing is stored and the build-time default applies. */
+  stored: boolean;
+}
+
+/**
+ * The effective selection without applying it: the stored choice, or
+ * `fallback` (the build-time default from `VITE_SMIRK_BACKEND_URL` /
+ * `VITE_SMIRK_API_STYLE`) when the user never chose one or reset to it.
+ */
+export async function resolveBackend(
+  storage: PlatformStorage,
+  fallback: { url: string; apiStyle: WalletApiStyle },
+): Promise<BackendSelection> {
+  const cfg = await readBackendConfig(storage);
+  if (cfg && cfg.url) return { url: cfg.url, apiStyle: cfg.apiStyle, stored: true };
+  return { url: fallback.url, apiStyle: fallback.apiStyle, stored: false };
+}
+
 /**
  * Boot-time backend resolution for every JS context. Reads the durable config
- * and applies it; when absent, applies `fallback` (the build-time default from
- * `VITE_SMIRK_BACKEND_URL` / `VITE_SMIRK_API_STYLE`). Returns the effective
+ * and applies it; when absent, applies `fallback`. Returns the effective
  * selection so the caller can display it / decide whether onboarding runs.
  */
 export async function loadAndApplyBackend(
   storage: PlatformStorage,
   fallback: { url: string; apiStyle: WalletApiStyle },
-): Promise<{ url: string; apiStyle: WalletApiStyle; stored: boolean }> {
-  const cfg = await readBackendConfig(storage);
-  if (cfg && cfg.url) {
-    applyBackendConfig(cfg);
-    return { url: cfg.url, apiStyle: cfg.apiStyle, stored: true };
-  }
-  applyBackendConfig(fallback);
-  return { url: fallback.url, apiStyle: fallback.apiStyle, stored: false };
+): Promise<BackendSelection> {
+  const selection = await resolveBackend(storage, fallback);
+  applyBackendConfig(selection);
+  return selection;
 }
 
 /**
- * Re-apply the backend whenever ANOTHER context changes the selection (the
- * offscreen-desync footgun otherwise). Returns an unsubscribe fn. `onChange`
- * fires after the singleton is re-pointed so the caller can re-bootstrap auth.
+ * Follow the selection whenever ANOTHER context changes it (the
+ * offscreen-desync footgun otherwise). Returns an unsubscribe fn.
+ *
+ * Clearing the selection is a change too: "reset to the default backend"
+ * removes the stored config, and every other context must then move to
+ * `fallback`. This used to apply only a non-empty config, so after a reset the
+ * background worker and any second wallet window stayed on the operator the
+ * user had just left, and the next background sign-in registered there.
+ *
+ * A context already pointed at the selection (normally the one that made the
+ * change) is left alone, so a session token it has just minted survives.
+ * `onChange` fires only when this context was actually re-pointed. When the
+ * selection cannot be read, the session token is dropped: a context that
+ * cannot confirm its backend must not keep authenticating to one.
  */
 export function subscribeBackend(
   storage: PlatformStorage,
-  onChange: (cfg: BackendConfig | null) => void,
+  fallback: { url: string; apiStyle: WalletApiStyle },
+  onChange?: (selection: BackendSelection) => void,
 ): () => void {
   return storage.subscribe((key) => {
     if (key !== BACKEND_CONFIG_KEY) return;
-    void readBackendConfig(storage).then((cfg) => {
-      if (cfg && cfg.url) applyBackendConfig(cfg);
-      onChange(cfg);
-    });
+    void resolveBackend(storage, fallback).then(
+      (selection) => {
+        if (
+          api.getBaseUrl() === selection.url &&
+          api.getWalletApiStyle() === selection.apiStyle
+        ) {
+          return;
+        }
+        applyBackendConfig(selection);
+        onChange?.(selection);
+      },
+      (e: unknown) => {
+        api.setAccessToken(null);
+        console.warn(
+          '[backend-config] could not read the backend selection after it changed; signed out of',
+          api.getBaseUrl(),
+          e,
+        );
+      },
+    );
   });
 }
 

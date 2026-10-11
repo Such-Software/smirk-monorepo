@@ -172,6 +172,9 @@ export async function bootstrapAuthInExtension(
 
   const result = await runBootstrapInBackground(
     {
+      // The token comes back for THIS client's backend, and only that backend
+      // may mint it (see runBootstrapInBackground).
+      backend: { url: api.getBaseUrl(), apiStyle: api.getWalletApiStyle() },
       fingerprint: wallet.fingerprint,
       keys,
       signedTimestamp: timestamp,
