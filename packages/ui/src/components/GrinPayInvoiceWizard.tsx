@@ -22,12 +22,20 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
+import type { WizardState } from '@smirk/core';
 
 import { useWizard } from '../state/hooks';
 import { Button } from './Button';
 
-const WIZARD_ID = 'grin-pay-invoice';
+/** Session-state id of the Grin invoice payment wizard. */
+export const GRIN_PAY_INVOICE_WIZARD_ID = 'grin-pay-invoice';
+const WIZARD_ID = GRIN_PAY_INVOICE_WIZARD_ID;
 const TOTAL_STEPS = 3;
+
+/** True when a persisted invoice payment shows Done: signed and replied, the recipient finalizes. */
+export function grinPayInvoiceDone(state: WizardState): boolean {
+  return state.step >= TOTAL_STEPS;
+}
 
 export interface GrinPayInvoiceFields extends Record<string, unknown> {
   /** I1 slatepack from the receiver. Pasted or pre-seeded by the popup

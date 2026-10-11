@@ -1,8 +1,19 @@
 import type { WizardState } from '@smirk/core';
 
+/** Session-state id of the Send wizard. */
+export const SEND_WIZARD_ID = 'send';
+
+/** Send's receipt step. Send reaches it only after the broadcast or Grin finalize succeeded. */
+export const SEND_RECEIPT_STEP = 4;
+
+/** True when a persisted send shows its receipt: the money already left, nothing to resume. */
+export function sendShowsReceipt(current: WizardState): boolean {
+  return current.step >= SEND_RECEIPT_STEP;
+}
+
 /** Open Send using persisted state, before rendering a restored receipt or draft. */
 export function prepareSendDraft(current: WizardState, initialAssetId?: string): WizardState {
-  const draft = current.step >= 4
+  const draft = sendShowsReceipt(current)
     ? { step: 0, fields: {}, startedAt: Date.now() }
     : current;
   // Preserve a recipient, amount or interactive exchange already in progress.

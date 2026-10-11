@@ -91,6 +91,7 @@ export {
   THORCHAIN_WIZARD_ID,
   NONLOGS_WIZARD_ID,
   swapProviderCards,
+  swapSettled,
 } from './components/SwapTab';
 export { WhereToTrade, TRADE_VENUES } from './components/WhereToTrade';
 export type { TradePairPrice, TradeVenue, WhereToTradeProps } from './components/WhereToTrade';
@@ -107,6 +108,7 @@ export type {
 } from './components/SwapTab';
 
 export { SendWizard } from './components/SendWizard';
+export { SEND_WIZARD_ID, sendShowsReceipt } from './components/send-draft';
 export type {
   SendWizardProps,
   SendFields,
@@ -117,7 +119,11 @@ export type {
   GrinFinalizeOutcome,
 } from './components/SendWizard';
 
-export { GrinRequestWizard } from './components/GrinRequestWizard';
+export {
+  GrinRequestWizard,
+  GRIN_REQUEST_WIZARD_ID,
+  grinRequestDone,
+} from './components/GrinRequestWizard';
 export type {
   GrinRequestWizardProps,
   GrinRequestFields,
@@ -127,7 +133,11 @@ export type {
   GrinRequestFinalizeOutcome,
 } from './components/GrinRequestWizard';
 
-export { GrinPasteIncomingWizard } from './components/GrinPasteIncomingWizard';
+export {
+  GrinPasteIncomingWizard,
+  GRIN_PASTE_INCOMING_WIZARD_ID,
+  grinPasteIncomingDone,
+} from './components/GrinPasteIncomingWizard';
 export type {
   GrinPasteIncomingWizardProps,
   GrinPasteIncomingFields,
@@ -135,7 +145,11 @@ export type {
   GrinPasteIncomingSignOutcome,
 } from './components/GrinPasteIncomingWizard';
 
-export { GrinPayInvoiceWizard } from './components/GrinPayInvoiceWizard';
+export {
+  GrinPayInvoiceWizard,
+  GRIN_PAY_INVOICE_WIZARD_ID,
+  grinPayInvoiceDone,
+} from './components/GrinPayInvoiceWizard';
 export type {
   GrinPayInvoiceWizardProps,
   GrinPayInvoiceFields,

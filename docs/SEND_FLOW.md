@@ -1,6 +1,6 @@
 # Send flow: reference
 
-> Status: stable · Updated 2026-09-27 · Applies to: Smirk client source
+> Status: stable · Updated 2026-10-11 · Applies to: Smirk client source
 
 How "user taps Send → tx lands on chain" works for each of Smirk's five
 assets, as shipped in v0.3.
@@ -13,9 +13,12 @@ runs the interactive slatepack ceremony.
 
 General Send starts with an asset chooser. Send from a coin detail starts at the
 destination for that coin. Persisted unfinished exchanges retain their state;
-completed receipts are cleared before a new send. Amount and review show a USD
-approximation from the selected asset's available price. Missing prices remain
-unavailable, and estimates never change the integer atomic signing amount.
+completed receipts are cleared before a new send. A wallet closed on a finished
+result (a send receipt, a tip or claim result, a settled swap) reopens on Home,
+while a draft, a send on Review and a swap awaiting its deposit resume. Amount
+and review show a USD approximation from the selected asset's available price.
+Missing prices remain unavailable, and estimates never change the integer
+atomic signing amount.
 
 The selected unlock grace period retains the scoped keys needed to send after
 popup reopen. Optional password confirmation applies per send, including tips,
