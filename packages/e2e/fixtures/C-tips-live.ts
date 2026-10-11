@@ -145,15 +145,31 @@ async function setupTabRoot(page: Page, tab: string): Promise<void> {
   await page.getByTestId(`nav-tab-${tab}`).click();
 }
 
+/**
+ * An unlocked popup reopens on the screen it was left on: after a failed test
+ * that can be a tip composer, a send or its receipt rather than Home. Return to
+ * Home the way a user would (tap the Home tab, then again for its root), so a
+ * restarted worker reaches the same starting point as a fresh one.
+ */
+async function backToHome(page: Page): Promise<void> {
+  const home = page.getByTestId('home-total-balance');
+  for (let attempt = 0; attempt < 3 && !(await home.isVisible().catch(() => false)); attempt++) {
+    await setupTabRoot(page, 'home');
+    await home.waitFor({ timeout: 60_000 }).catch(() => undefined);
+  }
+}
+
 /** What a freshly opened popup shows. */
 async function popupState(page: Page): Promise<'onboarding' | 'locked' | 'home'> {
   const onboarding = page.getByTestId('onboarding-import-btn');
   const locked = page.getByTestId('lockscreen-password-input');
   const home = page.getByTestId('home-total-balance');
-  await onboarding.or(locked).or(home).first().waitFor({ timeout: 90_000 });
-  if (await home.isVisible().catch(() => false)) return 'home';
+  const nav = page.getByTestId('bottom-nav');
+  await onboarding.or(locked).or(home).or(nav).first().waitFor({ timeout: 90_000 });
   if (await locked.isVisible().catch(() => false)) return 'locked';
-  return 'onboarding';
+  if (await onboarding.isVisible().catch(() => false)) return 'onboarding';
+  await backToHome(page);
+  return 'home';
 }
 
 async function waitForBalances(page: Page): Promise<void> {
@@ -217,10 +233,11 @@ async function unlockExisting(page: Page, password: string): Promise<void> {
   await page.getByTestId('lockscreen-password-input').fill(password);
   await page.getByTestId('lockscreen-unlock-btn').click();
   const error = page.getByTestId('lockscreen-error');
-  await page.getByTestId('home-total-balance').or(error).first().waitFor({ timeout: 5 * 60_000 });
+  await page.getByTestId('home-total-balance').or(error).or(page.getByTestId('bottom-nav')).first().waitFor({ timeout: 5 * 60_000 });
   if (await error.isVisible().catch(() => false)) {
     throw new Error('the kept profile does not unlock with this run\'s derived password (was the run salt replaced?)');
   }
+  await backToHome(page);
   await waitForBalances(page);
 }
 

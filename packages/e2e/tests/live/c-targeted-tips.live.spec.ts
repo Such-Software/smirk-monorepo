@@ -295,11 +295,17 @@ test("inbox: bob sees every genuine tip with its sender, message and claim-by da
   test.skip(rescueMode(), RESCUE_ONLY);
   test.setTimeout(90 * MINUTE);
   const bob = tipLane.bob;
-  const genuine = [...PERSON_TIPS, ...FEDERATED_TIPS]
+  const created = [...PERSON_TIPS, ...FEDERATED_TIPS]
     .filter((p) => p.to !== 'second-backend')
     .map((p) => ledgerTip(tipLane, p.key))
     .filter((t): t is CreatedTip => t !== null);
-  test.skip(genuine.length === 0, 'no person tip to bob was created in this run');
+  // A tip whose delivery the relay refused never reaches the Inbox (its send
+  // test failed for that); its forgery check still runs against the others.
+  for (const t of created.filter((x) => x.deliveryRefused)) {
+    test.info().annotations.push({ type: 'not in the Inbox', description: `${t.key}: delivery refused (${t.deliveryRefused})` });
+  }
+  const genuine = created.filter((t) => !t.deliveryRefused);
+  test.skip(created.length === 0, 'no person tip to bob was created in this run');
   const forged = tipLane.ledger.forgeries();
   test.skip(forged.length < 2, 'the forge test did not publish both wraps (see it)');
 
@@ -352,6 +358,12 @@ for (const plan of PERSON_TIPS.filter((p) => CONFIRMING_ASSETS.includes(p.asset)
     const first = await publicTip(tip.tipId);
     const samples = await waitForPublicTip(tip.tipId, pastGate, 150 * MINUTE, 'its confirmation gate');
     expectConfirmationsRose(first ? [first, ...samples] : samples);
+    if (tip.deliveryRefused) {
+      // Never delivered (its send test failed for that): the confirmations are
+      // proven here, and the claim goes through the fallback link.
+      test.info().annotations.push({ type: 'not in the Inbox', description: `delivery refused (${tip.deliveryRefused})` });
+      return;
+    }
     await expectInboxTip(tipLane, tipLane.bob, tip, { claimable: true, timeoutMs: 15 * MINUTE });
   });
 }
@@ -365,7 +377,14 @@ for (const plan of [...PERSON_TIPS, ...FEDERATED_TIPS]) {
     await waitForPublicTip(tip.tipId, pastGate, 150 * MINUTE, 'its confirmation gate');
     const claimer = await claimerOf(tipLane, tip);
     const before = await showHoldings(tipLane, claimer, plan.asset, `${TICKER[plan.asset]} balance before the claim`);
-    await claimFromInbox(tipLane, claimer, tip);
+    if (tip.deliveryRefused) {
+      // The relay refused the private delivery, so the Inbox never shows this
+      // tip: bob claims it the way the wallet tells the sender to, by the link.
+      test.info().annotations.push({ type: 'claimed by link', description: `delivery refused (${tip.deliveryRefused})` });
+      await claimLink(tipLane, claimer, tip);
+    } else {
+      await claimFromInbox(tipLane, claimer, tip);
+    }
     await expectCredited(tipLane, claimer, tip, before, `${TICKER[plan.asset]} received by bob`);
     expect(['claiming', 'claimed']).toContain((await publicTip(tip.tipId))?.status);
   });

@@ -713,6 +713,13 @@ async function review(
   if (isCryptonote(asset)) {
     await expect(page.locator('#root')).not.toContainText('Estimating…', { timeout: 30_000 });
   }
+  if (asset === 'btc' || asset === 'ltc') {
+    // Review fetches the tier's rate again and shows "normal (loading…)" until
+    // it lands, so read the row only once the rate is there.
+    await expect
+      .poll(async () => (await readReviewRows(page))['Fee tier'] ?? '', { timeout: 60_000, message: 'Review never showed the fee rate' })
+      .toMatch(/^normal \([\d.]+ sat\/vB\)$/);
+  }
   const rows = await readReviewRows(page);
   expect(rows.Asset, 'Review names the coin').toBe(`${DISPLAY_NAME[asset]} (${ticker})`);
   expect(rows.Amount, 'Review shows the amount').toBe(fromAtomic(asset, amountAtomic, 8));

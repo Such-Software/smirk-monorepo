@@ -11,7 +11,7 @@
  * is written to the lane's ledger as soon as its id is known, so a failure
  * later in the run never strands it (see C-tips-ledger.ts).
  */
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { BACKEND_URL } from './extension.js';
 import type { LiveWallet, TipLane, WalletName } from './C-tips-live.js';
 import { rescueMode, walletPassword } from './C-tips-live.js';
@@ -97,6 +97,8 @@ export interface CreatedTip {
   readonly memo?: string;
   readonly expiryDays: 1 | 7 | 30;
   readonly submittedAtMs: number;
+  /** Set when the relay refused this person tip's delivery (see the ledger). */
+  readonly deliveryRefused?: string;
 }
 
 export interface Holdings {
@@ -127,6 +129,7 @@ export function tipFromLedger(lane: TipLane, record: LedgerTip): CreatedTip {
     ...(record.memo ? { memo: record.memo } : {}),
     expiryDays: record.expiryDays,
     submittedAtMs: record.submittedAtMs,
+    ...(record.deliveryRefused ? { deliveryRefused: record.deliveryRefused } : {}),
   };
 }
 
@@ -540,6 +543,7 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
   expect(prefix, 'the success screen names the tip id').toMatch(/^[0-9a-f-]{12}$/i);
 
   let link: SecretLink | null = null;
+  let deliveryRefused: string | null = null;
   const pendingLink = CONFIRMING_ASSETS.includes(plan.asset);
   if (person && plan.deliveryFails) {
     // Funds left the wallet before delivery ran: a funded tip, a warning, and
@@ -551,9 +555,19 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
     link = await readLink(lane, shareUrl, prefix);
   } else if (person) {
     await expect(page.getByTestId('tip-success-detail')).toContainText(`Delivered privately to ${person.entry.display}`);
-    await expect(page.getByTestId('tip-delivery-warning')).toHaveCount(0);
-    // A delivered person tip never shows its link.
-    await expect(page.getByTestId('tip-share-url')).toHaveCount(0);
+    const warning = page.getByTestId('tip-delivery-warning');
+    if (await warning.isVisible().catch(() => false)) {
+      // The relay refused the private delivery of a funded tip. That fails this
+      // test (softly, below), and the run goes on: the recipient claims through
+      // the fallback link, so the funds still circulate and the rest is proven.
+      const said = ((await warning.innerText()) ?? '').replace(/\s+/g, ' ');
+      deliveryRefused = said.match(/failed \(([^)]{1,160})\)/)?.[1] ?? 'the wallet reported a failed delivery';
+      const shareUrl = page.getByTestId('tip-share-url');
+      if (await shareUrl.isVisible().catch(() => false)) link = await readLink(lane, shareUrl, prefix);
+    } else {
+      // A delivered person tip never shows its link.
+      await expect(page.getByTestId('tip-share-url')).toHaveCount(0);
+    }
   } else if (pendingLink) {
     // XMR, WOW and GRIN: the link stays hidden until funding confirms.
     await expect(page.getByTestId('tip-share-pending')).toContainText('Waiting for funding to confirm');
@@ -572,6 +586,11 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
   const tipId = (await created) ?? (await findTipIdByPrefix(lane, w, prefix));
   record(tipId);
   expect(tipId.startsWith(prefix), 'the created tip is the one on the success screen').toBe(true);
+  if (deliveryRefused) {
+    lane.ledger.markDeliveryRefused(tipId, deliveryRefused);
+    test.info().annotations.push({ type: 'delivery refused', description: `${plan.label}: ${deliveryRefused}` });
+    expect.soft(deliveryRefused, 'the relay refused the person tip\'s private delivery; it falls back to its link').toBeNull();
+  }
   if (link) {
     expect(link.reveal().includes(`/tip/${tipId}#`), 'the link names this tip').toBe(true);
     lane.links.set(tipId, link);

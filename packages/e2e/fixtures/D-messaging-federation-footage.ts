@@ -379,6 +379,9 @@ export class DFootage {
     const ms = this.opts.shortHolds ? SHORT_HOLD_MS : policyMs;
     const startedAt = Date.now();
     await sleep(ms);
+    // A timer can fire a millisecond early by the wall clock; the owner's
+    // policy is a floor, so top the hold up until it is not short.
+    while (Date.now() - startedAt < ms) await sleep(ms - (Date.now() - startedAt));
     this.holdLog.push({ kind, label, startedAt, ms: Date.now() - startedAt, policyMs });
   }
 

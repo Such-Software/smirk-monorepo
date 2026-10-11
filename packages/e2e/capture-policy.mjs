@@ -20,12 +20,36 @@ export function assertPrivateCapture(options = {}, env = process.env) {
   }
 }
 
+/**
+ * The source position an error points at, as `file:line`: its location, else
+ * the first stack frame in this suite's own code. Only frame lines are read
+ * (the message lines before them may hold values), and only a file name and a
+ * line number come out, so the result can be printed by the private reporter.
+ */
+export function failureSite(error) {
+  const location = error?.location;
+  if (location?.file && Number.isInteger(location.line)) return `${location.file.split(/[\\/]/).pop()}:${location.line}`;
+  for (const line of String(error?.stack ?? '').split('\n')) {
+    if (!/^\s*at\s/.test(line) || /node_modules|node:|playwright-core/.test(line)) continue;
+    const frame = line.match(/([\w.-]+\.(?:ts|mts|mjs|js)):(\d+):\d+\)?\s*$/);
+    if (frame) return `${frame[1]}:${frame[2]}`;
+  }
+  return null;
+}
+
 export function sanitizeTestErrors(testInfo) {
+  const sites = [];
   for (let i = 0; i < testInfo.errors.length; i++) {
     const location = testInfo.errors[i].location;
+    const site = failureSite(testInfo.errors[i]);
+    if (site && !sites.includes(site)) sites.push(site);
     testInfo.errors[i] = {
       message: 'Wallet check failed. Browser call logs, assertion values and page snapshots are withheld because they may contain secrets.',
       ...(location ? { location } : {}),
     };
+  }
+  // The reporter prints these source positions; the stack itself is dropped.
+  if (sites.length && Array.isArray(testInfo.annotations)) {
+    testInfo.annotations.push({ type: 'failed-at', description: sites.join(', ') });
   }
 }
