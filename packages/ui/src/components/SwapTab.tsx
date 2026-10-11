@@ -1645,10 +1645,12 @@ export function DepositStep({
       >
         <div style={{ fontSize: 13, fontWeight: 600 }}>Send to the deposit address</div>
         <Row label="Amount">
-          {(() => {
-            const a = safeAtomicBigInt(swap.fromAmountAtomic, 'DepositStep.fromAmountAtomic');
-            return a !== null ? formatAmountWithTicker(a, from.id) : '—';
-          })()}
+          <span data-testid="swap-deposit-amount">
+            {(() => {
+              const a = safeAtomicBigInt(swap.fromAmountAtomic, 'DepositStep.fromAmountAtomic');
+              return a !== null ? formatAmountWithTicker(a, from.id) : '—';
+            })()}
+          </span>
         </Row>
         {/* The figure this deposit was quoted at, which can differ from the
             estimate on the previous screen: the confirm re-quotes. */}

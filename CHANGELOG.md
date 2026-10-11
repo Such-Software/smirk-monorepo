@@ -21,6 +21,11 @@ the public `smirk-backend-core` repo and aren't echoed here.
   load, Review and Compose retry a few times and then say why, with a Retry
   button, instead of leaving Send or Continue disabled with no explanation.
   Background refreshes no longer restart the fee request while you review.
+- Swaps: "Open Send → pre-filled" on a swap's deposit step could open Send
+  empty, on its coin chooser, instead of on the deposit amount with the
+  deposit address and swap instruction filled in. The wallet's saved screen
+  state could revert a change it had just made when several were saved in
+  quick succession; it no longer does.
 
 ## [0.3.1] - 2026-10-09
 

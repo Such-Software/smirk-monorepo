@@ -346,6 +346,22 @@ export async function reviewValue(page: Page, label: string): Promise<string | n
   return bounded(page.evaluate(reviewRow, label), 10_000);
 }
 
+/**
+ * The deposit amount the swap's deposit step shows, in atomic units. For
+ * THORChain this is the binding quote's (Confirm quotes again with the
+ * destination, and that quote is what gets sent). Builds before 0.3.2 carry
+ * no test id on the row, so its text is read instead.
+ */
+export async function depositAmount(w: LiveWallet, coin: Coin): Promise<bigint> {
+  const cell = w.page.getByTestId('swap-deposit-amount');
+  const text = (await cell.count()) > 0
+    ? ((await cell.textContent({ timeout: 10_000 })) ?? '')
+    : ((await rootText(w.page)).match(/Send to the deposit address\s+Amount\s+([^\n]+)/)?.[1] ?? '');
+  const m = text.match(new RegExp(`([\\d.,]+)\\s*${COINS[coin].ticker}`));
+  if (!m?.[1]) throw new Error(`the deposit step shows no ${COINS[coin].ticker} amount`);
+  return toAtomic(m[1], coin);
+}
+
 /** The deposit the provider quoted, as Send must show it before the tap. */
 export interface ExpectedDeposit {
   /** Decimal amount the Send screen must be prefilled with. */
@@ -386,7 +402,12 @@ export async function sendPrefilled(
   onSend: { before: () => void; after: (txid: string) => void },
 ): Promise<{ txid: string; to: string }> {
   const amount = w.page.getByTestId('send-amount-input');
-  await expect(amount).toBeVisible({ timeout: 60_000 });
+  // Send opens either on its amount step (the deposit handed over) or, when
+  // the handoff lost the deposit, on its coin chooser. Each outcome fails on
+  // its own line: the private reporter keeps only the line.
+  const chooser = w.page.locator('[data-testid^="send-asset-"]').first();
+  await expect(amount.or(chooser)).toBeVisible({ timeout: 60_000 });
+  expect(await chooser.isVisible(), 'Send opened on its coin chooser: the swap deposit was not handed over').toBe(false);
   await w.footage.settled('send prefilled with the swap deposit');
   expect(toAtomic(await amount.inputValue({ timeout: 10_000 }), coin), 'the Send amount is the quoted deposit').toBe(toAtomic(expected.amount, coin));
   await w.footage.tap('continue to review', w.page.getByTestId('send-compose-continue'));
