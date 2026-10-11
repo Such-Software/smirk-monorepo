@@ -60,6 +60,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deriveNostrIdentity } from '@smirk/core';
 import { test as privateTest } from './private-test.js';
+import { watchContext } from './failure-context.js';
+import { recoverToHome } from './wallet-recovery.js';
 import { isLocalPublishRelay, liveRelayAdmits, relayKey } from './relay-guard.js';
 import { readCapabilities } from './D-messaging-federation-nostr.js';
 import {
@@ -599,6 +601,7 @@ async function unlockProfile(
   context: BrowserContext,
   extensionId: string,
   password: string,
+  name: DWalletName,
 ): Promise<{ page: Page; resetBackend: boolean }> {
   const page = await context.newPage();
   const lock = page.getByTestId('lockscreen-password-input');
@@ -638,13 +641,18 @@ async function unlockProfile(
       await expect(nav).toBeVisible({ timeout: 180_000 });
     }
     stage = 'home';
+    // The wallet restores the screen its last test left (a conversation, a
+    // Send draft, Settings): bring it back to Home's root, bounded, and note
+    // what it found in the private log.
+    const { reached } = await recoverToHome(page, { wallet: name });
+    if (reached !== 'home') throw new Error(`the wallet shows ${reached}, not Home`);
     const total = page.getByTestId('home-total-balance');
-    if (!(await total.isVisible())) await page.getByTestId('nav-tab-home').click();
     await total.waitFor({ timeout: 120_000 });
     await expect.poll(async () => (await total.textContent()) ?? '', { timeout: 120_000 }).toMatch(/\d/);
     return { page, resetBackend };
-  } catch {
-    throw new Error(`live lane: unlocking the run's profile stopped at the ${stage} stage`);
+  } catch (error) {
+    // Stage only; the original stays the cause, so the private log can name its class.
+    throw new Error(`live lane: unlocking the run's profile stopped at the ${stage} stage`, { cause: error });
   }
 }
 
@@ -722,12 +730,14 @@ async function openWallet(
     // step instead of waiting out the two-hour test budget.
     context.setDefaultTimeout(90_000);
     context.setDefaultNavigationTimeout(90_000);
+    // Request shapes and screen test ids for the private failure log; no values.
+    watchContext(name, context);
     const relayGuard = await installRelayGuard(context, deps.pins);
     let [worker] = context.serviceWorkers();
     if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 30_000 });
     const extensionId = new URL(worker.url()).host;
     const { page, resetBackend } = reuse
-      ? await unlockProfile(context, extensionId, password)
+      ? await unlockProfile(context, extensionId, password, name)
       : { page: await importIntoProfile(context, extensionId, words, password), resetBackend: false };
     words.fill('');
     if (!reuse) writeFileSync(marker, 'imported\n', { mode: 0o600 });

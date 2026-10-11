@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AUTO_CLOSE_TAPS, HOLD, holdRefusals } from './E-swaps-policy.mjs';
+import { HOLD_TOLERANCE_MS } from './hold-timer.mjs';
 
 /** Consecutive holds, 100 ms apart, as [kind, label, ms, extra?]. */
 function timeline(specs, closed = true) {
@@ -32,9 +33,23 @@ test('taps, typed fields, settled screens and results in policy are admitted', (
 
 test('a hold shorter than its policy is refused, whatever its kind', () => {
   for (const [kind, ms] of [['tap', HOLD.preTapMs], ['type', HOLD.preTapMs], ['settled', HOLD.settledMs], ['result', HOLD.resultMs]]) {
-    assert.notDeepEqual(holdRefusals(timeline([[kind, 'a screen', ms - 1]], false)), [], kind);
+    // Asked for the full policy, measured short by more than a timer tick.
+    assert.notDeepEqual(holdRefusals(timeline([[kind, 'a screen', ms - HOLD_TOLERANCE_MS - 1, { requiredMs: ms }]], false)), [], kind);
     assert.deepEqual(holdRefusals(timeline([[kind, 'a screen', ms], ...(kind === 'tap' || kind === 'type' ? [settled('after')] : [])])), [], kind);
   }
+});
+
+test('a hold a timer tick short of its policy is admitted, but never a weaker policy', () => {
+  // The run that found this: a 5999 ms tap hold and an 11999 ms settle, each
+  // a correct sleep that the event loop's clock woke a millisecond early.
+  const ticks = timeline([
+    ['tap', 'open the Swap tab', HOLD.preTapMs - 1, { requiredMs: HOLD.preTapMs }],
+    ['settled', 'Swap tab', HOLD.settledMs - 1, { requiredMs: HOLD.settledMs }],
+  ]);
+  assert.deepEqual(holdRefusals(ticks), []);
+  const weaker = timeline([['tap', 'open the Swap tab', HOLD.preTapMs], settled('Swap tab')]);
+  weaker.holds[0].requiredMs = HOLD.preTapMs - 1;
+  assert.notDeepEqual(holdRefusals(weaker), []);
 });
 
 test('a screen reached by an action and never held settled is refused', () => {

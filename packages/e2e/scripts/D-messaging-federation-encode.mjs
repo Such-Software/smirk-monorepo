@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { heldLongEnough } from '../fixtures/hold-timer.mjs';
 
 const WALLETS = ['alice', 'bob', 'carol'];
 const FORMAT = 'smirk-e2e-guarded-footage/1';
@@ -75,7 +76,7 @@ export function validateTimeline(timeline, dir) {
     }
   }
   for (const hold of timeline.holds) {
-    if (typeof hold.ms !== 'number' || typeof hold.policyMs !== 'number' || hold.ms + 50 < hold.policyMs) {
+    if (typeof hold.ms !== 'number' || typeof hold.policyMs !== 'number' || !heldLongEnough(hold.ms, hold.policyMs)) {
       throw new Error(`a ${hold.kind} hold is shorter than the video policy; refusing to encode`);
     }
   }

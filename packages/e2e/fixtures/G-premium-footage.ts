@@ -31,6 +31,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { MASK_SELECTORS, PREMIUM_GUARD, frameVerdict, type FrameVerdictKind } from './G-premium-guard.mjs';
+import { sleepAtLeast } from './hold-timer.mjs';
+import { noteStep } from './failure-context.js';
 
 /** Static pause before every tap or entry, so each action reads on video. */
 export const TAP_PAUSE_MS = 6_000;
@@ -342,11 +344,8 @@ export class GuardedFootage {
 
   async #pause(ms: number): Promise<number> {
     const from = Date.now();
-    const target = this.recording ? ms : UNRECORDED_PAUSE_MS;
-    await sleep(target);
-    // A timer can fire a millisecond early by the wall clock, and the encoder
-    // refuses a hold even 1 ms short of the policy: top it up until it is not.
-    while (Date.now() - from < target) await sleep(target - (Date.now() - from));
+    // Never a timer tick short: processing compares this with the policy.
+    await sleepAtLeast(this.recording ? ms : UNRECORDED_PAUSE_MS);
     return Date.now() - from;
   }
 
@@ -363,6 +362,7 @@ export class GuardedFootage {
 
   /** Hold the screen still, check it, then tap. */
   async tap(target: Locator, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     const page = target.page();
     await target.waitFor({ state: 'visible', timeout: 60_000 });
@@ -383,6 +383,7 @@ export class GuardedFootage {
    * tapping, when the control is already gone.
    */
   async tapThenHold(target: Locator, label: string): Promise<boolean> {
+    noteStep(label);
     assertStaticLabel(label);
     const page = target.page();
     if (!(await target.isVisible().catch(() => false))) return false;
@@ -399,6 +400,7 @@ export class GuardedFootage {
 
   /** Hold, then type non-secret text. A known secret here is a spec bug. */
   async type(target: Locator, text: string, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     if (this.canary.hit(text, [])) throw new Error(`Refusing "${label}": that text is a known secret; use a secret scope.`);
     const page = target.page();
@@ -413,6 +415,7 @@ export class GuardedFootage {
 
   /** Hold, then close a window the run opened (a checkout tab, a second window). */
   async closePage(page: Page, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     this.focus(page);
     const from = Date.now();
@@ -423,6 +426,7 @@ export class GuardedFootage {
 
   /** Wait for loading indicators to clear, then hold the settled screen. */
   async settled(page: Page, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     this.focus(page);
     await page.locator('#root').filter({ hasText: /Updating…|Loading/ })
@@ -434,6 +438,7 @@ export class GuardedFootage {
 
   /** Hold a key result on screen. */
   async result(page: Page, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     this.focus(page);
     const from = Date.now();

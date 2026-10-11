@@ -24,6 +24,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
+import { heldLongEnough } from '../fixtures/hold-timer.mjs';
 
 export const MIN_HOLD_MS = Object.freeze({ tap: 6_000, type: 6_000, close: 6_000, settled: 12_000, result: 25_000 });
 const VERDICTS = new Set(['clean', 'masked', 'card']);
@@ -79,7 +80,7 @@ export function validateTimeline(timeline, runDir, exists = existsSync) {
   for (const hold of timeline.holds ?? []) {
     const minimum = MIN_HOLD_MS[hold.kind];
     if (minimum === undefined) problems.push('a hold has an unknown kind');
-    else if (!(hold.ms >= minimum)) problems.push(`a ${hold.kind} hold lasted ${hold.ms} ms, under the ${minimum} ms policy`);
+    else if (!heldLongEnough(hold.ms, minimum)) problems.push(`a ${hold.kind} hold lasted ${hold.ms} ms, under the ${minimum} ms policy`);
     if (!staticLabel(hold.label)) problems.push('a hold has an unsafe label');
     if (hold.after !== undefined && (hold.after !== true || hold.kind !== 'tap')) problems.push('only a tap may hold after itself');
   }

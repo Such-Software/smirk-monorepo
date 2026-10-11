@@ -26,6 +26,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { test as base } from './private-test.js';
 import { ACTION_TIMEOUT_MS, GuardedFootage, assertStaticLabel, surfaceOf, waitForQuiet } from './guarded-footage.js';
+import { watchContext } from './failure-context.js';
+import { recoverToHome } from './wallet-recovery.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -397,6 +399,8 @@ export class LiveWallets {
       try { contacted.add(new URL(url).hostname); } catch { contacted.add('unparseable'); }
     });
     this.footage.watch(context, wallet);
+    // Request shapes and screen test ids for the private failure log; no values.
+    watchContext(label, context);
     let [worker] = context.serviceWorkers();
     if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 30_000 });
     const extensionId = new URL(worker.url()).host;
@@ -665,16 +669,34 @@ export async function tabRoot(footage: GuardedFootage, page: Page, tab: 'home' |
   await footage.settled(page, `${tab} tab`);
 }
 
-/** A usable wallet page on Home, held settled: reopened if closed, unlocked if locked. */
+/**
+ * Recorded moves take the owner's holds (a settle and a pre-tap pause each),
+ * so a recorded recovery gets this long; an unrecorded one, its default.
+ */
+const RECORDED_RECOVERY_MS = 5 * 60_000;
+
+/**
+ * A usable wallet page on Home's root, held settled: reopened if closed,
+ * unlocked if locked, and brought back from whatever screen the wallet
+ * restored (fixtures/wallet-recovery.ts), every move a recorded tap.
+ */
 export async function openHome(footage: GuardedFootage, wallet: LiveWallet): Promise<Page> {
   let page = wallet.profile.page;
   if (page.isClosed() || surfaceOf(page.url()) !== 'wallet') page = await wallet.profile.openPage();
-  const lock = page.getByTestId('lockscreen-root');
-  const nav = page.getByTestId('bottom-nav');
-  await expect(lock.or(nav).first()).toBeVisible({ timeout: 60_000 });
-  if (await lock.isVisible().catch(() => false)) await unlock(footage, wallet, page);
-  await expect(nav).toBeVisible({ timeout: 60_000 });
-  await tabRoot(footage, page, 'home');
+  const recover = () =>
+    recoverToHome(page, {
+      wallet: wallet.name,
+      budgetMs: RECORDED_RECOVERY_MS,
+      tap: (target, label) => footage.tap(target, label),
+      press: (target, key, label) => footage.press(target, key, label),
+    });
+  let { reached } = await recover();
+  if (reached === 'locked') {
+    await unlock(footage, wallet, page);
+    ({ reached } = await recover());
+  }
+  if (reached !== 'home') throw new Error(`${wallet.name} shows ${reached}, not Home`);
+  await footage.settled(page, 'home tab');
   return page;
 }
 

@@ -29,8 +29,10 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { heldLongEnough } from '../fixtures/hold-timer.mjs';
 
 const POLICY = { 'pre-tap': 6_000, settled: 12_000, result: 25_000 };
+/** Slack when lining a hold up with the step it belongs to; hold lengths use hold-timer.mjs. */
 const TOLERANCE_MS = 25;
 const FPS = 30;
 const BAR = 120;
@@ -61,7 +63,7 @@ export function auditTimeline(timeline, walletDir) {
   for (const hold of holds) {
     const min = POLICY[hold.kind];
     if (min === undefined) problems.push(`unknown hold kind ${String(hold.kind).slice(0, 20)}`);
-    else if (!(hold.plannedMs >= min) || !(hold.until - hold.from >= min - TOLERANCE_MS)) {
+    else if (!(hold.plannedMs >= min) || !heldLongEnough(hold.until - hold.from, min)) {
       problems.push(`a ${hold.kind} hold lasted ${hold.until - hold.from} ms, below the ${min} ms policy`);
     }
   }

@@ -82,6 +82,8 @@ import {
   type WalletFootage,
 } from './B-send-receive-history-footage.js';
 import { LANE, laneDirs, workspaceDist } from './B-send-receive-history-dirs.js';
+import { watchContext } from './failure-context.js';
+import { WalletRecoveryError, recoverToHome } from './wallet-recovery.js';
 
 export { LANE };
 export const LIVE_LANE = process.env.E2E_LIVE === '1';
@@ -260,21 +262,14 @@ async function describeStuckScreen(page: Page): Promise<string> {
   return `visible test ids: ${ids.join(', ') || 'none'}; screen text: ${text}`;
 }
 
-/** Wait for Home to show a real balance set from the backend. */
+/**
+ * Wait for Home to show a real balance set from the backend. A reopened
+ * profile is brought back to Home first (reopenWallet, through
+ * fixtures/wallet-recovery.ts, which also backs out of a Send draft a failed
+ * test left open); a fresh import has no restored screen.
+ */
 async function awaitHome(page: Page): Promise<void> {
   const total = page.getByTestId('home-total-balance');
-  // A send a failed test left open persists as a draft, and the reopened wallet
-  // shows it instead of Home. Back out of it the way a user would: the header
-  // control is Back on every step after the first and Cancel on the first.
-  // Each press keeps the owner's 6 s still before a tap.
-  const header = page.getByTestId('send-wizard-header-back');
-  for (let i = 0; i < 6; i++) {
-    await total.or(header).first().waitFor({ timeout: 10 * 60_000 }).catch(() => {});
-    if ((await total.isVisible().catch(() => false)) || !(await header.isVisible().catch(() => false))) break;
-    await page.waitForTimeout(6_000);
-    await header.click();
-    await page.waitForTimeout(12_000);
-  }
   // A returning wallet may solve proof of work and rescan before Home shows.
   await total.waitFor({ timeout: 10 * 60_000 }).catch(async () => {
     throw new Error(`the wallet did not reach Home: ${await describeStuckScreen(page)}`);
@@ -318,19 +313,28 @@ async function importWallet(
 /**
  * Reopen this run's profile: the wallet is already imported, so unlock it
  * with the derived password. False when the profile turns out not to hold a
- * wallet this password opens (onboarding shows, or the unlock is refused).
+ * wallet this password opens (onboarding shows, no wallet screen appears, or
+ * the unlock is refused).
+ *
+ * The wallet restores the screen its last test left (a Send draft on Review,
+ * a coin screen, Settings). That screen is brought back to Home's root, and
+ * reported in the private log, within a minute; it used to be taken for "not
+ * this wallet", which deleted the profile and its send records and spent a
+ * restore on importing it again.
  */
-async function reopenWallet(page: Page, extensionId: string, password: string): Promise<boolean> {
+async function reopenWallet(page: Page, extensionId: string, password: string, name: WalletName): Promise<boolean> {
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   const lock = page.getByTestId('lockscreen-password-input');
-  const home = page.getByTestId('home-total-balance');
-  const onboarding = page.getByTestId('onboarding-import-btn');
-  const shown = await lock.or(home).or(onboarding).first().waitFor({ timeout: 60_000 }).then(
-    () => true,
-    () => false,
-  );
-  if (!shown || (await onboarding.isVisible().catch(() => false))) return false;
-  if (await lock.isVisible().catch(() => false)) {
+  let opened: Awaited<ReturnType<typeof recoverToHome>>;
+  try {
+    opened = await recoverToHome(page, { wallet: name });
+  } catch (error) {
+    if (error instanceof WalletRecoveryError && error.reason === 'no-surface') return false;
+    throw error;
+  }
+  if (opened.reached === 'onboarding') return false;
+  if (opened.reached === 'bootstrap-error') throw new Error('the wallet did not reach Home: it opened on its sign-in error screen');
+  if (opened.reached === 'locked') {
     await lock.fill(password);
     await page.getByTestId('lockscreen-unlock-btn').click();
     // Unlocked (the lock screen goes) or refused (it shows an error); either
@@ -347,6 +351,9 @@ async function reopenWallet(page: Page, extensionId: string, password: string): 
       ),
     ]);
     if (!unlocked) return false;
+    // Signing in may solve proof of work before the restored screen shows.
+    const after = await recoverToHome(page, { wallet: name, firstPaintMs: 3 * 60_000 });
+    if (after.reached !== 'home') throw new Error(`the wallet did not reach Home after unlocking: it shows ${after.reached}`);
   }
   await awaitHome(page);
   return true;
@@ -383,7 +390,7 @@ interface OpenedProfile {
   broadcasts: BroadcastMonitor;
 }
 
-async function launchProfile(profile: string, extensionDir: string, grinTip: ChainTip): Promise<OpenedProfile> {
+async function launchProfile(profile: string, extensionDir: string, grinTip: ChainTip, name: WalletName): Promise<OpenedProfile> {
   privateDir(profile);
   clearProfileLocks(profile);
   const context = await chromium.launchPersistentContext(profile, {
@@ -399,6 +406,8 @@ async function launchProfile(profile: string, extensionDir: string, grinTip: Cha
     );
   }
   context.on('response', (response) => grinTip.watch(response));
+  // Request shapes and screen test ids for the private failure log; no values.
+  watchContext(name, context);
   const broadcasts = await BroadcastMonitor.attach(context, 'observe');
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 60_000 });
@@ -464,7 +473,7 @@ export const test = base.extend<{}, { live: LiveLane }>({
           let marker = readMarker(markerFile);
           if (!marker) rmSync(profile, { recursive: true, force: true });
 
-          let opened = await launchProfile(profile, extension.dir, grinTip);
+          let opened = await launchProfile(profile, extension.dir, grinTip, name);
           contexts.push(opened.context);
 
           const started = Date.now();
@@ -476,7 +485,7 @@ export const test = base.extend<{}, { live: LiveLane }>({
           let reused = false;
           try {
             if (marker && marker.extensionId === opened.extensionId) {
-              reused = await reopenWallet(opened.page, opened.extensionId, password);
+              reused = await reopenWallet(opened.page, opened.extensionId, password, name);
             }
             if (reused) {
               profileId = marker!.profileId;
@@ -489,7 +498,7 @@ export const test = base.extend<{}, { live: LiveLane }>({
                 rmSync(profile, { recursive: true, force: true });
                 rmSync(markerFile, { force: true });
                 marker = null;
-                opened = await launchProfile(profile, extension.dir, grinTip);
+                opened = await launchProfile(profile, extension.dir, grinTip, name);
                 contexts.push(opened.context);
               }
               await importWallet(opened.page, opened.extensionId, words, password);
@@ -503,7 +512,9 @@ export const test = base.extend<{}, { live: LiveLane }>({
             const message =
               error instanceof Error && /^the wallet (did not reach Home|never loaded)/.test(error.message)
                 ? error.message
-                : 'opening the wallet failed before Home (details withheld)';
+                : error instanceof WalletRecoveryError
+                  ? `the wallet did not reach Home: ${error.message}`
+                  : 'opening the wallet failed before Home (details withheld)';
             progress(`${name}: ${message}`);
             throw error;
           } finally {

@@ -67,6 +67,9 @@
  *     release/chrome/          the verified, unpacked staged Chrome zip
  *     phases/<phase>.json      every attempt: start, end, exit codes, decisions
  *     logs/<phase>-<n>.log     the lane's own output (outcomes and progress)
+ *     logs/<phase>-<n>.private.jsonl  why each test failed, by shape only
+ *                              (fixtures/failure-record.mjs), and every wallet
+ *                              the lane brought back Home on reopening
  *     <area>/                  that lane's footage, video, ledgers and evidence
  *     summary.json             every phase's state and where its video is
  *
@@ -156,6 +159,7 @@ const LANE_OWNED = Object.freeze([
   'E2E_LIVE_RUN_DIR',
   'E2E_REPORTS_DIR',
   'E2E_LIVE_RUN_ID',
+  'E2E_PRIVATE_LOG',
 ]);
 
 const FONTS = ['/System/Library/Fonts/Supplemental/Arial Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'];
@@ -777,6 +781,9 @@ async function runPhase(phase, ctx) {
   const phaseCtx = { ...ctx, attemptId: `${startedAt}`, attemptStartedAt: startedAt };
   const env = phaseEnv(phase, phaseCtx);
   const logPath = join(privateDir(join(ctx.runDir, 'logs')), `${phase.id}-${attempt}.log`);
+  // The private reporter's failure explanations (classes, step labels, screen
+  // test ids, request shapes, recoveries; never values), beside the phase log.
+  env.E2E_PRIVATE_LOG = join(ctx.runDir, 'logs', `${phase.id}-${attempt}.private.jsonl`);
   const log = createWriteStream(logPath, { mode: 0o600 });
   const record = { attempt, startedAt: new Date(startedAt).toISOString(), decisions: ctx.decisions, commands: [], log: logPath };
   status.status = 'running';

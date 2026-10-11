@@ -54,6 +54,7 @@ import {
   describeViolations,
   type HoldKind,
 } from './footage-policy.mjs';
+import { noteStep } from './failure-context.js';
 
 /** The owner's dead-air policy and its timeline check live in footage-policy.mjs. */
 export { HOLD_MS, type HoldKind };
@@ -462,12 +463,14 @@ export class GuardedFootage {
 
   /** Wait for loading text to clear, then hold for the settled period. */
   async settled(page: Page, label: string): Promise<void> {
+    noteStep(label);
     await waitForQuiet(page);
     await this.hold('settled', label, page);
   }
 
   /** Wait for loading text to clear, then hold a key result on screen. */
   async result(page: Page, label: string): Promise<void> {
+    noteStep(label);
     await waitForQuiet(page);
     await this.hold('result', label, page);
   }
@@ -504,6 +507,7 @@ export class GuardedFootage {
 
   /** The only way a live spec clicks: wait for the target, settle, pause, then click. */
   async tap(target: Locator, label: string, options: { force?: boolean } = {}): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await target.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
     await target.scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS }).catch(() => {});
@@ -522,6 +526,7 @@ export class GuardedFootage {
 
   /** Choose an option of a select element, after the settle and the pre-tap pause. */
   async choose(target: Locator, value: string, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await target.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
     await this.beforeInteraction(target.page(), label);
@@ -531,6 +536,7 @@ export class GuardedFootage {
 
   /** Type ordinary, non-secret text (a handle). Refuses a known secret. */
   async type(target: Locator, text: string, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     if (this.canary.hit({ values: [text], text })) {
       throw new Error('Refusing to type a known secret in the open; use footage.secret with secretFill.');
@@ -543,6 +549,7 @@ export class GuardedFootage {
 
   /** Fill a secret. Allowed only inside `secret(...)`, so no frame shows it. */
   async secretFill(target: Locator, value: string, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     if (!this.secretCaption()) throw new Error('secretFill runs only inside footage.secret(...).');
     await target.fill(value, { timeout: ACTION_TIMEOUT_MS });
@@ -550,6 +557,7 @@ export class GuardedFootage {
 
   /** Press a key on the page, after the settle and the pre-tap pause. */
   async press(page: Page, key: string, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await this.beforeInteraction(page, label);
     this.interaction('press', page, label);

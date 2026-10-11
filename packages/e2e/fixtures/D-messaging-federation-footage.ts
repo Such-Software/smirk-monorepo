@@ -37,6 +37,8 @@ import type { Locator, Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { heldLongEnough, sleepAtLeast } from './hold-timer.mjs';
+import { noteStep } from './failure-context.js';
 
 /** Hold durations required by the owner's video policy (milliseconds). */
 export const D_HOLD = Object.freeze({
@@ -296,6 +298,7 @@ export class DFootage {
 
   /** Hold the screen static, then tap. */
   async tap(locator: Locator, label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await locator.waitFor({ state: 'visible', timeout: 60_000 });
     await this.hold('tap', label, D_HOLD.BEFORE_TAP_MS);
@@ -324,6 +327,7 @@ export class DFootage {
    * frame, a label or the timeline.
    */
   async type(locator: Locator, text: string, label: string, opts: { secret?: boolean } = {}): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await locator.waitFor({ state: 'visible', timeout: 60_000 });
     await this.hold('tap', label, D_HOLD.BEFORE_TAP_MS);
@@ -339,6 +343,7 @@ export class DFootage {
 
   /** Wait until nothing is loading or updating, then hold the settled screen. */
   async settled(label: string, patienceMs = 60_000): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await this.page
       .locator('#root')
@@ -350,6 +355,7 @@ export class DFootage {
 
   /** Hold a key result on screen. */
   async result(label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await this.hold('result', label, D_HOLD.RESULT_MS);
   }
@@ -378,10 +384,8 @@ export class DFootage {
   private async hold(kind: HoldKind, label: string, policyMs: number): Promise<void> {
     const ms = this.opts.shortHolds ? SHORT_HOLD_MS : policyMs;
     const startedAt = Date.now();
-    await sleep(ms);
-    // A timer can fire a millisecond early by the wall clock; the owner's
-    // policy is a floor, so top the hold up until it is not short.
-    while (Date.now() - startedAt < ms) await sleep(ms - (Date.now() - startedAt));
+    // Never a timer tick short: the encoder compares this with the policy.
+    await sleepAtLeast(ms);
     this.holdLog.push({ kind, label, startedAt, ms: Date.now() - startedAt, policyMs });
   }
 
@@ -508,7 +512,7 @@ export function assertHoldsMeetPolicy(footages: readonly DFootage[]): number {
   for (const footage of footages) {
     for (const hold of footage.holds()) {
       checked++;
-      if (hold.ms + 50 < hold.policyMs) {
+      if (!heldLongEnough(hold.ms, hold.policyMs)) {
         throw new Error(`a ${hold.kind} hold on ${footage.wallet} ("${hold.label}") was shorter than the video policy`);
       }
     }

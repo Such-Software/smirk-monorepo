@@ -10,6 +10,8 @@
  *   - key results (balances, swap status, history detail, a broadcast): 25 s.
  */
 
+import { heldLongEnough } from './hold-timer.mjs';
+
 /** Hold lengths the recorder uses, in milliseconds. */
 export const HOLD = Object.freeze({
   /** Static screen before every tap or typed field. */
@@ -50,7 +52,9 @@ export function holdRefusals(timeline) {
   for (const h of holds) {
     const need = HOLD_MIN_MS[h.kind];
     if (need === undefined) out.push(`hold of unknown kind ${String(h.kind).slice(0, 20)}`);
-    else if (h.until - h.from < need || h.requiredMs < need) out.push(`a ${h.kind} hold lasted ${h.until - h.from} ms, under the ${need} ms policy`);
+    // The measured hold may be a timer tick short (hold-timer.mjs); the
+    // policy the recorder asked for may not be short at all.
+    else if (!heldLongEnough(h.until - h.from, need) || h.requiredMs < need) out.push(`a ${h.kind} hold lasted ${h.until - h.from} ms, under the ${need} ms policy`);
     if (h.beforeAutoClose && !AUTO_CLOSE_TAPS.includes(h.label)) out.push(`"${String(h.label).slice(0, 80)}" skipped its settle but is not an allowed auto-close tap`);
   }
   // A screen that was never held cannot be caught by checking the holds that

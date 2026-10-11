@@ -31,6 +31,7 @@ import { chromium, expect, type BrowserContext, type Page } from '@playwright/te
 import { test as base } from './private-test.js';
 import { assertPrivateCapture } from '../capture-policy.mjs';
 import { GuardedFootage, footageRequested } from './G-premium-footage.js';
+import { watchContext } from './failure-context.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -199,6 +200,8 @@ export class LiveWallets {
       deviceScaleFactor: SCALE,
       args: [`--disable-extensions-except=${EXTENSION_DIST}`, `--load-extension=${EXTENSION_DIST}`],
     });
+    // Request shapes and screen test ids for the private failure log; no values.
+    watchContext(name, context);
     let [worker] = context.serviceWorkers();
     if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 30_000 });
     const extensionId = new URL(worker.url()).host;
