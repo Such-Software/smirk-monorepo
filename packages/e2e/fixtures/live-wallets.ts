@@ -793,8 +793,11 @@ export async function sentTipSummaries(footage: GuardedFootage, page: Page): Pro
   const cards = page.locator('[data-testid^="sent-tip-card-"]');
   await expect(cards.first().or(page.getByText('No tips sent yet')).first(), 'the Sent tips list never loaded').toBeVisible({ timeout: 60_000 });
   await waitForQuiet(page);
+  // innerText, not textContent: the card's amount line and its relative date
+  // are sibling blocks, and textContent joins them with no space ("link3mo ago"),
+  // so a word boundary after the recipient never matches.
   const summaries = await cards.evaluateAll((elements) => elements.map((element) => ({
-    line: (element.querySelector('[data-testid="sent-tip-toggle"]')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    line: ((element.querySelector('[data-testid="sent-tip-toggle"]') as HTMLElement | null)?.innerText ?? '').replace(/\s+/g, ' ').trim(),
     status: (element.querySelector('[data-testid="sent-tip-status-badge"]')?.textContent ?? '').trim(),
   })));
   await footage.result(page, 'sent tips');

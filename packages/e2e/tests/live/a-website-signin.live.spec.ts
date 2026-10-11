@@ -55,28 +55,55 @@ function defineScenarios(): void {
       const connect = site.getByRole('button', { name: 'Connect with Smirk' });
       await expect(connect, 'smirk.cash never detected the wallet').toBeEnabled({ timeout: 30_000 });
       await footage.settled(site, 'smirk.cash');
+      // v0.3.1's wallet offers signIn: connect and sign in one approval. A site
+      // still on connect() then signMessage() opens a connect approval first.
+      // Follow whichever flow the live site runs, count the approval windows and
+      // the passwords, and fail (softly, after the whole flow is recorded) when
+      // the sign-in needed more than one of either.
+      let passwords = 0;
+      const answer = async (approval: Page, label: string): Promise<void> => {
+        await approval.waitForURL(/#approval\//, { timeout: 30_000 });
+        const lock = approval.getByTestId('lockscreen-password-input');
+        const approve = approval.getByRole('button', { name: 'Approve', exact: true });
+        await lock.or(approve).first().waitFor({ timeout: 30_000 });
+        if (await lock.isVisible()) {
+          // Lock every time: the approval window opens on the lock screen.
+          await unlock(footage, alice, approval);
+          passwords += 1;
+        }
+        await expect(approve).toBeVisible({ timeout: 30_000 });
+        await expect(approval.locator('body')).toContainText(new URL(WEBSITE_URL).host);
+        await footage.result(approval, label);
+        await footage.tap(approve, `approve the ${label}`);
+        await expect.poll(() => approval.isClosed(), { timeout: 30_000, message: 'the approval window stayed open' }).toBe(true);
+      };
+      const choose = site.getByText('Choose your coin to sign in');
+      const firstWindow = context.waitForEvent('page', { timeout: 30_000 });
       await footage.tap(connect, 'connect with Smirk');
-      await expect(site.getByText('Choose your coin to sign in')).toBeVisible({ timeout: 30_000 });
+      const first = await Promise.race([
+        choose.waitFor({ timeout: 30_000 }).then(() => null),
+        firstWindow,
+      ]);
+      firstWindow.catch(() => undefined);
+      if (first) await answer(first, 'connect approval');
+      await expect(choose).toBeVisible({ timeout: 30_000 });
       await footage.settled(site, 'choose a coin');
 
       const opened = context.waitForEvent('page', { timeout: 60_000 });
       await footage.tap(site.locator('button.coin-btn').filter({ hasText: /^\s*btc\s*$/i }), 'sign in with BTC');
-      const approval = await opened;
-      await approval.waitForURL(/#approval\//, { timeout: 30_000 });
-      // Lock every time: the approval window opens on the lock screen, and this
-      // is the one password of the flow.
-      await unlock(footage, alice, approval);
-      await expect(approval.getByText('Sign in to this site?')).toBeVisible({ timeout: 30_000 });
-      await expect(approval.locator('body')).toContainText(new URL(WEBSITE_URL).host);
-      await footage.result(approval, 'sign-in approval');
-      await footage.tap(approval.getByRole('button', { name: 'Approve', exact: true }), 'approve the sign-in');
-      await expect.poll(() => approval.isClosed(), { timeout: 30_000, message: 'the approval window stayed open' }).toBe(true);
+      await answer(await opened, 'sign-in approval');
 
       await expect(site.getByText('Logged in!'), 'smirk.cash did not reach its signed-in state').toBeVisible({ timeout: 60_000 });
       await expect(site.getByText(/Signed in with BTC/i)).toBeVisible();
       await expect(site.locator('body'), 'smirk.cash signed in to a different account than the wallet').toContainText(alice.userId!);
       await footage.result(site, 'signed in on smirk.cash');
-      expect(approvals.windows.length, 'the sign-in needed more than one approval window').toBe(1);
+      footage.fact('sign-in approval windows', approvals.windows.length);
+      footage.fact('sign-in passwords', passwords);
+      expect.soft(passwords, 'the sign-in asked for the password more than once').toBe(1);
+      expect.soft(
+        approvals.windows.length,
+        'the sign-in needed more than one approval window (the site does not use the wallet\'s one-approval signIn)',
+      ).toBe(1);
       await expect(site.getByText('Choose your coin to sign in'), 'the site asked again after signing in').toHaveCount(0);
 
       // The sign-in grace serves only that site and tab: the wallet itself is still locked.

@@ -344,6 +344,9 @@ export class WalletFootage {
     if (!this.enabled) return;
     const from = Date.now();
     await sleep(plannedMs);
+    // A timer can fire a millisecond early by the wall clock, and the encoder
+    // refuses a hold even 1 ms short of the policy: top it up until it is not.
+    while (Date.now() - from < plannedMs) await sleep(plannedMs - (Date.now() - from));
     this.holds.push({ kind, label, plannedMs, from, until: Date.now() });
   }
 

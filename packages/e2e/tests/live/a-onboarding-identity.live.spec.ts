@@ -169,6 +169,48 @@ function defineScenarios(): void {
     wallets.remember('created', { name: 'newcomer', profile, password, ...outcome });
   });
 
+  // Right after create, in the same worker: a failure anywhere later (the
+  // settings tour fails softly on a -dirty build) restarts the worker, which
+  // forgets the created wallet and would turn this into a skip.
+  test('claim a handle on the new wallet, link it and publish the profile', async ({ wallets, footage }) => {
+    requireProdWrites('Claiming a handle and publishing a profile');
+    const created = wallets.recall('created');
+    if (!created) expectedSkip('the create scenario left no new wallet in this worker (it failed or was skipped)');
+    const page = await openHome(footage, created);
+    await settingsSection(footage, page, 'settings-nostr-nav', 'settings-nostr-screen', 'Nostr identity');
+    await expect(page.getByTestId('nostr-handle-absent'), 'a brand-new wallet already has a handle').toBeVisible({ timeout: 30_000 });
+
+    const stamp = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+    const handle = `e2e_a_${stamp}_${randomBytes(2).toString('hex')}`;
+    await footage.type(page.getByTestId('nostr-claim-handle-input'), handle, 'type a test handle');
+    await footage.tap(page.getByTestId('nostr-claim-handle-btn'), 'claim the handle');
+    const shown = page.getByTestId('nostr-handle');
+    const refused = page.getByTestId('nostr-claim-handle-error');
+    // Whichever comes first: the password prompt, or the claim's own outcome.
+    await confirmPasswordIfAsked(footage, created, page, { outcome: shown.or(refused) });
+    await expect(shown.or(refused).first()).toBeVisible({ timeout: 60_000 });
+    if (await refused.isVisible()) throw new Error(`the handle claim was refused: ${(await refused.innerText()).replace(/\s+/g, ' ').slice(0, 200)}`);
+    await expect(shown).toContainText(`${handle}@`);
+    footage.fact('created wallet handle', handle);
+    await footage.result(page, 'handle claimed');
+
+    const link = page.getByTestId('nostr-link-btn');
+    const linked = page.getByTestId('nostr-linked-badge');
+    if (await link.isVisible()) {
+      await footage.tap(link, 'link the identity');
+      await confirmPasswordIfAsked(footage, created, page, { outcome: linked });
+    }
+    await expect(linked, 'the identity never reached the linked state').toBeVisible({ timeout: 60_000 });
+    await footage.result(page, 'identity linked');
+
+    const result = page.getByTestId('nostr-publish-result');
+    await footage.tap(page.getByTestId('nostr-publish-profile'), 'publish the profile');
+    await confirmPasswordIfAsked(footage, created, page, { outcome: result });
+    await expect(result).toBeVisible({ timeout: 60_000 });
+    await expect(result, 'publishing a claimed, linked handle did not succeed').toContainText(`Published ${handle}@`);
+    await footage.result(page, 'profile published');
+  });
+
   test('fresh import of alice: returning-user bootstrap and real balances', async ({ wallets, footage }) => {
     test.setTimeout(60 * 60_000);
     const baseline = requireBaseline('alice');
@@ -447,7 +489,9 @@ function defineScenarios(): void {
     await footage.result(page, 'alice npub');
 
     const rows = page.locator('[data-testid^="nostr-identity-"]');
-    const seedRow = rows.filter({ hasText: /\bseed\b/ }).first();
+    // The source badge is its own element. A word-boundary match over the
+    // row's text never sees it: the row reads "npub1…hnw0seed", with no space.
+    const seedRow = rows.filter({ has: page.getByText('seed', { exact: true }) }).first();
     const seedHex = ((await seedRow.getAttribute('data-testid')) ?? '').replace('nostr-identity-', '');
     expect(seedHex, 'no seed-derived identity row').toMatch(/^[0-9a-f]{64}$/);
 
@@ -477,7 +521,7 @@ function defineScenarios(): void {
     expect(added, 'adding a burner did not add exactly one identity').toHaveLength(1);
     const burnerHex = added[0]!.replace('nostr-identity-', '');
     expect(burnerHex).toMatch(/^[0-9a-f]{64}$/);
-    await expect(page.getByTestId(`nostr-identity-${burnerHex}`)).toContainText(/\bburner\b/);
+    await expect(page.getByTestId(`nostr-identity-${burnerHex}`).getByText('burner', { exact: true })).toBeVisible();
     await footage.result(page, 'burner added');
 
     const active = page.getByTestId('nostr-npub');
@@ -496,46 +540,13 @@ function defineScenarios(): void {
     await openHome(footage, alice);
   });
 
-  test('claim a handle on the new wallet, link it and publish the profile', async ({ wallets, footage }) => {
-    requireProdWrites('Claiming a handle and publishing a profile');
-    const created = wallets.recall('created');
-    if (!created) expectedSkip('the create scenario left no new wallet in this worker (it failed or was skipped)');
-    const page = await openHome(footage, created);
-    await settingsSection(footage, page, 'settings-nostr-nav', 'settings-nostr-screen', 'Nostr identity');
-    await expect(page.getByTestId('nostr-handle-absent'), 'a brand-new wallet already has a handle').toBeVisible({ timeout: 30_000 });
-
-    const stamp = new Date().toISOString().slice(2, 10).replace(/-/g, '');
-    const handle = `e2e_a_${stamp}_${randomBytes(2).toString('hex')}`;
-    await footage.type(page.getByTestId('nostr-claim-handle-input'), handle, 'type a test handle');
-    await footage.tap(page.getByTestId('nostr-claim-handle-btn'), 'claim the handle');
-    const shown = page.getByTestId('nostr-handle');
-    const refused = page.getByTestId('nostr-claim-handle-error');
-    // Whichever comes first: the password prompt, or the claim's own outcome.
-    await confirmPasswordIfAsked(footage, created, page, { outcome: shown.or(refused) });
-    await expect(shown.or(refused).first()).toBeVisible({ timeout: 60_000 });
-    if (await refused.isVisible()) throw new Error(`the handle claim was refused: ${(await refused.innerText()).replace(/\s+/g, ' ').slice(0, 200)}`);
-    await expect(shown).toContainText(`${handle}@`);
-    footage.fact('created wallet handle', handle);
-    await footage.result(page, 'handle claimed');
-
-    const link = page.getByTestId('nostr-link-btn');
-    const linked = page.getByTestId('nostr-linked-badge');
-    if (await link.isVisible()) {
-      await footage.tap(link, 'link the identity');
-      await confirmPasswordIfAsked(footage, created, page, { outcome: linked });
-    }
-    await expect(linked, 'the identity never reached the linked state').toBeVisible({ timeout: 60_000 });
-    await footage.result(page, 'identity linked');
-
-    const result = page.getByTestId('nostr-publish-result');
-    await footage.tap(page.getByTestId('nostr-publish-profile'), 'publish the profile');
-    await confirmPasswordIfAsked(footage, created, page, { outcome: result });
-    await expect(result).toBeVisible({ timeout: 60_000 });
-    await expect(result, 'publishing a claimed, linked handle did not succeed').toContainText(`Published ${handle}@`);
-    await footage.result(page, 'profile published');
-  });
-
-  test('warm resume: the identity link control asks for the password', async ({ wallets, footage }) => {
+  // Since 1d3a37b the wallet keeps a complete scoped signing session for the
+  // chosen auto-lock window ("Restore complete scoped signing sessions for the
+  // selected grace period"), never the phrase. A warm resume inside that window
+  // therefore manages identities without a password; an older session that
+  // holds no scoped authority shows the locked notice, whose control must ask
+  // for the password rather than go inert. Either is correct; inert is not.
+  test('warm resume: identity controls work from the session or ask for the password', async ({ wallets, footage }) => {
     const alice = await wallets.reference('alice');
     let page = await openHome(footage, alice);
     await tabRoot(footage, page, 'settings');
@@ -547,23 +558,34 @@ function defineScenarios(): void {
     page = await alice.profile.openPage();
     await expect(page.getByTestId('bottom-nav'), 'not a warm resume: the wallet came back locked').toBeVisible({ timeout: 60_000 });
     await settingsSection(footage, page, 'settings-nostr-nav', 'settings-nostr-screen', 'Nostr identity');
-    await expect(
-      page.getByTestId('nostr-unlock-input').or(page.getByTestId('nostr-unlock-manage')).first(),
-      'no warm-resume affordance, so the seed may still be in memory',
-    ).toBeVisible({ timeout: 30_000 });
-    const manage = page.getByTestId('nostr-unlock-manage');
-    if (await manage.isVisible()) await footage.tap(manage, 'open the password field');
-    await expect(page.getByTestId('nostr-unlock-input')).toHaveAttribute('type', 'password');
-    await footage.settled(page, 'warm resume identity');
+    const locked = page.getByTestId('nostr-locked-notice');
+    const manageable = page.getByTestId('nostr-add-burner');
+    await expect(locked.or(manageable).first(), 'the identity screen shows neither its controls nor the locked notice').toBeVisible({ timeout: 30_000 });
 
-    const link = page.getByTestId('nostr-link-btn');
-    const target = (await link.isVisible()) ? link : page.getByTestId('nostr-publish-profile');
-    await expect(target, 'disabled on a warm resume, which reads as broken').toBeEnabled();
-    await footage.tap(target, 'press the identity control');
-    const prompt = page.getByTestId('nostr-unlock-prompt');
-    await expect(prompt, 'the control said nothing on a warm resume').toBeVisible({ timeout: 20_000 });
-    expect(((await prompt.textContent()) ?? '').toLowerCase()).toContain('password');
-    await footage.result(page, 'control asks for the password');
+    if (await locked.isVisible()) {
+      footage.fact('warm resume identity authority', 'none: the locked notice is shown');
+      const manage = page.getByTestId('nostr-unlock-manage');
+      if (await manage.isVisible()) await footage.tap(manage, 'open the password field');
+      await expect(page.getByTestId('nostr-unlock-input')).toHaveAttribute('type', 'password');
+      await footage.settled(page, 'warm resume identity');
+      const link = page.getByTestId('nostr-link-btn');
+      const target = (await link.isVisible()) ? link : page.getByTestId('nostr-publish-profile');
+      await expect(target, 'disabled on a warm resume, which reads as broken').toBeEnabled();
+      await footage.tap(target, 'press the identity control');
+      const prompt = page.getByTestId('nostr-unlock-prompt');
+      await expect(prompt, 'the control said nothing on a warm resume').toBeVisible({ timeout: 20_000 });
+      expect(((await prompt.textContent()) ?? '').toLowerCase()).toContain('password');
+      await footage.result(page, 'control asks for the password');
+    } else {
+      // The scoped session: every management control is live, no prompt needed.
+      footage.fact('warm resume identity authority', 'scoped session restored');
+      await expect(manageable, 'adding an identity is disabled on a warm resume').toBeEnabled();
+      const link = page.getByTestId('nostr-link-btn');
+      const target = (await link.isVisible()) ? link : page.getByTestId('nostr-publish-profile');
+      await expect(target, 'the identity control is disabled on a warm resume, which reads as broken').toBeEnabled();
+      await expect(page.getByTestId('nostr-unlock-prompt')).toHaveCount(0);
+      await footage.result(page, 'identity controls live from the session');
+    }
 
     await tabRoot(footage, page, 'settings');
     await footage.choose(page.getByTestId('settings-autolock-select'), '0', 'auto-lock immediately');

@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { PRIVATE_USE, assertPrivateCapture, sanitizeTestErrors } from '../capture-policy.mjs';
+import { PRIVATE_USE, assertPrivateCapture, failureSite, sanitizeTestErrors } from '../capture-policy.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,6 +29,22 @@ test('failure sanitization preserves location without assertion values or snapsh
   sanitizeTestErrors(info);
   assert.equal(JSON.stringify(info).includes(value), false);
   assert.deepEqual(info.errors[0].location, location);
+});
+
+test('a failure keeps its source position as an annotation and nothing of its message', () => {
+  const value = randomBytes(32).toString('hex');
+  const stack = [
+    `Error: expected ${value}`,
+    `    at ${value} (/x/node_modules/playwright-core/lib/a.js:1:2)`,
+    '    at helper (/repo/packages/e2e/fixtures/lane-helper.ts:42:7)',
+    '    at /repo/packages/e2e/tests/live/lane.live.spec.ts:9:3',
+  ].join('\n');
+  const info = { errors: [{ message: value, stack }], annotations: [] };
+  sanitizeTestErrors(info);
+  assert.equal(JSON.stringify(info).includes(value), false);
+  const site = info.annotations.find((a) => a.type === 'failed-at')?.description ?? '';
+  assert.match(site, /^lane-helper\.ts:\d+$/, 'the first frame in the suite names the failing check');
+  assert.equal(failureSite({ message: value, stack: `Error: ${value}` }), null, 'a message alone yields no position');
 });
 
 test('a real failing browser test does not write or print its generated secret', () => {
@@ -63,6 +79,10 @@ test('a real failing browser test does not write or print its generated secret',
     assert.equal(result.status, 1, 'the intentional browser failure must execute');
     const output = (result.stdout ?? '') + (result.stderr ?? '');
     assert.equal(output.includes('failed: failure.spec.ts'), true, 'the scenario reached its failure');
+    // Besides the test's own line, the output names the line of the failing
+    // check (a source position, never a value).
+    const positions = new Set([...output.matchAll(/failure\.spec\.ts:(\d+)/g)].map((m) => m[1]));
+    assert.ok(positions.size >= 2, 'the failure names the line of the failing check, not only the test');
     assert.equal(output.includes(secret), false, 'generated secret reached command output');
     const files = [];
     function walk(directory) {

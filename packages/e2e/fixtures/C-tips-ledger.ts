@@ -35,6 +35,12 @@ export interface LedgerTip {
   expiryDays: 1 | 7 | 30;
   submittedAtMs: number;
   invocation: string;
+  /**
+   * Why the relay refused a person tip's private delivery, as the wallet said
+   * it (never a key or a link). The tip is funded either way; its recipient
+   * claims it through the fallback link instead of the Inbox.
+   */
+  deliveryRefused?: string;
 }
 
 export interface LedgerForgery {
@@ -95,6 +101,15 @@ export class TipLedger {
       throw new Error(`the ledger already holds a tip for ${tip.key}; a run never pays for one plan twice`);
     }
     this.data.tips.push({ ...tip, invocation: this.invocation });
+    this.save();
+  }
+
+  /** Note that a recorded person tip was funded but its delivery was refused. */
+  markDeliveryRefused(tipId: string, reason: string): void {
+    this.reload();
+    const tip = this.data.tips.find((t) => t.tipId === tipId);
+    if (!tip || tip.deliveryRefused) return;
+    tip.deliveryRefused = reason;
     this.save();
   }
 

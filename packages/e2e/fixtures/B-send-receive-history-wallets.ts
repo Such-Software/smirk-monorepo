@@ -263,6 +263,18 @@ async function describeStuckScreen(page: Page): Promise<string> {
 /** Wait for Home to show a real balance set from the backend. */
 async function awaitHome(page: Page): Promise<void> {
   const total = page.getByTestId('home-total-balance');
+  // A send a failed test left open persists as a draft, and the reopened wallet
+  // shows it instead of Home. Back out of it the way a user would: the header
+  // control is Back on every step after the first and Cancel on the first.
+  // Each press keeps the owner's 6 s still before a tap.
+  const header = page.getByTestId('send-wizard-header-back');
+  for (let i = 0; i < 6; i++) {
+    await total.or(header).first().waitFor({ timeout: 10 * 60_000 }).catch(() => {});
+    if ((await total.isVisible().catch(() => false)) || !(await header.isVisible().catch(() => false))) break;
+    await page.waitForTimeout(6_000);
+    await header.click();
+    await page.waitForTimeout(12_000);
+  }
   // A returning wallet may solve proof of work and rescan before Home shows.
   await total.waitFor({ timeout: 10 * 60_000 }).catch(async () => {
     throw new Error(`the wallet did not reach Home: ${await describeStuckScreen(page)}`);
