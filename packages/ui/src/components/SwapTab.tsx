@@ -184,8 +184,10 @@ export interface SwapTabProps {
     refundAddress: string;
   }) => Promise<SwapInFlight>;
   /** Open the wallet's SendWizard pre-filled with the deposit address
-   *  + amount. Consumer routes; we just fire the intent. */
-  onOpenSend: (deposit: SwapInFlight) => void;
+   *  + amount. Consumer routes. Return (or resolve) `false` when Send did
+   *  not open, for example because the user kept a Send draft: the swap then
+   *  stays on its deposit step instead of moving to the status step. */
+  onOpenSend: OpenSendHandler;
   /** Refresh status of an in-flight swap. Polled on a ~10s cadence
    *  on the Status step. Optional: consumers that haven't wired the
    *  backend's GET /api/v1/swaps/:id can omit and the user gets a
@@ -878,7 +880,7 @@ interface TrocadorWizardProps {
     toAddress: string;
     refundAddress: string;
   }) => Promise<SwapInFlight>;
-  onOpenSend: (deposit: SwapInFlight) => void;
+  onOpenSend: OpenSendHandler;
   onFetchStatus?: (id: string) => Promise<SwapInFlight>;
   resolveAddress?: (assetId: string) => string | null;
   validateAddress?: (assetId: string, address: string) => string | null;
@@ -988,15 +990,14 @@ function TrocadorWizard(props: TrocadorWizardProps) {
         <DepositStep
           swap={fields.inFlight}
           onOpenSend={() => {
-            // Hand the deposit off to Send, AND advance the wizard to
-            // the status step in the same tick. Without this, the user
-            // sends, comes back to the Swap tab and lands back on the
-            // "Send to deposit address" view as if nothing happened. If
-            // they bail on the Send wizard the status page just shows
-            // "waiting for deposit" until Trocador's quote-validity
-            // window expires: same terminal we already handle.
-            props.onOpenSend(fields.inFlight!);
-            setStep(3);
+            // Hand the deposit off to Send, then advance the wizard to the
+            // status step, so a user who sends and comes back does not land
+            // on "Send to deposit address" as if nothing happened. Only when
+            // Send opened: a user who kept their Send draft stays here, where
+            // the deposit can still be paid (openSendFromDeposit).
+            void openSendFromDeposit(props.onOpenSend, fields.inFlight!, () => props.patchFields({ step: 3 })).catch(
+              (e: unknown) => console.warn('[swap] Open Send failed; the deposit step stays', e),
+            );
           }}
           onContinue={() => setStep(3)}
         />
@@ -1615,6 +1616,32 @@ export function BookAnalysisPanel({
 }
 
 // ----- Step 2: Deposit -------------------------------------------------
+
+/**
+ * The consumer's "open Send on this deposit". `false` means Send did not open;
+ * anything else (including no answer, from a consumer that predates it) means
+ * it did.
+ */
+export type OpenSendHandler = (deposit: SwapInFlight) => boolean | void | Promise<boolean | void>;
+
+/**
+ * The deposit step's "Open Send → pre-filled": hand `deposit` to the consumer
+ * and run `toStatus` only once Send opened. Resolves whether it did.
+ *
+ * The status step has no pay action and no way back, and a memo deposit never
+ * shows its address. Moving there while Send stayed closed (the user declined
+ * to replace a Send draft) left a quoted deposit nothing in the wallet could
+ * pay; the user had to cancel the swap and quote again.
+ */
+export async function openSendFromDeposit(
+  onOpenSend: OpenSendHandler,
+  deposit: SwapInFlight,
+  toStatus: () => Promise<void>,
+): Promise<boolean> {
+  if ((await onOpenSend(deposit)) === false) return false;
+  await toStatus();
+  return true;
+}
 
 /** Exported for tests; the wizard is the only caller. */
 export function DepositStep({

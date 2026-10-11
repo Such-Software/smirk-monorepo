@@ -21,7 +21,7 @@ import type { WalletSession } from '../types';
 import { confirmThorchainSwap, thorchainGatewayHost, thorchainOffered, thorchainQuoteSummary, thorchainSwap } from '../thorchain';
 import { nonlogsOffered, nonlogsSwap, ownAddressesOnly } from '../nonlogs';
 import { findSwapDeposit, journalKeyFor, recordSend } from '../send-journal';
-import { openSwapDepositInSend } from '../swap-handoff';
+import { swapOpenSendHandler } from '../swap-handoff';
 import { fetchTrocadorSwapStatus, SWAP_TRACKED_AT } from '../swap-status';
 
 /**
@@ -606,14 +606,15 @@ export function SwapRouter({
         void backendTrackingOk;
         return sw;
       }}
-      onOpenSend={(deposit) => {
-        // Send opens on Compose with the deposit's coin, address and exact
-        // amount; the draft and the route are one write (swap-handoff.ts).
-        // A Send draft in progress is replaced only if the user agrees.
-        void openSwapDepositInSend(store, deposit, () =>
-          window.confirm('You have a Send draft in progress. Replace it with this swap deposit?'),
-        );
-      }}
+      // Send opens on Compose with the deposit's coin, address and exact
+      // amount; the draft and the route are one write (swap-handoff.ts). A
+      // Send draft in progress is replaced only if the user agrees, and a Grin
+      // payment waiting for its reply never is. Resolves false when Send did
+      // not open, so the swap stays on its deposit step.
+      onOpenSend={swapOpenSendHandler(store, {
+        confirm: (question) => window.confirm(question),
+        alert: (message) => window.alert(message),
+      })}
       onTrocadorFetchStatus={async (id) => {
         if (!trocador) throw new Error(connectionError ?? 'Trocador is unavailable in this app.');
         // The backend's record is consulted only at the backend that recorded

@@ -226,6 +226,7 @@ import { ensureWasmInit } from './wasm-init';
 import { setGrinJournalScope, clearGrinJournal } from './grin-tx-journal';
 import { setSendJournalScope, clearSendJournal, recordSend, journalKeyFor } from './send-journal';
 import { checkMemoDeposit } from './thorchain';
+import { openPayLinkInSend } from './send-handoff';
 import { clearPendingPremium } from './premium-pending';
 import { ApprovalApp } from './routes/approval';
 import { AssetDetailRoute } from './routes/asset-detail';
@@ -3155,20 +3156,11 @@ function HomeRouter({
             } catch (e) {
               return { ok: false, error: e instanceof Error ? e.message : 'Invalid pay link' };
             }
-            await store.update((s) => {
-              s.wizards.send = {
-                step: 1,
-                startedAt: Date.now(),
-                fields: {
-                  fromAssetId: 'grin',
-                  toAddress: pay.recipientPubkeyHex,
-                  ...(pay.amountGrin ? { amountText: pay.amountGrin } : {}),
-                  ...(pay.memo ? { grinPayMemo: pay.memo } : {}),
-                },
-              };
-            });
-            void navigate('home/send');
-            return { ok: true };
+            // The draft and the route are one write (send-handoff.ts). A Send
+            // draft in progress is replaced only if the user agrees, and a
+            // Grin payment waiting for its reply never is: its sender context
+            // lives only in Send.
+            return openPayLinkInSend(store, pay, (question) => window.confirm(question));
           }
           await ensureWasmInit();
           // Derive the slatepack secret upfront so we can decrypt

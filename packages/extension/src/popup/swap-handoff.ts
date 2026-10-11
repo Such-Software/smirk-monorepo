@@ -4,31 +4,22 @@
  * Send must open on Compose holding the deposit's coin, address and exact
  * amount, never on its coin chooser. The handler used to save the Send draft
  * and then navigate in a second save; whenever the store lost one of the two
- * (the storage echo fixed in session-state.ts, or another window saving in
- * between), Send opened on "Send what?" with nothing filled in, or did not
- * open at all. The draft and the route are now one save: Send never mounts
- * without its deposit.
+ * (the storage echo fixed in session-state.ts), Send opened on "Send what?"
+ * with nothing filled in, or did not open at all. The draft and the route are
+ * now one save (send-handoff.ts): Send never mounts without its deposit, and
+ * storage never holds half a handoff.
+ *
+ * The handler tells the Swap tab whether Send opened. The tab moves the swap
+ * to its status step only then: that step has no pay action and no way back,
+ * so a swap moved there with Send closed could no longer be paid from here.
  */
 import type { SessionStateStore, WizardState } from '@smirk/core';
-import { SEND_WIZARD_ID, sendShowsReceipt, type SwapInFlight } from '@smirk/ui';
+import type { SwapInFlight } from '@smirk/ui';
 import { atomicToText } from './format';
-
-/** The route Send renders on. */
-export const SEND_ROUTE = 'home/send';
+import { openSendOnDraft, type SendHandoff } from './send-handoff';
 
 /** Send's Compose step: the coin and the recipient are already chosen. */
 const SEND_COMPOSE_STEP = 2;
-
-/**
- * True when Send holds something the user typed or chose: a recipient, an
- * amount, or a coin past the chooser. An empty chooser left from an earlier
- * visit is not a draft, and neither is a finished send's receipt.
- */
-export function sendDraftInProgress(send: WizardState | undefined): boolean {
-  if (!send || sendShowsReceipt(send)) return false;
-  const f = send.fields as { fromAssetId?: string; toAddress?: string; amountText?: string };
-  return !!f.toAddress || !!f.amountText || (!!f.fromAssetId && send.step > 0);
-}
 
 /** The Send wizard state that pays `deposit`: Compose, with nothing left from an earlier draft. */
 export function swapDepositDraft(deposit: SwapInFlight, now: number = Date.now()): WizardState {
@@ -67,20 +58,36 @@ export function swapDepositDraft(deposit: SwapInFlight, now: number = Date.now()
 }
 
 /**
- * Open Send on `deposit`. A Send draft in progress is replaced only when
- * `confirmReplace` agrees; otherwise nothing is written and this returns
- * false. The draft and the route are written in one store update.
+ * Open Send on `deposit`, in one store update. A Send draft in progress is
+ * replaced only when `confirmReplace` agrees, and a Grin payment waiting for
+ * its reply never is (send-handoff.ts).
  */
-export async function openSwapDepositInSend(
+export function openSwapDepositInSend(
   store: SessionStateStore,
   deposit: SwapInFlight,
-  confirmReplace: () => boolean,
-): Promise<boolean> {
-  const current = await store.load();
-  if (sendDraftInProgress(current.wizards[SEND_WIZARD_ID]) && !confirmReplace()) return false;
-  await store.update((s) => {
-    s.wizards[SEND_WIZARD_ID] = swapDepositDraft(deposit);
-    s.route = { current: SEND_ROUTE };
-  });
-  return true;
+  confirmReplace: (question: string) => boolean,
+): Promise<SendHandoff> {
+  return openSendOnDraft(store, swapDepositDraft(deposit), 'this swap deposit', confirmReplace);
+}
+
+/** How the popup asks and tells: `window.confirm` and `window.alert`, injected for tests. */
+export interface HandoffDialogs {
+  confirm(question: string): boolean;
+  alert(message: string): void;
+}
+
+/**
+ * The Swap tab's `onOpenSend`: resolves true only when Send opened on the
+ * deposit. A refusal is shown before it resolves false; a declined replace
+ * needs no message, since the user just answered it.
+ */
+export function swapOpenSendHandler(
+  store: SessionStateStore,
+  dialogs: HandoffDialogs,
+): (deposit: SwapInFlight) => Promise<boolean> {
+  return async (deposit) => {
+    const handoff = await openSwapDepositInSend(store, deposit, (question) => dialogs.confirm(question));
+    if (handoff.refusal) dialogs.alert(handoff.refusal);
+    return handoff.opened;
+  };
 }
