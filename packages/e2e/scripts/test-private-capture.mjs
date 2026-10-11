@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { PRIVATE_USE, assertPrivateCapture, failureSite, sanitizeTestErrors } from '../capture-policy.mjs';
+import { TEST_PHRASE, leaked, mixedToken } from '../fixtures/leak-probes.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -50,6 +51,10 @@ test('a failure keeps its source position as an annotation and nothing of its me
 test('a real failing browser test does not write or print its generated secret, and its private log explains it', () => {
   const temporary = mkdtempSync(join(tmpdir(), 'smirk-private-capture-'));
   const secret = randomBytes(32).toString('hex');
+  // A phrase and a password in the shapes the old label rule let through:
+  // capitalized and comma-separated, and short mixed runs joined by a hyphen.
+  const phrase = [TEST_PHRASE[0][0].toUpperCase() + TEST_PHRASE[0].slice(1), ...TEST_PHRASE.slice(1)].join(', ');
+  const password = `${mixedToken(14)}-${mixedToken(14)}`;
   const privateLog = join(temporary, 'logs', 'private.jsonl');
   try {
     // ESM like packages/e2e itself, so the specs, fixtures and reporter load
@@ -65,7 +70,8 @@ test('a real failing browser test does not write or print its generated secret, 
     };`);
     // The secret is everywhere a careless log could look: the page text, an
     // input value, a test id, a request path and query, a step label, a
-    // test.step title, the console, and the assertion's received value.
+    // test.step title, the console, and the assertion's received value. The
+    // phrase and the password come as step labels and the failing step's title.
     writeFileSync(join(temporary, 'failure.spec.ts'), `
       import { test as privateTest } from ${JSON.stringify(join(root, 'fixtures/private-test.ts'))};
       import { attachPrivateContext, noteStep, watchContext } from ${JSON.stringify(join(root, 'fixtures/failure-context.ts'))};
@@ -92,8 +98,10 @@ test('a real failing browser test does not write or print its generated secret, 
         await test.expect.poll(() => page.evaluate(() => performance.getEntriesByType('resource').length)).toBeGreaterThan(0);
         writeFileSync(process.env.PRIVATE_CAPTURE_PROGRESS!, 'input reached');
         console.log(value);
+        noteStep('Confirm ' + process.env.PRIVATE_CAPTURE_PHRASE!);
+        noteStep('unlock with ' + process.env.PRIVATE_CAPTURE_PASSWORD!);
         noteStep('Check the probe field');
-        await test.step('Probe ' + value, async () => {
+        await test.step('Confirm ' + process.env.PRIVATE_CAPTURE_PHRASE!, async () => {
           await test.expect(page.locator('input')).toHaveValue('forced-mismatch', { timeout: 1 });
         });
       });
@@ -102,6 +110,7 @@ test('a real failing browser test does not write or print its generated secret, 
       encoding: 'utf8', timeout: 45000,
       env: {
         ...process.env, DEBUG: '', PWDEBUG: '', PRIVATE_CAPTURE_SENTINEL: secret,
+        PRIVATE_CAPTURE_PHRASE: phrase, PRIVATE_CAPTURE_PASSWORD: password,
         PRIVATE_CAPTURE_PROGRESS: join(temporary, 'progress'), E2E_PRIVATE_LOG: privateLog,
       },
     });
@@ -114,6 +123,7 @@ test('a real failing browser test does not write or print its generated secret, 
     const positions = new Set([...output.matchAll(/failure\.spec\.ts:(\d+)/g)].map((m) => m[1]));
     assert.ok(positions.size >= 2, 'the failure names the line of the failing check, not only the test');
     assert.equal(output.includes(secret), false, 'generated secret reached command output');
+    assert.equal(leaked(output, [...TEST_PHRASE, password]), false, 'a phrase word or the password reached command output');
     const files = [];
     function walk(directory) {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -125,6 +135,7 @@ test('a real failing browser test does not write or print its generated secret, 
     walk(temporary);
     for (const file of files) {
       assert.equal(readFileSync(file).includes(Buffer.from(secret)), false, 'generated secret reached a file');
+      assert.equal(leaked(readFileSync(file, 'latin1'), [...TEST_PHRASE, password]), false, 'a phrase word or the password reached a file');
       assert.equal(/\.(png|webm|zip)$/.test(file), false, 'unexpected media or trace artifact');
     }
 
@@ -140,7 +151,8 @@ test('a real failing browser test does not write or print its generated secret, 
     assert.equal(failure.errors[0].matcher, 'toHaveValue', 'the error class names the failed matcher');
     assert.equal(failure.step, 'Check the probe field', 'the step that was running');
     assert.ok(failure.steps.some((step) => step.label === 'label withheld'), 'a value-like step label is withheld, not dropped silently');
-    assert.equal(failure.failedCall?.title, undefined, 'a test.step title with a value is withheld');
+    assert.equal(failure.failedCall?.title, undefined, 'a test.step title with a phrase is withheld');
+    assert.ok(failure.steps.every((step) => ['label withheld', 'Check the probe field'].includes(step.label)), 'only the static step label is kept');
     const ids = failure.screens.flatMap((screen) => screen.testIds);
     assert.ok(ids.includes('probe-field'), 'screen test ids are listed');
     assert.ok(ids.includes('secret-*'), 'an id-like part of a test id is replaced');

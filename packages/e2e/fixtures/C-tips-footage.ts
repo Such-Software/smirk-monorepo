@@ -419,7 +419,7 @@ export class GuardedFootage {
    * operation whose outcome the caller waits for and holds itself.
    */
   async tap(locator: Locator, label: string, options: { settle?: boolean } = {}): Promise<void> {
-    noteStep(label);
+    noteStep(assertStaticLabel(label));
     const page = locator.page();
     await locator.waitFor({ state: 'visible', timeout: TAP_PATIENCE_MS });
     await this.hold('tap', page, label);
@@ -437,7 +437,7 @@ export class GuardedFootage {
 
   /** Type a secret into a field behind a redaction card, then hold the (masked) result. */
   async secretFill(locator: Locator, value: string, label: string): Promise<void> {
-    noteStep(label);
+    noteStep(assertStaticLabel(label));
     await this.secret(locator.page(), label, async () => {
       await locator.waitFor({ state: 'visible', timeout: TAP_PATIENCE_MS });
       await locator.fill(value, { timeout: TAP_PATIENCE_MS });
@@ -458,7 +458,7 @@ export class GuardedFootage {
    * refreshes, so text presence alone would mean waiting out the patience.)
    */
   async settled(page: Page, label: string): Promise<void> {
-    noteStep(label);
+    noteStep(assertStaticLabel(label));
     const busy = page.getByText(BUSY_TEXT).filter({ visible: true });
     const deadline = Date.now() + SETTLE_PATIENCE_MS;
     while (Date.now() < deadline && !page.isClosed() && (await busy.count().catch(() => 0)) > 0) await sleep(250);
@@ -467,7 +467,7 @@ export class GuardedFootage {
 
   /** Hold a key result on screen. */
   async result(page: Page, label: string): Promise<void> {
-    noteStep(label);
+    noteStep(assertStaticLabel(label));
     await this.hold('result', page, label);
   }
 

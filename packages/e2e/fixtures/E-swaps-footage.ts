@@ -340,8 +340,8 @@ export class WalletFootage {
     target: Locator,
     options: { timeout?: number; beforeAutoClose?: boolean; beforeClick?: () => void } = {},
   ): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     if (options.beforeAutoClose && !AUTO_CLOSE_TAPS.includes(label)) {
       throw new Error(`"${label}" is not a reviewed auto-close tap; it must wait for the settle`);
     }
@@ -357,8 +357,8 @@ export class WalletFootage {
 
   /** As `tap`, then type a public value (an amount, an address). */
   async fill(label: string, target: Locator, value: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     await this.settleIfUnheld();
     await target.waitFor({ state: 'visible', timeout: 60_000 });
     await this.hold('type', label, HOLD.preTapMs);
@@ -370,8 +370,8 @@ export class WalletFootage {
 
   /** Wait for loading text to clear, then hold the settled screen. */
   async settled(label: string, options: { patienceMs?: number } = {}): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     const { page } = this.current();
     const deadline = Date.now() + (options.patienceMs ?? 45_000);
     while (Date.now() < deadline) {
@@ -385,8 +385,8 @@ export class WalletFootage {
 
   /** Hold a key result on screen (it also counts as the settled hold). */
   async result(label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     this.timeline.marker(label);
     await this.hold('result', label, HOLD.resultMs);
     this.unheld = null;

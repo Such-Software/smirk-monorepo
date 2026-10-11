@@ -102,11 +102,14 @@ areas A to H):
   browser stdout, assertion values, attachments, steps or HTML reports.
 - Each failure is explained, by shape only, in a private log (JSON lines, 0600
   in a 0700 directory): the error class (its class name, the Playwright call or
-  matcher, a fixed category such as action timeout, and the file and line that
-  threw), the lane step label that was running, the test ids on every wallet
-  screen with id-like parts replaced by `*`, and recent requests as method, host,
-  route words and status. Never a message, page text, input value, query,
-  header or body. `E2E_PRIVATE_LOG` names the file (the v0.3.1 runner puts it
+  matcher, a fixed category such as action timeout, and the file and line of
+  the `at` frame that threw), the lane step label that was running, the test ids
+  on every wallet screen with id-like parts replaced by `*`, and recent requests
+  as method, host, route words and status. Never a message, page text, input
+  value, query, header or body. A step label or test title is kept only when
+  every token has an allowed shape (plain words, acronyms, short numbers) and it
+  holds no run of six recovery-phrase words; otherwise it is withheld whole.
+  Footage helpers check a label before they note it as the running step. `E2E_PRIVATE_LOG` names the file (the v0.3.1 runner puts it
   beside each phase log); otherwise it goes under `~/Build/smirk-e2e/private-logs`.
   `fixtures/failure-record.mjs` defines the shapes, and the reporter re-shapes
   everything a worker hands it before writing.
