@@ -35,7 +35,7 @@ import { AssetIcon } from './AssetIcon';
 import { Button } from './Button';
 import { formatAmount, formatAmountWithAsset } from '../format';
 import { copyText } from '../clipboard';
-import { prepareSendDraft } from './send-draft';
+import { prepareSendDraft, SEND_RECEIPT_STEP, SEND_WIZARD_ID } from './send-draft';
 import { UsdEstimate } from './UsdEstimate';
 
 export type FeeTier = 'fast' | 'normal' | 'slow' | 'custom';
@@ -321,8 +321,8 @@ export interface GrinFinalizeResult {
 }
 export type GrinFinalizeOutcome = GrinFinalizeResult | { ok: false; error: string };
 
-const WIZARD_ID = 'send';
-const TOTAL_STEPS = 4; // 0=asset 1=address 2=compose 3=review (success at step >=4)
+const WIZARD_ID = SEND_WIZARD_ID;
+const TOTAL_STEPS = SEND_RECEIPT_STEP; // 0=asset 1=address 2=compose 3=review (success at step >=4)
 
 /** How long the send receipt stays up before returning home on its own. */
 const AUTO_DISMISS_SECS = 12;

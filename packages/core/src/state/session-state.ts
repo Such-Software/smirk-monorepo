@@ -334,11 +334,19 @@ export class SessionStateStore {
     });
   }
 
-  /** Read the current state. Loads from storage on first call; caches afterward. */
+  /**
+   * Read the current state. Loads from storage on first call; caches afterward.
+   *
+   * State cached while the read is in flight (a save, a cross-context sync) is
+   * newer than what the read returns, and wins. Before, a first read answering
+   * late replaced that newer cache with what storage held when it was issued,
+   * and the next `update()` saved the stale state back: a relaunch lost its
+   * launch-time write that way.
+   */
   async load(): Promise<SessionState> {
     if (this.cached) return this.cached;
     const raw = await this.storage.get<unknown>(this.key);
-    this.cached = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
+    this.cached ??= raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
     return this.cached;
   }
 

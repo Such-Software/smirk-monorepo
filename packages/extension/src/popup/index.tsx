@@ -95,6 +95,7 @@ import {
   legacyFindingNeedsAttention,
   type LegacyCheckRecord,
   type BackendCapabilities,
+  settleForLaunch,
 } from '@smirk/core';
 import { PAYMENT_PENDING_SENTINEL } from '../background/jobs/types';
 import { setPendingRegistrationInvoice } from './pending-registration-invoice';
@@ -120,6 +121,7 @@ import {
 import { HeaderIdentitySwitcher } from './identity-switcher';
 import { nip05Resolver, instanceHomeDomain } from './nip05';
 import { storage, store, router, walletKeystore, sessionStorage } from './singletons';
+import { FINISHED_FLOW_RULES, markResultShown } from './launch-restore';
 import { readBalanceSnapshot, writeBalanceSnapshot, clearBalanceSnapshot } from './balance-snapshot';
 import { bootBackendSelection, DEFAULT_BACKEND } from '../backend-boot';
 import {
@@ -1198,6 +1200,13 @@ function App() {
   };
 
   useEffect(() => {
+    // A relaunch opens Home instead of a flow that already finished (a send
+    // receipt, a settled swap, a tip or claim result); drafts and operations
+    // still in flight resume. Issued before refresh(), whose unlock is what
+    // first renders a routed screen. See launch-restore.ts.
+    const launchSettled = settleForLaunch(store, FINISHED_FLOW_RULES).catch((e) => {
+      console.warn('[popup] could not settle finished flows at launch:', e);
+    });
     const unsubscribe = subscribeWalletLock(walletKeystore, sessionStorage, refresh);
     void refresh();
     // Kick off WASM load in the background. Grin inbox actions (sign /
@@ -1215,7 +1224,9 @@ function App() {
     // "Stale", 24h "Expiring") live on each Inbox row but don't drop
     // anything; the user can still cancel/resume manually. Only the
     // 7-day floor wipes local state, in lockstep with the backend.
-    void sweepStaleGrinWizards();
+    // Runs after the launch settle, which must see a finished flow's state
+    // to send its route Home before the sweep ages that state out.
+    void launchSettled.then(() => sweepStaleGrinWizards());
     return unsubscribe;
   }, []);
 
@@ -3228,6 +3239,9 @@ function HomeRouter({
           if (claimedAssetId !== undefined) success.assetId = claimedAssetId;
           if (claimedAmount !== undefined) success.amountAtomic = claimedAmount;
           if (outcome.confirming) success.confirming = true;
+          // The claim result lives only in this screen's memory; a relaunch
+          // opens Home rather than an empty paste box.
+          markResultShown(router, 'home/inbox/paste-tip');
           return success;
         }}
         onExit={() => void navigate('inbox')}
@@ -3322,6 +3336,7 @@ function HomeRouter({
     const tipPrefilledAsset = route.current.startsWith('home/tip/')
       ? route.current.substring('home/tip/'.length)
       : undefined;
+    const tipRoute = route.current;
     return (
       <TipMaker
         // Tip composer respects both the per-asset socialTipping
@@ -3362,7 +3377,7 @@ function HomeRouter({
           const grinRewindHash = (wallet.mnemonic || wallet.sessionSecrets?.grin)
             ? grinRewindHashFromMnemonic(grinKeySource(wallet))
             : undefined;
-          return dispatchSocialTip({
+          const outcome = await dispatchSocialTip({
             wallet,
             senderUserId: grinUserId,
             fields,
@@ -3401,6 +3416,10 @@ function HomeRouter({
               });
             },
           });
+          // The composer holds its result only in memory; mark the route so a
+          // relaunch opens Home instead of an empty composer, as if unsent.
+          if (outcome.ok) markResultShown(router, tipRoute);
+          return outcome;
         }}
         onExit={() => void navigate('home')}
         resolveIcon={resolveIcon}

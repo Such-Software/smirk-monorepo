@@ -31,6 +31,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getAsset, mustGetAsset } from '@smirk/assets';
+import type { WizardState } from '@smirk/core';
 import { useWizard } from '../state/hooks';
 import { AssetIcon } from './AssetIcon';
 import { formatAmountWithTicker, formatAmount } from '../format';
@@ -487,6 +488,18 @@ interface TrocadorFields extends Record<string, unknown> {
   refundAddressAutoFilledFor?: string | undefined;
   /** Set after step 1 advances to step 2 (trade created on Trocador). */
   inFlight?: SwapInFlight;
+}
+
+/**
+ * True when a persisted swap wizard (any provider) holds a swap its provider
+ * settled: delivered, or refunded to the sender. Nothing is left to resume.
+ * A `failed` swap is not settled: its reasons include a refund still on its
+ * way and a provider status the wallet could not read, so it stays restorable
+ * with its trade id and support contacts.
+ */
+export function swapSettled(state: WizardState): boolean {
+  const outcome = (state.fields as Partial<TrocadorFields>).inFlight?.state?.state;
+  return outcome === 'completed' || outcome === 'refunded';
 }
 
 // ============================================================================

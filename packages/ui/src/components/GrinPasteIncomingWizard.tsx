@@ -23,12 +23,20 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
+import type { WizardState } from '@smirk/core';
 
 import { useWizard } from '../state/hooks';
 import { Button } from './Button';
 
-const WIZARD_ID = 'grin-paste-incoming';
+/** Session-state id of the incoming Grin slatepack wizard. */
+export const GRIN_PASTE_INCOMING_WIZARD_ID = 'grin-paste-incoming';
+const WIZARD_ID = GRIN_PASTE_INCOMING_WIZARD_ID;
 const TOTAL_STEPS = 2;
+
+/** True when a persisted incoming slatepack shows Done: signed and replied, the sender finalizes. */
+export function grinPasteIncomingDone(state: WizardState): boolean {
+  return state.step >= TOTAL_STEPS;
+}
 
 export interface GrinPasteIncomingFields extends Record<string, unknown> {
   /** S1 slatepack from the sender. Set by the popup before navigation

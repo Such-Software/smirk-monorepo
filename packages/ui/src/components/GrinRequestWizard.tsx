@@ -15,13 +15,21 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { mustGetAsset } from '@smirk/assets';
+import type { WizardState } from '@smirk/core';
 
 import { useWizard } from '../state/hooks';
 import { Button } from './Button';
 import { copyText } from '../clipboard';
 
-const WIZARD_ID = 'grin-request';
+/** Session-state id of the Grin payment request wizard. */
+export const GRIN_REQUEST_WIZARD_ID = 'grin-request';
+const WIZARD_ID = GRIN_REQUEST_WIZARD_ID;
 const TOTAL_STEPS = 2;
+
+/** True when a persisted request shows Done: finalized, nothing left to resume. */
+export function grinRequestDone(state: WizardState): boolean {
+  return state.step >= TOTAL_STEPS;
+}
 
 export interface GrinRequestFields extends Record<string, unknown> {
   amountText?: string;

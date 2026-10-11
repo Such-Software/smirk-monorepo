@@ -26,6 +26,7 @@
  */
 
 import type { SessionStateStore, Route } from './session-state';
+import { FINISHED_ROUTE_PARAM } from './launch';
 
 /**
  * Top-level wallet tab. `browse` is desktop-only: the BottomNav only
@@ -79,6 +80,18 @@ export class RouteController {
       if (segments.length <= 1) return;
       segments.pop();
       s.route = { current: segments.join('/') };
+    });
+  }
+
+  /**
+   * Mark `routeId` as a finished flow's result screen, while it is still the
+   * current route, so a relaunch opens Home instead of reopening it (see
+   * `stateForLaunch`). Navigating anywhere clears the mark with the params.
+   */
+  async markFinished(routeId: string): Promise<void> {
+    await this.store.update((s) => {
+      if (s.route.current !== routeId) return;
+      s.route = { current: routeId, params: { ...s.route.params, [FINISHED_ROUTE_PARAM]: true } };
     });
   }
 

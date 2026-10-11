@@ -70,6 +70,15 @@ export type { Tab } from './route';
 export { Wizard } from './wizards';
 
 export {
+  FINISHED_ROUTE_PARAM,
+  routeIsFinished,
+  routeWithin,
+  settleForLaunch,
+  stateForLaunch,
+} from './launch';
+export type { FinishedFlowRule } from './launch';
+
+export {
   isStale as isPendingOutgoingStale,
   pendingOutgoingFor,
   pendingOutgoingTotal,
