@@ -108,7 +108,7 @@ export type {
 } from './components/SwapTab';
 
 export { SendWizard } from './components/SendWizard';
-export { SEND_WIZARD_ID, sendShowsReceipt } from './components/send-draft';
+export { SEND_WIZARD_ID, prepareSendDraft, sendShowsReceipt } from './components/send-draft';
 export type {
   SendWizardProps,
   SendFields,
