@@ -13,6 +13,7 @@ import { hCanarySnapshot, hHeaderHitTest, hMaskCovered, hMaskOverlay, hMaskRemov
 import { FootageError, GuardedRecorder, imageSize, wrapLabel } from './H-cross-browser-desktop-recorder.mjs';
 import { SignInLedger, pause } from './H-cross-browser-desktop-signin.mjs';
 import { compareWithReference } from './H-cross-browser-desktop-reference.mjs';
+import { HOLD_TOLERANCE_MS } from './hold-timer.mjs';
 import { readBalances as readDesktopBalances } from '../scripts/H-cross-browser-desktop-macos-driver.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -167,7 +168,9 @@ test('labels are static and timelines enforce the owner holds, in sequence', () 
     ],
   };
   assert.deepEqual(verifyTimeline(good, holds), []);
-  assert.ok(verifyTimeline({ ...good, events: [settled('Home'), { kind: 'tap', label: 'Tap Send', holdMs: 5999 }] }, holds).length);
+  // A hold a timer tick short counts; one short by more than the tolerance does not.
+  assert.deepEqual(verifyTimeline({ ...good, events: [settled('Home'), { kind: 'tap', label: 'Tap Send', holdMs: holds.preTapMs - 1 }] }, holds), []);
+  assert.ok(verifyTimeline({ ...good, events: [settled('Home'), { kind: 'tap', label: 'Tap Send', holdMs: holds.preTapMs - HOLD_TOLERANCE_MS - 1 }] }, holds).length);
   assert.ok(verifyTimeline({ ...good, events: [{ kind: 'result', label: 'Home balances', holdMs: 1000 }] }, holds).length);
   assert.ok(verifyTimeline({ ...good, events: [tap('Tap Send')] }, holds).length, 'a tap on a screen that was never held');
   assert.ok(verifyTimeline({ ...good, events: [settled('Home'), tap('Tap Receive'), tap('Choose Monero')] }, holds).length, 'a screen tapped through without its 12 s still');

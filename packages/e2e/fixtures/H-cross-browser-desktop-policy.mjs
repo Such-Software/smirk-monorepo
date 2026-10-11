@@ -13,6 +13,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { heldLongEnough } from './hold-timer.mjs';
 
 export const AREA = 'H-cross-browser-desktop';
 
@@ -225,12 +226,13 @@ export function verifyTimeline(timeline, holds = HOLDS) {
   for (const event of timeline.events ?? []) {
     try { assertStaticLabel(event.label); } catch { problems.push(`an ${event.kind} event has a non-static label`); }
     const floor = minimum[event.kind];
-    if (floor !== undefined && !(event.holdMs >= floor)) problems.push(`${event.kind} hold shorter than ${floor} ms`);
+    // Measured holds may be a timer tick short (hold-timer.mjs).
+    if (floor !== undefined && !heldLongEnough(event.holdMs, floor)) problems.push(`${event.kind} hold shorter than ${floor} ms`);
     if (event.kind === 'settled' || event.kind === 'result') {
-      if (event.holdMs >= floor) held = true;
+      if (heldLongEnough(event.holdMs, floor)) held = true;
     } else if (event.kind === 'tap' || event.kind === 'secret') {
       if (!held) problems.push(`a ${event.kind} came before its screen was held still`);
-      if (event.kind === 'secret' && !(event.preHoldMs >= holds.preTapMs)) problems.push(`secret pre-hold shorter than ${holds.preTapMs} ms`);
+      if (event.kind === 'secret' && !heldLongEnough(event.preHoldMs, holds.preTapMs)) problems.push(`secret pre-hold shorter than ${holds.preTapMs} ms`);
       held = false;
     }
   }

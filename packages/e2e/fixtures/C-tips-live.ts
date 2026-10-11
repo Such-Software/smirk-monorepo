@@ -38,6 +38,8 @@ import { WALLET_VARIABLES, readWalletPhrase, walletFileExists, walletFilePath } 
 import { DEVICE_SCALE, GuardedFootage, VIEWPORT, footageMode } from './C-tips-footage.js';
 import { TipLedger, type LedgerWalletName } from './C-tips-ledger.js';
 import { invocationId, privateDir, runLabel, stateDir } from './C-tips-run.mjs';
+import { watchContext } from './failure-context.js';
+import { recoverToHome } from './wallet-recovery.js';
 
 export type WalletName = LedgerWalletName;
 /** The three demo wallets every scenario uses. `bob-fed` is bob on a second backend. */
@@ -146,30 +148,16 @@ async function setupTabRoot(page: Page, tab: string): Promise<void> {
 }
 
 /**
- * An unlocked popup reopens on the screen it was left on: after a failed test
- * that can be a tip composer, a send or its receipt rather than Home. Return to
- * Home the way a user would (tap the Home tab, then again for its root), so a
- * restarted worker reaches the same starting point as a fresh one.
+ * What a freshly opened popup shows: onboarding, the lock screen, or Home's
+ * root. A kept profile reopens on whatever screen its last test left (a tip
+ * result, a Send draft, Settings); that is brought back to Home here, within
+ * a minute, and reported, instead of waiting minutes for a Home that the
+ * restored screen never shows.
  */
-async function backToHome(page: Page): Promise<void> {
-  const home = page.getByTestId('home-total-balance');
-  for (let attempt = 0; attempt < 3 && !(await home.isVisible().catch(() => false)); attempt++) {
-    await setupTabRoot(page, 'home');
-    await home.waitFor({ timeout: 60_000 }).catch(() => undefined);
-  }
-}
-
-/** What a freshly opened popup shows. */
-async function popupState(page: Page): Promise<'onboarding' | 'locked' | 'home'> {
-  const onboarding = page.getByTestId('onboarding-import-btn');
-  const locked = page.getByTestId('lockscreen-password-input');
-  const home = page.getByTestId('home-total-balance');
-  const nav = page.getByTestId('bottom-nav');
-  await onboarding.or(locked).or(home).or(nav).first().waitFor({ timeout: 90_000 });
-  if (await locked.isVisible().catch(() => false)) return 'locked';
-  if (await onboarding.isVisible().catch(() => false)) return 'onboarding';
-  await backToHome(page);
-  return 'home';
+async function popupState(page: Page, name: WalletName, firstPaintMs = 90_000): Promise<'onboarding' | 'locked' | 'home'> {
+  const { reached } = await recoverToHome(page, { wallet: name, firstPaintMs });
+  if (reached === 'bootstrap-error') throw new Error('the wallet opened on its sign-in error screen');
+  return reached;
 }
 
 async function waitForBalances(page: Page): Promise<void> {
@@ -229,15 +217,24 @@ async function importWallet(page: Page, words: string[], password: string): Prom
   await waitForBalances(page);
 }
 
-async function unlockExisting(page: Page, password: string): Promise<void> {
+async function unlockExisting(page: Page, password: string, name: WalletName): Promise<void> {
   await page.getByTestId('lockscreen-password-input').fill(password);
   await page.getByTestId('lockscreen-unlock-btn').click();
   const error = page.getByTestId('lockscreen-error');
-  await page.getByTestId('home-total-balance').or(error).or(page.getByTestId('bottom-nav')).first().waitFor({ timeout: 5 * 60_000 });
+  const lock = page.getByTestId('lockscreen-root');
+  // Unlocked (the lock screen goes) or refused (it says so). What it uncovers
+  // is the restored screen, not necessarily Home.
+  await expect
+    .poll(async () => ((await error.isVisible().catch(() => false)) || (await lock.count()) === 0), {
+      timeout: 2 * 60_000,
+      message: 'the lock screen neither opened nor refused the password',
+    })
+    .toBe(true);
   if (await error.isVisible().catch(() => false)) {
     throw new Error('the kept profile does not unlock with this run\'s derived password (was the run salt replaced?)');
   }
-  await backToHome(page);
+  // Signing in may solve proof of work before the wallet shows a screen.
+  if ((await popupState(page, name, 3 * 60_000)) !== 'home') throw new Error('the unlocked wallet did not reach Home');
   await waitForBalances(page);
 }
 
@@ -387,6 +384,8 @@ export class TipLane {
       deviceScaleFactor: DEVICE_SCALE,
       args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`],
     });
+    // Request shapes and screen test ids for the private failure log; no values.
+    watchContext(name, context);
     try {
       for (const page of context.pages()) this.watchRelay(name, page);
       context.on('page', (page) => this.watchRelay(name, page));
@@ -401,10 +400,10 @@ export class TipLane {
         this.footage.registerSecret(password);
         this.footage.registerPhraseWords(words);
         await page.goto(`chrome-extension://${extensionId}/popup.html`);
-        const state = await popupState(page);
+        const state = await popupState(page, name);
         // A kept profile (a restarted worker, or a rescue run) unlocks; a new one imports.
         if (state === 'onboarding') await importWallet(page, words, password);
-        else if (state === 'locked') await unlockExisting(page, password);
+        else if (state === 'locked') await unlockExisting(page, password, name);
         else await waitForBalances(page);
       } finally {
         words.fill('');
@@ -413,8 +412,9 @@ export class TipLane {
       if (options.backendUrl) {
         await switchBackend(page, options.backendUrl);
         await page.goto(`chrome-extension://${extensionId}/popup.html`);
-        const state = await popupState(page);
-        if (state === 'locked') await unlockExisting(page, password);
+        const state = await popupState(page, name);
+        if (state === 'locked') await unlockExisting(page, password, name);
+        else if (state !== 'home') throw new Error('the wallet showed onboarding after switching its backend');
         await waitForBalances(page);
       }
       await maximizeAutoLock(page);
@@ -432,8 +432,9 @@ export class TipLane {
     } catch (error) {
       passwords.delete(name);
       await context.close().catch(() => undefined);
-      // Names only: a setup failure may have happened on a phrase screen.
-      throw new Error(`${name} setup failed: ${String(error instanceof Error ? error.message : error).split('\n')[0]}`);
+      // Names only: a setup failure may have happened on a phrase screen. The
+      // original stays the cause, so the private log can name its class.
+      throw new Error(`${name} setup failed: ${String(error instanceof Error ? error.message : error).split('\n')[0]}`, { cause: error });
     }
   }
 

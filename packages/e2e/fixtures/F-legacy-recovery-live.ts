@@ -47,6 +47,7 @@ import {
   type ReleaseFacts,
   type WalletName,
 } from './F-legacy-recovery-lane.mjs';
+import { watchContext } from './failure-context.js';
 
 export { WALLET_NAMES, type WalletName };
 
@@ -299,6 +300,8 @@ export class LiveWallets {
       args: [`--disable-extensions-except=${this.extension}`, `--load-extension=${this.extension}`],
     });
     this.contexts.push(context);
+    // Request shapes and screen test ids for the private failure log; no values.
+    watchContext(name, context);
     context.setDefaultTimeout(ACTION_TIMEOUT_MS);
     context.setDefaultNavigationTimeout(ACTION_TIMEOUT_MS);
     const events: NetEvent[] = [];

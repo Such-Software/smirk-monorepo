@@ -100,6 +100,26 @@ areas A to H):
   snapshot even when the screenshot setting is off.
 - The private reporter prints source locations and outcomes. It does not forward
   browser stdout, assertion values, attachments, steps or HTML reports.
+- Each failure is explained, by shape only, in a private log (JSON lines, 0600
+  in a 0700 directory): the error class (its class name, the Playwright call or
+  matcher, a fixed category such as action timeout, and the file and line that
+  threw), the lane step label that was running, the test ids on every wallet
+  screen with id-like parts replaced by `*`, and recent requests as method, host,
+  route words and status. Never a message, page text, input value, query,
+  header or body. `E2E_PRIVATE_LOG` names the file (the v0.3.1 runner puts it
+  beside each phase log); otherwise it goes under `~/Build/smirk-e2e/private-logs`.
+  `fixtures/failure-record.mjs` defines the shapes, and the reporter re-shapes
+  everything a worker hands it before writing.
+- Playwright traces stay off even with screenshots and snapshots off: a trace
+  still records what `fill` typed, what `textContent` read and the console, and
+  its network log exists only with snapshots on, where it keeps request headers.
+  `scripts/test-private-capture.mjs` proves both against the installed version.
+- A lane that reopens a kept wallet profile brings it back to Home's root from
+  whatever screen it restored (`fixtures/wallet-recovery.ts`): a result's own
+  close control, Back through a Send draft that holds no funds in flight, a
+  coin screen's Back, then the Home tab, within a minute. It never cancels a
+  swap or a Grin exchange, never answers a password prompt, and logs where it
+  started and the moves it made.
 - Footage markers retain no values, URLs or sidecar files. `CAPTURE_VIDEO` and
   `MARKETING_SHOTS` no longer activate capture. The old marketing spec stays closed.
 - Debug logging and generic reporter overrides refuse because they can print

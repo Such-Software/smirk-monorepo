@@ -1,4 +1,10 @@
-/** Wallet tests may display or enter secrets. This suite has no capture lane. */
+/**
+ * Wallet tests may display or enter secrets. This suite has no capture lane.
+ * Traces stay off too, even with screenshots and snapshots off: a trace keeps
+ * call parameters and results and console text (fixtures/failure-record.mjs
+ * explains, scripts/test-private-capture.mjs proves). Failures are explained in
+ * the private reporter's log instead.
+ */
 export const PRIVATE_USE = Object.freeze({ trace: 'off', screenshot: 'off', video: 'off' });
 
 export function assertPrivateCapture(options = {}, env = process.env) {

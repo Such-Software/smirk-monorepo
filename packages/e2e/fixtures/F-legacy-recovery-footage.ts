@@ -53,6 +53,8 @@ import {
   type FrameVerdict,
 } from './F-legacy-recovery-guard.mjs';
 import { ACTION_TIMEOUT_MS, FOOTAGE_RUN, LANE_ID, footageEnabled, footageRoot } from './F-legacy-recovery-lane.mjs';
+import { sleepAtLeast } from './hold-timer.mjs';
+import { noteStep } from './failure-context.js';
 
 /** Static pause before every tap, typed value or toggle. */
 export const TAP_PAUSE_MS = 6_000;
@@ -337,16 +339,15 @@ export class WalletFootage {
   }
 
   mark(label: FootageLabel): void {
+    noteStep(label);
     this.marks.push({ label, at: Date.now(), test: this.currentTest });
   }
 
   private async hold(kind: HoldEntry['kind'], label: FootageLabel, plannedMs: number): Promise<void> {
     if (!this.enabled) return;
     const from = Date.now();
-    await sleep(plannedMs);
-    // A timer can fire a millisecond early by the wall clock, and the encoder
-    // refuses a hold even 1 ms short of the policy: top it up until it is not.
-    while (Date.now() - from < plannedMs) await sleep(plannedMs - (Date.now() - from));
+    // Never a timer tick short: the encoder compares this with the policy.
+    await sleepAtLeast(plannedMs);
     this.holds.push({ kind, label, plannedMs, from, until: Date.now() });
   }
 

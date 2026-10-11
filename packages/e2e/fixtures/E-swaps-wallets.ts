@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, expect, type BrowserContext, type Dialog, type Locator, type Page } from '@playwright/test';
 import { Canary, PageRecorder, WalletFootage, WalletTimeline } from './E-swaps-footage.js';
+import { watchContext } from './failure-context.js';
 
 export type WalletName = 'alice' | 'bob' | 'carol';
 export const WALLET_NAMES: readonly WalletName[] = ['alice', 'bob', 'carol'];
@@ -160,6 +161,8 @@ export class LiveWallet {
         deviceScaleFactor: 2,
         args: [`--disable-extensions-except=${opts.extensionDir}`, `--load-extension=${opts.extensionDir}`],
       });
+      // Request shapes and screen test ids for the private failure log; no values.
+      watchContext(opts.name, context);
       let [worker] = context.serviceWorkers();
       if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 30_000 });
       const extensionId = new URL(worker.url()).host;

@@ -9,10 +9,10 @@
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "e2e": "bash scripts/build-extension.sh && playwright test",
-    "test:privacy": "node --test scripts/test-private-capture.mjs",
+    "test:privacy": "node --test scripts/test-private-capture.mjs fixtures/failure-record.test.mjs && node --import tsx --test scripts/private-reporter.test.mjs",
     "test:e-swaps-guards": "node --test fixtures/E-swaps-guard.test.mjs fixtures/E-swaps-page.test.mjs fixtures/E-swaps-policy.test.mjs fixtures/E-swaps-build.test.mjs fixtures/E-swaps-ledger.test.mjs scripts/E-swaps-encode.test.mjs && node scripts/E-swaps-check-live-spec.mjs",
     "test:layout": "playwright test -c playwright.layout.config.ts",
-    "test:live-v031-guards": "node --test demo/guard.test.mjs fixtures/footage-policy.test.mjs fixtures/B-send-receive-history-guard.test.mjs scripts/B-send-receive-history-footage.test.mjs fixtures/F-legacy-recovery-guard.test.mjs fixtures/F-legacy-recovery-lane.test.mjs fixtures/F-legacy-recovery-release.test.mjs scripts/F-legacy-recovery-encode.test.mjs fixtures/H-cross-browser-desktop-guard.test.mjs scripts/live-v031.test.mjs && node --import tsx --test fixtures/C-tips-guard.test.mjs fixtures/C-tips-encode.test.mjs fixtures/C-tips-forge.test.mjs fixtures/C-tips-lane.test.mjs scripts/D-messaging-federation.test.mjs fixtures/G-premium.test.mjs scripts/live-v031-policy.test.mjs && npm run test:e-swaps-guards && node scripts/B-send-receive-history-check-live-specs.mjs && node scripts/D-messaging-federation-check-live-specs.mjs",
+    "test:live-v031-guards": "node --test demo/guard.test.mjs fixtures/footage-policy.test.mjs fixtures/hold-timer.test.mjs fixtures/B-send-receive-history-guard.test.mjs scripts/B-send-receive-history-footage.test.mjs fixtures/F-legacy-recovery-guard.test.mjs fixtures/F-legacy-recovery-lane.test.mjs fixtures/F-legacy-recovery-release.test.mjs scripts/F-legacy-recovery-encode.test.mjs fixtures/H-cross-browser-desktop-guard.test.mjs scripts/live-v031.test.mjs && node --import tsx --test fixtures/wallet-recovery.test.mjs fixtures/C-tips-guard.test.mjs fixtures/C-tips-encode.test.mjs fixtures/C-tips-forge.test.mjs fixtures/C-tips-lane.test.mjs scripts/D-messaging-federation.test.mjs fixtures/G-premium.test.mjs scripts/live-v031-policy.test.mjs && npm run test:e-swaps-guards && node scripts/B-send-receive-history-check-live-specs.mjs && node scripts/D-messaging-federation-check-live-specs.mjs && npm run test:privacy",
     "test:live-v031": "node scripts/live-v031.mjs"
   },
   "devDependencies": {

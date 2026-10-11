@@ -12,6 +12,7 @@ const EXTENSION_DIST =
   process.env.EXTENSION_DIST ?? join(__dirname, '..', '..', 'extension', 'dist');
 
 import { Footage } from './footage.js';
+import { attachPrivateContext, watchContext } from './failure-context.js';
 
 // Legacy exports remain for closed marketing specs. Capture cannot be enabled
 // in a wallet context; a future demo needs its own reviewed secret-free fixture.
@@ -50,9 +51,13 @@ export const test = base.extend<{
         '--no-sandbox',
       ],
     });
+    // Request shapes and screen test ids for the private failure log; no values.
+    watchContext('wallet', context);
     try {
       await use(context);
     } finally {
+      // Explained (value-free) while the pages are still open, then withheld.
+      await attachPrivateContext(testInfo);
       sanitizeTestErrors(testInfo);
       await context.close();
     }

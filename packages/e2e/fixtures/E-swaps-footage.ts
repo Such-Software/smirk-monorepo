@@ -43,6 +43,8 @@ import type { Locator, Page } from '@playwright/test';
 import { CARD_PATTERNS, Canary, MASK_SELECTORS, assertStaticLabel, frameSurface, type FrameSurface } from './E-swaps-guard.mjs';
 import { loadingProbe } from './E-swaps-page.mjs';
 import { AUTO_CLOSE_TAPS, HOLD } from './E-swaps-policy.mjs';
+import { sleepAtLeast } from './hold-timer.mjs';
+import { noteStep } from './failure-context.js';
 
 export { Canary, HOLD, assertStaticLabel };
 
@@ -303,10 +305,8 @@ export class WalletFootage {
   private async hold(kind: HoldKind, label: string, requiredMs: number, extra: Pick<HoldRecord, 'beforeAutoClose'> = {}): Promise<void> {
     if (!this.enabled) return;
     const from = Date.now();
-    await sleep(requiredMs);
-    // A timer can fire a millisecond early by the wall clock, and the encoder
-    // refuses a hold even 1 ms short of the policy: top it up until it is not.
-    while (Date.now() - from < requiredMs) await sleep(requiredMs - (Date.now() - from));
+    // Never a timer tick short: the encoder compares this with the policy.
+    await sleepAtLeast(requiredMs);
     this.timeline.hold({ kind, label, from, until: Date.now(), requiredMs, ...extra });
   }
 
@@ -340,6 +340,7 @@ export class WalletFootage {
     target: Locator,
     options: { timeout?: number; beforeAutoClose?: boolean; beforeClick?: () => void } = {},
   ): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     if (options.beforeAutoClose && !AUTO_CLOSE_TAPS.includes(label)) {
       throw new Error(`"${label}" is not a reviewed auto-close tap; it must wait for the settle`);
@@ -356,6 +357,7 @@ export class WalletFootage {
 
   /** As `tap`, then type a public value (an amount, an address). */
   async fill(label: string, target: Locator, value: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     await this.settleIfUnheld();
     await target.waitFor({ state: 'visible', timeout: 60_000 });
@@ -368,6 +370,7 @@ export class WalletFootage {
 
   /** Wait for loading text to clear, then hold the settled screen. */
   async settled(label: string, options: { patienceMs?: number } = {}): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     const { page } = this.current();
     const deadline = Date.now() + (options.patienceMs ?? 45_000);
@@ -382,6 +385,7 @@ export class WalletFootage {
 
   /** Hold a key result on screen (it also counts as the settled hold). */
   async result(label: string): Promise<void> {
+    noteStep(label);
     assertStaticLabel(label);
     this.timeline.marker(label);
     await this.hold('result', label, HOLD.resultMs);
