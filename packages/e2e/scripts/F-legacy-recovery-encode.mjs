@@ -27,9 +27,9 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { heldLongEnough } from '../fixtures/hold-timer.mjs';
+import { RC_FOOTAGE_ROOT } from '../fixtures/release-candidate.mjs';
 
 const POLICY = { 'pre-tap': 6_000, settled: 12_000, result: 25_000 };
 /** Slack when lining a hold up with the step it belongs to; hold lengths use hold-timer.mjs. */
@@ -175,7 +175,7 @@ function captionsAss(marks, start, endMs, height) {
 }
 
 function main() {
-  const run = resolve(argument('run', join(homedir(), 'Build', 'smirk-e2e', 'v0.3.1-run-11204', 'footage')));
+  const run = resolve(argument('run', RC_FOOTAGE_ROOT));
   const fontDefault = ['/System/Library/Fonts/Supplemental/Arial Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'].find(existsSync);
   const font = argument('font', fontDefault);
   if (!font || !existsSync(font)) throw new Error('caption font not found; pass --font');

@@ -4,7 +4,7 @@
  * A manifest version proves nothing about which build is loaded: any local
  * build of the release commit says 0.3.1 too. This check proves the unpacked
  * directory in EXTENSION_DIST is exactly the staged Chrome zip:
- *   1. the zip's SHA-256 equals the pinned value (run 11204 by default), and,
+ *   1. the zip's SHA-256 equals the pinned value (release-candidate.json), and,
  *      when the release provenance sits beside it, the provenance names the
  *      same hash;
  *   2. every file in the zip exists in the directory with identical bytes;
@@ -17,9 +17,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
+import { RC } from './release-candidate.mjs';
 
-/** The v0.3.1 release candidate: run 11204's Chrome zip. */
-export const PINNED_CHROME_ZIP_SHA256 = 'e64fb7aca1012b10cc078fcdc272685e0966e356297a5c8aa59485aa08485776';
+/** The release candidate's Chrome zip (release-candidate.json). */
+export const PINNED_CHROME_ZIP_SHA256 = RC.chromeZip.sha256;
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 

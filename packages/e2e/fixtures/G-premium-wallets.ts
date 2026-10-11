@@ -19,7 +19,7 @@
  *   LIVE_EXPECT_VERSION manifest version to insist on (default 0.3.1)
  *   LIVE_WALLET_FILE    custody file (default: packages/smoke-tests/secrets/smoke-mnemonics.env)
  *   FOOTAGE=guarded     record through the guarded recorder
- *   FOOTAGE_DIR         footage root (default ~/Build/smirk-e2e/v0.3.1-run-11204/footage)
+ *   FOOTAGE_DIR         footage root (default ~/Build/smirk-e2e/v<version>-run-<run>/footage)
  */
 
 import { randomBytes } from 'node:crypto';

@@ -41,7 +41,7 @@
  *   E2E_LIVE_EXTENSION_ZIP      the staged store zip to test, verified against
  *   E2E_LIVE_EXTENSION_SHA256   ...this hash before unpacking; or else
  *   EXTENSION_DIST              an unpacked build
- *   E2E_LIVE_RUN_LABEL          e.g. run-11204; names the run directory
+ *   E2E_LIVE_RUN_LABEL          e.g. run-<run>; names the run directory
  *   E2E_LIVE_RUN_DIR            overrides ~/Build/smirk-e2e/v<version>-<label>
  *
  * The run directory (0700) holds the address book, the spend ledger, a

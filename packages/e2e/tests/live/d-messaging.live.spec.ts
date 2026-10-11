@@ -32,7 +32,7 @@
  *
  * Running it (owner-approved demo wallets; never `set -a` the custody file):
  *
- *   E2E_LIVE=1 E2E_LIVE_RELAY=1 FOOTAGE=guarded E2E_RUN_LABEL=run-11204 \
+ *   E2E_LIVE=1 E2E_LIVE_RELAY=1 FOOTAGE=guarded E2E_RUN_LABEL=run-<run> \
  *   E2E_LIVE_LINK=1 ALLOW_PROD_WRITES=1 [E2E_LIVE_CAROL_HANDLE=<name>] [E2E_LIVE_FEED_POST=1] \
  *   BACKEND_URL=https://api.smirk.cash/api/v1 \
  *   EXTENSION_DIST=<unpacked, hash-verified smirk-wallet-chrome-v0.3.1.zip> \

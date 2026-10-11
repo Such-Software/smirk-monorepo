@@ -27,12 +27,12 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
 import { MASK_SELECTORS, PREMIUM_GUARD, frameVerdict, type FrameVerdictKind } from './G-premium-guard.mjs';
 import { sleepAtLeast } from './hold-timer.mjs';
 import { noteStep } from './failure-context.js';
+import { RC_FOOTAGE_ROOT } from './release-candidate.mjs';
 
 /** Static pause before every tap or entry, so each action reads on video. */
 export const TAP_PAUSE_MS = 6_000;
@@ -48,7 +48,7 @@ export const RESUME_CLEAN_PASSES = 2;
 export const UNRECORDED_PAUSE_MS = 400;
 
 export const AREA = 'G-premium';
-export const DEFAULT_FOOTAGE_ROOT = join(homedir(), 'Build', 'smirk-e2e', 'v0.3.1-run-11204', 'footage');
+export const DEFAULT_FOOTAGE_ROOT = RC_FOOTAGE_ROOT;
 
 export type HoldKind = 'tap' | 'type' | 'close' | 'settled' | 'result';
 /** Policy minimum per hold kind; the processor refuses anything shorter. */

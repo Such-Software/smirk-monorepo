@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
- * Area H live lane: the Smirk Wallet v0.3.1 release candidate (run 11204) in
+ * Area H live lane: the Smirk Wallet release candidate (fixtures/release-candidate.json) in
  * Firefox, in Firefox with LibreWolf-style hardening, and in Chromium, with the
  * guarded recorder running throughout.
  *
  * Lanes
  *   firefox      Firefox 156 + geckodriver 0.37.1, staged Firefox zip
- *                (sha256 d1bc2463...) installed temporarily; the moz-extension
+ *                (its pinned SHA-256) installed temporarily; the moz-extension
  *                UUID is pinned through extensions.webextensions.uuids.
  *   firefox-rfp  The same with resistFingerprinting + letterboxing, WebGL off
  *                and strict tracking protection (LibreWolf defaults). The
  *                measured-layout fallback is the known expected skip there.
- *   chromium     Playwright Chromium with the staged Chrome zip (e64fb7ac...).
+ *   chromium     Playwright Chromium with the staged Chrome zip (pinned the same way).
  *                Its last step reads Home again and writes the balance
  *                reference the macOS desktop smoke compares against.
  *
@@ -56,7 +56,7 @@
  * custody step (place it once, mode 0600, and remove it after the run).
  *
  * Coverage note: "Chrome: all core flows on the staged Chrome zip" belongs to
- * areas A to G, which verify and load the same zip (e64fb7ac...) themselves.
+ * areas A to G, which verify and load the same zip themselves.
  * This lane covers the core flows above on that zip in Chromium, and the same
  * flows on the staged Firefox zip.
  *
@@ -69,7 +69,7 @@
  *     [--funded xmr,wow[,btc,ltc,grin]] [--signin-budget N] [--share-signin-budget]
  *
  * Output (0700), one directory per invocation, never overwritten:
- *   ~/Build/smirk-e2e/v0.3.1-run-11204/footage/H-cross-browser-desktop/<UTC stamp>/<lane>/
+ *   ~/Build/smirk-e2e/v<version>-run-<run>/footage/H-cross-browser-desktop/<UTC stamp>/<lane>/
  *     timeline.json, frames/, <lane>.mp4, CHAPTERS-<lane>.md, evidence.json
  *   .../H-cross-browser-desktop/balances-reference.json (latest Chromium read)
  * Nothing is uploaded or promoted.

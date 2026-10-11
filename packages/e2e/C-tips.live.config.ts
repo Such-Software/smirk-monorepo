@@ -17,10 +17,10 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
  *   E2E_LIVE=1 E2E_LIVE_MONEY=1 ALLOW_PROD_WRITES=1 FOOTAGE=guarded
  *   BACKEND_URL=https://api.smirk.cash/api/v1
  *   SMOKE_WALLET_FILE=<owner-only demo wallet file>
- *   E2E_RELEASE_ZIP     default ~/Build/smirk-release/v0.3.1-run-11204/staged/smirk-wallet-chrome-v0.3.1.zip
- *   E2E_RELEASE_SHA256  default the run-11204 Chrome zip (e64fb7ac...)
+ *   E2E_RELEASE_ZIP     default the candidate's staged Chrome zip (fixtures/release-candidate.json)
+ *   E2E_RELEASE_SHA256  default that zip's recorded SHA-256
  *   E2E_RELEASE_VERSION default 0.3.1
- *   E2E_RUN_LABEL       default v0.3.1-run-11204 (names the run directory)
+ *   E2E_RUN_LABEL       default v<version>-run-<run> of the candidate (names the run directory)
  *   E2E_CLAIM_BOB_HANDLE=<name>    let the lane claim a handle for bob if he has none
  *   E2E_FOREIGN_NIP05=name@domain  bob's address on a foreign NIP-05 domain
  *   FED_BACKEND_URL     a second, independent backend

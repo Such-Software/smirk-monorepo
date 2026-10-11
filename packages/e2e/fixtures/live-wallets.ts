@@ -19,7 +19,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { inspect } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -28,21 +28,22 @@ import { test as base } from './private-test.js';
 import { ACTION_TIMEOUT_MS, GuardedFootage, assertStaticLabel, surfaceOf, waitForQuiet } from './guarded-footage.js';
 import { watchContext } from './failure-context.js';
 import { recoverToHome } from './wallet-recovery.js';
+import { RC } from './release-candidate.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
 
 /**
- * The release candidate this lane was written for: run 11204, source 14a74e10,
- * built through the Builds wrapper b615d731. Hashes are of the staged store zips.
+ * The release candidate under test (fixtures/release-candidate.json): its
+ * source, the Builds wrapper it was built through, and the staged store zips.
  */
 export const RELEASE_CANDIDATE = Object.freeze({
-  version: '0.3.1',
+  version: RC.version,
   /** Short commits the build stamp may carry: the source, or its Builds wrapper. */
-  commits: Object.freeze(['14a74e1', 'b615d73']),
-  chromeZip: join(homedir(), 'Build', 'smirk-release', 'v0.3.1-run-11204', 'staged', 'smirk-wallet-chrome-v0.3.1.zip'),
-  chromeZipSha256: 'e64fb7aca1012b10cc078fcdc272685e0966e356297a5c8aa59485aa08485776',
-  firefoxZipSha256: 'd1bc246338f1fb520717a0e76e125c1a301e9b58743e8a027cadfc2d4e6647c4',
+  commits: RC.stampCommits,
+  chromeZip: join(RC.stagedDir, RC.chromeZip.file),
+  chromeZipSha256: RC.chromeZip.sha256,
+  firefoxZipSha256: RC.firefoxZip.sha256,
 });
 
 /** The production website the sign-in scenario uses. */

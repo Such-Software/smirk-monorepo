@@ -13,6 +13,8 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   DECISIONS,
+  E_TESTS,
+  NONLOGS_SWAP_TITLE,
   PHASES,
   REQUIRED_GATES,
   Refusal,
@@ -27,6 +29,7 @@ import {
   planPhases,
   readDecisions,
   secretEnvProblems,
+  TROCADOR_SWAP_TITLE,
 } from './live-v031.mjs';
 
 const E2E = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -201,11 +204,23 @@ test("each decision opens exactly the lane behaviour it names, and a no closes i
     assert.ok(!(yes(id).E2E_LIVE_ACK_GAPS ?? '').split(',').includes('federation'));
   }
 
-  const eYes = phaseCommands(phase('E'), ctx(ALL_YES))[0].args;
-  const eNo = phaseCommands(phase('E'), ctx(ALL_NO))[0].args;
-  assert.ok(!eYes.includes('--grep-invert'));
-  assert.ok(eNo.includes('--grep-invert'), 'no NonLogs swap: that one test is deselected');
-  assert.equal(Number(yes('E').E2E_MIN_EXECUTED) - Number(no('E').E2E_MIN_EXECUTED), 1, 'and the floor drops by exactly that test');
+  const eArgs = (decisions) => phaseCommands(phase('E'), ctx(decisions))[0].args;
+  const inverted = (decisions) => {
+    const args = eArgs(decisions);
+    const at = args.indexOf('--grep-invert');
+    return at < 0 ? null : new RegExp(args[at + 1]);
+  };
+  assert.equal(inverted(ALL_YES), null, 'every swap approved: nothing is deselected');
+  for (const [key, title, other] of [['nonlogsSwap', NONLOGS_SWAP_TITLE, TROCADOR_SWAP_TITLE], ['trocadorSwap', TROCADOR_SWAP_TITLE, NONLOGS_SWAP_TITLE]]) {
+    const one = { ...ALL_YES, [key]: false };
+    assert.ok(inverted(one).test(title), `${key} no: its test is deselected`);
+    assert.ok(!inverted(one).test(other), `${key} no: the other swap stays selected`);
+    assert.equal(Number(yes('E').E2E_MIN_EXECUTED) - Number(phaseEnv(phase('E'), ctx(one, passThrough), passThrough).E2E_MIN_EXECUTED), 1, `${key} no: the floor drops by exactly that test`);
+  }
+  assert.ok(inverted(ALL_NO).test(NONLOGS_SWAP_TITLE) && inverted(ALL_NO).test(TROCADOR_SWAP_TITLE));
+  assert.equal(Number(yes('E').E2E_MIN_EXECUTED) - Number(no('E').E2E_MIN_EXECUTED), 2, 'both declined: the floor drops by both');
+  assert.equal(yes('E').V031_TROCADOR_SWAP, 'yes', 'the lane sees the approval it re-checks');
+  assert.equal(phaseEnv(phase('E'), ctx(ALL_NO, passThrough), { ...passThrough, V031_TROCADOR_SWAP: 'yes' }).V031_TROCADOR_SWAP, undefined, 'a declined swap is closed in the lane even if the variable was inherited');
 
   assert.equal(yes('G').E2E_PREMIUM_PURCHASE, '1');
   for (const name of ['E2E_PREMIUM_PURCHASE', 'E2E_LIVE_MONEY', 'E2E_PREMIUM_POST']) assert.equal(no('G')[name], undefined);
@@ -230,4 +245,15 @@ test("G's encoder is given only the run directories this attempt created", () =>
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("E's test count and the titles its decisions deselect match the spec", () => {
+  const spec = readFileSync(join(E2E, 'tests', 'live', 'e-swaps.live.spec.ts'), 'utf8');
+  const titles = [...spec.matchAll(/^\s+test\('([^']+)'/gm)].map((m) => m[1]);
+  assert.equal(titles.length, E_TESTS, 'E_TESTS is the number of tests in the E spec');
+  for (const title of [NONLOGS_SWAP_TITLE, TROCADOR_SWAP_TITLE]) {
+    assert.equal(titles.filter((t) => t.includes(title)).length, 1, `exactly one E test carries "${title}"`);
+  }
+  const config = readFileSync(join(E2E, 'E-swaps.live.config.ts'), 'utf8');
+  assert.equal(config.match(/E2E_MIN_EXECUTED \?\?= '(\d+)'/)?.[1], String(E_TESTS), "the lane's own floor is E_TESTS");
 });

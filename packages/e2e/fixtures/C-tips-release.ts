@@ -2,8 +2,8 @@
  * C-tips release binding: the live lane tests exactly the release candidate.
  *
  * The candidate is a byte-identical store zip, not a local build: its SHA-256
- * must equal the one recorded for the run (by default the v0.3.1 run-11204
- * Chrome zip), its manifest must carry the release version, and it is unpacked
+ * must equal the one recorded for the run (by default the candidate's Chrome
+ * zip, release-candidate.json), its manifest must carry the release version, and it is unpacked
  * here, by the lane, into the run's private state directory. EXTENSION_DIST is
  * then set to that directory for every worker; an EXTENSION_DIST the operator
  * set to anything else is refused rather than silently tested instead.
@@ -11,14 +11,14 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createReadStream, existsSync, readFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { privateDir, stateDir } from './C-tips-run.mjs';
+import { RC } from './release-candidate.mjs';
 
 export const CANDIDATE = Object.freeze({
-  zip: join(homedir(), 'Build', 'smirk-release', 'v0.3.1-run-11204', 'staged', 'smirk-wallet-chrome-v0.3.1.zip'),
-  sha256: 'e64fb7aca1012b10cc078fcdc272685e0966e356297a5c8aa59485aa08485776',
-  version: '0.3.1',
+  zip: join(RC.stagedDir, RC.chromeZip.file),
+  sha256: RC.chromeZip.sha256,
+  version: RC.version,
 });
 
 export async function sha256File(path: string): Promise<string> {
