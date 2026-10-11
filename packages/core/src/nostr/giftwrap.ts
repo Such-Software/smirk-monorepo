@@ -15,7 +15,8 @@
  * outcome even though the wrapper bytes differ each call.
  */
 
-import { wrapEvent } from 'nostr-tools/nip59';
+import { createRumor, createSeal, wrapEvent } from 'nostr-tools/nip59';
+import { wrapSealWithPow } from './pow-wrap';
 import { decrypt as nip44Decrypt, getConversationKey } from 'nostr-tools/nip44';
 import { verifyEvent } from 'nostr-tools/pure';
 
@@ -68,15 +69,19 @@ export function wrapPayment(
   sender: NostrIdentity,
   recipientPubkeyHex: string,
   payload: PaymentPayload,
+  powBits = 0,
 ): PaymentGiftWrap {
   const rumor = buildPaymentRumor(payload, recipientPubkeyHex);
   // nostr-tools types the rumor loosely (an unsigned event template); our
   // UnsignedRumor supplies kind/content/tags, which is all createRumor reads.
-  return wrapEvent(
-    rumor as unknown as Parameters<typeof wrapEvent>[0],
-    sender.privateKey,
-    recipientPubkeyHex,
-  ) as PaymentGiftWrap;
+  const template = rumor as unknown as Parameters<typeof wrapEvent>[0];
+  if (powBits > 0) {
+    // The outer event is signed by an ephemeral key, so the relay treats every
+    // wrap as coming from an unknown author: mine the proof-of-work it asks for.
+    const seal = createSeal(createRumor(template, sender.privateKey), sender.privateKey, recipientPubkeyHex);
+    return wrapSealWithPow(seal, recipientPubkeyHex, powBits) as unknown as PaymentGiftWrap;
+  }
+  return wrapEvent(template, sender.privateKey, recipientPubkeyHex) as PaymentGiftWrap;
 }
 
 /** The result of opening a gift-wrap: who really sent it (from the inner seal,

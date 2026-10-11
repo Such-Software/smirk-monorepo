@@ -182,6 +182,12 @@ export interface NostrChannelIO {
   outboundRelays(recipientPubkeyHex: string): Promise<string[]>;
   /** Relays to read our own inbox from (the backend relay ∪ our NIP-17 list). */
   inboxRelays(): Promise<string[]>;
+  /**
+   * NIP-13 bits to mine on every outgoing wrap. A wrap's outer signer is
+   * ephemeral, so the relay treats it as an unknown author; ours advertises the
+   * bits it requires as `messaging.inbound_pow_bits`. Optional: absent means 0.
+   */
+  powBits?(): Promise<number>;
 }
 
 function grinPayload(
@@ -310,7 +316,7 @@ export class NostrGiftwrapChannel implements SlatepackChannel {
     recipientPubkeyHex: string,
     payload: GrinSlatepackPayload | TipPayload,
   ): Promise<void> {
-    const wrap = wrapPayment(this.io.identity, recipientPubkeyHex, payload);
+    const wrap = wrapPayment(this.io.identity, recipientPubkeyHex, payload, (await this.io.powBits?.()) ?? 0);
     const relays = await this.io.outboundRelays(recipientPubkeyHex);
     await this.io.publish(relays, wrap);
   }
