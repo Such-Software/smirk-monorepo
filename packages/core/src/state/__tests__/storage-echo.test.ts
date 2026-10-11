@@ -17,7 +17,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SessionStateStore, canonicalJson, type SessionState } from '../session-state';
+import { SessionStateStore, canonicalJson, withoutWriteStamp, type SessionState } from '../session-state';
 import type { PlatformStorage } from '../platform';
 
 /** Objects rebuilt with sorted keys, as chrome.storage hands them back. */
@@ -82,6 +82,11 @@ async function settled(): Promise<void> {
   for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
 }
 
+/** The session state storage holds, without the stamp naming its writer. */
+function storedState(storage: ChromeLikeStorage): SessionState {
+  return withoutWriteStamp(storage.peek('k')) as SessionState;
+}
+
 test('the double reproduces the probed order: the announcement comes before the write settles', async () => {
   const storage = new ChromeLikeStorage();
   const order: string[] = [];
@@ -115,7 +120,7 @@ test('Open Send: the Send draft written between two other writes is still there 
   });
   await settled();
 
-  const stored = storage.peek('k') as SessionState;
+  const stored = storedState(storage);
   assert.equal(stored.route.current, 'home/send');
   assert.deepEqual(stored.wizards.send?.fields, { fromAssetId: 'btc', amountText: '0.00015' }, 'the Send draft survived');
   assert.equal(stored.wizards.send?.step, 2);
@@ -136,7 +141,7 @@ test('a run of updates leaves cache and storage equal, and every update applied'
     });
   }
   await settled();
-  const stored = storage.peek('k') as SessionState;
+  const stored = storedState(storage);
   for (let i = 0; i < 20; i++) assert.equal(stored.scroll[`screen-${i}`], i, `update ${i} applied`);
   assert.deepEqual(await store.load(), stored);
   store.destroy();
@@ -178,12 +183,133 @@ test("another window's write read while this window's writes land does not repla
     s.route = { current: 'home/send' };
   });
   await settled();
-  const stored = storage.peek('k') as SessionState;
+  const stored = storedState(storage);
   assert.equal(stored.route.current, 'home/send');
   assert.deepEqual(await popup.load(), stored, "the popup's cache holds what storage holds");
   assert.deepEqual(await popout.load(), stored, "the pop-out's cache holds what storage holds");
   popup.destroy();
   popout.destroy();
+});
+
+// Another window can write a state equal in every field to one this window
+// wrote earlier (A, then B, then A again). Matching own writes by content
+// alone ignored it, kept the in-between value, and wrote that back on the next
+// update. Review of #47, 2026-10-11.
+
+test('auto-lock set back to "every time" in another window is adopted, though it equals an earlier write here', async () => {
+  const storage = new ChromeLikeStorage();
+  const tab = new SessionStateStore(storage, 'k');
+  // The wallet tab opens Settings with auto-lock at "every time" (0).
+  await tab.update((s) => {
+    s.route = { current: 'settings' };
+  });
+  await settled();
+  const popout = new SessionStateStore(storage, 'k');
+  await popout.load();
+  const shown: number[] = [];
+  tab.subscribe((s) => shown.push(s.ui.autoLockMinutes));
+
+  // In the pop-out the user picks "1 hour", then "every time" again.
+  await popout.update((s) => {
+    s.ui.autoLockMinutes = 60;
+  });
+  await settled();
+  await popout.update((s) => {
+    s.ui.autoLockMinutes = 0;
+  });
+  await settled();
+
+  // The tab's unlock reads this to decide whether signing keys stay cached.
+  assert.equal((await tab.load()).ui.autoLockMinutes, 0, 'the tab holds "every time"');
+  assert.equal(shown.at(-1), 0, 'the tab shows "every time"');
+
+  // The tab's next write must not put the hour back.
+  await tab.update((s) => {
+    s.scroll.settings = 1;
+  });
+  await settled();
+  assert.equal(storedState(storage).ui.autoLockMinutes, 0, 'storage keeps "every time"');
+  assert.equal((await popout.load()).ui.autoLockMinutes, 0, 'the pop-out keeps "every time"');
+  tab.destroy();
+  popout.destroy();
+});
+
+test('a Send recipient and a balance mask put back in another window stay put back', async () => {
+  const storage = new ChromeLikeStorage();
+  const tab = new SessionStateStore(storage, 'k');
+  await tab.update((s) => {
+    s.route = { current: 'home/send' };
+    s.ui.balanceHidden = true;
+    s.wizards.send = { step: 1, startedAt: 1, fields: { fromAssetId: 'btc', toAddress: 'addr-intended' } };
+  });
+  await settled();
+  const popout = new SessionStateStore(storage, 'k');
+  await popout.load();
+
+  // The pop-out pastes another address and reveals balances, then undoes both.
+  await popout.update((s) => {
+    s.wizards.send!.fields.toAddress = 'addr-mistaken';
+    s.ui.balanceHidden = false;
+  });
+  await settled();
+  await popout.update((s) => {
+    s.wizards.send!.fields.toAddress = 'addr-intended';
+    s.ui.balanceHidden = true;
+  });
+  await settled();
+
+  const inTab = await tab.load();
+  assert.equal(inTab.wizards.send?.fields.toAddress, 'addr-intended');
+  assert.equal(inTab.ui.balanceHidden, true);
+  await tab.update((s) => {
+    s.scroll['home/send'] = 1;
+  });
+  await settled();
+  const inPopout = await popout.load();
+  assert.equal(inPopout.wizards.send?.fields.toAddress, 'addr-intended', 'the removed address does not come back');
+  assert.equal(inPopout.ui.balanceHidden, true, 'balances stay masked');
+  tab.destroy();
+  popout.destroy();
+});
+
+test("an update that changes nothing does not write this window's state over another window's change", async () => {
+  const storage = new ChromeLikeStorage();
+  const tab = new SessionStateStore(storage, 'k');
+  await tab.update((s) => {
+    s.ui.autoLockMinutes = 60;
+  });
+  await settled();
+  const popout = new SessionStateStore(storage, 'k');
+  await popout.load();
+
+  // The pop-out chooses "every time". The tab has been told but has not read
+  // it yet when its focus refresh runs an update that changes nothing.
+  await popout.update((s) => {
+    s.ui.autoLockMinutes = 0;
+  });
+  await tab.update(() => {});
+  await settled();
+
+  assert.equal(storedState(storage).ui.autoLockMinutes, 0, 'storage keeps "every time"');
+  assert.equal((await tab.load()).ui.autoLockMinutes, 0, 'the tab adopted "every time"');
+  assert.equal((await popout.load()).ui.autoLockMinutes, 0, 'the pop-out keeps "every time"');
+  tab.destroy();
+  popout.destroy();
+});
+
+test("a stored state carrying this window's stamp but other content is adopted", async () => {
+  // A harness that writes storage directly spreads what it read, stamp included.
+  const storage = new ChromeLikeStorage();
+  const tab = new SessionStateStore(storage, 'k');
+  await tab.update((s) => {
+    s.route = { current: 'settings' };
+  });
+  await settled();
+  const raw = storage.peek('k') as Record<string, unknown> & { ui: Record<string, unknown> };
+  await storage.set('k', { ...raw, ui: { ...raw.ui, autoLockMinutes: 15 } });
+  await settled();
+  assert.equal((await tab.load()).ui.autoLockMinutes, 15);
+  tab.destroy();
 });
 
 test('canonicalJson ignores key order at every depth and keeps array order', () => {

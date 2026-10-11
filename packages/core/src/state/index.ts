@@ -61,6 +61,7 @@ export {
   MIGRATIONS,
   SessionStateStore,
   migrate,
+  withoutWriteStamp,
 } from './session-state';
 export type { Migration, SessionState, Route, WizardState } from './session-state';
 
