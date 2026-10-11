@@ -67,10 +67,13 @@ export function createNostrChannelIO(identity: NostrIdentity): NostrChannelIO {
 
     async powBits(): Promise<number> {
       // The relay sees every wrap's ephemeral signer as an unknown author, so it
-      // asks the same proof-of-work of a tip or slatepack as of any DM.
+      // asks the same proof-of-work of a tip or slatepack as of any DM. The
+      // figure passes through unclamped: mining fewer bits than the relay asks
+      // is refused anyway, so wrapSealWithPow refuses an excessive demand up
+      // front and names it (see MAX_WRAP_POW_BITS).
       const caps = await loadCapabilities(api);
       const bits = caps?.messaging?.inbound_pow_bits;
-      return typeof bits === 'number' && Number.isInteger(bits) && bits > 0 ? Math.min(bits, 32) : 0;
+      return typeof bits === 'number' && Number.isInteger(bits) && bits > 0 ? bits : 0;
     },
   };
 }

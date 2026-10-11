@@ -14,9 +14,9 @@
  * actually sent it. Mining with it would buy relay admission by leaking send
  * time. Only the nonce varies here; the randomised timestamp survives.
  *
- * 8 bits averages 256 hashes, which is imperceptible. The cost is exponential
- * in the bit count, so a relay demanding a large difficulty will be slow by
- * design, and the caller decides whether that is worth it.
+ * 8 bits averages 256 hashes, which is imperceptible. The cost doubles with
+ * every bit and the loop runs synchronously on the caller's thread, so the
+ * difficulty is bounded by {@link MAX_WRAP_POW_BITS}.
  */
 
 import { createSeal } from 'nostr-tools/nip59';
@@ -26,12 +26,32 @@ import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey } from 'no
 
 const GIFT_WRAP_KIND = 1059;
 
+/**
+ * The most proof-of-work the wallet mines on one wrap. At the tens of thousands
+ * of hashes a second a wallet manages, 8 bits takes milliseconds, 16 about a
+ * second, 20 tens of seconds and 32 over a day, with the wallet frozen
+ * throughout. The relay guide recommends 8 to 16 bits for a public relay; the
+ * backend accepts up to 40. A demand above this ceiling is refused before any
+ * hashing, naming the figure, instead of hanging the wallet only to be refused.
+ */
+export const MAX_WRAP_POW_BITS = 20;
+
 /** Wrap an already-built seal for `recipientPublicKey`, mining `difficulty` leading zero bits. */
 export function wrapSealWithPow(
   sealed: ReturnType<typeof createSeal>,
   recipientPublicKey: string,
   difficulty: number,
 ): ReturnType<typeof finalizeEvent> {
+  // Callers pass a backend-advertised figure. A NaN would never satisfy the
+  // loop below, and an excessive one would freeze the wallet: refuse both now.
+  if (!Number.isInteger(difficulty)) {
+    throw new Error(`the relay's proof-of-work difficulty is not a whole number of bits (${String(difficulty)})`);
+  }
+  if (difficulty > MAX_WRAP_POW_BITS) {
+    throw new Error(
+      `the relay requires ${difficulty} bits of proof-of-work per message; this wallet mines at most ${MAX_WRAP_POW_BITS}`,
+    );
+  }
   const ephemeral = generateSecretKey();
   // Same shape nostr-tools' createWrap produces, including NIP-59's backdated timestamp.
   const base = {

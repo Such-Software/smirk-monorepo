@@ -13,9 +13,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getPow } from 'nostr-tools/nip13';
+import { createRumor, createSeal } from 'nostr-tools/nip59';
 
 import { generateBurnerIdentity } from '../identity';
 import { wrapPayment, unwrapPayment } from '../giftwrap';
+import { MAX_WRAP_POW_BITS, wrapSealWithPow } from '../pow-wrap';
 import type { PaymentPayload } from '../payments';
 import type { NostrWireEvent, NostrFilter } from '../client';
 import type { NostrChannelIO } from '../../payments/slatepack-channel';
@@ -58,6 +60,24 @@ test('without bits the wrap is unchanged (no nonce tag)', () => {
   const wrap = wrapPayment(alice, bob.pubkeyHex, tip);
   assert.ok(!wrap.tags.some((t) => t[0] === 'nonce'));
   assert.deepEqual(unwrapPayment(bob, wrap).payload, tip);
+});
+
+test('a demand above the mining ceiling is refused at once, naming the figure', { timeout: 5_000 }, () => {
+  // One bit over the ceiling would take minutes of frozen wallet if it were mined.
+  const excessive = MAX_WRAP_POW_BITS + 1;
+  const names = (e: unknown) => e instanceof Error && e.message.includes(String(excessive));
+  assert.throws(() => wrapPayment(alice, bob.pubkeyHex, tip, excessive), names);
+  // DMs share the miner, so the same ceiling holds there.
+  const seal = createSeal(createRumor({ kind: 14, content: 'hi', tags: [['p', bob.pubkeyHex]] }, alice.privateKey), alice.privateKey, bob.pubkeyHex);
+  assert.throws(() => wrapSealWithPow(seal, bob.pubkeyHex, excessive), names);
+  assert.ok(MAX_WRAP_POW_BITS >= 16, "the ceiling still admits the relay guide's 8 to 16 bits");
+});
+
+test('a difficulty that is not a whole number is refused instead of mining forever', { timeout: 5_000 }, () => {
+  const seal = createSeal(createRumor({ kind: 14, content: 'hi', tags: [['p', bob.pubkeyHex]] }, alice.privateKey), alice.privateKey, bob.pubkeyHex);
+  for (const bad of [Number.NaN, 7.5, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => wrapSealWithPow(seal, bob.pubkeyHex, bad), Error);
+  }
 });
 
 function relay(bits: number) {
