@@ -26,6 +26,10 @@ the public `smirk-backend-core` repo and aren't echoed here.
   deposit address and swap instruction filled in. The wallet's saved screen
   state could revert a change it had just made when several were saved in
   quick succession; it no longer does.
+- Swaps: the same tap, with Trocador or THORChain, fills in Send and opens it
+  in a single step, so Send can no longer open without the deposit. It also no
+  longer asks to replace a Send draft when Send only holds the receipt of a
+  send that already went out.
 
 ## [0.3.1] - 2026-10-09
 

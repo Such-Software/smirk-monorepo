@@ -4,7 +4,6 @@ import { TrocadorSwap, type NonlogsQuoteData } from '@smirk/swap';
 import { api, type UnlockedWallet } from '@smirk/core';
 import {
   SwapTab,
-  useRoute,
   TROCADOR_WIZARD_ID,
   THORCHAIN_WIZARD_ID,
   NONLOGS_WIZARD_ID,
@@ -22,6 +21,7 @@ import type { WalletSession } from '../types';
 import { confirmThorchainSwap, thorchainGatewayHost, thorchainOffered, thorchainQuoteSummary, thorchainSwap } from '../thorchain';
 import { nonlogsOffered, nonlogsSwap, ownAddressesOnly } from '../nonlogs';
 import { findSwapDeposit, journalKeyFor, recordSend } from '../send-journal';
+import { openSwapDepositInSend } from '../swap-handoff';
 
 /**
  * SwapRouter: wires the @smirk/ui SwapTab to the TrocadorSwap library
@@ -41,7 +41,6 @@ export function SwapRouter({
   wallet: UnlockedWallet;
   session: WalletSession | null;
 }) {
-  const { navigate } = useRoute();
   const apiKey = import.meta.env.VITE_TROCADOR_API_KEY ?? '';
   // Webhook URL pointing at *our* backend's receiver. Trocador POSTs
   // status changes here; receiver authenticates via the per-swap
@@ -597,85 +596,12 @@ export function SwapRouter({
         return sw;
       }}
       onOpenSend={(deposit) => {
-        // Pre-fill the SendWizard with the deposit address + amount so
-        // the user lands directly on Compose with everything filled.
-        // Also stash a `pendingContext` so the resulting
-        // pendingOutgoing entry is tagged as a swap-deposit; the
-        // AssetDetail Activity row then renders "Swap deposit → XMR
-        // (CDNQ…)" with a tap-link back to the swap status, instead
-        // of a generic "Sending to LTC1Q…".
-        //
-        // Guard against silently destroying an in-progress send
-        // draft: pre-2026-06-13 this handler unconditionally
-        // overwrote s.wizards.send, so a user with a half-typed
-        // send to a friend would lose their draft on the prefill
-        // click. Other update sites at lines 2067, 2454, 4321 all
-        // use the safe `const w = s.wizards.send; if (w)` pattern;
-        // only this handler nuked the slot. Now we check, prompt,
-        // and bail if the user wants to keep their draft.
-        void (async () => {
-          const current = await store.load();
-          const existing = current.wizards.send;
-          // Heuristic: a populated draft has at least one of the
-          // user-typed fields (fromAssetId at non-empty, toAddress,
-          // amountText). An empty step=0 wizard from a previous
-          // visit doesn't count.
-          const f = existing?.fields as
-            | { fromAssetId?: string; toAddress?: string; amountText?: string }
-            | undefined;
-          const isPopulated =
-            !!f &&
-            (!!f.toAddress ||
-              !!f.amountText ||
-              (!!f.fromAssetId && (existing?.step ?? 0) > 0));
-          if (isPopulated) {
-            const ok = window.confirm(
-              'You have a Send draft in progress — replace it with this swap deposit?',
-            );
-            if (!ok) return;
-          }
-          await store.update((s) => {
-            s.wizards.send = {
-              step: 2, // skip Pick + Address; jump to Compose
-              startedAt: Date.now(),
-              fields: {
-                fromAssetId: deposit.fromAsset,
-                toAddress: deposit.depositAddress,
-                amountText: atomicToText(
-                  deposit.fromAmountAtomic,
-                  deposit.fromAsset,
-                ),
-                pendingContext: {
-                  kind: 'swap-deposit',
-                  tradeId: deposit.id,
-                  toAsset: deposit.toAsset,
-                  provider: deposit.provider ?? 'trocador',
-                  // THORChain: the send path refuses this vault unless the
-                  // memo, the quoted amount and the deadline all still hold.
-                  ...(deposit.memo
-                    ? {
-                        memo: deposit.memo,
-                        amountAtomic: deposit.fromAmountAtomic,
-                        ...(deposit.depositBeforeMs !== undefined ? { depositBeforeMs: deposit.depositBeforeMs } : {}),
-                      }
-                    : {}),
-                },
-                // Stash the original prefill seed so the
-                // popup-level onSubmit cross-checker (below) can
-                // verify the user didn't mutate fromAsset/toAddress
-                // mid-flow into something unrelated. Mismatch =
-                // drop the pendingContext at write time so the
-                // resulting Activity row says "Send" not the wrong
-                // "Swap deposit → XMR (trade …)".
-                pendingContextSeed: {
-                  fromAssetId: deposit.fromAsset,
-                  toAddress: deposit.depositAddress,
-                },
-              },
-            };
-          });
-          await navigate('home/send');
-        })();
+        // Send opens on Compose with the deposit's coin, address and exact
+        // amount; the draft and the route are one write (swap-handoff.ts).
+        // A Send draft in progress is replaced only if the user agrees.
+        void openSwapDepositInSend(store, deposit, () =>
+          window.confirm('You have a Send draft in progress. Replace it with this swap deposit?'),
+        );
       }}
       onTrocadorFetchStatus={async (id) => {
         if (!trocador) throw new Error(connectionError ?? 'Trocador is unavailable in this app.');
