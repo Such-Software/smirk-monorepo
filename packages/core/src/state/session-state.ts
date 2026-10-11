@@ -311,123 +311,6 @@ export function canonicalJson(value: unknown): string {
 }
 
 // ----------------------------------------------------------------------------
-// Changes: what an update did, applied to what storage holds when it is
-// written rather than to a cache that may be behind it.
-// ----------------------------------------------------------------------------
-
-/**
- * Top-level keys whose children change independently: one preference, one
- * scroll offset, one wizard each. A wizard is one unit, so a Send draft is
- * never assembled from two windows' halves. Every other top-level key (the
- * route, the version) is one unit.
- */
-const MERGED_BY_CHILD: ReadonlySet<string> = new Set(['ui', 'scroll', 'wizards']);
-
-/**
- * The top-level list merged by entry (asset and tx hash): a send another window
- * recorded survives this window removing a settled one, and the reverse.
- */
-const MERGED_BY_ENTRY = 'pendingOutgoing';
-
-/**
- * One unit a write changed: a top-level key, or one child or entry of a key
- * merged by child or by entry. `value` undefined means the write removed it.
- */
-interface Change {
-  key: string;
-  child?: string;
-  value: unknown;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function sameJson(a: unknown, b: unknown): boolean {
-  return canonicalJson(a) === canonicalJson(b);
-}
-
-function copyJson<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function entryKey(entry: unknown): string | null {
-  if (!isRecord(entry) || typeof entry.asset !== 'string' || typeof entry.txHash !== 'string') return null;
-  return `${entry.asset}:${entry.txHash}`;
-}
-
-/** Entries by key, or null when the list is not one of keyed, distinct entries. */
-function entriesByKey(list: unknown): Map<string, unknown> | null {
-  if (!Array.isArray(list)) return null;
-  const out = new Map<string, unknown>();
-  for (const entry of list) {
-    const key = entryKey(entry);
-    if (key === null || out.has(key)) return null;
-    out.set(key, entry);
-  }
-  return out;
-}
-
-/** The units `after` changed relative to `before`. */
-function diffStates(before: unknown, after: unknown): Change[] {
-  const from = isRecord(before) ? before : {};
-  const to = isRecord(after) ? after : {};
-  const changes: Change[] = [];
-  for (const key of new Set([...Object.keys(from), ...Object.keys(to)])) {
-    const a = from[key];
-    const b = to[key];
-    if (sameJson(a, b)) continue;
-    if (MERGED_BY_CHILD.has(key) && isRecord(a) && isRecord(b)) {
-      for (const child of new Set([...Object.keys(a), ...Object.keys(b)])) {
-        if (!sameJson(a[child], b[child])) changes.push({ key, child, value: b[child] });
-      }
-      continue;
-    }
-    const aEntries = key === MERGED_BY_ENTRY ? entriesByKey(a) : null;
-    const bEntries = key === MERGED_BY_ENTRY ? entriesByKey(b) : null;
-    if (aEntries && bEntries) {
-      for (const child of new Set([...aEntries.keys(), ...bEntries.keys()])) {
-        if (!sameJson(aEntries.get(child), bEntries.get(child))) {
-          changes.push({ key, child, value: bEntries.get(child) });
-        }
-      }
-      continue;
-    }
-    changes.push({ key, value: b });
-  }
-  return changes;
-}
-
-/** `state` with `changes` applied on top, as a fresh copy. */
-function applyChanges(state: SessionState, changes: readonly Change[]): SessionState {
-  const out = copyJson(state) as unknown as Record<string, unknown>;
-  for (const { key, child, value } of changes) {
-    const written = value === undefined ? undefined : copyJson(value);
-    if (child === undefined) {
-      if (written === undefined) delete out[key];
-      else out[key] = written;
-    } else if (key === MERGED_BY_ENTRY) {
-      const list = Array.isArray(out[key]) ? (out[key] as unknown[]) : [];
-      const at = list.findIndex((entry) => entryKey(entry) === child);
-      if (written === undefined) {
-        if (at >= 0) list.splice(at, 1);
-      } else if (at >= 0) {
-        list[at] = written;
-      } else {
-        list.push(written);
-      }
-      out[key] = list;
-    } else {
-      const parent = isRecord(out[key]) ? (out[key] as Record<string, unknown>) : {};
-      if (written === undefined) delete parent[child];
-      else parent[child] = written;
-      out[key] = parent;
-    }
-  }
-  return out as unknown as SessionState;
-}
-
-// ----------------------------------------------------------------------------
 // Cross-window lock
 // ----------------------------------------------------------------------------
 
@@ -470,6 +353,9 @@ export function webLocks(): CrossWindowLock | null {
   };
 }
 
+/** What `update()` runs: it may change the state it is given, or return a new one. */
+type Mutator = (state: SessionState) => void | SessionState | Promise<void | SessionState>;
+
 /**
  * Typed reactive store for the session state. Wraps a [`PlatformStorage`]
  * backend with:
@@ -482,16 +368,16 @@ export function webLocks(): CrossWindowLock | null {
  * Framework-agnostic: exposes `subscribe(listener)` so any UI layer
  * can wire it up. The Preact hooks live in `@smirk/ui/state`.
  *
- * Windows share one stored state. Storage offers no compare-and-swap, so an
- * update does not write its whole cached state: it records what its mutator
- * changed and, under a lock every window of the extension shares
- * (`navigator.locks`), reads storage and writes those changes over what it
- * holds. Another window's change is kept even when it lands between two of
- * this window's updates, before this window has read it: a send recorded by a
- * dapp approval window while the popup was writing used to be lost that way.
- * Without the lock (a runtime that lacks it), an update still writes over
- * what it reads, but another window's write between that read and this write
- * can be lost.
+ * Windows share one stored state, and storage offers no compare-and-swap.
+ * Under a lock every window of the extension shares (`navigator.locks`), an
+ * update reads storage, runs its mutator on what it read and writes the
+ * result, so it never writes over a state it has not seen. Another window's
+ * change is kept even when it lands between two of this window's updates,
+ * before this window has read it: a send recorded by a dapp approval window
+ * while the popup was writing used to be lost that way. Without the lock (a
+ * runtime that lacks it) an update runs on this window's cache and writes the
+ * whole result: one window's state, never pieces of two, and when two windows
+ * write within the same few milliseconds one change can be lost.
  */
 export class SessionStateStore {
   private cached: SessionState | null = null;
@@ -669,23 +555,17 @@ export class SessionStateStore {
    * another window had just made, announced but not yet read here, was
    * reverted in every window.
    *
-   * What the mutator changed (one preference, scroll offset or wizard, one
-   * pending send, otherwise a top-level key) is written over what storage
-   * holds, read under the cross-window lock, so the cache being behind
-   * another window costs nothing. The state returned is the one written.
+   * Under the cross-window lock the mutator gets what storage holds, not
+   * this window's cache, and the lock is held until its write settles: a
+   * check the mutator makes holds for the state it replaces, whatever another
+   * window saved a moment before. Keep mutators synchronous; one that waits
+   * holds up every window's updates.
    */
-  async update(
-    mutator: (state: SessionState) => void | SessionState | Promise<void | SessionState>,
-  ): Promise<SessionState> {
-    const run = async (): Promise<SessionState> => {
-      const current = await this.load();
-      const draft: SessionState = JSON.parse(JSON.stringify(current));
-      const result = await mutator(draft);
-      const next = (result === undefined ? draft : result) as SessionState;
-      const changes = diffStates(current, next);
-      if (changes.length === 0) return next;
-      return this.commit(changes);
-    };
+  async update(mutator: Mutator): Promise<SessionState> {
+    const run = (): Promise<SessionState> =>
+      this.lock
+        ? this.lock.run(`smirk:session-state:${this.key}`, async () => this.apply(await this.readCurrent(), mutator))
+        : this.load().then((current) => this.apply(current, mutator));
     const next = this.updateChain.then(run, run);
     // Keep the chain alive across rejections so one failing mutator
     // doesn't strand all subsequent queued updates. The chain just
@@ -695,18 +575,14 @@ export class SessionStateStore {
     return next;
   }
 
-  /**
-   * Under the cross-window lock, apply `changes` to what storage holds and
-   * write the result. The lock is held until the write settles, so the next
-   * window's read sees it.
-   */
-  private commit(changes: readonly Change[]): Promise<SessionState> {
-    const task = async (): Promise<SessionState> => {
-      const state = applyChanges(await this.readCurrent(), changes);
-      await this.save(state);
-      return state;
-    };
-    return this.lock ? this.lock.run(`smirk:session-state:${this.key}`, task) : task();
+  /** Run `mutator` on a copy of `current` and write the result, unless it changed nothing. */
+  private async apply(current: SessionState, mutator: Mutator): Promise<SessionState> {
+    const draft: SessionState = JSON.parse(JSON.stringify(current));
+    const result = await mutator(draft);
+    const next = (result === undefined ? draft : result) as SessionState;
+    if (canonicalJson(next) === canonicalJson(current)) return next;
+    await this.save(next);
+    return next;
   }
 
   /** What storage holds now, or the cache when it cannot be read. */
