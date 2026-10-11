@@ -37,6 +37,7 @@ import { formatAmount, formatAmountWithAsset } from '../format';
 import { copyText } from '../clipboard';
 import { prepareSendDraft, SEND_RECEIPT_STEP, SEND_WIZARD_ID } from './send-draft';
 import { UsdEstimate } from './UsdEstimate';
+import { FEE_TIER_MAX_ATTEMPTS, useFeeTierFetch } from './fee-tier-fetch';
 
 export type FeeTier = 'fast' | 'normal' | 'slow' | 'custom';
 
@@ -899,8 +900,15 @@ function Compose({
   //    suppress the toggle below until that lands.
   const sweepSupported = usesFeePicker || asset.family.family === 'cryptonote';
   const [sweep, setSweep] = useState(sweepSupported ? initialSweep : false);
-  const [tiers, setTiers] = useState<FeeTiers | null>(null);
-  const [tiersError, setTiersError] = useState<string | null>(null);
+  // Load fee tiers on mount. Skip for non-UTXO assets: their fees come from
+  // the send-handler at sign-time, not a Compose-screen picker. The hook
+  // times out, retries a bounded number of times and ends in a retryable
+  // error, and a parent re-render with a new `resolveFeeRates` closure does
+  // not restart it.
+  const feeTiers = useFeeTierFetch(assetId, usesFeePicker, resolveFeeRates);
+  const tiers = feeTiers.state?.status === 'ready' ? feeTiers.state.tiers : null;
+  const tiersError = feeTiers.state?.status === 'failed' ? feeTiers.state.error : null;
+  const tiersAttempt = feeTiers.state?.status === 'loading' ? feeTiers.state.attempt : 1;
   // For non-picker assets: live fee estimate fetched on mount via the
   // shell-supplied callback. `null` = no callback wired or still
   // loading; otherwise a bigint atomic-units estimate.
@@ -926,27 +934,6 @@ function Compose({
     // on the closed-over values keeps the effect cheap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amountText, tier, customForPersist, sweep]);
-
-  // Load fee tiers on mount. Skip for non-UTXO assets: their fees
-  // come from the send-handler at sign-time, not a Compose-screen
-  // picker.
-  useEffect(() => {
-    if (!usesFeePicker) return;
-    let alive = true;
-    setTiers(null);
-    setTiersError(null);
-    resolveFeeRates(assetId).then(
-      (t) => {
-        if (alive) setTiers(t);
-      },
-      (e) => {
-        if (alive) setTiersError(e instanceof Error ? e.message : 'Failed to load fee rates');
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [assetId, resolveFeeRates, usesFeePicker]);
 
   // For non-picker assets, fetch a live fee estimate via the shell
   // callback (popup hits LWS per_byte_fee + wasm.estimate_fee). For
@@ -1210,9 +1197,17 @@ function Compose({
         >
           Network fee
         </div>
-        {tiersError && <FieldError>Fee estimate failed: {tiersError}</FieldError>}
+        {tiersError && (
+          <FeeRetry testid="send-fee" onRetry={feeTiers.retry}>
+            Fee estimate failed: {tiersError}
+          </FeeRetry>
+        )}
         {!tiers && !tiersError && (
-          <div style={{ fontSize: 11, opacity: 0.5, padding: '4px 0' }}>Loading fee rates…</div>
+          <div style={{ fontSize: 11, opacity: 0.5, padding: '4px 0' }}>
+            {tiersAttempt > 1
+              ? `Loading fee rates… (try ${tiersAttempt} of ${FEE_TIER_MAX_ATTEMPTS})`
+              : 'Loading fee rates…'}
+          </div>
         )}
         {tiers && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -1452,7 +1447,26 @@ function Review({
   const usesFeePicker = asset.family.family === 'utxo';
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tiers, setTiers] = useState<FeeTiers | null>(null);
+  // Re-fetch tiers on mount: rates may have shifted since Compose loaded
+  // them. Cheap insurance against signing a stale fee. (Skipped for custom
+  // tier: user explicitly set their rate; and for non-picker assets: their
+  // fee comes from the handler, not a tier.) Send waits for this rate, so the
+  // fetch must always end: each attempt times out, retries are bounded, and
+  // the last failure is shown with a Retry. An answer without a usable rate
+  // for the chosen tier is a failure too, not an endless "loading…".
+  const refetchTier = usesFeePicker && feeTier !== 'custom' ? feeTier : null;
+  const feeTiers = useFeeTierFetch(
+    assetId,
+    refetchTier !== null,
+    resolveFeeRates,
+    (t) => (refetchTier === null || usableRate(t?.[refetchTier])
+      ? null
+      : `the fee service returned no ${refetchTier} rate`),
+    refetchTier ?? '',
+  );
+  const tiers = feeTiers.state?.status === 'ready' ? feeTiers.state.tiers : null;
+  const tiersError = feeTiers.state?.status === 'failed' ? feeTiers.state.error : null;
+  const tiersAttempt = feeTiers.state?.status === 'loading' ? feeTiers.state.attempt : 1;
   const [estimatedFeeAtomic, setEstimatedFeeAtomic] = useState<bigint | null>(null);
   // For CryptoNote (XMR/WOW) the fee is computed server-side, so `rate`
   // is a constant 0 and can't gate the Send button. Track whether the
@@ -1467,8 +1481,17 @@ function Review({
   // the user to review; in sweep mode the input count is significant
   // so we tell the shell to size the estimate for the actual spendable
   // output count.
+  //
+  // Keyed on what is asked, not on the callback's identity: the popup passes
+  // a fresh closure on every session write, and restarting here also
+  // restarted the 12 s safety valve, so steady writes could hold Send behind
+  // "Estimating…" indefinitely.
+  const estimateRef = useRef(resolveSendFeeEstimate);
+  estimateRef.current = resolveSendFeeEstimate;
+  const hasEstimate = resolveSendFeeEstimate !== undefined;
   useEffect(() => {
-    if (usesFeePicker || !resolveSendFeeEstimate) {
+    const estimate = estimateRef.current;
+    if (usesFeePicker || !estimate) {
       setFeeEstimatePending(false);
       return;
     }
@@ -1480,7 +1503,7 @@ function Review({
     };
     // Safety valve: never block Send forever if the estimate hangs.
     const fallback = setTimeout(settle, 12_000);
-    resolveSendFeeEstimate(assetId, { sweep }).then(
+    estimate(assetId, { sweep }).then(
       (fee) => {
         if (!alive) return;
         if (fee !== null) setEstimatedFeeAtomic(fee);
@@ -1497,22 +1520,7 @@ function Review({
       alive = false;
       clearTimeout(fallback);
     };
-  }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep]);
-
-  // Re-fetch tiers on mount: rates may have shifted since Compose loaded
-  // them. Cheap insurance against signing a stale fee. (Skipped for
-  // custom tier: user explicitly set their rate; and for non-picker
-  // assets: their fee comes from the handler, not a tier.)
-  useEffect(() => {
-    if (!usesFeePicker || feeTier === 'custom') return;
-    let alive = true;
-    resolveFeeRates(assetId).then((t) => {
-      if (alive) setTiers(t);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [assetId, feeTier, resolveFeeRates, usesFeePicker]);
+  }, [assetId, usesFeePicker, hasEstimate, sweep]);
 
   // Same rate-resolution as Compose: every rate gets the relay floor, so
   // 'normal' at 1.0 sat/vB displays + ships as 1.1 and a custom 0.5 displays
@@ -1520,7 +1528,8 @@ function Review({
   // it; flooring again here keeps the Review row honest for a `wizard.fields`
   // value written by an older build. For non-picker assets the rate is
   // meaningless: the dispatcher ignores feeRateSatPerVb for XMR/WOW/Grin.
-  const electrumRate = feeTier === 'custom' ? null : (tiers?.[feeTier] ?? null);
+  const fetchedRate = refetchTier === null ? undefined : tiers?.[refetchTier];
+  const electrumRate = usableRate(fetchedRate) ? fetchedRate : null;
   const rate: number | null = !usesFeePicker
     ? 0
     : feeTier === 'custom'
@@ -1581,7 +1590,17 @@ function Review({
       {usesFeePicker ? (
         <ReviewRow
           label="Fee tier"
-          value={`${feeTier} (${rate !== null && rate !== undefined ? `${rate} sat/vB` : 'loading…'})`}
+          value={`${feeTier} (${
+            rate !== null && rate !== undefined
+              ? `${rate} sat/vB`
+              : refetchTier === null
+                ? 'no rate set'
+                : tiersError
+                  ? 'unavailable'
+                  : tiersAttempt > 1
+                    ? `retrying, try ${tiersAttempt} of ${FEE_TIER_MAX_ATTEMPTS}…`
+                    : 'loading…'
+          })`}
         />
       ) : (
         <ReviewRow
@@ -1594,6 +1613,11 @@ function Review({
                 : 'computed at send'
           }
         />
+      )}
+      {tiersError && (
+        <FeeRetry testid="send-review-fee" onRetry={feeTiers.retry}>
+          Could not load the current {feeTier} fee rate: {tiersError}. Send stays off until it loads.
+        </FeeRetry>
       )}
       {error && <FieldError>{error}</FieldError>}
       <PrimaryButton testid="send-review-submit" disabled={submitting || !canSend} onClick={handleSubmit}>
@@ -2298,6 +2322,52 @@ function FieldError({ children }: { children: preact.ComponentChildren }) {
   return (
     <div style={{ color: 'var(--smirk-negative)', fontSize: 12, padding: '4px 0' }}>{children}</div>
   );
+}
+
+/** A fee-rate failure the user can act on: the cause, and a Retry. */
+function FeeRetry({
+  testid,
+  onRetry,
+  children,
+}: {
+  testid: string;
+  onRetry: () => void;
+  children: preact.ComponentChildren;
+}) {
+  return (
+    <div
+      data-testid={`${testid}-error`}
+      role="alert"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        color: 'var(--smirk-negative)',
+        fontSize: 12,
+        padding: '4px 0',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+      <button
+        type="button"
+        data-testid={`${testid}-retry`}
+        onClick={onRetry}
+        style={{
+          ...maxButtonStyle,
+          padding: '6px 12px',
+          background: 'var(--smirk-bg-elevated)',
+          color: 'var(--smirk-fg)',
+        }}
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
+/** A tier rate the Send flow can floor and sign with. */
+function usableRate(rate: number | null | undefined): rate is number {
+  return typeof rate === 'number' && Number.isFinite(rate);
 }
 
 function PrimaryButton({

@@ -1,6 +1,6 @@
 # Changelog
 
-> Status: stable · Updated 2026-10-09 · Applies to: Smirk client source
+> Status: stable · Updated 2026-10-11 · Applies to: Smirk client source
 
 All notable user-facing changes to Smirk Wallet.
 
@@ -14,6 +14,13 @@ Backend changes that don't affect wallet behaviour land separately in
 the public `smirk-backend-core` repo and aren't echoed here.
 
 ## [Unreleased]
+
+### Fixed
+
+- Send on Bitcoin and Litecoin: when the network fee rate is slow or fails to
+  load, Review and Compose retry a few times and then say why, with a Retry
+  button, instead of leaving Send or Continue disabled with no explanation.
+  Background refreshes no longer restart the fee request while you review.
 
 ## [0.3.1] - 2026-10-09
 
