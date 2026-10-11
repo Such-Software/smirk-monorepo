@@ -3,12 +3,18 @@
  * npub-native sign-in) when the backend refuses the known-wallet fast path.
  */
 
-import { test, type TestContext } from 'node:test';
+import { mock, test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createChallenge } from 'altcha-lib';
 import { api, NOSTR_IDENTITY_CONFLICT } from '@smirk/core';
 
 import { bootstrapAuthHandler } from '../bootstrap-auth';
+import { signInClients } from '../sign-in-client';
+
+// These tests stub the sign-in's requests on the shared `api` singleton, so the
+// handler's per-job client is that singleton here. Which backend the requests
+// reach is covered by backend-binding.test.ts.
+mock.method(signInClients, 'for', () => api);
 
 const LEGACY_POW_REFUSAL = {
   status: 400,

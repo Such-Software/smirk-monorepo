@@ -44,8 +44,12 @@ const FALLBACK = DEFAULT_BACKEND;
  * context boot. `onChange` fires (after the singleton is re-pointed + the JWT
  * cleared) when another context switches the backend, so the caller can
  * re-bootstrap auth / refresh its UI.
+ *
+ * Resolves once the durable selection has been applied (or found unreadable,
+ * leaving the build default), so a context can hold backend-bound work, such
+ * as a sign-in, until it knows which backend it is on.
  */
-export function bootBackendSelection(onChange?: () => void): void {
+export function bootBackendSelection(onChange?: () => void): Promise<void> {
   // (1) Immediate default: synchronous, so any request before the async read
   // resolves still has a valid base URL.
   initSmirkApi({ baseUrl: FALLBACK.url, walletApiStyle: FALLBACK.apiStyle });
@@ -63,7 +67,7 @@ export function bootBackendSelection(onChange?: () => void): void {
   ).chrome?.storage?.local;
   if (!chromeStorage) {
     // Storage-less context (offscreen): keep the synchronous build default.
-    return;
+    return Promise.resolve();
   }
   let storage: ChromeLocalStorage;
   try {
@@ -73,11 +77,17 @@ export function bootBackendSelection(onChange?: () => void): void {
     // unexpected. Keep the default; log at debug so it never hits the error
     // console during normal operation.
     console.debug('[backend-boot] storage init failed; using build default', e);
-    return;
+    return Promise.resolve();
   }
-  // (2) Durable override. Fire-and-forget: the first real request (auth
-  // bootstrap, balances) happens well after this resolves.
-  void loadAndApplyBackend(storage, FALLBACK);
+  // (2) Durable override. The first real request (auth bootstrap, balances)
+  // normally happens well after this resolves; a context that must not start
+  // backend-bound work on the build default first awaits the returned promise.
+  const applied = loadAndApplyBackend(storage, FALLBACK).then(
+    () => undefined,
+    (e: unknown) => {
+      console.warn('[backend-boot] could not read the backend selection; using the build default', e);
+    },
+  );
   // (3) Cross-context re-apply on switch, INCLUDING a reset to the default
   // (which clears the stored selection, so FALLBACK is what applies). When this
   // context is re-pointed, the previous operator's capabilities and relay set
@@ -88,4 +98,5 @@ export function bootBackendSelection(onChange?: () => void): void {
     initSmirkMessaging({ publicRelays: [] });
     onChange?.();
   });
+  return applied;
 }

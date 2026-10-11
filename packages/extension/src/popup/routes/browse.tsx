@@ -19,6 +19,7 @@ import { ensureWasmInit } from '../wasm-init';
 import { send } from '../send-handler';
 import { claimPublicTip } from '../tip-claim-handler';
 import { readBootstrapCache } from '../bootstrap-cache';
+import { rememberedBackendAccounts } from '../../backend-accounts';
 import type { BrowserControllerGlobal, IframeBrowserController } from '../browser-controller';
 import { chromeStoragePermissionStore } from '../../background/dapp/permissions';
 import { nip05HomeDomain } from '../nip05';
@@ -182,7 +183,9 @@ export function BrowseTab({
         ensureWasmInit,
         send,
         claimPublicTip,
-        readBootstrapCache,
+        // Only the sign-in cached for the backend this window points at.
+        readBootstrapCache: (fingerprint) => readBootstrapCache(fingerprint, api.getBaseUrl()),
+        knownBackends: rememberedBackendAccounts,
         api,
         loadState: () => store.load(),
         updateState: (m) => store.update(m),

@@ -38,7 +38,7 @@ import { legacyBtcRotationProof, legacyMergeAllowed } from './legacy-rotation';
 import { signBitcoinMessage, bytesToHex } from './crypto';
 import type { UnlockedWallet } from './keystore';
 import type { SmirkApi } from './api';
-import { loadCapabilities, capAllowsPrices } from './api';
+import { loadCapabilities, capAllowsPrices, pinBackend } from './api';
 import { chainProviders, type ChainProviderRegistry, type UtxoAddressRef } from './chain';
 import { btcLtcFreshAddrsEnabled } from './utxo-addressbook';
 import {
@@ -146,9 +146,14 @@ export async function bootstrapAuth(
   wallet: UnlockedWallet,
   options: BootstrapAuthOptions = {},
 ): Promise<BootstrapAuthResult> {
+  // This sign-in, and the token it mints, belong to the backend `api` points at
+  // now. Checked after every await below and again before the token goes in:
+  // the client can be re-pointed while a request is in flight.
+  const pinned = pinBackend(api);
   const keys = buildKeysList(wallet);
 
   const restore = await requireRestoreState(api, { fingerprint: wallet.fingerprint, keys });
+  pinned.assertCurrent();
   const isKnownWallet = restore.exists;
   const xmrStartHeight = isKnownWallet ? restore.xmrStartHeight ?? undefined : undefined;
   const wowStartHeight = isKnownWallet ? restore.wowStartHeight ?? undefined : undefined;
@@ -185,8 +190,10 @@ export async function bootstrapAuth(
   // The rotation proof goes only to a server that advertises the hardened
   // merge (`legacyMergeAllowed`). Read once, before any signing.
   const rotationAllowed = isKnownWallet && !!wallet.seed && (await legacyMergeAllowed(api));
+  pinned.assertCurrent();
 
   const register = (altchaSolution: AltchaPayload | null) => {
+    pinned.assertCurrent();
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = signBitcoinMessage(`smirk-auth-${timestamp}`, wallet.keys.btc.privateKey);
     // A wallet the backend already knows may still be registered under its
@@ -197,7 +204,7 @@ export async function bootstrapAuth(
     // is signed afresh for every attempt.
     const rotation =
       rotationAllowed && wallet.seed
-        ? legacyBtcRotationProof(wallet.seed, keys[0]!.publicKey, timestamp, api.getBaseUrl())
+        ? legacyBtcRotationProof(wallet.seed, keys[0]!.publicKey, timestamp, pinned.url)
         : null;
     return api.extensionRegister({
       keys,
@@ -229,7 +236,8 @@ export async function bootstrapAuth(
     throw new Error(result.error ?? 'Auth failed');
   }
 
-  api.setAccessToken(result.data.accessToken);
+  // Only while `api` still points at the backend that minted it.
+  pinned.installToken(result.data.accessToken);
 
   // Grin slatepack registration deliberately does NOT happen here.
   // A `wallets` row is what the relay's address-match join
