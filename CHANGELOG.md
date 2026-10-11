@@ -19,8 +19,13 @@ the public `smirk-backend-core` repo and aren't echoed here.
 
 - Send on Bitcoin and Litecoin: when the network fee rate is slow or fails to
   load, Review and Compose retry a few times and then say why, with a Retry
-  button, instead of leaving Send or Continue disabled with no explanation.
+  button, instead of leaving Send or Continue disabled with no explanation. A
+  rate that arrives after that, such as the wallet's standard fallback rate
+  when the fee service does not reply at all, is still shown and used.
   Background refreshes no longer restart the fee request while you review.
+- Send on Monero and Wownero: Max no longer turns Continue off each time the
+  wallet refreshes in the background. If the fee estimate Max needs does not
+  arrive, Compose says why and offers Retry.
 - Swaps: "Open Send → pre-filled" on a swap's deposit step could open Send
   empty, on its coin chooser, instead of on the deposit amount with the
   deposit address and swap instruction filled in. The wallet's saved screen

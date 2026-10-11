@@ -37,7 +37,7 @@ import { formatAmount, formatAmountWithAsset } from '../format';
 import { copyText } from '../clipboard';
 import { prepareSendDraft, SEND_RECEIPT_STEP, SEND_WIZARD_ID } from './send-draft';
 import { UsdEstimate } from './UsdEstimate';
-import { FEE_TIER_MAX_ATTEMPTS, useFeeTierFetch } from './fee-tier-fetch';
+import { FEE_ESTIMATE_TIMEOUT_MS, FEE_TIER_MAX_ATTEMPTS, useFeeFetch, useFeeTierFetch } from './fee-tier-fetch';
 
 export type FeeTier = 'fast' | 'normal' | 'slow' | 'custom';
 
@@ -905,14 +905,10 @@ function Compose({
   // times out, retries a bounded number of times and ends in a retryable
   // error, and a parent re-render with a new `resolveFeeRates` closure does
   // not restart it.
-  const feeTiers = useFeeTierFetch(assetId, usesFeePicker, resolveFeeRates);
-  const tiers = feeTiers.state?.status === 'ready' ? feeTiers.state.tiers : null;
+  const feeTiers = useFeeTierFetch(assetId, usesFeePicker ? 'compose' : null, resolveFeeRates);
+  const tiers = feeTiers.state?.status === 'ready' ? feeTiers.state.value : null;
   const tiersError = feeTiers.state?.status === 'failed' ? feeTiers.state.error : null;
   const tiersAttempt = feeTiers.state?.status === 'loading' ? feeTiers.state.attempt : 1;
-  // For non-picker assets: live fee estimate fetched on mount via the
-  // shell-supplied callback. `null` = no callback wired or still
-  // loading; otherwise a bigint atomic-units estimate.
-  const [estimatedFeeAtomic, setEstimatedFeeAtomic] = useState<bigint | null>(null);
 
   // Persist Compose state to wizard.fields on every change so the
   // popup-close + reopen path restores exactly what was typed.
@@ -955,46 +951,59 @@ function Compose({
     () => parseAmount(assetId, amountText),
     [assetId, amountText, parseAmount],
   );
-  useEffect(() => {
-    if (usesFeePicker || !resolveSendFeeEstimate) return;
-    let alive = true;
-    setEstimatedFeeAtomic(null);
-    // Don't ask the resolver for an estimate when there's nothing to
-    // estimate against. Sweep is a special case: it's "pay whatever
-    // is spendable" and the resolver can size against full balance.
-    if (!sweep && (parsedAmountForEstimate === null || parsedAmountForEstimate <= 0n)) {
-      return;
-    }
-    const opts: { sweep?: boolean; amountAtomic?: bigint } = { sweep };
-    if (parsedAmountForEstimate !== null && parsedAmountForEstimate > 0n) {
-      opts.amountAtomic = parsedAmountForEstimate;
-    }
-    resolveSendFeeEstimate(assetId, opts).then(
-      (fee) => {
-        if (alive && fee !== null) setEstimatedFeeAtomic(fee);
-      },
-      () => {
-        // Swallow estimate failures: fall back to the generic
-        // "computed at send time" copy below. A failed estimate
-        // shouldn't block the user from continuing.
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [assetId, usesFeePicker, resolveSendFeeEstimate, sweep, parsedAmountForEstimate]);
+  // Don't ask the resolver for an estimate when there's nothing to estimate
+  // against. Sweep is a special case: it's "pay whatever is spendable" and the
+  // resolver can size against full balance.
+  const estimateAmount =
+    parsedAmountForEstimate !== null && parsedAmountForEstimate > 0n ? parsedAmountForEstimate : null;
+  const wantsEstimate =
+    !usesFeePicker && resolveSendFeeEstimate !== undefined && (sweep || estimateAmount !== null);
+  // Keyed on what is asked, never on the callback's identity: the popup passes
+  // a fresh `resolveSendFeeEstimate` on every session write (its own
+  // `onChange` persist below, balance and inbox polls), and every restart
+  // blanked the estimate an XMR/WOW Max needs, turning Continue off.
+  //
+  // A Max (sweep) cannot continue without the estimate, so there it must end:
+  // one attempt with a timeout, a null answer counts as a failure, and the
+  // cause is shown with a Retry. A late answer is still used. One attempt,
+  // not three: the Grin estimate replays coin selection over the wallet's
+  // outputs, and a slow one should not be run again beside itself. For a
+  // normal send the estimate only informs, so a failure stays quiet, as before.
+  const feeEstimate = useFeeFetch<bigint | null>(
+    wantsEstimate ? `${assetId}|${sweep ? 'sweep' : 'amount'}|${estimateAmount ?? ''}` : null,
+    () =>
+      resolveSendFeeEstimate
+        ? resolveSendFeeEstimate(assetId, {
+            sweep,
+            ...(estimateAmount !== null ? { amountAtomic: estimateAmount } : {}),
+          })
+        : Promise.resolve(null),
+    (fee) => (sweep && fee === null ? 'the wallet server returned no fee estimate' : null),
+    { timeoutMs: FEE_ESTIMATE_TIMEOUT_MS, retryDelaysMs: [] },
+  );
+  // `null` = no callback wired, nothing to estimate, still loading, or failed;
+  // otherwise a bigint atomic-units estimate.
+  const estimatedFeeAtomic = feeEstimate.state?.status === 'ready' ? feeEstimate.state.value : null;
+  const estimateError =
+    sweep && feeEstimate.state?.status === 'failed' ? feeEstimate.state.error : null;
+  const estimateLoading = sweep && feeEstimate.state?.status === 'loading';
 
   // How many inputs a BTC/LTC sweep will really spend. `sendBtcLtc` selects
   // EVERY spendable UTXO, and each one adds 68 vbytes, so pricing the preview
   // at one input showed the user a send amount larger than the tx we broadcast.
   // `null` means "not known" (no resolver wired, lookup failed, still in
   // flight); the preview then falls back to one input and says so below.
+  // Keyed on its inputs and read through a ref, like the estimate above.
   const [sweepInputCount, setSweepInputCount] = useState<number | null>(null);
+  const sweepCountRef = useRef(resolveSweepInputCount);
+  sweepCountRef.current = resolveSweepInputCount;
+  const hasSweepCount = resolveSweepInputCount !== undefined;
   useEffect(() => {
     setSweepInputCount(null);
-    if (!usesFeePicker || !sweep || !resolveSweepInputCount) return;
+    const count = sweepCountRef.current;
+    if (!usesFeePicker || !sweep || !count) return;
     let alive = true;
-    resolveSweepInputCount(assetId).then(
+    count(assetId).then(
       (n) => {
         if (alive && n !== null && Number.isInteger(n) && n > 0) setSweepInputCount(n);
       },
@@ -1006,7 +1015,7 @@ function Compose({
     return () => {
       alive = false;
     };
-  }, [assetId, usesFeePicker, sweep, resolveSweepInputCount]);
+  }, [assetId, usesFeePicker, sweep, hasSweepCount]);
 
   // Non-sweep sends fund recipient + change out of the typical single input;
   // a sweep uses the real count when we have it. Falling back to 1 keeps the
@@ -1318,6 +1327,18 @@ function Compose({
           </strong>
         </div>
       )}
+      {/* Max on XMR/WOW sends balance minus this estimate, so Continue waits
+          for it. Say so while it loads, and why if it does not arrive. */}
+      {!usesFeePicker && estimateLoading && (
+        <div data-testid="send-fee-estimate-loading" style={{ fontSize: 11, opacity: 0.5, padding: '4px 0' }}>
+          Estimating the network fee for Max…
+        </div>
+      )}
+      {!usesFeePicker && estimateError && (
+        <FeeRetry testid="send-fee-estimate" onRetry={feeEstimate.retry}>
+          Could not estimate the network fee for Max: {estimateError}. Continue stays off until it loads.
+        </FeeRetry>
+      )}
 
       {/* Total. For non-picker assets we don't know the fee yet, so the
           "amount + fee" total row is suppressed; the Review screen will
@@ -1451,20 +1472,27 @@ function Review({
   // them. Cheap insurance against signing a stale fee. (Skipped for custom
   // tier: user explicitly set their rate; and for non-picker assets: their
   // fee comes from the handler, not a tier.) Send waits for this rate, so the
-  // fetch must always end: each attempt times out, retries are bounded, and
+  // wait must always end: each attempt times out, retries are bounded, and
   // the last failure is shown with a Retry. An answer without a usable rate
-  // for the chosen tier is a failure too, not an endless "loading…".
+  // for the chosen tier is a failure too, not an endless "loading…". A valid
+  // rate that lands after that failure is still used, and the row shows it
+  // before Send turns on: the popup answers a silent fee service with its
+  // fallback rate only when the API client gives up at 30 s, after the last
+  // attempt here has already timed out.
+  //
+  // The fetch is keyed on the asset and tier, and its answer is only ever
+  // read for the key it was fetched for, so a draft changed in place under a
+  // mounted Review can never price one coin with another coin's rate.
   const refetchTier = usesFeePicker && feeTier !== 'custom' ? feeTier : null;
   const feeTiers = useFeeTierFetch(
     assetId,
-    refetchTier !== null,
+    refetchTier === null ? null : `review|${refetchTier}`,
     resolveFeeRates,
     (t) => (refetchTier === null || usableRate(t?.[refetchTier])
       ? null
       : `the fee service returned no ${refetchTier} rate`),
-    refetchTier ?? '',
   );
-  const tiers = feeTiers.state?.status === 'ready' ? feeTiers.state.tiers : null;
+  const tiers = feeTiers.state?.status === 'ready' ? feeTiers.state.value : null;
   const tiersError = feeTiers.state?.status === 'failed' ? feeTiers.state.error : null;
   const tiersAttempt = feeTiers.state?.status === 'loading' ? feeTiers.state.attempt : 1;
   const [estimatedFeeAtomic, setEstimatedFeeAtomic] = useState<bigint | null>(null);
@@ -1554,14 +1582,20 @@ function Review({
     // CryptoNote: don't allow commit until the fee estimate has settled.
     !feeEstimatePending;
 
+  // One submit at a time. The disabled button is not enough on its own: it
+  // only turns off when Preact re-renders, and two clicks dispatched in the
+  // same task (a script, an automation driver) both reach this handler first.
+  const submittingRef = useRef(false);
   const handleSubmit = async () => {
-    if (!canSend || rate === null || rate === undefined) return;
+    if (submittingRef.current || !canSend || rate === null || rate === undefined) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     const result = await onSubmit({
       amountAtomic: amountAtomic ?? 0n,
       feeRateSatPerVb: rate,
     });
+    submittingRef.current = false;
     setSubmitting(false);
     if (!result.ok) setError(result.error);
   };
