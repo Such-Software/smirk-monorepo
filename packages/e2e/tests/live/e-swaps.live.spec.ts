@@ -57,6 +57,7 @@ import {
   closeWizard,
   completedAmount,
   confirmError,
+  depositAmount,
   followStatus,
   fromAtomic,
   hasPill,
@@ -714,13 +715,17 @@ if (gates.registered) {
       await expect(w.page.getByTestId('swap-wizard-step')).toHaveText('3/4', { timeout: 120_000 });
       await expect(w.page.getByTestId('swap-deposit-memo-warning'), 'a memo deposit hides the vault and warns').toBeVisible();
       expect(toAtomic(((await w.page.getByTestId('swap-deposit-receive').textContent()) ?? '').match(/([\d.]+)/)?.[1] ?? '0', 'ltc')).toBeGreaterThan(0n);
+      // Confirm re-quoted with the destination; the deposit step shows that
+      // binding quote, and Send must carry exactly it.
+      const deposit = await depositAmount(w, 'btc');
+      expect(deposit, 'the binding quote is for the amount quoted').toBe(amount);
       await w.footage.result('deposit step with the memo warning');
       await w.footage.tap('open Send prefilled', w.page.getByTestId('swap-deposit-open-send'));
-      lane.evidence.note('thorchain btc-ltc swap', 'deposit sat', amount.toString());
+      lane.evidence.note('thorchain btc-ltc swap', 'deposit sat', deposit.toString());
       const sent = await sendPrefilled(
         w,
         'btc',
-        { amount: fromAtomic(amount, 'btc'), to: () => thorInbound('BTC') },
+        { amount: fromAtomic(deposit, 'btc'), to: () => thorInbound('BTC') },
         inflightHooks(lane, key, w),
       );
       expect(sent.txid).toMatch(/^[0-9a-f]{64}$/i);
@@ -782,10 +787,12 @@ if (gates.registered) {
       await w.footage.tap('confirm the swap', w.page.getByTestId('swap-quote-confirm'));
       await expect(w.page.getByTestId('swap-wizard-step')).toHaveText('3/4', { timeout: 120_000 });
       await expect(w.page.getByTestId('swap-deposit-memo-warning')).toBeVisible();
+      const deposit = await depositAmount(w, 'ltc');
+      expect(deposit, 'the binding quote is for the amount quoted').toBe(toAtomic(amount!, 'ltc'));
       await w.footage.result('deposit step with the memo warning');
       await w.footage.tap('open Send prefilled', w.page.getByTestId('swap-deposit-open-send'));
-      lane.evidence.note('thorchain ltc-btc swap', 'deposit LTC', amount!);
-      const sent = await sendPrefilled(w, 'ltc', { amount: amount!, to: () => thorInbound('LTC') }, inflightHooks(lane, key, w));
+      lane.evidence.note('thorchain ltc-btc swap', 'deposit LTC', fromAtomic(deposit, 'ltc'));
+      const sent = await sendPrefilled(w, 'ltc', { amount: fromAtomic(deposit, 'ltc'), to: () => thorInbound('LTC') }, inflightHooks(lane, key, w));
       expect(sent.txid).toMatch(/^[0-9a-f]{64}$/i);
 
       await checkHistoryEntry(w, 'ltc', 'btc', sent.txid);

@@ -260,6 +260,28 @@ export function migrate(raw: unknown): SessionState {
 const STORAGE_KEY = 'smirk:popup-state';
 
 /**
+ * Own writes remembered while storage may still report them. A burst longer
+ * than this (writes issued faster than storage answers) forgets the oldest,
+ * which a late read would then mistake for another window's state.
+ */
+const MAX_OWN_WRITES = 64;
+
+/**
+ * JSON with every object's keys in sorted order, so two encodings of one state
+ * compare equal. chrome.storage returns objects with their keys sorted, not in
+ * the order they were written, so a plain `JSON.stringify` of a read never
+ * matched the same state as this store wrote it.
+ */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) return v;
+    const sorted: Record<string, unknown> = {};
+    for (const k of Object.keys(v).sort()) sorted[k] = (v as Record<string, unknown>)[k];
+    return sorted;
+  });
+}
+
+/**
  * Typed reactive store for the session state. Wraps a [`PlatformStorage`]
  * backend with:
  *
@@ -277,12 +299,28 @@ export class SessionStateStore {
   private readonly platformUnsub: () => void;
 
   /**
-   * Tracks the JSON of our last own write so the platform-subscribe
-   * callback can skip the round-trip when the change came from us.
-   * Avoids double-notification (one direct from `save`, one from
-   * `storage.subscribe` re-firing on our own write).
+   * Canonical JSON ({@link canonicalJson}) of this store's own writes that
+   * storage may still report back, oldest first. A change notification is
+   * followed by a read, and that read can answer with ANY of these, not only
+   * the newest: chrome.storage.local announces a write to the writing page
+   * before the write's promise settles, so the read issued from the
+   * announcement of write N is answered before write N+1 is applied, after
+   * N+1 has already been issued. Adopting such a read as another window's
+   * change put an older state back into the cache, and the next update built
+   * on it: the Swap tab's "Open Send" lost its Send draft that way (live run
+   * 2026-10-10). Pruned up to the newest write a read has returned.
    */
-  private lastWrittenJson: string | null = null;
+  private ownWrites: string[] = [];
+
+  /** `save()` calls whose storage write has not settled yet. */
+  private writesInFlight = 0;
+
+  /**
+   * Another window's state was read while our own writes were in flight.
+   * Those writes may land after it, so it is not adopted then; storage is read
+   * again once they have settled.
+   */
+  private resyncAfterWrites = false;
 
   /**
    * Promise-chain mutex serializing every `update()` call. Without it,
@@ -304,34 +342,53 @@ export class SessionStateStore {
   ) {
     // Listen for cross-context writes (e.g. extension pop-out window
     // updating state while the popup is open, or a Tauri second window).
-    // Skip writes that originated here so we don't double-notify.
+    // Writes that originated here are skipped, including older ones.
     this.platformUnsub = this.storage.subscribe((changedKey) => {
       if (changedKey !== this.key) return;
-      void this.storage
-        .get<unknown>(this.key)
-        .then((raw) => {
-          // JSON.stringify can throw on a circular/corrupt payload; a serialize
-          // failure is treated as "not our echo" so we still re-read and notify.
-          let incomingJson: string | null = null;
-          try {
-            incomingJson = raw === null ? '' : JSON.stringify(raw);
-          } catch {
-            incomingJson = null;
-          }
-          if (incomingJson !== null && incomingJson === this.lastWrittenJson) {
-            // Echo of our own write: skip.
-            return;
-          }
-          const next = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
-          this.cached = next;
-          for (const l of this.listeners) l(next);
-        })
-        .catch((e) => {
-          // A failed cross-context sync must not become an unhandled rejection;
-          // the cache stays as-is until the next read.
-          console.warn('[session-state] cross-context sync failed:', e);
-        });
+      this.syncFromStorage();
     });
+  }
+
+  /**
+   * Read storage after a change notification and adopt what it holds when it
+   * is another window's write. Never adopts one of our own writes (the cache
+   * already holds the newest of them), and never another window's state while
+   * our own writes are still landing: storage is read again after them.
+   */
+  private syncFromStorage(): void {
+    void this.storage
+      .get<unknown>(this.key)
+      .then((raw) => {
+        // A payload that cannot be serialized (circular, corrupt) is not ours.
+        let incoming: string | null = null;
+        try {
+          incoming = raw === null ? null : canonicalJson(raw);
+        } catch {
+          incoming = null;
+        }
+        if (incoming !== null && this.isOwnWrite(incoming)) return;
+        if (this.writesInFlight > 0) {
+          this.resyncAfterWrites = true;
+          return;
+        }
+        const next = raw === null ? { ...DEFAULT_SESSION_STATE } : migrate(raw);
+        this.cached = next;
+        for (const l of this.listeners) l(next);
+      })
+      .catch((e) => {
+        // A failed cross-context sync must not become an unhandled rejection;
+        // the cache stays as-is until the next read.
+        console.warn('[session-state] cross-context sync failed:', e);
+      });
+  }
+
+  /** True when `json` is one of our own writes; forgets the ones before it. */
+  private isOwnWrite(json: string): boolean {
+    const at = this.ownWrites.indexOf(json);
+    if (at < 0) return false;
+    // Storage has reached this write, so no later read returns an earlier one.
+    this.ownWrites.splice(0, at);
+    return true;
   }
 
   /**
@@ -352,9 +409,20 @@ export class SessionStateStore {
 
   /** Replace the entire state. Most callers want [`update`] instead. */
   async save(state: SessionState): Promise<void> {
+    const json = canonicalJson(state);
     this.cached = state;
-    this.lastWrittenJson = JSON.stringify(state);
-    await this.storage.set(this.key, state);
+    this.ownWrites.push(json);
+    if (this.ownWrites.length > MAX_OWN_WRITES) this.ownWrites.splice(0, this.ownWrites.length - MAX_OWN_WRITES);
+    this.writesInFlight += 1;
+    try {
+      await this.storage.set(this.key, state);
+    } finally {
+      this.writesInFlight -= 1;
+      if (this.writesInFlight === 0 && this.resyncAfterWrites) {
+        this.resyncAfterWrites = false;
+        this.syncFromStorage();
+      }
+    }
     for (const l of this.listeners) l(state);
   }
 
