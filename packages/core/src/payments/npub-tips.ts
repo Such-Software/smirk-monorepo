@@ -168,13 +168,14 @@ export async function deliverNpubTip(
 ): Promise<NpubTipDeliveryResult> {
   const recipient = recipientPubkeyHex.toLowerCase();
   const sealFor = (peer: string) => sealNpubTipClaimKey(io.identity.privateKey, peer, tip.tipId, tip.claimKey);
-  const wrap = wrapPayment(io.identity, recipient, tipPayload(sealFor(recipient), tip));
+  const powBits = (await io.powBits?.()) ?? 0;
+  const wrap = wrapPayment(io.identity, recipient, tipPayload(sealFor(recipient), tip), powBits);
   await io.publish(await io.outboundRelays(recipient), wrap);
 
   const self = io.identity.pubkeyHex;
   if (recipient === self) return { selfCopy: true };
   try {
-    const copy = wrapPayment(io.identity, self, tipPayload(sealFor(self), tip, recipient));
+    const copy = wrapPayment(io.identity, self, tipPayload(sealFor(self), tip, recipient), powBits);
     await io.publish(await io.inboxRelays(), copy);
     return { selfCopy: true };
   } catch {

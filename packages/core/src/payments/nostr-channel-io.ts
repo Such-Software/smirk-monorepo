@@ -13,6 +13,8 @@ import { messagingProvider, messagingRelays } from '../messaging/registry';
 import { resolveDmRelays } from '../messaging/dm';
 import type { GiftWrapEvent } from '../messaging/types';
 import type { NostrChannelIO } from './slatepack-channel';
+import { api } from '../api';
+import { loadCapabilities } from '../api/capabilities-cache';
 
 const dedup = (a: string[]): string[] => [...new Set(a.filter(Boolean))];
 
@@ -61,6 +63,17 @@ export function createNostrChannelIO(identity: NostrIdentity): NostrChannelIO {
 
     async inboxRelays(): Promise<string[]> {
       return messagingRelays();
+    },
+
+    async powBits(): Promise<number> {
+      // The relay sees every wrap's ephemeral signer as an unknown author, so it
+      // asks the same proof-of-work of a tip or slatepack as of any DM. The
+      // figure passes through unclamped: mining fewer bits than the relay asks
+      // is refused anyway, so wrapSealWithPow refuses an excessive demand up
+      // front and names it (see MAX_WRAP_POW_BITS).
+      const caps = await loadCapabilities(api);
+      const bits = caps?.messaging?.inbound_pow_bits;
+      return typeof bits === 'number' && Number.isInteger(bits) && bits > 0 ? bits : 0;
     },
   };
 }
