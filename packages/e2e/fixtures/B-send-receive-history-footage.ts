@@ -368,8 +368,8 @@ export class WalletFootage {
     label: string,
     opts: { timeout?: number; position?: { x: number; y: number }; urgent?: UrgentReason } = {},
   ): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     const timeout = opts.timeout ?? 60_000;
     const where = opts.position ? { position: opts.position } : {};
     // Logged before waiting, so a stalled run shows what it was waiting for.
@@ -392,8 +392,8 @@ export class WalletFootage {
    * Refuses a value the canary knows; secrets go through `typeSecret`.
    */
   async fill(locator: Locator, value: string, label: string, opts: { timeout?: number } = {}): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     if (this.canary.isSecret(value)) throw new Error('refusing to type a known secret outside a secret scope');
     const timeout = opts.timeout ?? 60_000;
     this.timeline.add('step', label);
@@ -413,8 +413,8 @@ export class WalletFootage {
 
   /** Wait for the wallet to stop showing busy text, then hold the settled screen. */
   async settled(label: string, opts: { patience?: number } = {}): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     this.timeline.add('step', label);
     const deadline = Date.now() + (opts.patience ?? SETTLE_PATIENCE_MS);
     let clean = 0;
@@ -433,8 +433,8 @@ export class WalletFootage {
 
   /** Hold a key result on screen. */
   async result(label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     const held = await this.holdFor(HOLD_RESULT_MS);
     this.timeline.add('result', label, { holdMs: held });
     this.held = true;

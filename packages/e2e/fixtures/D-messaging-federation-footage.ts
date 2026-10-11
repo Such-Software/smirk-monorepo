@@ -298,8 +298,8 @@ export class DFootage {
 
   /** Hold the screen static, then tap. */
   async tap(locator: Locator, label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     await locator.waitFor({ state: 'visible', timeout: 60_000 });
     await this.hold('tap', label, D_HOLD.BEFORE_TAP_MS);
     try {
@@ -327,8 +327,8 @@ export class DFootage {
    * frame, a label or the timeline.
    */
   async type(locator: Locator, text: string, label: string, opts: { secret?: boolean } = {}): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     await locator.waitFor({ state: 'visible', timeout: 60_000 });
     await this.hold('tap', label, D_HOLD.BEFORE_TAP_MS);
     if (opts.secret) {
@@ -343,8 +343,8 @@ export class DFootage {
 
   /** Wait until nothing is loading or updating, then hold the settled screen. */
   async settled(label: string, patienceMs = 60_000): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     await this.page
       .locator('#root')
       .filter({ hasText: /Updating…|Loading/ })
@@ -355,8 +355,8 @@ export class DFootage {
 
   /** Hold a key result on screen. */
   async result(label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     await this.hold('result', label, D_HOLD.RESULT_MS);
   }
 

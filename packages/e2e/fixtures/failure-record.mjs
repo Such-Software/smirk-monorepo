@@ -10,13 +10,18 @@
  *   error class   the error's class name, the Playwright call or matcher that
  *                 failed (`locator.click`, `toBeVisible`), a fixed category
  *                 (action timeout, test timeout, target closed, ...), a network
- *                 error code, and the file and line that threw. Never the message.
+ *                 error code, and the source file and line of the `at` frame
+ *                 that threw. Never the message, nor a message line that ends
+ *                 like a frame.
  *   step label    the static label of the lane step that was running (the
  *                 footage labels the lanes already restrict to static words),
- *                 re-checked here; anything value-like is dropped.
+ *                 re-checked here against an allowlist of word shapes; a
+ *                 label with any other token, or with a run of recovery-phrase
+ *                 words, is withheld whole (see safeLabel).
  *   screen        the data-testid values visible on each wallet page, with any
  *                 id-like part (uuid, hex, key, address, long number) replaced
- *                 by `*`. Never text, never input values.
+ *                 by `*`, and an id holding a run of phrase words dropped.
+ *                 Never text, never input values.
  *   network       method, scheme, host, a path template (every segment that is
  *                 not a known route word becomes `:x`), status and timing of
  *                 recent requests. Never query strings, fragments, headers or
@@ -41,6 +46,7 @@
 import { appendFileSync, chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { PHRASE_WORDS } from './phrase-words.mjs';
 
 /** The attachment a worker hands the reporter: JSON, already shaped. */
 export const CONTEXT_ATTACHMENT = 'smirk-private-context';
@@ -54,21 +60,79 @@ const LABEL_SHAPE = /^[A-Za-z][A-Za-z0-9 ,.:;()'/&+#-]{0,119}$/;
 const VALUE_LIKE = /:\/\/|@|npub1|nsec1|[0-9a-fA-F]{16,}|[A-Za-z0-9]{24,}|\d{5,}/;
 
 /**
- * A static label, or null. Rejects anything with the shape of a value: a URL,
- * an address or handle, a key or hash, a long number, and twelve or more bare
- * lowercase words in a row, which is what a recovery phrase looks like.
+ * Names a label may use that no other token shape admits: mixed-case product
+ * names and the wallet's own host. Add one here when a lane label needs it;
+ * every other mixed-case or dotted token is refused, because that is how a
+ * password, a handle or an encoded value looks.
+ */
+const LABEL_NAMES = ['THORChain', 'NonLogs', 'GoblinPay', 'BTCPay', 'BasicSwap', 'smirk\\.cash'];
+
+/**
+ * The tokens a label may hold, each with an optional opening `(` or `'` and a
+ * closing `)` or `'` and `,` `.` `:` or `;`:
+ *   a word        `send`, `Home`, `auto-lock`, `wallet's`: letters, lower case
+ *                 after the first, hyphenated parts in lower case;
+ *   an acronym    `BTC`, `XMR`, `DMs`, `BTC/LTC`, `NIP-05`, `F2`: capitals,
+ *                 paired by `/`, or with a short number;
+ *   a version     `v0.2.4`, `pre-v0.3`;
+ *   a name        one of LABEL_NAMES;
+ *   a number      at most three digits, or `#` and at most three digits;
+ *   a joiner      `&`, `+` or `-` on its own.
+ * A capital after a token's first letter (but in an acronym or a listed
+ * name), a lower-case letter beside a digit (but a version's `v`), a `/`
+ * anywhere but between acronyms, `@`, `=`, `_`, `%` and double quotes never
+ * pass, so neither does a key, address, token, claim link or a password of
+ * the shapes people and the lanes use.
+ */
+const LABEL_TOKEN = new RegExp(
+  '^[(\']?(?:' +
+    [
+      "[A-Za-z][a-z]*(?:-[a-z]+)*(?:'[a-z]{1,2})?",
+      "[A-Z]{2,6}(?:'?s)?",
+      '[A-Z]{2,6}(?:/[A-Z]{2,6}){1,3}',
+      '[A-Z]{1,6}-?\\d{1,3}',
+      '(?:pre-)?v\\d{1,2}(?:\\.\\d{1,3}){1,2}',
+      `(?:${LABEL_NAMES.join('|')})(?:'s)?`,
+      '#?\\d{1,3}',
+      '[&+-]',
+    ].join('|') +
+    ')\\)?\'?[,.:;]?$',
+);
+
+/**
+ * Consecutive recovery-phrase words (BIP-39, the wallet's list) a label may
+ * hold. Lane labels and titles reach five ("asset list, order-book quote"); a
+ * whole phrase, or six or more of its words in a row, is refused in any case,
+ * with any separator, numbered or not.
+ */
+const PHRASE_RUN = 6;
+
+function phraseRun(text) {
+  let run = 0;
+  for (const word of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    // Numbering ("1. abandon 2. ability") neither counts nor breaks a run.
+    if (!word || /^\d+$/.test(word)) continue;
+    run = PHRASE_WORDS.has(word) ? run + 1 : 0;
+    if (run >= PHRASE_RUN) return true;
+  }
+  return false;
+}
+
+/**
+ * A static label, or null. This is an allowlist: every token must have one of
+ * the shapes LABEL_TOKEN admits, and the label must not hold a run of
+ * recovery-phrase words. Anything else withholds the whole label, so a
+ * password, key, address, handle, URL, long number or recovery phrase (whole,
+ * capitalized, comma-separated or six words of it) cannot pass. A plain word
+ * can, which is why lanes pass static labels: one phrase word or a password
+ * that is a single plain word looks like any other word.
  */
 export function safeLabel(label) {
   if (typeof label !== 'string') return null;
   const text = label.trim().replace(/\s+/g, ' ');
   if (!LABEL_SHAPE.test(text) || VALUE_LIKE.test(text)) return null;
-  const words = text.split(' ');
-  let run = 0;
-  for (const word of words) {
-    run = /^[a-z]{3,12}$/.test(word) ? run + 1 : 0;
-    if (run >= 12) return null;
-  }
-  return text;
+  if (!text.split(' ').every((token) => LABEL_TOKEN.test(token))) return null;
+  return phraseRun(text) ? null : text;
 }
 
 // ── Screen test ids ──────────────────────────────────────────────────────────
@@ -76,7 +140,9 @@ export function safeLabel(label) {
 /**
  * A data-testid with every id-like part replaced by `*`, or null when the
  * attribute is not a plain identifier at all. `tip-detail-<uuid>` becomes
- * `tip-detail-*`, `nostr-identity-<hex key>` becomes `nostr-identity-*`.
+ * `tip-detail-*`, `nostr-identity-<hex key>` becomes `nostr-identity-*`. An
+ * id holding a run of recovery-phrase words is dropped, as a label would be;
+ * the app's own ids reach four (`send-custom-fee-rate-input`).
  */
 export function safeTestId(id) {
   if (typeof id !== 'string' || id.length === 0 || id.length > 200) return null;
@@ -88,7 +154,7 @@ export function safeTestId(id) {
     .replace(/[0-9a-fA-F]{8,}/g, '*')
     .replace(/\d{3,}/g, '*')
     .replace(/\*(?:[-_.:]?\*)+/g, '*');
-  return shaped.length <= 96 && /[A-Za-z]{2,}/.test(shaped) ? shaped : null;
+  return shaped.length <= 96 && /[A-Za-z]{2,}/.test(shaped) && !phraseRun(shaped) ? shaped : null;
 }
 
 /** Shaped, de-duplicated test ids in screen order, at most `limit`. */
@@ -113,7 +179,11 @@ const NAME = new RegExp(`^(${CLASS_NAME})(?=[:\\s]|$)`);
 const API = new RegExp(`\\b(${API_NAME})(?=[:(])`);
 const MATCHER = new RegExp(`\\bexpect(?:\\.(?:poll|soft))?\\([A-Za-z]{0,16}\\)\\.(${MATCHER_NAME})\\(`);
 const NET_CODE = new RegExp(`\\b(${NET_CODE_NAME})\\b`);
-const FIXTURE = /Fixture "([A-Za-z_$][A-Za-z0-9_$]{0,40})" timeout of \d+ms exceeded during (setup|teardown)/;
+// A fixture is named in code: camelCase letters (`tipLane`, `liveWallets`), or
+// one of Playwright's own with a leading underscore. Digits, `$` and inner
+// underscores are refused, since a value quoted in that place would carry them.
+const FIXTURE_NAME = '_?[a-z][A-Za-z]{0,40}';
+const FIXTURE = new RegExp(`Fixture "(${FIXTURE_NAME})" timeout of \\d+ms exceeded during (setup|teardown)`);
 const KINDS = [
   [/Test timeout of \d+ms exceeded/, 'test timeout'],
   [/Fixture "[^"\n]{0,60}" timeout/, 'fixture timeout'],
@@ -133,16 +203,24 @@ export function locationLabel(location) {
   return location && typeof location === 'object' ? shortLocation(location.file, location.line) : null;
 }
 
+/** A source file's base name: a script extension, and nothing value-like before it. */
+const SOURCE_FILE = '[A-Za-z0-9_.-]{1,72}\\.[cm]?[jt]sx?';
+const SOURCE_NAME = new RegExp(`^${SOURCE_FILE}$`);
+
 function shortLocation(file, line) {
-  if (typeof file !== 'string' || !Number.isInteger(line)) return null;
+  if (typeof file !== 'string' || !Number.isInteger(line) || line < 0 || line > 999_999) return null;
   const name = basename(file.replace(/[?#].*$/, ''));
-  return /^[A-Za-z0-9_.-]{1,80}$/.test(name) ? `${name}:${line}` : null;
+  return SOURCE_NAME.test(name) && !VALUE_LIKE.test(name) ? `${name}:${line}` : null;
 }
 
-/** The first stack frame in the suite's own code (not node_modules, not node internals). */
+/**
+ * The first stack frame in the suite's own code (not node_modules, not node
+ * internals). Only `at` frame lines are read, as in capture-policy.mjs: the
+ * message lines before them (a call log, Expected and Received) may hold values.
+ */
 function throwSite(stack) {
   if (typeof stack !== 'string') return null;
-  for (const line of stack.split('\n').slice(1, 40)) {
+  for (const line of stack.split('\n').filter((text) => /^\s*at\s/.test(text)).slice(0, 40)) {
     const frame = line.match(/\(?((?:file:\/\/)?\/[^():\s]+|[A-Za-z]:\\[^():]+|[a-z-]+:\/\/[^():\s]+):(\d+):\d+\)?\s*$/);
     if (!frame) continue;
     const file = frame[1];
@@ -200,10 +278,19 @@ const ERROR_FIELDS = Object.freeze({
   api: new RegExp(`^${API_NAME}$`),
   matcher: new RegExp(`^${MATCHER_NAME}$`),
   kind: new RegExp(`^(?:${KINDS.map(([, kind]) => kind).join('|')})$`),
-  fixture: /^[A-Za-z_$][A-Za-z0-9_$]{0,40} (?:setup|teardown)$/,
+  fixture: new RegExp(`^${FIXTURE_NAME} (?:setup|teardown)$`),
   code: new RegExp(`^${NET_CODE_NAME}$`),
-  at: /^[A-Za-z0-9_.-]{1,80}:\d{1,6}$/,
+  at: new RegExp(`^${SOURCE_FILE}:\\d{1,6}$`),
 });
+
+/**
+ * What VALUE_LIKE is checked on, per field. A network code is held to its
+ * fixed grammar alone, as before. A place is checked on its file name, since
+ * a line number past 9999 reads as a long number; its line was the only
+ * reason `at` skipped the check, which let a message line ending in
+ * `/<token>:12:3` pass as a place.
+ */
+const VALUE_PART = Object.freeze({ code: () => '', at: (value) => value.replace(/:\d+$/, '') });
 
 /** An error class as the reporter re-checks it: known fields of known shapes only. */
 export function safeErrorClass(shape, depth = 0) {
@@ -211,7 +298,7 @@ export function safeErrorClass(shape, depth = 0) {
   if (!shape || typeof shape !== 'object') return { name: 'unknown' };
   for (const [field, pattern] of Object.entries(ERROR_FIELDS)) {
     const value = shape[field];
-    if (typeof value === 'string' && pattern.test(value) && (field === 'at' || field === 'code' || !VALUE_LIKE.test(value))) out[field] = value;
+    if (typeof value === 'string' && pattern.test(value) && !VALUE_LIKE.test(VALUE_PART[field]?.(value) ?? value)) out[field] = value;
   }
   out.name ??= 'unknown';
   if (depth === 0 && shape.cause) out.cause = safeErrorClass(shape.cause, 1);

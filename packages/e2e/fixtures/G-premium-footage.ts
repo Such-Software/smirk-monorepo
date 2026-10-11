@@ -362,8 +362,8 @@ export class GuardedFootage {
 
   /** Hold the screen still, check it, then tap. */
   async tap(target: Locator, label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     const page = target.page();
     await target.waitFor({ state: 'visible', timeout: 60_000 });
     this.focus(page);
@@ -383,8 +383,8 @@ export class GuardedFootage {
    * tapping, when the control is already gone.
    */
   async tapThenHold(target: Locator, label: string): Promise<boolean> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     const page = target.page();
     if (!(await target.isVisible().catch(() => false))) return false;
     this.focus(page);
@@ -400,8 +400,8 @@ export class GuardedFootage {
 
   /** Hold, then type non-secret text. A known secret here is a spec bug. */
   async type(target: Locator, text: string, label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     if (this.canary.hit(text, [])) throw new Error(`Refusing "${label}": that text is a known secret; use a secret scope.`);
     const page = target.page();
     await target.waitFor({ state: 'visible', timeout: 60_000 });
@@ -415,8 +415,8 @@ export class GuardedFootage {
 
   /** Hold, then close a window the run opened (a checkout tab, a second window). */
   async closePage(page: Page, label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     this.focus(page);
     const from = Date.now();
     const ms = await this.#pause(TAP_PAUSE_MS);
@@ -426,8 +426,8 @@ export class GuardedFootage {
 
   /** Wait for loading indicators to clear, then hold the settled screen. */
   async settled(page: Page, label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     this.focus(page);
     await page.locator('#root').filter({ hasText: /Updating…|Loading/ })
       .waitFor({ state: 'detached', timeout: 60_000 }).catch(() => {});
@@ -438,8 +438,8 @@ export class GuardedFootage {
 
   /** Hold a key result on screen. */
   async result(page: Page, label: string): Promise<void> {
-    noteStep(label);
     assertStaticLabel(label);
+    noteStep(label);
     this.focus(page);
     const from = Date.now();
     const ms = await this.#pause(RESULT_HOLD_MS);
