@@ -78,16 +78,21 @@ export const test = base.extend<{
 
 export const expect = test.expect;
 
+/** The local smirk-backend-core a lane targets when BACKEND_URL is unset. */
+export const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080/api/v1';
+
 /** The instance under test (default: local smirk-backend-core). */
-export const BACKEND_URL = process.env.BACKEND_URL ?? 'http://127.0.0.1:8080/api/v1';
+export const BACKEND_URL = process.env.BACKEND_URL ?? DEFAULT_BACKEND_URL;
 
 /**
  * True when the target backend is a SHARED / production host (not loopback).
- * Fails safe: an unparseable URL is treated as shared.
+ * Fails safe: an unparseable URL is treated as shared. A gate that takes an
+ * environment passes that environment's URL, so it never mixes its own opt-ins
+ * with the process's backend.
  */
-export function isSharedBackend(): boolean {
+export function isSharedBackend(url: string = BACKEND_URL): boolean {
   try {
-    const h = new URL(BACKEND_URL).hostname;
+    const h = new URL(url).hostname;
     return !(h === '127.0.0.1' || h === 'localhost' || h === '0.0.0.0' || h.endsWith('.local'));
   } catch {
     return true;
