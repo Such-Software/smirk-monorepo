@@ -33,7 +33,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bytesToHex, decodeNpub, encodeNpub, hexToBytes, shortNpub } from '@smirk/core';
 import { test as base } from './private-test.js';
-import { BACKEND_URL, isSharedBackend } from './extension.js';
+import { DEFAULT_BACKEND_URL, isSharedBackend } from './extension.js';
 import { WALLET_VARIABLES, readWalletPhrase, walletFileExists, walletFilePath } from './C-tips-custody.mjs';
 import { DEVICE_SCALE, GuardedFootage, VIEWPORT, footageMode } from './C-tips-footage.js';
 import { TipLedger, type LedgerWalletName } from './C-tips-ledger.js';
@@ -86,8 +86,9 @@ export function liveGateReason(env: Record<string, string | undefined> = process
     return 'live lane closed: set E2E_LIVE=1 to drive the backend under test with the demo wallets';
   }
   if (env.E2E_LIVE_MONEY !== '1') return 'SPENDS REAL FUNDS: set E2E_LIVE_MONEY=1 to run';
-  if (isSharedBackend() && env.ALLOW_PROD_WRITES !== '1') {
-    return `BACKEND_URL ${BACKEND_URL} is a shared host: set ALLOW_PROD_WRITES=1 to write to it`;
+  const backend = env.BACKEND_URL ?? DEFAULT_BACKEND_URL;
+  if (isSharedBackend(backend) && env.ALLOW_PROD_WRITES !== '1') {
+    return `BACKEND_URL ${backend} is a shared host: set ALLOW_PROD_WRITES=1 to write to it`;
   }
   if (!walletFileExists(env)) {
     return 'wallet custody file not found: set SMOKE_WALLET_FILE to the owner-only (0600) demo wallet file';

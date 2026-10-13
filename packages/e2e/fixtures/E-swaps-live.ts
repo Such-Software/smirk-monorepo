@@ -38,7 +38,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test as base } from './private-test.js';
-import { BACKEND_URL, isSharedBackend } from './extension.js';
+import { BACKEND_URL, DEFAULT_BACKEND_URL, isSharedBackend } from './extension.js';
 import { proveBuild, type BuildProof } from './E-swaps-build.mjs';
 import { InflightLedger } from './E-swaps-ledger.mjs';
 import { LiveWallet, WALLET_NAMES, type WalletName } from './E-swaps-wallets.js';
@@ -65,7 +65,7 @@ export function laneGates(env: NodeJS.ProcessEnv = process.env): LaneGates {
     registered: env.E2E_LANE === 'live',
     live: env.E2E_LIVE === '1',
     money: env.E2E_LIVE_MONEY === '1',
-    prodWrites: !isSharedBackend() || env.ALLOW_PROD_WRITES === '1',
+    prodWrites: !isSharedBackend(env.BACKEND_URL ?? DEFAULT_BACKEND_URL) || env.ALLOW_PROD_WRITES === '1',
     footage: footage === 'guarded' ? 'guarded' : 'off',
   };
 }
