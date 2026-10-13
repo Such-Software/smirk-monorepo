@@ -35,8 +35,9 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
  *   E2E_WALLET_FILE=<owner-only custody file> \
  *   npx playwright test -c packages/e2e/playwright.live.config.ts
  *
- * By default the preflight verifies and unpacks the staged Chrome zip of run
- * 11204 (E2E_EXTENSION_ZIP and E2E_EXTENSION_SHA256 override it).
+ * By default the preflight verifies and unpacks the staged Chrome zip of the
+ * release candidate in fixtures/release-candidate.json (E2E_EXTENSION_ZIP and
+ * E2E_EXTENSION_SHA256 override it).
  */
 assertPrivateCapture();
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';

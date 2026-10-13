@@ -43,6 +43,7 @@ import { ALICE_FUNDED, ASSETS, HOLDS, POLL_MS, RELEASE, assertStaticLabel, makeC
 import { drawLines, ffmpeg, filterScriptArgs, findFont, privateDir, wrapLines } from '../fixtures/H-cross-browser-desktop-recorder.mjs';
 import { MOVING_TEXT, REFERENCE_MAX_AGE_MS, amount, compareWithReference, readReference } from '../fixtures/H-cross-browser-desktop-reference.mjs';
 import { BudgetError, SIGNIN, SignInLedger, admitLane, pause } from '../fixtures/H-cross-browser-desktop-signin.mjs';
+import { RC } from '../fixtures/release-candidate.mjs';
 
 const WINDOW = { x: 60, y: 60, w: 1024, h: 720 };
 const NAMES = { btc: 'Bitcoin', ltc: 'Litecoin', xmr: 'Monero', wow: 'Wownero', grin: 'Grin' };
@@ -401,7 +402,7 @@ function encodeDesktop(outDir, timeline, fontOption) {
     'color=c=0x0d0b14:s=1920x1080:r=30[bg]',
     '[raw]scale=1240:900:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[shot]',
     ['[bg][shot]overlay=x=W-w-60:y=(H-h)/2:shortest=1',
-      ...drawLines({ font, lines: ['Smirk Wallet v0.3.1 (run 11204)', 'Area H: macOS desktop'], size: 30, color: '0xf5c542', x: 60, y: 120, spacing: 10, workDir: work, stem: 'lane' }),
+      ...drawLines({ font, lines: [`Smirk Wallet v${RC.version} (run ${RC.run})`, 'Area H: macOS desktop'], size: 30, color: '0xf5c542', x: 60, y: 120, spacing: 10, workDir: work, stem: 'lane' }),
       `drawtext=fontfile='${font}':text='%{pts\\:gmtime\\:${Math.floor(t0 / 1000)}\\:%Y-%m-%d %T} UTC':fontcolor=0xbbbbbb:fontsize=28:x=60:y=h-120`,
       ...captions,
       'format=yuv420p[v]'].join(','),
@@ -416,7 +417,7 @@ function encodeDesktop(outDir, timeline, fontOption) {
   };
   writeFileSync(join(outDir, 'CHAPTERS-macos-desktop.md'), [
     '# macOS desktop chapters', '',
-    'Smirk Wallet v0.3.1 desktop app, release run 11204, area H. Real speed; holds are deliberate dead air.', '',
+    `Smirk Wallet v${RC.version} desktop app, release run ${RC.run}, area H. Real speed; holds are deliberate dead air.`, '',
     '| Video time | Kind | Operation | Hold (s) |', '| --- | --- | --- | --- |',
     ...timeline.events.map((event) => `| ${stamp(event.start)} | ${event.kind} | ${event.label} | ${(event.holdMs / 1000).toFixed(1)} |`),
     '',

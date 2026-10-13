@@ -38,6 +38,7 @@ import { join, relative } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CLEAN_PASS_GAP_MS, FRAME_INTERVAL_MS, GUARD_RULES, HOLDS, MASKS, MaskUnavailable, POLL_MS, assertStaticLabel, verifyTimeline } from './H-cross-browser-desktop-policy.mjs';
 import { hCanarySnapshot, hSecretVerdict } from './H-cross-browser-desktop-guard.mjs';
+import { RC } from './release-candidate.mjs';
 
 /** Create a directory chain owned by this user with mode 0700 at every level we create. */
 export function privateDir(path) {
@@ -507,7 +508,7 @@ export function encodeLane(outDir, { font: explicitFont } = {}) {
       + 'scale=1100:960:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[shot]',
     [
       '[bg][shot]overlay=x=W-w-100:y=(H-h)/2:shortest=1',
-      ...drawLines({ font, lines: ['Smirk Wallet v0.3.1 (run 11204)', `Area H: ${timeline.lane}`], size: 34, color: '0xf5c542', x: 100, y: 120, spacing: 10, workDir: work, stem: 'lane' }),
+      ...drawLines({ font, lines: [`Smirk Wallet v${RC.version} (run ${RC.run})`, `Area H: ${timeline.lane}`], size: 34, color: '0xf5c542', x: 100, y: 120, spacing: 10, workDir: work, stem: 'lane' }),
       `drawtext=fontfile='${font}':text='%{pts\\:gmtime\\:${start}\\:%Y-%m-%d %T} UTC':fontcolor=0xbbbbbb:fontsize=32:x=100:y=h-140`,
       ...captions,
       'format=yuv420p[v]',
@@ -527,7 +528,7 @@ export function encodeLane(outDir, { font: explicitFont } = {}) {
   const chapterLines = [
     `# ${timeline.lane} chapters`,
     '',
-    `Smirk Wallet v0.3.1, release run 11204, area H. Real speed; holds are deliberate dead air.`,
+    `Smirk Wallet v${RC.version}, release run ${RC.run}, area H. Real speed; holds are deliberate dead air.`,
     '',
     '| Video time | Kind | Operation | Hold (s) |',
     '| --- | --- | --- | --- |',

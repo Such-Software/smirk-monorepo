@@ -2,7 +2,7 @@
 /**
  * The Smirk Wallet v0.3.1 release run: every live area, A to H, one after
  * another in the order of the release survey, against the STAGED release
- * candidate (run 11204) and the production backend, recorded under the
+ * candidate (fixtures/release-candidate.json) and the production backend, recorded under the
  * owner's video policy. `npm run test:live-v031 -w @smirk/e2e` runs it.
  *
  * Order. The survey interleaves areas so that confirmation waits overlap;
@@ -50,6 +50,8 @@
  *                          federated tips, D's trip to B); "no" records the
  *                          gap as acknowledged (E2E_LIVE_ACK_GAPS=federation)
  *   V031_NONLOGS_SWAP      the real NonLogs XMR to WOW swap in E
+ *   V031_TROCADOR_SWAP     the real Trocador LTC to XMR swap in E (capped,
+ *                          fixtures/E-swaps-trocador.mjs)
  *   V031_PREMIUM_PURCHASE  the premium purchase in G (needs G_PREMIUM_CHECKOUT_HOST)
  *   V031_LEGACY_FIXTURE    F's seeded moves among the demo wallets
  *   V031_FEED_POST         any public feed post (D, and G after a purchase)
@@ -58,7 +60,7 @@
  * names, G_PREMIUM_*, E_SWAPS_ACCEPT_KNOWN_ISSUES, E2E_ACCEPT_DIRTY_BUILD,
  * E2E_LEGACY_*) pass through to the lane that reads them, unless a decision
  * above closes them. BACKEND_URL defaults to production; V031_STAGED_DIR to
- * the run 11204 staging directory; V031_FONT to a caption font found here.
+ * the candidate's staging directory; V031_FONT to a caption font found here.
  *
  * Output, all 0700 directories and 0600 files, nothing uploaded or promoted:
  *   ~/Build/smirk-e2e/v031-run/<UTC date>/     (--run-dir overrides)
@@ -103,19 +105,20 @@ import { createRequire } from 'node:module';
 import { homedir, hostname, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { RC } from '../fixtures/release-candidate.mjs';
 
 const E2E_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The release candidate under test: run 11204, source 14a74e10. Hashes are of the staged zips. */
+/** The release candidate under test (fixtures/release-candidate.json). Hashes are of the staged zips. */
 export const RELEASE = Object.freeze({
-  version: '0.3.1',
-  run: 11204,
-  sourceCommit: '14a74e10',
-  stagedDir: join(homedir(), 'Build', 'smirk-release', 'v0.3.1-run-11204', 'staged'),
-  chromeZip: 'smirk-wallet-chrome-v0.3.1.zip',
-  chromeSha256: 'e64fb7aca1012b10cc078fcdc272685e0966e356297a5c8aa59485aa08485776',
-  firefoxZip: 'smirk-wallet-firefox-v0.3.1.zip',
-  firefoxSha256: 'd1bc246338f1fb520717a0e76e125c1a301e9b58743e8a027cadfc2d4e6647c4',
+  version: RC.version,
+  run: Number(RC.run),
+  sourceCommit: RC.sourceCommit.slice(0, 8),
+  stagedDir: RC.stagedDir,
+  chromeZip: RC.chromeZip.file,
+  chromeSha256: RC.chromeZip.sha256,
+  firefoxZip: RC.firefoxZip.file,
+  firefoxSha256: RC.firefoxZip.sha256,
 });
 
 export const PRODUCTION_BACKEND = 'https://api.smirk.cash/api/v1';
@@ -135,15 +138,24 @@ export const DECISIONS = Object.freeze([
   { env: 'V031_IDENTITY_WRITES', key: 'identityWrites', what: 'new-wallet and handle writes (A, C, D)' },
   { env: 'V031_FEDERATION_B', key: 'federationB', what: 'the federation backend B (C, D)' },
   { env: 'V031_NONLOGS_SWAP', key: 'nonlogsSwap', what: 'the real NonLogs XMR to WOW swap (E)' },
+  { env: 'V031_TROCADOR_SWAP', key: 'trocadorSwap', what: 'the real Trocador LTC to XMR swap (E)' },
   { env: 'V031_PREMIUM_PURCHASE', key: 'premiumPurchase', what: 'the premium purchase in LTC (G)' },
   { env: 'V031_LEGACY_FIXTURE', key: 'legacyFixture', what: 'the seeded legacy moves (F)' },
   { env: 'V031_FEED_POST', key: 'feedPost', what: 'any public feed post (D, G)' },
 ]);
 
-/** The E test the NonLogs decision governs (tests/live/e-swaps.live.spec.ts). */
-const NONLOGS_SWAP_TITLE = 'NonLogs XMR to WOW: small real swap';
-/** E's test count (E-swaps.live.config.ts), without and with that swap. */
-const E_TESTS = 10;
+/** The E tests the swap decisions govern (tests/live/e-swaps.live.spec.ts). */
+export const NONLOGS_SWAP_TITLE = 'NonLogs XMR to WOW: small real swap';
+export const TROCADOR_SWAP_TITLE = 'Trocador LTC to XMR: real swap';
+/** E's test count (E-swaps.live.config.ts) with every decision yes. */
+export const E_TESTS = 11;
+
+/** The E tests a "no" deselects, as titles. */
+export function eDeselected(decisions) {
+  return [...(decisions.nonlogsSwap ? [] : [NONLOGS_SWAP_TITLE]), ...(decisions.trocadorSwap ? [] : [TROCADOR_SWAP_TITLE])];
+}
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Variables each lane sets for itself; an inherited value would leak one lane's state into another. */
 const LANE_OWNED = Object.freeze([
@@ -207,7 +219,10 @@ export const PHASES = Object.freeze([
     title: 'Swaps: THORChain both ways for real, quotes, Trocador, NonLogs, Where to trade',
     kind: 'playwright',
     config: 'E-swaps.live.config.ts',
-    grepInvert: (ctx) => (ctx.decisions.nonlogsSwap ? null : NONLOGS_SWAP_TITLE),
+    grepInvert: (ctx) => {
+      const titles = eDeselected(ctx.decisions);
+      return titles.length ? titles.map(escapeRegExp).join('|') : null;
+    },
     env: (ctx) => ({
       EXTENSION_DIST: ctx.chromeDir,
       EXTENSION_ZIP: ctx.chromeZip,
@@ -216,7 +231,9 @@ export const PHASES = Object.freeze([
       E2E_RUN_LABEL: ctx.runId,
       E2E_FOOTAGE_DIR: join(ctx.runDir, 'E-swaps', 'footage'),
       E_SWAPS_RUN_ID: ctx.attemptId,
-      E2E_MIN_EXECUTED: String(ctx.decisions.nonlogsSwap ? E_TESTS : E_TESTS - 1),
+      E2E_MIN_EXECUTED: String(E_TESTS - eDeselected(ctx.decisions).length),
+      // The lane re-checks the owner's answer itself; a "no" also deselects the test.
+      V031_TROCADOR_SWAP: ctx.decisions.trocadorSwap ? 'yes' : null,
     }),
     encode: (ctx) => [
       node('scripts/E-swaps-encode.mjs', ['--run', ctx.attemptId, '--area', join(ctx.runDir, 'E-swaps', 'footage', 'E-swaps'), '--font', ctx.font]),
@@ -735,7 +752,7 @@ async function preflight(options, phases, env) {
   say(`run ${runId} in ${runDir}; test source ${source.commit ?? 'unknown'}${source.dirty ? ' with local changes' : ''}`);
   say(`owner decisions: ${DECISIONS.map((d) => `${d.env}=${decisions[d.key] ? 'yes' : 'no'}`).join(' ')}`);
   if (!decisions.federationB) say('federation gap acknowledged by the owner: C and D list those skips as chosen, never as evidence');
-  if (!(env.E_SWAPS_ACCEPT_KNOWN_ISSUES ?? '').includes('stale-provider-note')) {
+  if (RELEASE.sourceCommit === '14a74e10' && !(env.E_SWAPS_ACCEPT_KNOWN_ISSUES ?? '').includes('stale-provider-note')) {
     say("note: on 14a74e10 E's 'live provider card drops its pre-check note' fails by design unless the owner sets E_SWAPS_ACCEPT_KNOWN_ISSUES=stale-provider-note");
   }
   return { runDir, runId, walletFile, backend, stagedDir, chromeZip, firefoxZip, chromeDir, decisions, font, env };

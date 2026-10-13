@@ -27,6 +27,7 @@ import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, 
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PINNED_CHROME_ZIP_SHA256, verifyUnpackedRelease } from './F-legacy-recovery-release.mjs';
+import { RC } from './release-candidate.mjs';
 
 export const LANE_ID = 'F-legacy-recovery';
 
@@ -154,10 +155,10 @@ export function expectedExecuted(g, moves) {
 
 // ── Preflight ────────────────────────────────────────────────────────────────
 
-export const DEFAULT_RELEASE_ZIP = join(homedir(), 'Build', 'smirk-release', 'v0.3.1-run-11204', 'staged', 'smirk-wallet-chrome-v0.3.1.zip');
+export const DEFAULT_RELEASE_ZIP = join(RC.stagedDir, RC.chromeZip.file);
 
 /** Run identity, for output paths only. */
-export const FOOTAGE_RUN = process.env.E2E_FOOTAGE_RUN ?? 'v0.3.1-run-11204';
+export const FOOTAGE_RUN = process.env.E2E_FOOTAGE_RUN ?? RC.runLabel;
 
 export function footageRoot() {
   return resolve(process.env.E2E_FOOTAGE_DIR ?? join(homedir(), 'Build', 'smirk-e2e', FOOTAGE_RUN, 'footage'));

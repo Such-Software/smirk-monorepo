@@ -42,6 +42,7 @@ import { BACKEND_URL, isSharedBackend } from './extension.js';
 import { proveBuild, type BuildProof } from './E-swaps-build.mjs';
 import { InflightLedger } from './E-swaps-ledger.mjs';
 import { LiveWallet, WALLET_NAMES, type WalletName } from './E-swaps-wallets.js';
+import { RC } from './release-candidate.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -161,7 +162,7 @@ function sessionDir(runDir: string, wallet: WalletName): string {
 }
 
 export function footageRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const label = env.E2E_RUN_LABEL ?? 'v0.3.1-run-11204';
+  const label = env.E2E_RUN_LABEL ?? RC.runLabel;
   return resolve(env.E2E_FOOTAGE_DIR ?? join(homedir(), 'Build', 'smirk-e2e', label, 'footage'));
 }
 

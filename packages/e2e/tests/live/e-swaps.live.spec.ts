@@ -20,10 +20,12 @@
  * screen, in order, and uses the first that covers it; the choice and every
  * balance read are in the run's evidence.
  *
- * Money moves only in the last three tests, in the smallest amounts the
- * providers accept (planned from THORChain's own public answers before any
- * wallet is chosen), and only between a demo wallet's own addresses and the
- * deposit address a provider quoted. Review must show exactly the quoted
+ * Money moves only in the last four tests, in the smallest amounts the
+ * providers accept (planned from THORChain's own public answers, or from the
+ * smallest step of a capped ladder Trocador quotes, before any deposit), and
+ * only between a demo wallet's own addresses and the deposit address a
+ * provider quoted. The real Trocador swap also needs the owner's
+ * V031_TROCADOR_SWAP=yes (fixtures/E-swaps-trocador.mjs). Review must show exactly the quoted
  * coin, amount and deposit address before Send is tapped. A real swap is
  * entered in the in-flight ledger before its Send tap and leaves it only when
  * the provider finishes it; while it is there, no run starts that swap again.
@@ -48,6 +50,14 @@ import {
   type ThorObserved,
 } from '../../fixtures/E-swaps-providers.js';
 import { swapKey } from '../../fixtures/E-swaps-ledger.mjs';
+import {
+  TROCADOR_TRADE_ID,
+  trocadorAmountRefusal,
+  trocadorEvidence,
+  trocadorPlan,
+  trocadorSwapRefusal,
+  type TrocadorStep,
+} from '../../fixtures/E-swaps-trocador.mjs';
 import {
   COINS,
   TERMINAL,
@@ -110,6 +120,8 @@ const MIN = 60_000;
 /** Balances, addresses, quote, confirm and Send, at the owner's holds. */
 const SETUP_MS = 60 * MIN;
 const THOR_FOLLOW_MS = 150 * MIN;
+/** Trocador: LTC confirmations at the exchange, the exchange, and the XMR payout. */
+const TROCADOR_FOLLOW_MS = 150 * MIN;
 const NONLOGS_DEPOSIT_MS = 75 * MIN;
 /** How long NonLogs may take to pay out (matching can take hours). */
 const NONLOGS_BUDGET_MS = Number(process.env.E_SWAPS_NONLOGS_BUDGET_MIN ?? '180') * MIN;
@@ -304,6 +316,27 @@ async function quoteLtcLadder(w: LiveWallet, from: number, fundable: bigint | nu
     await w.footage.result('THORChain refused this amount');
   }
   return null;
+}
+
+/**
+ * Quote LTC to XMR at Trocador from the smallest ladder step upwards, within
+ * what the wallet can fund with its network fee. Trocador answers "amount
+ * higher than max or lower than min" below the routed exchange's minimum;
+ * each refusal is held on screen.
+ */
+async function quoteTrocadorLadder(w: LiveWallet, ladder: readonly TrocadorStep[], fundable: bigint | null): Promise<TrocadorStep | null> {
+  for (const step of ladder) {
+    if (fundable !== null && step.atomic + LTC_FEE_MARGIN > fundable) break;
+    const attempt = await requestQuote(w, step.text);
+    if (attempt.ok) return step;
+    await w.footage.result('Trocador refused this amount');
+  }
+  return null;
+}
+
+/** The public facts of the Trocador swap, shape-checked, into the run's evidence. */
+function noteTrocador(lane: Lane, fields: Parameters<typeof trocadorEvidence>[0]): void {
+  for (const [key, value] of Object.entries(trocadorEvidence(fields))) lane.evidence.note('trocador ltc-xmr swap', key, value);
 }
 
 /** Find the history row of a swap deposit and check its detail sheet. */
@@ -817,6 +850,75 @@ if (gates.registered) {
       lane.evidence.note('thorchain ltc-btc swap', 'completed sat', got!.toString());
       const rise = await waitForArrival(w, 'btc', btcBefore.total, (got! * 99n) / 100n, BTC_ARRIVAL_MS);
       lane.evidence.note('thorchain ltc-btc swap', 'BTC rise sat', rise.toString());
+      await swapRoot(w);
+    });
+
+    test('Trocador LTC to XMR: real swap, history entry, resume after reopen, XMR arrives', async ({ lane }) => {
+      const XMR_ARRIVAL_MS = 60 * MIN;
+      test.setTimeout(SETUP_MS + TROCADOR_FOLLOW_MS + XMR_ARRIVAL_MS + 15 * MIN);
+      requireGates(lane, true);
+      const decision = trocadorSwapRefusal(process.env);
+      test.skip(decision !== null, decision ?? '');
+      const key = swapKey('trocador', 'ltc', 'xmr');
+      guardInflight(lane, key);
+      // A malformed or over-cap plan refuses here, before any wallet is opened.
+      const plan = trocadorPlan(process.env);
+      const funded = await fundedWallet(lane, 'ltc', plan.ladder[0]!.atomic + LTC_FEE_MARGIN);
+      test.skip(funded === null, 'no demo wallet holds enough confirmed LTC for the smallest Trocador step and its network fee');
+      const w = funded!.w;
+      const xmrBefore = await readBalance(w, 'xmr');
+      const ownXmr = await readOwnAddress(w, 'xmr');
+      const ownLtc = await readOwnAddress(w, 'ltc');
+
+      await swapRoot(w);
+      await openTrocador(w);
+      test.skip(!(await hasPill(w, 'from', 'ltc')) || !(await hasPill(w, 'to', 'xmr')), 'Trocador offers no LTC to XMR pair in this build');
+      const available = await choosePair(w, 'ltc', 'xmr');
+      const step = await quoteTrocadorLadder(w, plan.ladder, available ?? funded!.balance.confirmed);
+      test.skip(step === null, 'Trocador quoted no LTC amount on the ladder that the chosen wallet can fund within the cap');
+      await w.footage.settled('Trocador quote');
+      const q = await readQuote(w);
+      expect(q.provider, 'the exchange Trocador routed to').toMatch(/\S/);
+      expect(['thorchain', 'nonlogs']).not.toContain(q.provider);
+      expect(q.receiveTicker).toBe('XMR');
+      expect(toAtomic(q.receive, 'xmr'), 'a positive XMR estimate').toBeGreaterThan(0n);
+      await w.footage.result('Trocador quote before confirming');
+      noteTrocador(lane, { exchange: q.provider, depositLtc: step!.text });
+      await w.footage.tap('use my own XMR address', w.page.getByTestId('swap-quote-use-my-to-address'));
+      await expect(w.page.getByTestId('swap-quote-to-address')).toHaveValue(ownXmr);
+      await expect(w.page.getByTestId('swap-quote-refund-address'), 'refunds come back to this wallet').toHaveValue(ownLtc);
+      await w.footage.tap('confirm the swap', w.page.getByTestId('swap-quote-confirm'));
+      await expect(w.page.getByTestId('swap-wizard-step')).toHaveText('3/4', { timeout: 120_000 });
+      const deposit = ((await w.page.getByTestId('swap-deposit-address').textContent({ timeout: 10_000 })) ?? '').trim();
+      expect(deposit, 'Trocador returned an LTC deposit address').toMatch(/^(ltc1[02-9ac-hj-np-z]{20,80}|[LM3][1-9A-HJ-NP-Za-km-z]{25,34})$/);
+      expect(deposit, 'the deposit address is the exchange\'s, not this wallet\'s').not.toBe(ownLtc);
+      const amount = await depositAmount(w, 'ltc');
+      expect(amount, 'the deposit step asks for exactly the amount quoted').toBe(step!.atomic);
+      const over = trocadorAmountRefusal(amount, plan.capAtomic);
+      if (over) refuse(lane, over);
+      await w.footage.result('Trocador deposit address');
+      await w.footage.tap('open Send prefilled', w.page.getByTestId('swap-deposit-open-send'));
+      const sent = await sendPrefilled(w, 'ltc', { amount: fromAtomic(amount, 'ltc'), to: async () => deposit }, inflightHooks(lane, key, w));
+      expect(sent.txid).toMatch(/^[0-9a-f]{64}$/i);
+      noteTrocador(lane, { depositTxid: sent.txid });
+
+      await checkHistoryEntry(w, 'ltc', 'xmr', sent.txid);
+      const tradeId = await statusTradeId(w);
+      expect(tradeId, 'a Trocador trade id').toMatch(TROCADOR_TRADE_ID);
+      noteTrocador(lane, { tradeId });
+      await checkResumeAfterReopen(w, tradeId);
+
+      const final = await w.footage.wait('Trocador swap in progress', () => followStatus(w, Date.now() + TROCADOR_FOLLOW_MS));
+      if (TERMINAL.includes(final.kind)) lane.ledger.finish(key);
+      noteTrocador(lane, { finalStatus: final.kind });
+      expect(final.kind, 'Trocador completed the swap').toBe('completed');
+      expect(final.seen).not.toContain('refunded');
+      const got = completedAmount(final.text, 'xmr');
+      expect(got, 'the completed amount').not.toBeNull();
+      expect(got!).toBeGreaterThan(0n);
+      noteTrocador(lane, { completedXmrAtomic: got!.toString() });
+      const rise = await waitForArrival(w, 'xmr', xmrBefore.total, (got! * 99n) / 100n, XMR_ARRIVAL_MS);
+      noteTrocador(lane, { xmrRiseAtomic: rise.toString() });
       await swapRoot(w);
     });
 

@@ -12,10 +12,10 @@
  *
  *   E2E_LIVE=1 E2E_LIVE_MONEY=1 ALLOW_PROD_WRITES=1 FOOTAGE=guarded \
  *   BACKEND_URL=https://api.smirk.cash/api/v1 \
- *   E2E_LIVE_EXTENSION_ZIP=~/Build/smirk-release/v0.3.1-run-11204/staged/smirk-wallet-chrome-v0.3.1.zip \
- *   E2E_LIVE_EXTENSION_SHA256=e64fb7aca1012b10cc078fcdc272685e0966e356297a5c8aa59485aa08485776 \
+ *   E2E_LIVE_EXTENSION_ZIP=~/Build/smirk-release/v<version>-run-<run>/staged/smirk-wallet-chrome-v<version>.zip \
+ *   E2E_LIVE_EXTENSION_SHA256=<its SHA-256, fixtures/release-candidate.json> \
  *   E2E_LIVE_WALLET_FILE=<main checkout>/packages/smoke-tests/secrets/smoke-mnemonics.env \
- *   E2E_LIVE_RUN_LABEL=run-11204 \
+ *   E2E_LIVE_RUN_LABEL=run-<run> \
  *   npx playwright test -c B-send-receive-history.live.config.ts
  *
  * The wallet file is read by path, in process, one variable at a time; never
@@ -46,7 +46,7 @@
  * test must run, so `--grep` subsets work and a skip still fails the run.
  *
  * Afterwards, encode the footage (1.0x, no trimming, holds verified):
- *   node scripts/B-send-receive-history-footage.mjs --run ~/Build/smirk-e2e/v0.3.1-run-11204
+ *   node scripts/B-send-receive-history-footage.mjs --run ~/Build/smirk-e2e/v<version>-run-<run>
  */
 
 import { defineConfig } from '@playwright/test';

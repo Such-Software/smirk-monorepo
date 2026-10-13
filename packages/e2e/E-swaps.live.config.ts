@@ -20,8 +20,8 @@ assertPrivateCapture();
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
 // Registers the live tests; the main suite leaves this unset.
 process.env.E2E_LANE = 'live';
-// The lane has ten tests; the skip guard's default floor is the main suite's.
-process.env.E2E_MIN_EXECUTED ??= '10';
+// The lane has eleven tests; the skip guard's default floor is the main suite's.
+process.env.E2E_MIN_EXECUTED ??= '11';
 // One id for the whole run, inherited by every worker (a failed test restarts
 // the worker): the run's directory, evidence and timelines are keyed by it,
 // and a wallet that could not be imported is not retried within it.

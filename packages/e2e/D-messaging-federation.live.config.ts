@@ -13,7 +13,7 @@ import { PRIVATE_USE, assertPrivateCapture } from './capture-policy.mjs';
  * Paced for review: holds of 6, 12 and 25 seconds, so a test may take most of
  * an hour. One worker, worker-scoped wallets, no retries.
  *
- *   E2E_LIVE=1 E2E_LIVE_RELAY=1 FOOTAGE=guarded E2E_RUN_LABEL=run-11204 \
+ *   E2E_LIVE=1 E2E_LIVE_RELAY=1 FOOTAGE=guarded E2E_RUN_LABEL=run-<run> \
  *   E2E_LIVE_LINK=1 ALLOW_PROD_WRITES=1 \
  *   BACKEND_URL=https://api.smirk.cash/api/v1 EXTENSION_DIST=<unpacked zip> \
  *   E2E_WALLET_FILE=<owner-only custody file> E2E_MIN_EXECUTED=1 \

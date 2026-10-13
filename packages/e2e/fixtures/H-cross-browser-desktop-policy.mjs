@@ -11,9 +11,8 @@
  * area-prefixed file so the shared demo guard (demo/guard.mjs) is unchanged.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { heldLongEnough } from './hold-timer.mjs';
+import { RC, RC_FOOTAGE_ROOT } from './release-candidate.mjs';
 
 export const AREA = 'H-cross-browser-desktop';
 
@@ -39,28 +38,22 @@ export const CLEAN_PASS_GAP_MS = 400;
 /** Condition polls (until(), busy checks) look again this often. Never a hold. */
 export const POLL_MS = 500;
 
-/** The exact release candidate under test (run 11204, source 14a74e10). */
+/** The exact release candidate under test (fixtures/release-candidate.json). */
 export const RELEASE = Object.freeze({
-  version: '0.3.1',
-  run: '11204',
-  sourceCommit: '14a74e10af383cfb6f76049024c4f750f89fe279',
-  buildsWrapper: 'b615d731d30e307e130840de8ca84a6a61ed12f8',
-  stagedDir: join(homedir(), 'Build', 'smirk-release', 'v0.3.1-run-11204', 'staged'),
-  chromeZip: Object.freeze({
-    file: 'smirk-wallet-chrome-v0.3.1.zip',
-    sha256: 'e64fb7aca1012b10cc078fcdc272685e0966e356297a5c8aa59485aa08485776',
-  }),
-  firefoxZip: Object.freeze({
-    file: 'smirk-wallet-firefox-v0.3.1.zip',
-    sha256: 'd1bc246338f1fb520717a0e76e125c1a301e9b58743e8a027cadfc2d4e6647c4',
-  }),
+  version: RC.version,
+  run: RC.run,
+  sourceCommit: RC.sourceCommit,
+  buildsWrapper: RC.buildsWrapper,
+  stagedDir: RC.stagedDir,
+  chromeZip: RC.chromeZip,
+  firefoxZip: RC.firefoxZip,
   geckoId: 'wallet@smirk.cash',
   macBundleId: 'cash.smirk.wallet',
   macTeamId: 'D8PL9F7X33',
 });
 
 /** Machine-local footage root. Never promoted automatically. */
-export const FOOTAGE_ROOT = join(homedir(), 'Build', 'smirk-e2e', 'v0.3.1-run-11204', 'footage');
+export const FOOTAGE_ROOT = RC_FOOTAGE_ROOT;
 
 /**
  * One directory per invocation, so a run never overwrites an earlier run's

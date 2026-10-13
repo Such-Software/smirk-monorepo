@@ -20,8 +20,9 @@
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { RC } from './release-candidate.mjs';
 
-export const DEFAULT_RUN_LABEL = 'v0.3.1-run-11204';
+export const DEFAULT_RUN_LABEL = RC.runLabel;
 
 /** The owner's dead-air policy: a still screen before each tap, on every settled screen, on key results. */
 export const OWNER_POLICY = Object.freeze({ tap: 6_000, settled: 12_000, result: 25_000 });

@@ -30,11 +30,10 @@
  * are short static phrases; values, URLs and keys are refused.
  *
  * Output (0700 directories, 0600 files) goes to E2E_FOOTAGE_DIR, by default
- * ~/Build/smirk-e2e/v0.3.1-run-11204/footage. Nothing is promoted or uploaded.
+ * ~/Build/smirk-e2e/<the candidate's run label>/footage. Nothing is promoted or uploaded.
  */
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
@@ -55,6 +54,7 @@ import {
   type HoldKind,
 } from './footage-policy.mjs';
 import { noteStep } from './failure-context.js';
+import { RC_FOOTAGE_ROOT } from './release-candidate.mjs';
 
 /** The owner's dead-air policy and its timeline check live in footage-policy.mjs. */
 export { HOLD_MS, type HoldKind };
@@ -77,7 +77,7 @@ export const ACTION_TIMEOUT_MS = 60_000;
 /** Clean guard passes required before capture resumes after a card. */
 export const RESUME_CLEAN_PASSES = 2;
 /** The default output root for this release candidate's run. */
-export const DEFAULT_FOOTAGE_DIR = join(homedir(), 'Build', 'smirk-e2e', 'v0.3.1-run-11204', 'footage');
+export const DEFAULT_FOOTAGE_DIR = RC_FOOTAGE_ROOT;
 
 /** Output frame rate of the per-page videos. */
 const ENCODE_FPS = 10;

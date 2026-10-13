@@ -27,7 +27,7 @@
  * Usage: node packages/e2e/scripts/E-swaps-encode.mjs (--run <id> | --latest)
  *          [--area <dir>] [--font <ttf>]
  * Default area: E2E_FOOTAGE_DIR/E-swaps, or
- *   ~/Build/smirk-e2e/<E2E_RUN_LABEL or v0.3.1-run-11204>/footage/E-swaps
+ *   ~/Build/smirk-e2e/<E2E_RUN_LABEL or the candidate's run label>/footage/E-swaps
  */
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -35,6 +35,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { assertStaticLabel } from '../fixtures/E-swaps-guard.mjs';
 import { holdRefusals } from '../fixtures/E-swaps-policy.mjs';
+import { RC } from '../fixtures/release-candidate.mjs';
 
 const FRAME = { w: 760, h: 1200 };
 const BAR = 150;
@@ -236,7 +237,7 @@ function encodeSession(runDir, session, font, { dir, timeline, framesDir }) {
 }
 
 function main() {
-  const label = process.env.E2E_RUN_LABEL ?? 'v0.3.1-run-11204';
+  const label = process.env.E2E_RUN_LABEL ?? RC.runLabel;
   const areaDir = resolve(argument('area', process.env.E2E_FOOTAGE_DIR ? join(process.env.E2E_FOOTAGE_DIR, 'E-swaps') : join(homedir(), 'Build', 'smirk-e2e', label, 'footage', 'E-swaps')));
   const font = argument('font', ['/System/Library/Fonts/Supplemental/Arial Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'].find(existsSync) ?? '');
   if (!font || !existsSync(font)) throw new Error('caption font not found; pass --font');

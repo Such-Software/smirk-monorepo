@@ -4,7 +4,7 @@
  * trimmed: the dead air the owner asked for stays in.
  *
  *   node packages/e2e/scripts/B-send-receive-history-footage.mjs \
- *     --run ~/Build/smirk-e2e/v0.3.1-run-11204 [--font <ttf>] [--fps 10]
+ *     --run ~/Build/smirk-e2e/v<version>-run-<run> [--font <ttf>] [--fps 10]
  *
  * Input: <run>/footage/B-send-receive-history/<recorder>/{frames.jsonl,
  * timeline.jsonl, frames/*.jpg} written by the lane's guarded recorder, and
