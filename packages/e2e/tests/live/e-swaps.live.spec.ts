@@ -44,7 +44,7 @@ import {
   FOREIGN_ADDRESS,
   THOR_ASSET_CODES,
   parseThorMemo,
-  thorInbound,
+  thorActiveVaults,
   thorObservedTx,
   thorQuoteProbe,
   type ThorObserved,
@@ -758,7 +758,7 @@ if (gates.registered) {
       const sent = await sendPrefilled(
         w,
         'btc',
-        { amount: fromAtomic(deposit, 'btc'), to: () => thorInbound('BTC') },
+        { amount: fromAtomic(deposit, 'btc'), to: () => thorActiveVaults('BTC') },
         inflightHooks(lane, key, w),
       );
       expect(sent.txid).toMatch(/^[0-9a-f]{64}$/i);
@@ -825,7 +825,7 @@ if (gates.registered) {
       await w.footage.result('deposit step with the memo warning');
       await w.footage.tap('open Send prefilled', w.page.getByTestId('swap-deposit-open-send'));
       lane.evidence.note('thorchain ltc-btc swap', 'deposit LTC', fromAtomic(deposit, 'ltc'));
-      const sent = await sendPrefilled(w, 'ltc', { amount: fromAtomic(deposit, 'ltc'), to: () => thorInbound('LTC') }, inflightHooks(lane, key, w));
+      const sent = await sendPrefilled(w, 'ltc', { amount: fromAtomic(deposit, 'ltc'), to: () => thorActiveVaults('LTC') }, inflightHooks(lane, key, w));
       expect(sent.txid).toMatch(/^[0-9a-f]{64}$/i);
 
       await checkHistoryEntry(w, 'ltc', 'btc', sent.txid);

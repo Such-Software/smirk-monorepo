@@ -1,3 +1,5 @@
+import { activeVaultAddresses } from './E-swaps-thorvaults.mjs';
+
 /**
  * Independent checks of what the wallet told THORChain, made from the test
  * runner rather than the wallet: the vault the deposit went to, and the memo
@@ -35,12 +37,15 @@ async function thor<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** THORChain's current inbound (vault) address for a chain. */
-export async function thorInbound(chain: 'BTC' | 'LTC'): Promise<string> {
-  const list = await thor<Array<{ chain: string; address?: string }>>('/thorchain/inbound_addresses');
-  const hit = list.find((x) => x.chain === chain)?.address;
-  if (!hit) throw new Error(`THORChain publishes no ${chain} inbound address`);
-  return hit;
+/**
+ * The vault addresses a quoted deposit on `chain` may name: every ActiveVault
+ * of an unhalted chain (see E-swaps-thorvaults.mjs for why not just the
+ * advertised inbound address).
+ */
+export async function thorActiveVaults(chain: 'BTC' | 'LTC'): Promise<string[]> {
+  const inbound = await thor<Array<{ chain?: string; halted?: boolean }>>('/thorchain/inbound_addresses');
+  const asgard = await thor<Array<{ status?: string; addresses?: Array<{ chain?: string; address?: string }> }>>('/thorchain/vaults/asgard');
+  return activeVaultAddresses(chain, inbound, asgard);
 }
 
 export interface ThorObserved {
