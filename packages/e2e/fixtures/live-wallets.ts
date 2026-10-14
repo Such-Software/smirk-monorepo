@@ -662,12 +662,16 @@ const TAB_ROOT: Record<string, string> = {
 export async function tabRoot(footage: GuardedFootage, page: Page, tab: 'home' | 'swap' | 'inbox' | 'settings' | 'feed'): Promise<void> {
   const nav = page.getByTestId(`nav-tab-${tab}`);
   await footage.tap(nav, `open the ${tab} tab`);
-  const marker = TAB_ROOT[tab];
-  if (marker && !(await page.getByTestId(marker).isVisible().catch(() => false))) {
-    await footage.tap(nav, `back to the ${tab} root`);
-  }
-  if (marker) await expect(page.getByTestId(marker)).toBeVisible({ timeout: 30_000 });
+  // The root can paint for a moment before the remembered sub-screen replaces
+  // it. On 2026-10-14 alice's Settings tap showed the root, then Nostr identity,
+  // and a check made straight after the tap skipped the second tap. Judge the
+  // screen once it has settled.
   await footage.settled(page, `${tab} tab`);
+  const marker = TAB_ROOT[tab];
+  if (!marker || (await page.getByTestId(marker).isVisible().catch(() => false))) return;
+  await footage.tap(nav, `back to the ${tab} root`);
+  await expect(page.getByTestId(marker)).toBeVisible({ timeout: 30_000 });
+  await footage.settled(page, `${tab} root`);
 }
 
 /**
