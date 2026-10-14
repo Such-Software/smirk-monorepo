@@ -366,8 +366,11 @@ export async function depositAmount(w: LiveWallet, coin: Coin): Promise<bigint> 
 export interface ExpectedDeposit {
   /** Decimal amount the Send screen must be prefilled with. */
   amount: string;
-  /** The address the provider quoted, read at the moment it is compared. */
-  to: () => Promise<string>;
+  /**
+   * The address the provider quoted, read at the moment it is compared; or
+   * every address the provider may quote (THORChain's active vaults).
+   */
+  to: () => Promise<string | readonly string[]>;
 }
 
 /**
@@ -423,7 +426,8 @@ export async function sendPrefilled(
   expect(asset, 'Review sends the quoted coin').toContain(`(${COINS[coin].ticker})`);
   expect(reviewAmount, 'Review shows an amount').not.toBeNull();
   expect(toAtomic(reviewAmount!, coin), 'Review sends exactly the quoted amount').toBe(toAtomic(expected.amount, coin));
-  expect(to, 'Review sends to the deposit address the provider quoted').toBe(want);
+  if (typeof want === 'string') expect(to, 'Review sends to the deposit address the provider quoted').toBe(want);
+  else expect(want, 'Review sends to one of the provider\'s active deposit addresses').toContain(to);
   await w.footage.result('send review matches the quote');
 
   await w.footage.tap('send the deposit', submit, { beforeClick: onSend.before });
