@@ -417,7 +417,11 @@ export function swapProviderCards(
 ): ShownProviderCard[] {
   const shaped = (p: ProviderCard, h: ProviderHandlers | undefined, live: (h: ProviderHandlers) => string, offeredNote: string): ShownProviderCard | null => {
     if (!h || h.offered === false) return null;
-    if (liveProvider(h)) return { ...p, status: 'active', blurb: live(h) };
+    if (liveProvider(h)) {
+      // The note is pre-check copy ("Not checked yet."); a live card has none.
+      const { statusNote: _preCheck, ...rest } = p;
+      return { ...rest, status: 'active', blurb: live(h) };
+    }
     if (h.onCheck) return { ...p, status: 'unavailable', checkable: true, statusNote: h.unavailableReason ?? offeredNote, badge: 'Tap to check' };
     return { ...p, status: 'unavailable', statusNote: h.unavailableReason ?? offeredNote, badge: 'Unavailable now' };
   };
@@ -751,8 +755,8 @@ function SwapHeader() {
           lineHeight: 1.5,
         }}
       >
-        CEX aggregators are non-custodial-for-Smirk but custodial for
-        the underlying provider. DEX routes (coming) are fully
+        CEX routes are non-custodial for Smirk but custodial at the
+        exchange that runs the swap. DEX routes such as THORChain are
         trust-minimized. Pick the route that fits the trust model you
         want for this trade.
       </div>

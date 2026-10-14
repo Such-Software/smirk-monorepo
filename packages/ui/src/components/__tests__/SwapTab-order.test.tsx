@@ -53,6 +53,8 @@ test('live providers are active with their tickers and no badge', () => {
     assert.equal(c.status, 'active');
     assert.equal(c.badge, undefined);
     assert.match(c.blurb, /Live now: /);
+    // 2026-10-14: a live THORChain card also read "Not checked yet."
+    assert.equal(c.statusNote, undefined, `${id} is live, so it carries no pre-check note`);
   }
 });
 
