@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { api, type WalletState } from '@smirk/core';
+import { api, WalletLockedError, type WalletState } from '@smirk/core';
 import {
   applyTheme,
   defaultTheme,
@@ -11,7 +11,8 @@ import {
   type ApprovalRequest as UiApprovalRequest,
 } from '@smirk/ui';
 import type { ApprovalResult as DappApprovalResult } from '@such-software/smirk-dapp-api';
-import { store, walletKeystore } from '../singletons';
+import { store, walletKeystore, sessionStorage } from '../singletons';
+import { subscribeWalletLock } from '../session-lock';
 import { normalizePaymentAmount } from '../format';
 import { tryRestoreSessionCache, writeSessionCache, convergeLegacySweep } from '../session-cache';
 import { tryRestoreFlowGrace, startFlowGrace, clearFlowGrace, scopeOf, flowGraceSeconds } from '../flow-grace';
@@ -48,7 +49,7 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
     return store.subscribe((s) => apply(s.ui.theme ?? 'default'));
   }, []);
 
-  const refresh = async () => {
+  const refresh = async (): Promise<WalletState> => {
     const p = await approvalPopupBridge.readPending(approvalId);
     // The sign-in flow grace serves only a request from the site and tab
     // that unlocked it; it is tried before the general session cache, which
@@ -61,14 +62,37 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
       // SW already cleaned it up (race), or never wrote it. Show
       // "no longer valid" and close shortly.
       setMissing(true);
-      return;
+      return ks;
     }
     setPending(p);
+    return ks;
   };
 
   useEffect(() => {
+    // A lock in any wallet window (Lock, Settings, auto-lock) ends this
+    // window's session too, so the next tap asks for the password.
+    const unsubscribe = subscribeWalletLock(walletKeystore, sessionStorage, async () => {
+      await refresh();
+    });
     void refresh();
+    return unsubscribe;
   }, []);
+
+  // A restored session (sign-in flow grace or auto-lock cache) keeps its
+  // original deadline, which the keystore enforces. Lock at that moment, as
+  // the main popup does, so the window shows the password screen instead of
+  // failing the next Approve with "Wallet is locked". Local only: the flow
+  // grace belongs to this window, and every other window arms its own timer
+  // for the shared auto-lock deadline.
+  useEffect(() => {
+    if (walletState?.kind !== 'unlocked') return;
+    const expiry = walletState.wallet.sessionExpiresAtMs;
+    if (expiry === undefined) return;
+    const timer = setTimeout(() => {
+      void walletKeystore.lock().then(refresh);
+    }, Math.max(0, expiry - Date.now()));
+    return () => clearTimeout(timer);
+  }, [walletState]);
 
   // Cache public material on unlock just like the main app does, so
   // the SW provider stays consistent even if the user first unlocked
@@ -177,21 +201,35 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
     // computes signatures with the unlocked wallet, performs payments
     // / claims, and returns the result envelope to pass back to the
     // SW via `approvalPopupBridge.writeResult`.
-    const result = await executeApproval(request, approval, {
-      wallet,
-      authorizeOperation,
-      assertOperationSession,
-      ensureWasmInit,
-      send,
-      claimPublicTip,
-      // Only the sign-in cached for the backend this window points at.
-      readBootstrapCache: (fingerprint) => readBootstrapCache(fingerprint, api.getBaseUrl()),
-      knownBackends: rememberedBackendAccounts,
-      api,
-      loadState: () => store.load(),
-      updateState: (m) => store.update(m),
-    });
-    if (approval.kind !== 'requestPayment' && approval.kind !== 'claimPublicTip') assertOperationSession(wallet);
+    let result: DappApprovalResult;
+    try {
+      result = await executeApproval(request, approval, {
+        wallet,
+        authorizeOperation,
+        assertOperationSession,
+        ensureWasmInit,
+        send,
+        claimPublicTip,
+        // Only the sign-in cached for the backend this window points at.
+        readBootstrapCache: (fingerprint) => readBootstrapCache(fingerprint, api.getBaseUrl()),
+        knownBackends: rememberedBackendAccounts,
+        api,
+        loadState: () => store.load(),
+        updateState: (m) => store.update(m),
+      });
+      if (approval.kind !== 'requestPayment' && approval.kind !== 'claimPublicTip') assertOperationSession(wallet);
+    } catch (e) {
+      if (!(e instanceof WalletLockedError)) throw e;
+      // The session ended between render and tap (deadline passed while the
+      // timer was throttled, or another window locked). Every session check
+      // precedes a broadcast, so nothing went out and no result is written:
+      // re-render, which asks for the password and then returns to this same
+      // request. A session restored meanwhile is not a fresh unlock, so the
+      // user taps Approve again rather than this attempt signing with it.
+      const next = await refresh();
+      if (next.kind === 'unlocked') throw new Error('The wallet session changed. Tap Approve again.');
+      return;
+    }
     await finish(result);
   };
 
