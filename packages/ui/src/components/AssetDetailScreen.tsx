@@ -190,6 +190,15 @@ export interface AssetDetailScreenProps {
   hidden?: boolean;
   /** True while either history or sparkline is in-flight. */
   loading?: boolean;
+  /**
+   * Set when the chain's history could not be read, with the cause. Activity
+   * then says so instead of "No activity yet": an empty list on a wallet that
+   * holds funds reads as a wallet where nothing ever happened. Rows that came
+   * from elsewhere (tips, in-flight sends) still render beneath it.
+   */
+  historyError?: string;
+  /** Read the chain's history again. Offered beside `historyError`. */
+  onRetryHistory?: () => void;
   /** Open the chain-appropriate explorer (or, for a swap deposit, the swap
    *  status). Offered from the detail sheet, no longer on the row tap. */
   onOpenExplorer?: (row: AssetDetailTxRow) => void;
@@ -236,6 +245,8 @@ export function AssetDetailScreen({
   history,
   hidden,
   loading,
+  historyError,
+  onRetryHistory,
   onOpenExplorer,
   hasExplorer,
   onRevealTxKey,
@@ -346,6 +357,55 @@ export function AssetDetailScreen({
         >
           Activity
         </div>
+        {!loading && historyError !== undefined && (
+          <div
+            data-testid="asset-detail-history-error"
+            role="alert"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              fontSize: 11,
+              padding: '10px 8px',
+              marginBottom: 6,
+              textAlign: 'center',
+              color: 'var(--smirk-negative, #ff6b6b)',
+              border: '1px solid var(--smirk-negative, #ff6b6b)',
+              borderRadius: 'var(--smirk-radius, 8px)',
+            }}
+          >
+            <span>
+              Couldn't load your {asset.displayName} transactions, so this list
+              may be incomplete.
+            </span>
+            <span
+              data-testid="asset-detail-history-error-reason"
+              style={{ color: 'var(--smirk-fg-muted)', wordBreak: 'break-word' }}
+            >
+              {historyError}
+            </span>
+            {onRetryHistory && (
+              <button
+                type="button"
+                data-testid="asset-detail-history-retry"
+                onClick={onRetryHistory}
+                style={{
+                  alignSelf: 'center',
+                  padding: '4px 10px',
+                  fontSize: 11,
+                  background: 'transparent',
+                  color: 'inherit',
+                  border: '1px solid var(--smirk-border)',
+                  borderRadius: 'var(--smirk-radius, 8px)',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                Try again
+              </button>
+            )}
+          </div>
+        )}
         {loading && history.length === 0 ? (
           <div
             style={{
@@ -357,8 +417,9 @@ export function AssetDetailScreen({
           >
             Loading…
           </div>
-        ) : history.length === 0 ? (
+        ) : history.length === 0 && historyError !== undefined ? null : history.length === 0 ? (
           <div
+            data-testid="asset-detail-history-empty"
             style={{
               fontSize: 11,
               color: 'var(--smirk-fg-muted)',

@@ -28,10 +28,9 @@ import { bytesToHex } from '../format';
 import { verifyKeyImage } from '../key-image';
 import {
   settleCryptonote,
-  dedupeByTxid,
-  sortUtxoTxs,
-  utxoTxToRow,
+  utxoHistoryRows,
   mergeSendJournal,
+  HistoryUnavailableError,
 } from '../history-mapping';
 import { readSendJournal, sendJournalKey, type SendJournalEntry } from '../send-journal';
 import { openExternal } from '../open-external';
@@ -82,6 +81,10 @@ export function AssetDetailRoute({
     undefined,
   );
   const [loading, setLoading] = useState(true);
+  // Why this chain's history could not be read, or null. Kept apart from an
+  // empty list: "No activity yet" on a wallet whose history merely failed to
+  // load tells the user nothing ever happened.
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [tipHeight, setTipHeight] = useState<number | undefined>(undefined);
   // The journal key is derived from the unlocked wallet on demand and never
@@ -125,15 +128,20 @@ export function AssetDetailRoute({
     let alive = true;
     setLoading(true);
     setHistory([]);
+    setHistoryError(null);
     setSparkline(undefined);
     void (async () => {
-      const [rawChainRows, journal, tipRows, spark] = await Promise.all([
+      const [chain, journal, tipRows, spark] = await Promise.all([
         loadAssetHistory(assetId, wallet, session?.bootstrap?.userId, (h) => {
           if (alive) setTipHeight(h);
-        }).catch(
-          (e) => {
+        }).then(
+          (rows) => ({ rows, error: null }),
+          (e: unknown) => {
+            // A request that failed and a mapper that threw land here alike.
+            // Either way the list is unknown, not empty: say so and keep the
+            // tip and pending rows, which come from elsewhere.
             console.warn('[asset-detail] history failed:', e);
-            return [] as AssetDetailTxRow[];
+            return { rows: [] as AssetDetailTxRow[], error: historyFailureReason(e) };
           },
         ),
         journalKey
@@ -165,7 +173,7 @@ export function AssetDetailRoute({
           : Promise.resolve(undefined),
       ]);
       if (!alive) return;
-      const chainRows = mergeSendJournal(rawChainRows, journal);
+      const chainRows = mergeSendJournal(chain.rows, journal);
       // Merge + sort newest-first. Tips and chain rows both carry an
       // ISO timestamp (Grin / cryptonote / utxo-with-timestamp /
       // tip-{sent,received}). Rows without a timestamp (UTXO with
@@ -185,6 +193,7 @@ export function AssetDetailRoute({
         return tb - ta;
       });
       setHistory(merged);
+      setHistoryError(chain.error);
       setSparkline(spark);
       setLoading(false);
     })();
@@ -220,6 +229,9 @@ export function AssetDetailRoute({
       // this Activity row come from the same `pendingOutgoing` source.
       history={[...pendingRows, ...history]}
       loading={loading}
+      {...(historyError !== null
+        ? { historyError, onRetryHistory: () => setReloadKey((k) => k + 1) }
+        : {})}
       onBack={onBack}
       onSend={onSend}
       onReceive={onReceive}
@@ -418,20 +430,20 @@ async function loadAssetHistory(
     if (btcLtcFreshAddrsEnabled() && typeof accountXpub === 'string') {
       const book = new UtxoAddressBook(storage, wallet.fingerprint, assetId);
       const refs = await buildUtxoScanRefs(book, assetId, accountXpub);
-      const rm = await chainProviders.utxo(assetId).getHistoryMulti(refs.map((x) => x.address));
-      if (rm.error || !rm.data) return [];
-      return sortUtxoTxs(dedupeByTxid(rm.data.transactions)).map(utxoTxToRow);
+      return utxoHistoryRows(
+        await chainProviders.utxo(assetId).getHistoryMulti(refs.map((x) => x.address)),
+      );
     }
-    const r = await chainProviders.utxo(assetId).getHistory(addr);
-    if (r.error || !r.data) return [];
-    return sortUtxoTxs(dedupeByTxid(r.data.transactions)).map(utxoTxToRow);
+    return utxoHistoryRows(await chainProviders.utxo(assetId).getHistory(addr));
   }
   if (assetId === 'xmr' || assetId === 'wow') {
     const addr = wallet.addresses[assetId];
     const viewKeyHex = bytesToHex(wallet.keys[assetId].privateViewKey);
     if (!addr) return [];
     const r = await chainProviders.lws(assetId).getHistory(addr, viewKeyHex);
-    if (r.error || !r.data) return [];
+    if (r.error || !r.data) {
+      throw new HistoryUnavailableError(r.error || 'the server returned no history');
+    }
     // `blockchain_height` is a block COUNT; the newest block is one below it.
     if (r.data.blockchain_height > 0) onTipHeight?.(r.data.blockchain_height - 1);
     const spendKeyHex = bytesToHex(wallet.keys[assetId].privateSpendKey);
@@ -504,6 +516,12 @@ async function loadAssetHistory(
 
 
 
+
+/** The cause a failed history read reports, for the coin screen to show under
+ *  its error: the server's own message, or what the mapper threw on. */
+function historyFailureReason(e: unknown): string {
+  return e instanceof Error && e.message ? e.message : String(e);
+}
 
 /** Map a client tx-journal entry onto the UI's `grin` history-row shape. */
 function grinJournalEntryToRow(e: GrinTxJournalEntry): AssetDetailTxRow {
