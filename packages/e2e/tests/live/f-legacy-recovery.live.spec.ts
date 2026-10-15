@@ -237,8 +237,23 @@ async function lookForTips(w: LiveWallet): Promise<{ since: number; isNew: boole
   return { since, isNew };
 }
 
-/** Send `amount` of `asset` from Home to `address`; returns the broadcast txid. */
-async function sendFromHome(w: LiveWallet, asset: ClaimAsset, address: string, amount: string): Promise<string> {
+/**
+ * Send `amount` of `asset` from Home to `address`; returns the broadcast txid,
+ * after handing it to `onTxid` the moment it shows.
+ *
+ * The receipt closes itself 12 s after it shows, and a settled hold after
+ * "Send" is 12 s: the 2026-10-15 run broadcast both F4 fixtures and then waited 5
+ * minutes on Home for a txid that had gone. So the broadcast leads straight
+ * to the receipt, the txid is read and recorded first, and "Stay on this
+ * screen" stops the countdown before anything is held.
+ */
+async function sendFromHome(
+  w: LiveWallet,
+  asset: ClaimAsset,
+  address: string,
+  amount: string,
+  onTxid: (txid: string) => void = () => undefined,
+): Promise<string> {
   await tabRoot(w, 'home', 'Back to Home');
   await w.footage.tap(w.page.getByTestId('home-action-send'), 'Send to an older address');
   const pick = w.page.getByTestId(`send-asset-${asset}`);
@@ -249,13 +264,25 @@ async function sendFromHome(w: LiveWallet, asset: ClaimAsset, address: string, a
   await w.footage.enter(w.page.getByTestId('send-amount-input'), amount, 'Send: amount');
   await w.footage.tap(w.page.getByTestId('send-compose-continue'), 'Send: amount');
   await w.footage.settled(w.page, 'Send: review');
-  await w.footage.tap(w.page.getByTestId('send-review-submit'), 'Send: broadcast');
-  await w.confirmOperationPasswordIfAsked();
+  await w.footage.tapIntoCountdown(w.page.getByTestId('send-review-submit'), 'Send: broadcast');
   const txid = w.page.getByTestId('send-done-txid');
-  await expect(txid, 'the send never reached a txid').toBeVisible({ timeout: 5 * MINUTE });
+  const asked = w.page.getByTestId('operation-password');
+  await expect(txid.or(asked), 'the send never reached a txid').toBeVisible({ timeout: 5 * MINUTE });
+  if (await asked.isVisible()) {
+    await w.confirmOperationPasswordIfAsked(1_000, { intoCountdown: true });
+    await expect(txid, 'the send never reached a txid').toBeVisible({ timeout: 5 * MINUTE });
+  }
   const value = (await txid.textContent())?.trim() ?? '';
-  await w.footage.result('Send: broadcast');
-  await w.footage.tap(w.page.getByTestId('send-done-close'), 'Back to Home');
+  onTxid(value);
+  const stay = w.page.getByRole('button', { name: 'Stay on this screen' });
+  if (await stay.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false)) {
+    await w.footage.tapOnCountdown(stay, 'Stay on the receipt');
+    await w.footage.result('Send: broadcast');
+    await w.footage.tap(w.page.getByTestId('send-done-close'), 'Back to Home');
+  } else {
+    // Gone already (a slow page): the txid is read, and the screen it left is held.
+    await w.footage.settled(w.page, 'Send: broadcast');
+  }
   return value;
 }
 
@@ -604,6 +631,21 @@ if (LIVE) {
       // 1. The fixture: resume one an earlier run left behind, else fund the older address.
       await openOlderAddresses(target);
       let current = older!;
+      if (current.state === 'not-scanned') {
+        // A probe cannot see coins at an address the server does not watch, so
+        // "not scanned" is not "empty": scan before deciding to fund. The
+        // 2026-10-15 run funded bob's v2 WOW address a second time that way.
+        const scanFrom = Date.now();
+        current = (await runCheck(target, 'legacy-scan', HOUR)).findings.find(same) ?? current;
+        const regs = registrations(target, scanFrom);
+        expect(regs.length, 'scanning made no registration request').toBeGreaterThan(0);
+        expect(regs.every((e) => ok(e.status)), 'the server refused a registration').toBe(true);
+        note('scanned-before-funding', regs.length);
+        await target.footage.result('Scan registered with the server');
+        expect(current.state, 'the older address is still unwatched after a scan: refusing to fund an address that may already hold a fixture').not.toBe(
+          'not-scanned',
+        );
+      }
       if (current.state === 'scanning') {
         // Registered by an earlier run but not caught up: wait before deciding whether coins are already there.
         await until(
@@ -621,9 +663,9 @@ if (LIVE) {
       if (!resumed) {
         funderBefore = await assetBalance(funder, s.asset, 'result');
         test.skip(funderBefore < 3 * Number(s.amount), `the funder lacks ${ticker} for the fixture (needs about three times ${s.amount}, for fees)`);
-        const fundingTxid = await sendFromHome(funder, s.asset, current.address, s.amount);
+        // Recorded the moment the receipt shows, so a later failure still leaves it in the evidence.
+        const fundingTxid = await sendFromHome(funder, s.asset, current.address, s.amount, (txid) => note('funding-txid', txid));
         expect(fundingTxid, 'the fixture send did not return a txid').toMatch(HEX64);
-        note('funding-txid', fundingTxid);
       }
 
       // 2. Watch until the coins settle; scan first where the server does not watch the address.

@@ -121,8 +121,12 @@ export interface LiveWallet {
    * redaction card. The password never leaves this fixture.
    */
   enterPassword(field: Locator, submit: Locator, label: FootageLabel): Promise<void>;
-  /** If an operation-password dialog appears within `windowMs`, confirm it. */
-  confirmOperationPasswordIfAsked(windowMs?: number): Promise<boolean>;
+  /**
+   * If an operation-password dialog appears within `windowMs`, confirm it.
+   * `intoCountdown`: what the confirmation leads to counts itself down (the
+   * Send receipt), so the screen after it is not held (see the footage).
+   */
+  confirmOperationPasswordIfAsked(windowMs?: number, options?: { intoCountdown?: boolean }): Promise<boolean>;
   /**
    * Enter a secret value (a claim link) into `field`, press `submit`, confirm
    * the operation password if asked, and wait for `done`, all behind one
@@ -362,14 +366,14 @@ export class LiveWallets {
           await field.waitFor({ state: 'hidden', timeout: 60_000 });
         });
       },
-      confirmOperationPasswordIfAsked: async (windowMs = 15_000) => {
+      confirmOperationPasswordIfAsked: async (windowMs = 15_000, options = {}) => {
         const asked = await page
           .getByTestId('operation-password')
           .waitFor({ state: 'visible', timeout: windowMs })
           .then(() => true, () => false);
         if (!asked) return false;
         // The empty field is masked while it waits; typing happens behind the card.
-        return footage.secret('Password confirmation (redacted)', () => confirmPassword(1_000));
+        return footage.secret('Password confirmation (redacted)', () => confirmPassword(1_000), options);
       },
       enterSecretText: async (field, value, submit, done, label) => {
         canary.addToken(value);
