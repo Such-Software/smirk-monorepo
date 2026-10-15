@@ -213,3 +213,38 @@ test('post-sign-in legacy work sends no unauthenticated read, and converges the 
     session.mock.restore();
   }
 });
+
+test('the automatic check reads the older addresses only after the sweep has finished with them', async () => {
+  // Hold every UTXO answer, so the sweep stays on its first m/44' read.
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  const calls: Call[] = [];
+  const restore = mock.method(globalThis, 'fetch', (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const body = init?.body ? (JSON.parse(String(init.body)) as { address?: string }) : {};
+    calls.push({ url, bearer: true, ...(body.address ? { address: body.address } : {}) });
+    if (url.includes('/lws/')) return new Response(JSON.stringify(LWS_BALANCE), { status: 200 });
+    await held;
+    return new Response(JSON.stringify({ asset: 'btc', address: body.address, utxos: [] }), { status: 200 });
+  }) as typeof fetch);
+  await storage.set(LEGACY_WALLET_KEY, { derivationVersion: 3 });
+  const session = mock.method(walletKeystore, 'assertUnlockedWallet', () => undefined);
+  try {
+    const wallet = unlock();
+    api.setAccessToken('live-token');
+    startLegacyWorkAfterSignIn(wallet);
+    await sleep(200);
+    // Only the sweep is reading: no older address twice, and no light-wallet read.
+    const early = reads(calls);
+    assert.ok(early.length > 0);
+    assert.equal(early.every(isUtxoRead), true, 'the check read while the sweep was still reading');
+    assert.equal(new Set(early.map((c) => c.address)).size, early.length, 'the check read an address the sweep was still reading');
+    release();
+    await until(async () => (await readLegacyCheck(wallet.fingerprint)) !== null, 'the check after the sweep');
+    assert.deepEqual(errored(await readLegacyCheck(wallet.fingerprint)), []);
+  } finally {
+    release();
+    session.mock.restore();
+    restore.mock.restore();
+  }
+});

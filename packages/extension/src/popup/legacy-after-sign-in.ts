@@ -37,7 +37,10 @@ export function convergeLegacySweepOnce(wallet: UnlockedWallet): Promise<LegacyS
 export function startLegacyWorkAfterSignIn(wallet: UnlockedWallet): void {
   // A restored session has no phrase, and without a token every read is refused.
   if (!wallet.mnemonic || !api.getAccessToken()) return;
-  void convergeLegacySweepOnce(wallet);
-  // Once per wallet; guarded inside.
-  void maybeAutoLegacyCheck(wallet);
+  // The check reads the same m/44' addresses the sweep may be emptying. Run
+  // side by side, it can read them before the broadcast and keep "funds found"
+  // for money the sweep has just moved, and nothing rechecks a clean record.
+  // So it waits for the sweep, which never rejects. Once per wallet; guarded
+  // inside.
+  void convergeLegacySweepOnce(wallet).then(() => maybeAutoLegacyCheck(wallet));
 }
