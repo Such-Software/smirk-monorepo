@@ -23,6 +23,12 @@
  * Swaps are never cancelled here: a swap screen is left by the Home tab and
  * its state kept, because a deposit may already be on its way.
  *
+ * Home counts only once it has held for a short settle window. The restored
+ * route can paint after Home: on 2026-10-14 carol's unlock showed Home, then
+ * her restored BTC coin screen, and a single look had already returned 'home'.
+ * waitForHome below is the long wait a caller makes after that, and it brings
+ * the wallet back again whenever another shell screen replaces Home.
+ *
  * Every move is a navigation the wallet offers its user; none signs, sends or
  * changes the backend. The lock screen, onboarding and the bootstrap-error
  * screen are returned to the caller, which knows how to answer them.
@@ -72,6 +78,8 @@ export interface RecoveryOptions {
   budgetMs?: number;
   /** The most moves before giving up. Default 12. */
   maxMoves?: number;
+  /** How long Home must hold before it counts. Default 2.5 s. */
+  settleMs?: number;
   /** A recorded lane's tap (holds before tapping). Default: a plain, bounded click. */
   tap?: (target: Locator, label: string) => Promise<void>;
   /** A recorded lane's key press. Default: a plain key press. */
@@ -136,6 +144,17 @@ async function changed(page: Page, before: string, ms: number): Promise<Screen> 
   return screen;
 }
 
+/** Home, held for `ms`; or the first screen that replaced it. */
+async function heldHome(page: Page, ms: number): Promise<Screen | null> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    await pause(Math.min(250, Math.max(0, deadline - Date.now())));
+    const screen = await look(page);
+    if (screen.surface !== 'home') return screen;
+  }
+  return null;
+}
+
 function describe(ids: readonly string[] | null): string {
   return ids?.length ? ids.slice(0, 8).join(', ') : 'no test ids';
 }
@@ -151,6 +170,7 @@ export async function recoverToHome(page: Page, options: RecoveryOptions): Promi
   const firstPaintMs = options.firstPaintMs ?? 60_000;
   const budgetMs = options.budgetMs ?? 45_000;
   const maxMoves = options.maxMoves ?? 12;
+  const settleMs = options.settleMs ?? 2_500;
   const tap = options.tap ?? ((target: Locator) => target.click({ timeout: 5_000 }));
   const press = options.press ?? ((p: Page, key: string) => p.keyboard.press(key));
   const report: RecoveryReport = { wallet: options.wallet, reached: 'home', from: null, moves: [], ms: 0 };
@@ -181,8 +201,14 @@ export async function recoverToHome(page: Page, options: RecoveryOptions): Promi
 
   const moveDeadline = Date.now() + budgetMs;
   for (;;) {
+    if (screen.surface === 'home') {
+      // Judge Home once it holds: a restored route may replace it a moment later.
+      const replaced = await heldHome(page, settleMs);
+      if (!replaced) return finish('home');
+      screen = replaced;
+      continue;
+    }
     if (screen.surface !== 'shell' && screen.surface !== 'loading') return finish(screen.surface);
-    report.from ??= safeTestIds(screen.ids.filter((id) => !CHROME.test(id)), 16);
     if (report.moves.length >= maxMoves || Date.now() >= moveDeadline) {
       fail('stuck', `${options.wallet}: still not on Home after ${report.moves.length} moves (${report.moves.join(', ') || 'none'}); it opened on ${describe(report.from)} and now shows ${describe(safeTestIds(screen.ids.filter((id) => !CHROME.test(id)), 8))}`);
     }
@@ -191,6 +217,7 @@ export async function recoverToHome(page: Page, options: RecoveryOptions): Promi
       screen = await changed(page, signature(screen), Math.min(5_000, Math.max(0, moveDeadline - Date.now())));
       continue;
     }
+    report.from ??= safeTestIds(screen.ids.filter((id) => !CHROME.test(id)), 16);
 
     const before = signature(screen);
     const fresh = (label: string) => !tried.has(`${before}|${label}`);
@@ -226,5 +253,45 @@ export async function recoverToHome(page: Page, options: RecoveryOptions): Promi
     report.moves.push(move.label);
     await move.run().catch(() => undefined);
     screen = await changed(page, before, Math.min(5_000, Math.max(0, moveDeadline - Date.now())));
+  }
+}
+
+export interface HomeWaitOptions extends RecoveryOptions {
+  /** The whole wait: a returning wallet may solve proof of work or rescan before Home shows. */
+  timeoutMs: number;
+  /** How often to look. Default 1 s. */
+  sliceMs?: number;
+  /** How many recoveries may run before giving up. Default 5. */
+  maxRecoveries?: number;
+}
+
+/**
+ * Wait, within one budget, for Home's root to show and hold. Whenever the
+ * shell shows another screen instead (a restored coin screen, Settings, a
+ * sheet), bring it back with recoverToHome rather than wait out the budget
+ * on a screen one tap could leave. Anything else (loading, onboarding still
+ * finishing, the lock screen) is waited on as before. True when Home holds;
+ * false when the budget or the recoveries ran out, so the caller can name
+ * the screen it was left on.
+ */
+export async function waitForHome(page: Page, options: HomeWaitOptions): Promise<boolean> {
+  const deadline = Date.now() + options.timeoutMs;
+  const sliceMs = options.sliceMs ?? 1_000;
+  const maxRecoveries = options.maxRecoveries ?? 5;
+  let recoveries = 0;
+  for (;;) {
+    const screen = await look(page);
+    if (screen.surface === 'home' || screen.surface === 'shell') {
+      if (recoveries++ >= maxRecoveries) return false;
+      try {
+        const { reached } = await recoverToHome(page, { ...options, firstPaintMs: Math.max(1_000, deadline - Date.now()) });
+        if (reached === 'home') return true;
+      } catch (error) {
+        // Already noted as failed; a slow sign-in may still be painting, so look again.
+        if (!(error instanceof WalletRecoveryError)) throw error;
+      }
+    }
+    if (Date.now() >= deadline) return false;
+    await pause(Math.min(sliceMs, Math.max(0, deadline - Date.now())));
   }
 }

@@ -13,6 +13,16 @@
  * "Settled" means no loading or busy text is left on the page (bounded by
  * `SETTLE_PATIENCE_MS`, after which the hold runs anyway).
  *
+ * One recorded exception: a screen that counts itself down. The Send receipt
+ * closes itself 12 s after it shows (SendWizard's AUTO_DISMISS_SECS), no
+ * longer than the settled hold, so a hold after "Send" always lost it; the
+ * 2026-10-15 run lost both F4 fixture txids that way. `tapIntoCountdown` (and a
+ * secret step with `intoCountdown`) acts with its still pause but no hold
+ * after, and `tapOnCountdown` stops the countdown at once with no pause
+ * before, then holds the screen it stopped. Each such step is recorded with
+ * `urgent: 'countdown'`, and the encoder admits the exception only as one
+ * short chain that ends on a held screen.
+ *
  * Recording is opt-in (`FOOTAGE=guarded`). Playwright's own trace, screenshot
  * and video stay off: they cannot be guarded per frame. Instead one recorder
  * per wallet page takes about four frames a second, and for each frame:
@@ -121,6 +131,7 @@ export const FOOTAGE_LABELS = [
   'Send: amount',
   'Send: review',
   'Send: broadcast',
+  'Stay on the receipt',
   'Funds still arriving at the older address',
   'Funds ready to move',
   'Open the notice',
@@ -150,7 +161,15 @@ export type FootageLabel = (typeof FOOTAGE_LABELS)[number];
 type CardSpan = { label: string; from: number; until: number; reasons: string[] };
 type FrameEntry = { file: string; from: number; until: number; kind: 'clean' | 'mask'; reasons: string[]; sha256: string };
 type HoldEntry = { kind: 'pre-tap' | 'settled' | 'result'; label: FootageLabel; plannedMs: number; from: number; until: number };
-type StepEntry = { kind: 'tap' | 'enter' | 'check' | 'select' | 'secret'; label: FootageLabel; from: number; until: number };
+/** The only reason a step may skip a hold: a screen that counts itself down. */
+export type UrgentReason = 'countdown';
+type StepEntry = {
+  kind: 'tap' | 'enter' | 'check' | 'select' | 'secret';
+  label: FootageLabel;
+  from: number;
+  until: number;
+  urgent?: UrgentReason;
+};
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const signature = (v: FrameVerdict) => `${v.kind}|${v.reasons.join(',')}`;
@@ -351,27 +370,36 @@ export class WalletFootage {
     this.holds.push({ kind, label, plannedMs, from, until: Date.now() });
   }
 
-  private async visible(target: Locator, label: FootageLabel): Promise<void> {
-    await target.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS }).catch(() => {
-      throw new Error(`footage step "${label}": its target was not visible within ${ACTION_TIMEOUT_MS / 1000} s`);
+  private async visible(target: Locator, label: FootageLabel, timeoutMs = ACTION_TIMEOUT_MS): Promise<void> {
+    await target.waitFor({ state: 'visible', timeout: timeoutMs }).catch(() => {
+      throw new Error(`footage step "${label}": its target was not visible within ${timeoutMs / 1000} s`);
     });
   }
 
   /**
    * One action with the policy around it: wait for the target and a settled
    * screen, mark, hold still, act, then let the result settle and hold it.
+   * A countdown step drops the pause before (`pause: false`) or the hold
+   * after (`holdAfter: false`) and is recorded as urgent.
    */
-  private async step(kind: StepEntry['kind'], target: Locator, label: FootageLabel, act: () => Promise<void>): Promise<void> {
-    await this.visible(target, label);
+  private async step(
+    kind: StepEntry['kind'],
+    target: Locator,
+    label: FootageLabel,
+    act: () => Promise<void>,
+    countdown: { pause: boolean; holdAfter: boolean; visibleMs: number } | null = null,
+  ): Promise<void> {
+    await this.visible(target, label, countdown?.visibleMs);
     const page = target.page();
-    await settle(page);
+    if (!countdown || countdown.pause) await settle(page);
     this.mark(label);
     const from = Date.now();
-    await this.hold('pre-tap', label, TAP_PAUSE_MS);
+    if (!countdown || countdown.pause) await this.hold('pre-tap', label, TAP_PAUSE_MS);
     await act().catch((error: unknown) => {
       throw new Error(`footage step "${label}" could not act: ${error instanceof Error ? error.message.split('\n')[0] : 'unknown error'}`);
     });
-    if (this.enabled) this.steps.push({ kind, label, from, until: Date.now() });
+    if (this.enabled) this.steps.push({ kind, label, from, until: Date.now(), ...(countdown ? { urgent: 'countdown' as const } : {}) });
+    if (countdown && !countdown.holdAfter) return;
     await settle(page);
     await this.hold('settled', label, SETTLED_HOLD_MS);
   }
@@ -379,6 +407,28 @@ export class WalletFootage {
   /** Static pause, the tap, then a held settled screen. */
   async tap(target: Locator, label: FootageLabel): Promise<void> {
     await this.step('tap', target, label, () => target.click({ timeout: ACTION_TIMEOUT_MS }));
+  }
+
+  /**
+   * Static pause, then a tap that leads to a screen counting itself down (the
+   * Send receipt): no hold after, so the caller reaches that screen in time.
+   * The caller must stop the countdown next with `tapOnCountdown`, or hold
+   * the screen with `settled`; the encoder refuses a chain left unheld.
+   */
+  async tapIntoCountdown(target: Locator, label: FootageLabel): Promise<void> {
+    await this.step('tap', target, label, () => target.click({ timeout: ACTION_TIMEOUT_MS }), {
+      pause: true,
+      holdAfter: false,
+      visibleMs: ACTION_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * Stop a countdown at once ("Stay on this screen"): no pause before, which
+   * would outlast the screen, then the stopped screen settles and is held.
+   */
+  async tapOnCountdown(target: Locator, label: FootageLabel): Promise<void> {
+    await this.step('tap', target, label, () => target.click({ timeout: 2_000 }), { pause: false, holdAfter: true, visibleMs: 3_000 });
   }
 
   /** Static pause, type a value that is NOT secret (an amount, an address), then hold. */
@@ -416,9 +466,10 @@ export class WalletFootage {
    * Run `fn` behind a redaction card on every recorded page, including one
    * opened meanwhile. Recording resumes only after two consecutive clean guard
    * passes, so a secret that lingers after `fn` stays redacted; then the
-   * resulting screen settles and is held.
+   * resulting screen settles and is held, unless it counts itself down
+   * (`intoCountdown`), which the caller stops next with `tapOnCountdown`.
    */
-  async secret<T>(label: FootageLabel, fn: () => Promise<T>): Promise<T> {
+  async secret<T>(label: FootageLabel, fn: () => Promise<T>, options: { intoCountdown?: boolean } = {}): Promise<T> {
     this.mark(label);
     const from = Date.now();
     this.activeSecret = label;
@@ -430,7 +481,9 @@ export class WalletFootage {
       this.activeSecret = null;
       await Promise.all(this.recorders.map((r) => r.leaveSecret()));
     }
-    if (this.enabled) this.steps.push({ kind: 'secret', label, from, until: Date.now() });
+    if (this.enabled) this.steps.push({ kind: 'secret', label, from, until: Date.now(), ...(options.intoCountdown ? { urgent: 'countdown' as const } : {}) });
+    // What it led to counts itself down: the caller stops that at once (tapOnCountdown).
+    if (options.intoCountdown) return value;
     if (this.primary) await settle(this.primary);
     // The card is down: caption the screen it left behind as what it is.
     this.mark('After the redacted step');

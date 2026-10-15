@@ -76,6 +76,7 @@ import {
   bobHandle,
   disabledChains,
   federatedBackend,
+  federationGapSkip,
   foreignAddress,
   liveCaps,
   relayInfo,
@@ -124,9 +125,17 @@ const FORGED_UNKNOWN_MEMO = 'C-tips forged: unknown tip id';
 
 const RESCUE_ONLY = 'rescue run: only the rescue and overview tests run';
 
-function tipOrSkip(lane: TipLane, key: string): CreatedTip {
-  const tip = ledgerTip(lane, key);
-  test.skip(!tip, `the ${key} person tip was not created in this run (see its send test)`);
+/**
+ * The tip an earlier send created, or a skip naming why it is missing. A
+ * federated send that skipped for an acknowledged gap passes that reason on,
+ * so its claim and settle skips are as expected as the send's own.
+ */
+async function tipOrSkip(lane: TipLane, plan: { key: string; to?: RecipientForm }): Promise<CreatedTip> {
+  const tip = ledgerTip(lane, plan.key);
+  if (!tip) {
+    const gap = plan.to ? await federationGapSkip(plan.to) : null;
+    test.skip(true, gap ?? `the ${plan.key} person tip was not created in this run (see its send test)`);
+  }
   return tip!;
 }
 
@@ -354,7 +363,7 @@ for (const plan of PERSON_TIPS.filter((p) => CONFIRMING_ASSETS.includes(p.asset)
   test(`confirm: the ${plan.label} tip becomes claimable in bob's Inbox`, async ({ tipLane }) => {
     test.skip(rescueMode(), RESCUE_ONLY);
     test.setTimeout(4 * HOUR);
-    const tip = tipOrSkip(tipLane, plan.key);
+    const tip = await tipOrSkip(tipLane, plan);
     const first = await publicTip(tip.tipId);
     const samples = await waitForPublicTip(tip.tipId, pastGate, 150 * MINUTE, 'its confirmation gate');
     expectConfirmationsRose(first ? [first, ...samples] : samples);
@@ -372,7 +381,7 @@ for (const plan of [...PERSON_TIPS, ...FEDERATED_TIPS]) {
   test(`claim: bob claims the ${plan.label} tip from his Inbox`, async ({ tipLane }) => {
     test.skip(rescueMode(), RESCUE_ONLY);
     test.setTimeout(3 * HOUR);
-    const tip = tipOrSkip(tipLane, plan.key);
+    const tip = await tipOrSkip(tipLane, plan);
     // BTC and LTC normally claim at zero confirmations; wait out any gate the backend sets.
     await waitForPublicTip(tip.tipId, pastGate, 150 * MINUTE, 'its confirmation gate');
     const claimer = await claimerOf(tipLane, tip);
@@ -463,7 +472,7 @@ for (const plan of [...PERSON_TIPS, ...FEDERATED_TIPS, { key: BLOCKED_KEY, label
   test(`settle: the ${plan.label} tip reads claimed, and the sender's row agrees`, async ({ tipLane }) => {
     test.skip(rescueMode(), RESCUE_ONLY);
     test.setTimeout(3 * HOUR);
-    const tip = tipOrSkip(tipLane, plan.key);
+    const tip = await tipOrSkip(tipLane, plan);
     const state = await publicTip(tip.tipId);
     test.skip(state?.status === 'pending' || state?.status === 'pending_confirmation', 'this tip was never claimed (see its claim test)');
     await waitForSettled(tip, 'claimed', 150 * MINUTE);
@@ -486,7 +495,7 @@ test('rescue: no person tip of this run still holds funds; any that does goes ba
   const outcomes: RescueOutcome[] = [];
   for (const record of records) outcomes.push(await rescueTip(tipLane, tipFromLedger(tipLane, record)));
   for (const o of outcomes.filter((x) => x.action !== 'already settled')) {
-    test.info().annotations.push({ type: 'rescue', description: `${o.key} (${o.asset}, from ${o.sender}): ${o.action}, ${o.status}` });
+    test.info().annotations.push({ type: 'rescue', description: `${o.key} (${o.asset}, from ${o.sender}): ${o.action}, ${o.status}${o.note ? `; ${o.note}` : ''}` });
   }
   expect(
     outcomes.filter((o) => o.action === 'failed').map((o) => `${o.key}: ${o.status}`),

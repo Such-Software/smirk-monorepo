@@ -64,6 +64,7 @@ import { watchContext } from './failure-context.js';
 import { recoverToHome } from './wallet-recovery.js';
 import { isLocalPublishRelay, liveRelayAdmits, relayKey } from './relay-guard.js';
 import { readCapabilities } from './D-messaging-federation-nostr.js';
+import { relayClosedSubId, wrapSubscriptionTracker, type WrapSubscription } from './D-messaging-federation-subscriptions.js';
 import {
   DFootage,
   SecretCanary,
@@ -150,8 +151,12 @@ export interface DRelayGuard {
   blocked: { kind: number; host: string; reason: string }[];
   /** Gift wraps (kind 1059) the page published, by public event id and relay host. */
   sentWraps: { id: string; host: string; at: number }[];
-  /** Gift-wrap subscriptions (REQ for kind 1059) the page opened, by the keys they listen for. */
-  wrapSubscriptions: { p: string[]; host: string; at: number }[];
+  /**
+   * Gift-wrap subscriptions (REQ for kind 1059) the page opened, by the keys
+   * they listen for, with when a CLOSE ended each (see
+   * D-messaging-federation-subscriptions.ts for why lifetime matters).
+   */
+  wrapSubscriptions: WrapSubscription[];
   /**
    * While true, the page's gift-wrap subscriptions are answered with EOSE at the
    * socket and never reach the relay, so whatever Messages shows can only come
@@ -403,6 +408,15 @@ async function installRelayGuard(context: BrowserContext, pins: readonly string[
     const server = ws.connectToServer();
     // Subscriptions this route answered itself (held reads): their CLOSE stays here too.
     const held = new Set<string>();
+    const subscriptions = wrapSubscriptionTracker(state.wrapSubscriptions, host);
+    // Setting this handler stops Playwright forwarding the relay's frames on
+    // its own, so each is passed on unchanged. Only a CLOSED is read: a
+    // subscription the relay refused is not one the page holds.
+    server.onMessage((message) => {
+      const closed = typeof message === 'string' ? relayClosedSubId(message) : null;
+      if (closed) subscriptions.close(closed);
+      ws.send(message);
+    });
     ws.onMessage((message) => {
       // Nostr is text. A binary frame to a production relay is not something
       // the wallet sends, so it is dropped rather than inspected.
@@ -434,11 +448,14 @@ async function installRelayGuard(context: BrowserContext, pins: readonly string[
             return;
           }
           const p = wraps.flatMap((f) => (Array.isArray(f['#p']) ? f['#p'].filter((k): k is string => typeof k === 'string') : []));
-          state.wrapSubscriptions.push({ p, host, at: Date.now() });
+          subscriptions.req(frame.subId, p);
         }
-      } else if (frame?.type === 'CLOSE' && held.has(frame.subId)) {
-        held.delete(frame.subId);
-        return;
+      } else if (frame?.type === 'CLOSE') {
+        if (held.has(frame.subId)) {
+          held.delete(frame.subId);
+          return;
+        }
+        subscriptions.close(frame.subId);
       }
       server.send(message);
     });

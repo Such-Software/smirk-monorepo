@@ -241,7 +241,7 @@ test('rescue: no link tip of this run still holds funds; any that does goes back
   const outcomes: RescueOutcome[] = [];
   for (const record of records) outcomes.push(await rescueTip(tipLane, tipFromLedger(tipLane, record)));
   for (const o of outcomes.filter((x) => x.action !== 'already settled')) {
-    test.info().annotations.push({ type: 'rescue', description: `${o.key} (${o.asset}, from ${o.sender}): ${o.action}, ${o.status}` });
+    test.info().annotations.push({ type: 'rescue', description: `${o.key} (${o.asset}, from ${o.sender}): ${o.action}, ${o.status}${o.note ? `; ${o.note}` : ''}` });
   }
   expect(
     outcomes.filter((o) => o.action === 'failed').map((o) => `${o.key}: ${o.status}`),

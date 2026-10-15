@@ -80,6 +80,7 @@ import {
   readCapabilities,
   type DCapabilities,
 } from '../../fixtures/D-messaging-federation-nostr.js';
+import { liveWrapSubscription } from '../../fixtures/D-messaging-federation-subscriptions.js';
 import { liveRelaySkipReason } from '../../fixtures/relay-guard.js';
 
 const skip = dLiveSkipReason() ?? dRelaySkipReason() ?? dFedSkipReason();
@@ -155,16 +156,30 @@ test('carol federates to backend B and back: honest Messages, reach notice, bala
   await expect(carol.page.getByTestId('backend-current'), 'Settings does not show backend B as connected').toContainText(hostB);
   await carol.footage.result('backend B after reload');
 
-  // Messages is honest about B's relay.
+  // Messages is honest about B's relay. The popup shares one relay pool, so
+  // Messages reuses the socket the tip poll already opened to B: a new socket
+  // proves nothing (2026-10-14). What Messages does that the tip poll does not
+  // is keep its subscription to carol's gift wraps open while it is on screen.
   dWallets.chapter('Federation: Messages on backend B');
-  const opensBefore = carol.relayGuard.opened.length;
+  const since = Date.now();
   const state = await openMessages(carol);
   const relayB = capsB.messaging?.relay_url ?? '';
   if (capsB.features?.nostr_relay && relayB) {
     expect(state, 'B advertises a relay but Messages says it has none').toBe('on');
-    const hosts = carol.relayGuard.opened.slice(opensBefore).map((o) => o.host);
-    expect(hosts, 'Messages on B did not connect to B\'s relay').toContain(new URL(relayB).host);
-    if (relayA) expect(hosts, 'Messages on B still talks to the previous operator\'s relay').not.toContain(new URL(relayA).host);
+    const subscriptions = carol.relayGuard.wrapSubscriptions;
+    await expect
+      .poll(() => liveWrapSubscription(subscriptions, { host: new URL(relayB).host, p: carol.pubkeyHex, since }), {
+        timeout: 60_000,
+        message: 'Messages on B never held a subscription to carol\'s inbox on B\'s relay',
+      })
+      .toBe(true);
+    if (relayA) {
+      const hostA = new URL(relayA).host;
+      expect(
+        subscriptions.filter((s) => s.at >= since && s.host === hostA).length,
+        'Messages on B still reads gift wraps from the previous operator\'s relay',
+      ).toBe(0);
+    }
   } else {
     expect(state, 'B runs no relay but Messages offers to send').toBe('off');
     await expect(carol.page.getByTestId('messages-relay-off')).toContainText(/does not run a Nostr relay/);

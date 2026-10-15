@@ -20,7 +20,12 @@
  *     result 25 s), or a timeline whose recorded policy is weaker;
  *   - a step (tap, typed value, toggle, choice, redacted step) without its
  *     still pause before it, or whose resulting screen was not held before the
- *     next step began: a screen the run passed through must not flash by;
+ *     next step began: a screen the run passed through must not flash by. The
+ *     one exception is a screen that counts itself down (the Send receipt):
+ *     steps marked `urgent: 'countdown'` may form one chain of at most
+ *     MAX_COUNTDOWN_CHAIN steps, in which a step's screen goes unheld only
+ *     when the next step continues the chain, a step skips its pause only when
+ *     it continues one, and the last step's screen is held;
  *   - a marker label that looks like a value (a URL, a long number or hex).
  *
  * Usage: node packages/e2e/scripts/F-legacy-recovery-encode.mjs [--run <dir>] [--font <ttf>]
@@ -32,6 +37,9 @@ import { heldLongEnough } from '../fixtures/hold-timer.mjs';
 import { RC_FOOTAGE_ROOT } from '../fixtures/release-candidate.mjs';
 
 const POLICY = { 'pre-tap': 6_000, settled: 12_000, result: 25_000 };
+/** Steps that may skip a hold around a self-closing screen: into it, a password on the way, out of its countdown. */
+const URGENT_REASONS = new Set(['countdown']);
+const MAX_COUNTDOWN_CHAIN = 3;
 /** Slack when lining a hold up with the step it belongs to; hold lengths use hold-timer.mjs. */
 const TOLERANCE_MS = 25;
 const FPS = 30;
@@ -71,13 +79,26 @@ export function auditTimeline(timeline, walletDir) {
     problems.push('the timeline does not record a held screen after every step');
   }
   const steps = timeline.steps ?? [];
+  const urgent = (step) => step?.urgent !== undefined;
+  const heldAfter = (i) => {
+    const next = steps[i + 1]?.from ?? Number.POSITIVE_INFINITY;
+    return holds.some((h) => (h.kind === 'settled' || h.kind === 'result') && h.from >= steps[i].until - TOLERANCE_MS && h.from < next);
+  };
+  // A step continues a countdown chain when the step before it is urgent and left its screen unheld.
+  const continues = (i) => i > 0 && urgent(steps[i - 1]) && !heldAfter(i - 1);
+  let chain = 0;
   steps.forEach((step, i) => {
     const what = `step ${i} (${String(step.kind).slice(0, 10)})`;
-    if (step.kind !== 'secret' && !holds.some((h) => h.kind === 'pre-tap' && h.from >= step.from - TOLERANCE_MS && h.until <= step.until + TOLERANCE_MS)) {
+    if (urgent(step) && (!URGENT_REASONS.has(step.urgent) || !['tap', 'secret'].includes(step.kind))) {
+      problems.push(`${what} claims an unknown urgency`);
+    }
+    chain = urgent(step) ? (continues(i) ? chain + 1 : 1) : 0;
+    if (chain > MAX_COUNTDOWN_CHAIN) problems.push(`${what} makes a countdown chain longer than ${MAX_COUNTDOWN_CHAIN} steps`);
+    const paused = holds.some((h) => h.kind === 'pre-tap' && h.from >= step.from - TOLERANCE_MS && h.until <= step.until + TOLERANCE_MS);
+    if (step.kind !== 'secret' && !paused && !(urgent(step) && continues(i))) {
       problems.push(`${what} had no still pause before it`);
     }
-    const next = steps[i + 1]?.from ?? Number.POSITIVE_INFINITY;
-    if (!holds.some((h) => (h.kind === 'settled' || h.kind === 'result') && h.from >= step.until - TOLERANCE_MS && h.from < next)) {
+    if (!heldAfter(i) && !(urgent(step) && urgent(steps[i + 1]))) {
       problems.push(`the screen after ${what} was not held before the next step`);
     }
   });

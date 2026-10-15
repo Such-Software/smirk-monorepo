@@ -5,8 +5,9 @@
  *
  *   node --test --import tsx packages/e2e/scripts/D-messaging-federation.test.mjs
  */
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { chromium } from 'playwright-core';
 import { liveRelayAdmits, relayKey, LIVE_RELAY_WALLET_KINDS } from '../fixtures/relay-guard.ts';
 import {
   D_HOLD,
@@ -15,6 +16,9 @@ import {
   holdsShortened,
 } from '../fixtures/D-messaging-federation-footage.ts';
 import { check, checkHelper } from './D-messaging-federation-check-live-specs.mjs';
+import { liveWrapSubscription, relayClosedSubId, wrapSubscriptionTracker } from '../fixtures/D-messaging-federation-subscriptions.ts';
+import { expectMessagingAs, shortNpub } from '../fixtures/D-messaging-federation-flows.ts';
+import { hexToNpub } from '../fixtures/D-messaging-federation-nostr.ts';
 
 const PROD = 'wss://relay.smirk.cash';
 const LOCAL = 'ws://127.0.0.1:8088';
@@ -129,4 +133,118 @@ test('the helper check refuses fixed sleeps on the page clock, not polls or back
   assert.deepEqual(lines('await new Promise((resolve) => setTimeout(resolve, 250));'), []);
   assert.deepEqual(lines('await submit.click();'), []);
   assert.deepEqual(lines(' * a comment that mentions waitForTimeout( is fine'), []);
+});
+
+test('only a gift-wrap subscription that stays open counts as a screen listening, not the tip poll on the same socket', () => {
+  // 2026-10-14: the popup's tip poll and Messages share one pooled socket and
+  // send the same filter; the tip poll's querySync closes at EOSE.
+  const CAROL = 'c'.repeat(64);
+  const log = [];
+  const relayB = wrapSubscriptionTracker(log, '127.0.0.1:8089');
+  const t0 = 1_000_000;
+  const want = { host: '127.0.0.1:8089', p: CAROL, since: t0 };
+  // A tip poll every 30 s, each closed within a second.
+  for (let i = 0; i < 3; i++) {
+    relayB.req(`poll${i}`, [CAROL], t0 + i * 30_000);
+    relayB.close(`poll${i}`, t0 + i * 30_000 + 400);
+  }
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 75_000 }), false, 'tip polls alone never pass');
+  // Messages subscribes and keeps it open.
+  relayB.req('messages', [CAROL], t0 + 80_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 81_000 }), false, 'too young to tell from an in-flight query');
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 95_000 }), true, 'an open subscription held past the query window counts');
+  // Not for another key, another relay, or one opened before the mark.
+  assert.equal(liveWrapSubscription(log, { ...want, p: 'd'.repeat(64), now: t0 + 95_000 }), false);
+  assert.equal(liveWrapSubscription(log, { ...want, host: 'relay.smirk.cash', now: t0 + 95_000 }), false);
+  assert.equal(liveWrapSubscription(log, { ...want, since: t0 + 85_000, now: t0 + 95_000 }), false);
+  // Closed, or replaced by a REQ reusing its id: no longer live.
+  relayB.close('messages', t0 + 96_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 120_000 }), false);
+  relayB.req('again', [CAROL], t0 + 130_000);
+  relayB.req('again', ['e'.repeat(64)], t0 + 131_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 150_000 }), false, 'a replaced subscription is closed');
+  // A CLOSE on another socket's id does not end this socket's subscription.
+  const other = wrapSubscriptionTracker(log, 'relay.smirk.cash');
+  relayB.req('shared-id', [CAROL], t0 + 200_000);
+  other.close('shared-id', t0 + 201_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 215_000 }), true);
+});
+
+test('a subscription the relay refused with CLOSED does not count as a screen listening', () => {
+  const CAROL = 'c'.repeat(64);
+  const log = [];
+  const relayB = wrapSubscriptionTracker(log, '127.0.0.1:8089');
+  const t0 = 1_000_000;
+  relayB.req('messages', [CAROL], t0);
+  const refused = relayClosedSubId(JSON.stringify(['CLOSED', 'messages', 'restricted: not accepting reads']));
+  assert.equal(refused, 'messages');
+  relayB.close(refused, t0 + 300);
+  assert.equal(liveWrapSubscription(log, { host: '127.0.0.1:8089', p: CAROL, since: t0, now: t0 + 30_000 }), false);
+  // Other relay frames end nothing, and are not mistaken for CLOSED.
+  for (const frame of [['EOSE', 'messages'], ['EVENT', 'messages', { kind: 1059, content: 'CLOSED' }], ['NOTICE', 'CLOSED'], ['OK', 'x', true, '']]) {
+    assert.equal(relayClosedSubId(JSON.stringify(frame)), null, frame[0]);
+  }
+  assert.equal(relayClosedSubId('["CLOSED"'), null, 'a malformed frame ends nothing');
+});
+
+let browser;
+before(async () => {
+  browser = await chromium.launch({ headless: true });
+});
+after(async () => {
+  await browser?.close();
+});
+
+/**
+ * A stand-in Messages screen with IdentityPicker's trigger rules: with one
+ * identity and no manage entry the trigger is disabled and opens nothing;
+ * with more it toggles a listbox whose selected option is the active npub.
+ */
+async function messagesScreen(npub, { identities }) {
+  const page = await browser.newPage();
+  const label = shortNpub(npub);
+  await page.setContent(`<!doctype html><body>
+    <button data-testid="messages-identity-picker" aria-haspopup="listbox" aria-expanded="false" ${identities > 1 ? '' : 'disabled'}>Messaging as ${label}</button>
+    <div id="list"></div>
+    <script>
+      const trigger = document.querySelector('[data-testid=messages-identity-picker]');
+      trigger.addEventListener('click', () => {
+        const list = document.getElementById('list');
+        const open = trigger.getAttribute('aria-expanded') !== 'true';
+        trigger.setAttribute('aria-expanded', String(open));
+        list.innerHTML = open ? '<div role="listbox"><div role="option" aria-selected="true">${label}</div><div role="option" aria-selected="false">npub1other…zzzz</div></div>' : '';
+      });
+    </script></body>`);
+  const taps = [];
+  const wallet = {
+    page,
+    relayGuard: { wrapSubscriptions: [{ p: [HEX], host: 'relay.smirk.cash', at: Date.now() }] },
+    footage: {
+      tap: async (target, label) => {
+        taps.push(label);
+        await target.click({ timeout: 2_000 });
+      },
+      settled: async () => undefined,
+    },
+  };
+  return { page, wallet, taps };
+}
+const HEX = 'ab'.repeat(32);
+
+test('Messages with one identity shows it on a picker that offers no list, and never taps it', async () => {
+  // On 2026-10-14 d-messaging :177 clicked the disabled trigger and waited out the action timeout.
+  const npub = hexToNpub(HEX);
+  const { page, wallet, taps } = await messagesScreen(npub, { identities: 1 });
+  await expectMessagingAs(wallet, npub, 0);
+  assert.deepEqual(taps, [], 'a disabled picker is not tapped');
+  await page.close();
+});
+
+test('Messages with several identities opens the picker and finds the npub selected', async () => {
+  const npub = hexToNpub(HEX);
+  const { page, wallet, taps } = await messagesScreen(npub, { identities: 2 });
+  await expectMessagingAs(wallet, npub, 0);
+  assert.equal(taps.length, 2, `opened and closed: ${taps.join(', ')}`);
+  assert.equal(await page.getByRole('listbox').count(), 0, 'the picker is closed again');
+  await page.close();
 });
