@@ -169,10 +169,17 @@ export function TipMaker(props: TipMakerProps) {
     recipient: TipRecipient | null;
   }>(null);
 
-  // Debounced recipient resolution. Empty means a link tip.
+  // Debounced recipient resolution. Empty means a link tip. Keyed on the
+  // text alone: the resolver is read through a ref, so a parent that passes a
+  // new function on every render (each balance poll) does not reset a
+  // resolved recipient to "checking" and look it up again.
+  const resolveRecipientRef = useRef(props.resolveRecipient);
+  resolveRecipientRef.current = props.resolveRecipient;
+  const canResolve = !!props.resolveRecipient;
   useEffect(() => {
     const text = recipientText.trim();
-    if (!text || !props.resolveRecipient) {
+    const resolve = resolveRecipientRef.current;
+    if (!text || !canResolve || !resolve) {
       setRecipientState({ kind: 'empty' });
       return;
     }
@@ -184,7 +191,7 @@ export function TipMaker(props: TipMakerProps) {
     setRecipientState({ kind: 'checking' });
     const handle = window.setTimeout(async () => {
       try {
-        const r = await props.resolveRecipient!(text);
+        const r = await resolve(text);
         if (cancelled) return;
         setRecipientState(r.ok ? { kind: 'ok', recipient: r.recipient } : { kind: 'error', error: r.error });
       } catch (e) {
@@ -197,7 +204,7 @@ export function TipMaker(props: TipMakerProps) {
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [recipientText, props.resolveRecipient]);
+  }, [recipientText, canResolve]);
 
   const balance = useMemo(() => (assetId ? props.resolveBalance(assetId) : 0n), [assetId, props.resolveBalance]);
   const parsedAmount = useMemo(

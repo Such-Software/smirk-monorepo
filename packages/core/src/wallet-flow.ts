@@ -322,7 +322,8 @@ export interface AssetBalance {
    * balance verified-spent path; surfacing is free). Consumed by
    * `reconcilePendingOutgoing()` to drop in-flight entries whose
    * inputs are all now reflected as spent. UTXO chains and Grin
-   * leave this undefined; their pendingOutgoing entries reconcile
+   * leave this undefined: BTC/LTC entries reconcile against the
+   * backend's tx history (`reconcileUtxoPendingOutgoing`), Grin's
    * via timing age-out.
    */
   verifiedSpentInputs?: string[];

@@ -44,9 +44,9 @@ import {
   pendingOutgoingTotalWithFee,
   inFlightInputsTotal,
   expectedLockedChange,
-  isPendingOutgoingStale,
   recentlySpentInputs,
-  reconcilePendingOutgoing,
+  reconcileAfterBalanceRefresh,
+  utxoAvailableDeduction,
   chainProviders,
   btcLtcFreshAddrsEnabled,
   UtxoAddressBook,
@@ -156,6 +156,7 @@ import {
 } from '@smirk/ui';
 import { listAssets, mustGetAsset } from '@smirk/assets';
 import { resolveTipRecipient, shortNpubFromHex } from './tip-recipient';
+import { readPendingUtxoHistory } from './pending-utxo-history';
 import { send } from './send-handler';
 import { authorizeOperation, assertOperationSession } from './operation-auth';
 import { bootstrapAuthInExtension } from './jobs/bootstrap-in-extension';
@@ -1120,14 +1121,22 @@ function App() {
       const pricesPromise = fetchPrices(api).catch(
         () => null as Prices | null,
       );
-      const visible = visibleAssetIds(await store.load(), listAssets()).map(
-        (a) => a.id,
-      );
+      const loaded = await store.load();
+      const visible = visibleAssetIds(loaded, listAssets()).map((a) => a.id);
       const grinRewindHash = await computeGrinRewindHash(wallet);
       // BTC/LTC scan set + gap discovery. `null` (and therefore no extra keys
       // at all) whenever ENABLE_BTCLTC_FRESH_ADDRS is off, which is the default.
       const utxoScan = await buildUtxoScanContext(wallet);
       if (!scope.current()) return;
+      // In parallel with the balances. Order does not matter: Home never
+      // deducts less than the backend's own mempool debit, so a history read
+      // that sees a tx mined before the balance read does cannot surface it.
+      const utxoHistoryPromise = readPendingUtxoHistory(
+        chainProviders,
+        wallet.addresses,
+        loaded.pendingOutgoing ?? [],
+        utxoScan?.refs,
+      );
       const balances = await fetchAllBalances(wallet, bootstrap, {
         verifyKeyImage,
         // Prices the grin rescan; without it a priced operator rejects the scan
@@ -1168,32 +1177,20 @@ function App() {
         wow: null,
         grin: null,
       };
+      const utxoHistory = await utxoHistoryPromise;
       if (!scope.current()) return;
       // Reconcile pendingOutgoing against the freshly-fetched balances
-      // before storing. Two-pass:
-      //   1. Per-asset, run reconcilePendingOutgoing against the new
-      //      verifiedSpentInputs set (XMR/WOW path: primary signal).
-      //   2. Drop any remaining entries past their per-asset age-out
-      //      (timing backstop; covers BTC/LTC which don't surface
-      //      verifiedSpentInputs and any chain where reconciliation
-      //      missed for whatever reason).
-      // Net effect: a successful XMR/WOW spend drops its
-      // pendingOutgoing entry on the next refresh after LWS reflects
-      // (~one block + scan tick), instead of waiting for the 5/30 min
-      // timeout.
+      // before storing (reconcileAfterBalanceRefresh):
+      //   1. XMR/WOW: drop entries whose key images now verify as spent.
+      //   2. BTC/LTC: drop entries the backend history lists as mined,
+      //      or has stopped listing for an hour (dropped or replaced).
+      //      One still in the mempool stays, however old: `confirmed`
+      //      keeps counting its inputs until it is mined.
+      //   3. Drop anything past its per-asset age-out backstop.
       const now = Date.now();
       await store.update((s) => {
         if (!s.pendingOutgoing || s.pendingOutgoing.length === 0) return;
-        let kept = s.pendingOutgoing;
-        for (const [assetId, b] of Object.entries(balances) as Array<[
-          string,
-          { verifiedSpentInputs?: string[] },
-        ]>) {
-          if (!b.verifiedSpentInputs || b.verifiedSpentInputs.length === 0) continue;
-          const verifiedSet = new Set(b.verifiedSpentInputs);
-          kept = reconcilePendingOutgoing(kept, assetId, verifiedSet);
-        }
-        kept = kept.filter((e) => !isPendingOutgoingStale(e, now));
+        const kept = reconcileAfterBalanceRefresh(s.pendingOutgoing, balances, utxoHistory, now);
         if (kept.length !== s.pendingOutgoing.length) {
           s.pendingOutgoing = kept;
         }
@@ -3419,7 +3416,9 @@ function HomeRouter({
         parseAmount={parseAmount}
         // A person tip is a link tip whose claim key rides a gift wrap to the
         // recipient's npub, so it needs no backend capability beyond tips.
-        resolveRecipient={(text) => resolveTipRecipient(text)}
+        // Passed by reference: an inline arrow is a new function on every
+        // render, and each balance poll re-ran the lookup.
+        resolveRecipient={resolveTipRecipient}
         formatUsd={(assetId, amountAtomic) => {
           const price = (session?.prices as Record<string, number | null> | null | undefined)?.[assetId];
           if (!price) return null;
@@ -3620,9 +3619,15 @@ function HomeRouter({
           b.locked !== undefined &&
           b.locked > 0n;
         const entries = sessionState.pendingOutgoing ?? [];
+        // UTXO: the backend's `confirmed` counts a spend's inputs until it
+        // is mined, so deduct whichever is larger, our in-flight entries or
+        // the backend's mempool debit (its negative `unconfirmed`).
+        const isUtxo = a.id === 'btc' || a.id === 'ltc';
         const sendingAmount = lwsReflectsSpend
           ? 0n
-          : pendingOutgoingTotalWithFee(entries, a.id);
+          : isUtxo
+            ? utxoAvailableDeduction(entries, a.id, b ? b.pending : 0n)
+            : pendingOutgoingTotalWithFee(entries, a.id);
         // For CryptoNote/Grin during in-flight: subtract the entire
         // input total from displayed-available (change isn't spendable
         // until lock window passes), and add (inputsTotal − amount −
