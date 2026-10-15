@@ -423,7 +423,10 @@ export function subscribedAs(w: DWallet, pubkeyHex: string, mark: number): boole
 /**
  * Messages listens (and so sends) as `npub`: since `mark` (an index into the
  * relay guard's `wrapSubscriptions`, taken before Messages opened) the screen
- * subscribed to that key's inbox, and the picker's selected entry is that npub.
+ * subscribed to that key's inbox, and the picker names that npub. With one
+ * identity and no manage entry the picker is a disabled label (IdentityPicker
+ * renders it so; Messages passes no onManage): it is checked as shown and
+ * left closed. Otherwise its selected entry must be that npub.
  */
 export async function expectMessagingAs(w: DWallet, npub: string, mark: number): Promise<void> {
   const hex = recipientToHex(npub);
@@ -434,6 +437,16 @@ export async function expectMessagingAs(w: DWallet, npub: string, mark: number):
     })
     .toBe(true);
   const picker = w.page.getByTestId('messages-identity-picker');
+  // Named first: the identities load after the screen, and only then is
+  // the trigger's interactivity final.
+  await expect(picker, 'Messages does not name the identity it messages as').toContainText(shortNpub(npub), { timeout: 60_000 });
+  if (await picker.isDisabled()) {
+    // On 2026-10-14 the lane clicked this disabled trigger and waited out the 90 s action timeout.
+    await expect(picker, 'a one-identity picker should not offer a list').toHaveAttribute('aria-expanded', 'false');
+    await expect(w.page.getByRole('listbox')).toHaveCount(0);
+    await w.footage.settled('messaging identity shown');
+    return;
+  }
   await w.footage.tap(picker, 'open the identity picker');
   await expect(
     w.page.getByRole('option', { selected: true }),

@@ -5,8 +5,9 @@
  *
  *   node --test --import tsx packages/e2e/scripts/D-messaging-federation.test.mjs
  */
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { chromium } from 'playwright-core';
 import { liveRelayAdmits, relayKey, LIVE_RELAY_WALLET_KINDS } from '../fixtures/relay-guard.ts';
 import {
   D_HOLD,
@@ -16,6 +17,8 @@ import {
 } from '../fixtures/D-messaging-federation-footage.ts';
 import { check, checkHelper } from './D-messaging-federation-check-live-specs.mjs';
 import { liveWrapSubscription, wrapSubscriptionTracker } from '../fixtures/D-messaging-federation-subscriptions.ts';
+import { expectMessagingAs, shortNpub } from '../fixtures/D-messaging-federation-flows.ts';
+import { hexToNpub } from '../fixtures/D-messaging-federation-nostr.ts';
 
 const PROD = 'wss://relay.smirk.cash';
 const LOCAL = 'ws://127.0.0.1:8088';
@@ -165,4 +168,66 @@ test('only a gift-wrap subscription that stays open counts as a screen listening
   relayB.req('shared-id', [CAROL], t0 + 200_000);
   other.close('shared-id', t0 + 201_000);
   assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 215_000 }), true);
+});
+
+let browser;
+before(async () => {
+  browser = await chromium.launch({ headless: true });
+});
+after(async () => {
+  await browser?.close();
+});
+
+/**
+ * A stand-in Messages screen with IdentityPicker's trigger rules: with one
+ * identity and no manage entry the trigger is disabled and opens nothing;
+ * with more it toggles a listbox whose selected option is the active npub.
+ */
+async function messagesScreen(npub, { identities }) {
+  const page = await browser.newPage();
+  const label = shortNpub(npub);
+  await page.setContent(`<!doctype html><body>
+    <button data-testid="messages-identity-picker" aria-haspopup="listbox" aria-expanded="false" ${identities > 1 ? '' : 'disabled'}>Messaging as ${label}</button>
+    <div id="list"></div>
+    <script>
+      const trigger = document.querySelector('[data-testid=messages-identity-picker]');
+      trigger.addEventListener('click', () => {
+        const list = document.getElementById('list');
+        const open = trigger.getAttribute('aria-expanded') !== 'true';
+        trigger.setAttribute('aria-expanded', String(open));
+        list.innerHTML = open ? '<div role="listbox"><div role="option" aria-selected="true">${label}</div><div role="option" aria-selected="false">npub1other…zzzz</div></div>' : '';
+      });
+    </script></body>`);
+  const taps = [];
+  const wallet = {
+    page,
+    relayGuard: { wrapSubscriptions: [{ p: [HEX], host: 'relay.smirk.cash', at: Date.now() }] },
+    footage: {
+      tap: async (target, label) => {
+        taps.push(label);
+        await target.click({ timeout: 2_000 });
+      },
+      settled: async () => undefined,
+    },
+  };
+  return { page, wallet, taps };
+}
+const HEX = 'ab'.repeat(32);
+
+test('Messages with one identity shows it on a picker that offers no list, and never taps it', async () => {
+  // On 2026-10-14 d-messaging :177 clicked the disabled trigger and waited out the action timeout.
+  const npub = hexToNpub(HEX);
+  const { page, wallet, taps } = await messagesScreen(npub, { identities: 1 });
+  await expectMessagingAs(wallet, npub, 0);
+  assert.deepEqual(taps, [], 'a disabled picker is not tapped');
+  await page.close();
+});
+
+test('Messages with several identities opens the picker and finds the npub selected', async () => {
+  const npub = hexToNpub(HEX);
+  const { page, wallet, taps } = await messagesScreen(npub, { identities: 2 });
+  await expectMessagingAs(wallet, npub, 0);
+  assert.equal(taps.length, 2, `opened and closed: ${taps.join(', ')}`);
+  assert.equal(await page.getByRole('listbox').count(), 0, 'the picker is closed again');
+  await page.close();
 });
