@@ -85,6 +85,8 @@ export * from './nostr-identity-conflict';
 
 // Anti-abuse client-side helpers (ALTCHA proof-of-work for wallet creation)
 export * from './pow';
+// The priced Grin scan shared by the balance read and every spend-side scan
+export * from './grin-restore-scan';
 
 // Buying premium: plan and payment-method labels, pending invoice lifetime
 export * from './premium-purchase';

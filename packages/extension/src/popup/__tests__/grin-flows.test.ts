@@ -23,6 +23,12 @@ import {
   chainProviders,
   GrinPendingOverlay,
   createMemoryGrinPendingStore,
+  fetchAllBalances,
+  invalidateCapabilities,
+  peekCapabilities,
+  requiredRestorePowBits,
+  type BackendCapabilities,
+  type CapabilitiesApi,
   type SlatepackChannels,
 } from '@smirk/core';
 import { grin as wasmGrin } from '@smirk/wasm';
@@ -487,11 +493,33 @@ function stubScanProvider(
   return { identifyCalls };
 }
 
+/** A capabilities source that never touches the network. `caps` of `null`
+ *  answers like a backend that could not be reached. */
+function fakeCapsApi(
+  caps: Partial<BackendCapabilities> | null,
+  opts: { baseUrl?: string; delayMs?: number } = {},
+): CapabilitiesApi & { calls: number } {
+  const probe = {
+    calls: 0,
+    getBaseUrl: () => opts.baseUrl ?? 'https://caps.test',
+    getCapabilities: async () => {
+      probe.calls++;
+      if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
+      return caps ? { data: caps as BackendCapabilities } : {};
+    },
+  };
+  return probe;
+}
+
+/** An operator that prices nothing: the scan is left to the backend's depth. */
+const UNPRICED_CAPS = { restore: { policy: 'bounded' as const, max_depth_days: 365 } };
+
 const scanDeps = (overlay: GrinPendingOverlay) => ({
   mnemonic:
     'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
   rewindHash: 'ab'.repeat(32),
   overlay,
+  api: fakeCapsApi(UNPRICED_CAPS, { baseUrl: 'https://unpriced.test' }),
 });
 
 test('resolveGrinSpendable spends via grin-lws key_id and SKIPS the identify search', async () => {
@@ -647,6 +675,117 @@ test('resolveGrinSpendable ignores a NON-canonical key_id and falls back to iden
 
   assert.deepEqual(identifyCalls, [COMMIT_A], 'non-canonical key_id defers to the search');
   assert.equal(res.outputs[0]?.path[2], 7);
+});
+
+// ── The spend scan is priced exactly like the balance read ──────────────────
+//
+// v0.3.0 and the v0.3.1 candidate refused every Grin send, tip and claim on
+// production with "this restore depth requires a 9-bit proof-of-work nonce":
+// the balance read paid the restore proof-of-work, but resolveGrinSpendable sent
+// a bare scan, which the backend prices at its deepest depth.
+
+/** Production's advertised policy at the time: 365 days deep, 90 free, one bit
+ *  per 30 days beyond that, so the deepest scan costs 9 bits. */
+const PRICED_RESTORE = {
+  policy: 'bounded' as const,
+  max_depth_days: 365,
+  pow_free_days: 90,
+  pow_days_per_bit: 30,
+  pow_max_bits: 24,
+};
+const PRICED_TIP = 3_500_000;
+
+type ScanParams = { rewindHash: string; startHeight?: number; restorePowNonce?: number };
+
+/** A grin provider that records every scan request it is sent. */
+function recordingGrinProvider(tip: number): ScanParams[] {
+  const sent: ScanParams[] = [];
+  chainProviders.setGrin({
+    asset: 'grin',
+    capabilities: {} as never,
+    scan: async (p: ScanParams) => {
+      sent.push({ ...p });
+      return { data: { outputs: [], total_balance: 0, last_pmmr_index: 0 }, status: 200 };
+    },
+    broadcast: async () => ({ data: { success: true }, status: 200 }),
+    getHeight: async () => ({ data: { height: tip }, status: 200 }),
+    estimateFee: async () => ({ data: { model: 'formula' }, status: 200 }),
+  } as never);
+  return sent;
+}
+
+/** The scan the BALANCE read sends for this wallet under `policy`. */
+async function balanceScanParams(rewindHash: string, sent: ScanParams[]): Promise<ScanParams> {
+  const before = sent.length;
+  const key = { privateViewKey: new Uint8Array(32), privateSpendKey: new Uint8Array(32) };
+  const balances = await fetchAllBalances(
+    { keys: { xmr: key, wow: key }, addresses: {} } as never,
+    {} as never,
+    {
+      restorePolicy: PRICED_RESTORE,
+      visibleAssetIds: ['grin'],
+      grinRewindHash: rewindHash,
+      providers: chainProviders,
+    },
+  );
+  assert.equal(balances.grin.error, undefined, 'the balance scan itself succeeds');
+  assert.equal(sent.length, before + 1, 'the balance read sent exactly one scan');
+  return sent[before]!;
+}
+
+test('resolveGrinSpendable sends the same priced scan (start height + nonce) as the balance read', async () => {
+  invalidateCapabilities();
+  const sent = recordingGrinProvider(PRICED_TIP);
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+  const deps = {
+    ...scanDeps(overlay),
+    api: fakeCapsApi({ restore: PRICED_RESTORE }, { baseUrl: 'https://priced.test' }),
+  };
+
+  const balance = await balanceScanParams(deps.rewindHash, sent);
+  await resolveGrinSpendable(deps);
+  const spend = sent.at(-1)!;
+
+  assert.equal(sent.length, 2, 'one balance scan, one spend scan');
+  // The capability really does price this depth, so a bare scan would be refused.
+  assert.ok(balance.startHeight !== undefined, 'balance scan names its start height');
+  assert.ok(
+    requiredRestorePowBits('grin', balance.startHeight, PRICED_TIP, PRICED_RESTORE) > 0,
+    'the advertised policy prices the deepest scan',
+  );
+  assert.ok(balance.restorePowNonce !== undefined, 'balance scan pays the proof-of-work');
+  assert.deepEqual(spend, balance, 'spend scan is priced exactly like the balance scan');
+});
+
+test('resolveGrinSpendable prices its scan even when capabilities had not loaded at call time', async () => {
+  invalidateCapabilities();
+  const sent = recordingGrinProvider(PRICED_TIP);
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+  const capsApi = fakeCapsApi(
+    { restore: PRICED_RESTORE },
+    { baseUrl: 'https://slow-caps.test', delayMs: 20 },
+  );
+  assert.equal(peekCapabilities(), null, 'nothing is cached when the spend starts');
+
+  await resolveGrinSpendable({ ...scanDeps(overlay), api: capsApi });
+
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0]!.startHeight !== undefined, 'scan names its start height');
+  assert.ok(sent[0]!.restorePowNonce !== undefined, 'scan pays the proof-of-work');
+});
+
+test('resolveGrinSpendable refuses, without sending a scan, when the restore policy cannot be loaded', async () => {
+  invalidateCapabilities();
+  const sent = recordingGrinProvider(PRICED_TIP);
+  const overlay = new GrinPendingOverlay(createMemoryGrinPendingStore());
+  const capsApi = fakeCapsApi(null, { baseUrl: 'https://unreachable.test' });
+
+  await assert.rejects(resolveGrinSpendable({ ...scanDeps(overlay), api: capsApi }), (e: unknown) => {
+    assert.ok(e instanceof Error && e.message.length > 0, 'refusal carries a reason');
+    return true;
+  });
+  assert.equal(sent.length, 0, 'an unpriceable scan is never sent');
+  assert.ok(capsApi.calls >= 2, 'a cached failure is retried once before refusing');
 });
 
 test('cancelGrinSend does NOT free inputs (or notify) once the tx has broadcast', async () => {

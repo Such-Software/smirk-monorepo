@@ -51,6 +51,7 @@ import {
   type RestorePowPolicy,
 } from './pow';
 import type { GrinPendingOverlay } from './payments/grin-pending-overlay';
+import { pricedGrinScan } from './grin-restore-scan';
 
 /** Grin coinbase maturity: coinbase outputs are unspendable for 1440 blocks. */
 const GRIN_COINBASE_MATURITY = 1440;
@@ -969,18 +970,14 @@ async function fetchLwsBalance(
  * `max(height, lock_height)`. `scan.total_balance` is deliberately NOT trusted
  * for `confirmed`; it neither splits maturity nor subtracts pending-spent.
  */
-/** Grin targets 60s blocks; mirrors the backend's `blocks_per_day`. */
-const GRIN_BLOCKS_PER_DAY = 1440;
-
 async function fetchGrinBalance(
   providers: ChainProviderRegistry,
   rewindHash: string,
   overlay: GrinPendingOverlay | undefined,
   restorePolicy?: RestorePowPolicy | undefined,
 ): Promise<AssetBalance> {
-  const grin = providers.grin();
-
-  // Tip first, because the restore price is a function of depth.
+  // Tip first, then the priced scan, through the one helper every grin scan
+  // shares (see `grin-restore-scan.ts`).
   //
   // This call used to be `grin.scan({ rewindHash })` with no start height at
   // all, which let the backend choose, and it chooses its deepest permitted
@@ -988,34 +985,13 @@ async function fetchGrinBalance(
   // the most expensive possible request, so every grin balance read was
   // rejected with "this restore depth requires an N-bit proof-of-work nonce",
   // for every wallet, not only for genuinely old ones. Verified against
-  // production on 2026-08-24.
-  //
-  // The fix is not to ask for a shallower window: that would silently drop
-  // outputs older than it and report a confidently wrong balance, which is
-  // worse than a loud failure. Instead ask for the deepest scan the operator
-  // allows and pay the advertised price. Nine bits is roughly 512 hashes, about
-  // 8ms.
-  const heightRes = await grin.getHeight();
-  // Tip is best-effort for maturity below; here it also prices the scan.
-  const scanTip = heightRes.data?.height ?? 0;
-
-  let scanParams: {
-    rewindHash: string;
-    startHeight?: number | undefined;
-    restorePowNonce?: number | undefined;
-  } = { rewindHash };
-
-  if (scanTip > 0 && restorePolicy?.pow_days_per_bit) {
-    // `null` means unbounded; fall back to a year, which is what the backend
-    // caps a bounded policy at anyway.
-    const maxDepthDays = restorePolicy.max_depth_days ?? 365;
-    const startHeight = Math.max(0, scanTip - maxDepthDays * GRIN_BLOCKS_PER_DAY);
-    const bits = requiredRestorePowBits('grin', startHeight, scanTip, restorePolicy);
-    const restorePowNonce = await solveRestorePow('grin', rewindHash, startHeight, bits);
-    scanParams = { rewindHash, startHeight, ...(restorePowNonce !== undefined ? { restorePowNonce } : {}) };
-  }
-
-  const scanRes = await grin.scan(scanParams);
+  // production on 2026-08-24. The spend path kept the bare call until the
+  // v0.3.1 live run, which is why both now go through `pricedGrinScan`.
+  const { scan: scanRes, height: heightRes } = await pricedGrinScan(
+    providers.grin(),
+    rewindHash,
+    restorePolicy,
+  );
   if (scanRes.error || !scanRes.data) {
     return { confirmed: 0n, pending: 0n, error: scanRes.error ?? 'Network error' };
   }
