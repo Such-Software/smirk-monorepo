@@ -486,6 +486,10 @@ if (LIVE) {
       w.footage.mark('Close the reopened window');
       await restored.close();
     } finally {
+      // Windows share one route (SessionStateStore), so the first window
+      // followed the restored one to Older addresses (2026-10-15): go back to
+      // Settings' root before putting the auto-lock back.
+      await tabRoot(w, 'settings', 'Open Settings');
       await w.footage.select(select, original, 'Settings: auto-lock');
     }
   });
