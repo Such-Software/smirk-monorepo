@@ -1,15 +1,15 @@
 {
   "_generated": "by scripts/rebind-release-candidate.mjs from a verified staged release; do not edit by hand",
   "version": "0.3.1",
-  "run": "11599",
-  "sourceCommit": "6ce080a5296b2fe1c9656a2c43c59d41501e1937",
-  "buildsWrapper": "0e4aef95f9b653fdbb56484fa9f5401866f3b363",
+  "run": "11864",
+  "sourceCommit": "0cd44bbbc38226cf9b117ce51646fcd9d63be8c1",
+  "buildsWrapper": "0d28ff2f5553ac989f6d23b724aac71633db5695",
   "chromeZip": {
     "file": "smirk-wallet-chrome-v0.3.1.zip",
-    "sha256": "05eb16c1513ac101ead0651d58ab11617c5c5122d73090193053566e60295177"
+    "sha256": "6c99b6c005d5ab91f61223ad1b44db69e35651cb57794aa696814d4c7c46b283"
   },
   "firefoxZip": {
     "file": "smirk-wallet-firefox-v0.3.1.zip",
-    "sha256": "c8ab289216dab8d7b9c3688c9ee541f9a03330317089a776f122634257b6623d"
+    "sha256": "258df64c856fff69f5b6c980aac1d02ad659563b9ea58cdf55fba5882055824a"
   }
 }
