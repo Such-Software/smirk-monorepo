@@ -35,9 +35,13 @@
 
 import { grinExtendedKey, grinLegacyExtendedKey, grinSlatepackSecret, grinSlatepackAddress, type GrinKeySource } from './session-signing';
 import {
+  api,
   chainProviders,
+  loadGrinRestorePolicy,
+  pricedGrinScan,
   GrinPendingOverlay,
   selectSendChannel,
+  type CapabilitiesApi,
   type GrinPending,
   type GrinPendingStore,
   type GrinScanOutput,
@@ -184,6 +188,12 @@ export interface GrinScanDeps {
   rewindHash: string;
   /** Client pending overlay: excludes just-spent inputs + owns the child index. */
   overlay: GrinPendingOverlay;
+  /**
+   * Where the restore policy that prices the scan comes from. Defaults to the
+   * shared backend client, the same one `chainProviders` scans through.
+   * Injectable for tests.
+   */
+  api?: CapabilitiesApi | undefined;
 }
 
 /** Spendable inputs resolved from scan, each with its recovered BIP32 path. */
@@ -202,7 +212,8 @@ export interface GrinSpendable {
 /**
  * Resolve currently-spendable Grin inputs from a fresh scan.
  *
- * 1. scan (source of truth) + chain tip.
+ * 1. chain tip, then the PRICED scan (source of truth): the same depth and
+ *    restore proof-of-work as the balance read, via core's `pricedGrinScan`.
  * 2. reconcile the overlay against the scan (clear settled entries first).
  * 3. keep MATURE outputs (coinbase ≥1440 confs; regular past lock_height) that
  *    are NOT in the overlay's pending-spent set (just-broadcast, not yet mined).
@@ -216,11 +227,25 @@ export interface GrinSpendable {
  *    trusted for spending but never moves the counter (see the seed note below).
  */
 export async function resolveGrinSpendable(deps: GrinScanDeps): Promise<GrinSpendable> {
-  const grin = chainProviders.grin();
-  const [scanRes, heightRes] = await Promise.all([
-    grin.scan({ rewindHash: deps.rewindHash }),
-    grin.getHeight(),
-  ]);
+  // The scan must be priced exactly like the balance read. A bare
+  // `grin.scan({ rewindHash })` lets the backend assume its deepest scan, which
+  // a priced operator refuses ("this restore depth requires a 9-bit
+  // proof-of-work nonce"), and that refused every Grin send, tip and claim in
+  // v0.3.0 while the balance read fine. Resolve the policy by awaiting the
+  // cached capabilities, never a synchronous peek, and refuse rather than send
+  // a scan we cannot price.
+  const restorePolicy = await loadGrinRestorePolicy(deps.api ?? api);
+  if (!restorePolicy) {
+    throw new Error(
+      "Failed to scan Grin outputs: this backend's restore policy (GET /capabilities) " +
+        'could not be loaded, so the scan cannot be priced; check the connection and try again',
+    );
+  }
+  const { scan: scanRes, height: heightRes } = await pricedGrinScan(
+    chainProviders.grin(),
+    deps.rewindHash,
+    restorePolicy,
+  );
   if (scanRes.error || !scanRes.data) {
     throw new Error(`Failed to scan Grin outputs: ${scanRes.error ?? 'network error'}`);
   }
