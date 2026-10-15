@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { liveGateReason } from './C-tips-live.ts';
 import { TipLedger } from './C-tips-ledger.ts';
-import { sweepTxidShape } from './C-tips-actions.ts';
+import * as actions from './C-tips-actions.ts';
 import SkipGuardReporter from '../skip-guard-reporter.ts';
 
 test('the live gate stays closed until every opt-in is set, requires recording, and refuses HEADED', (t) => {
@@ -68,11 +68,11 @@ test('a sweep report txid has the coin\'s shape: 32 bytes, or a 33-byte Grin ker
   const hash = 'ab'.repeat(32);
   const excess = '08' + 'cd'.repeat(32);
   for (const asset of ['btc', 'ltc', 'xmr', 'wow']) {
-    assert.equal(sweepTxidShape(asset).test(hash), true, asset);
-    assert.equal(sweepTxidShape(asset).test(excess), false, asset);
+    assert.equal(actions.sweepTxidShape(asset).test(hash), true, asset);
+    assert.equal(actions.sweepTxidShape(asset).test(excess), false, asset);
   }
-  assert.equal(sweepTxidShape('grin').test(excess), true, 'a GRIN claim reports the kernel excess');
-  assert.equal(sweepTxidShape('grin').test(hash), false);
+  assert.equal(actions.sweepTxidShape('grin').test(excess), true, 'a GRIN claim reports the kernel excess');
+  assert.equal(actions.sweepTxidShape('grin').test(hash), false);
 });
 
 test('the skip guard excuses only skips whose reason the lane config names, and still fails on the rest', async () => {
@@ -101,4 +101,23 @@ test('the skip guard excuses only skips whose reason the lane config names, and 
     console.log = log;
     delete process.env.E2E_MIN_EXECUTED;
   }
+});
+
+test('a blocked delivery is recorded as a refusal, so the sender\'s row may read "→ link", without failing the rehearsal', () => {
+  // 2026-10-15: the rehearsal's refusal was never recorded, so the rescue and
+  // overview checks rejected the documented "→ link" row for the blocked tip.
+  assert.equal(typeof actions.deliveryRefusal, 'function', 'composeTip decides refusals through deliveryRefusal');
+  const warning = 'Tip funded, but delivery to npub10sgu…txh9 failed (relay refused this message: delivery-failure rehearsal). Forward the link from Tips, sent.';
+  const planned = actions.deliveryRefusal(warning, true);
+  assert.equal(planned.planned, true, 'the rehearsal is not counted as an accidental refusal');
+  assert.match(planned.reason, /delivery-failure rehearsal/);
+  const accidental = actions.deliveryRefusal(warning.replace(' (relay refused this message: delivery-failure rehearsal)', ''), false);
+  assert.equal(accidental.planned, false);
+  assert.ok(accidental.reason.length > 0, 'an unquoted refusal still has a reason');
+
+  const tip = { key: 'npub:blocked-btc', recipientDisplay: 'npub10sgu…txh9', recipient: { shortNpub: 'npub10sgu…txh9' } };
+  const row = '0.00003 BTC → link';
+  assert.equal(actions.recipientPattern(tip).test(row), false, 'a delivered person tip must name its recipient');
+  assert.equal(actions.recipientPattern({ ...tip, deliveryRefused: planned.reason }).test(row), true);
+  assert.equal(actions.recipientPattern({ ...tip, deliveryRefused: planned.reason }).test('0.00003 BTC → npub10sgu…txh9'), true);
 });

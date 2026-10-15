@@ -543,13 +543,15 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
   expect(prefix, 'the success screen names the tip id').toMatch(/^[0-9a-f-]{12}$/i);
 
   let link: SecretLink | null = null;
-  let deliveryRefused: string | null = null;
+  let refusal: DeliveryRefusal | null = null;
   const pendingLink = CONFIRMING_ASSETS.includes(plan.asset);
   if (person && plan.deliveryFails) {
     // Funds left the wallet before delivery ran: a funded tip, a warning, and
     // the share link (masked) as the fallback to forward by hand.
-    await expect(page.getByTestId('tip-delivery-warning')).toContainText(/could not be delivered|delivery to .* failed/);
-    await expect(page.getByTestId('tip-delivery-warning')).toContainText('Tips, sent');
+    const warning = page.getByTestId('tip-delivery-warning');
+    await expect(warning).toContainText(/could not be delivered|delivery to .* failed/);
+    await expect(warning).toContainText('Tips, sent');
+    refusal = deliveryRefusal(await warning.innerText(), true);
     const shareUrl = page.getByTestId('tip-share-url');
     await expect(shareUrl).toBeVisible();
     link = await readLink(lane, shareUrl, prefix);
@@ -560,8 +562,7 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
       // The relay refused the private delivery of a funded tip. That fails this
       // test (softly, below), and the run goes on: the recipient claims through
       // the fallback link, so the funds still circulate and the rest is proven.
-      const said = ((await warning.innerText()) ?? '').replace(/\s+/g, ' ');
-      deliveryRefused = said.match(/failed \(([^)]{1,160})\)/)?.[1] ?? 'the wallet reported a failed delivery';
+      refusal = deliveryRefusal(await warning.innerText(), false);
       const shareUrl = page.getByTestId('tip-share-url');
       if (await shareUrl.isVisible().catch(() => false)) link = await readLink(lane, shareUrl, prefix);
     } else {
@@ -586,10 +587,15 @@ export async function composeTip(lane: TipLane, w: LiveWallet, plan: TipPlan): P
   const tipId = (await created) ?? (await findTipIdByPrefix(lane, w, prefix));
   record(tipId);
   expect(tipId.startsWith(prefix), 'the created tip is the one on the success screen').toBe(true);
-  if (deliveryRefused) {
-    lane.ledger.markDeliveryRefused(tipId, deliveryRefused);
-    test.info().annotations.push({ type: 'delivery refused', description: `${plan.label}: ${deliveryRefused}` });
-    expect.soft(deliveryRefused, 'the relay refused the person tip\'s private delivery; it falls back to its link').toBeNull();
+  if (refusal) {
+    // Recorded either way: the tip has no gift-wrap copy, so its Sent tips row
+    // may read "→ link" (recipientPattern). The 2026-10-15 run left the rehearsal's
+    // refusal unrecorded, and the rescue and overview rows then failed on it.
+    lane.ledger.markDeliveryRefused(tipId, refusal.reason);
+    if (!refusal.planned) {
+      test.info().annotations.push({ type: 'delivery refused', description: `${plan.label}: ${refusal.reason}` });
+      expect.soft(refusal.reason, 'the relay refused the person tip\'s private delivery; it falls back to its link').toBeNull();
+    }
   }
   if (link) {
     expect(link.reveal().includes(`/tip/${tipId}#`), 'the link names this tip').toBe(true);
@@ -631,6 +637,24 @@ async function findTipIdByPrefix(lane: TipLane, w: LiveWallet, prefix: string): 
 // ---------------------------------------------------------------------------
 // Sent tips rows and the detail sheet
 // ---------------------------------------------------------------------------
+
+export interface DeliveryRefusal {
+  /** The relay's reason as the warning quotes it, or a static stand-in. */
+  reason: string;
+  /** True for the delivery-failure rehearsal, which blocks delivery on purpose. */
+  planned: boolean;
+}
+
+/**
+ * What a person tip's success screen says about a refused private delivery,
+ * from its warning text. A planned refusal (the rehearsal) is recorded the
+ * same way as an accidental one; only the accidental one fails its send test.
+ */
+export function deliveryRefusal(warning: string, planned: boolean): DeliveryRefusal {
+  const said = warning.replace(/\s+/g, ' ');
+  const quoted = said.match(/failed \(([^)]{1,160})\)/)?.[1];
+  return { reason: quoted ?? (planned ? 'blocked by the delivery-failure rehearsal' : 'the wallet reported a failed delivery'), planned };
+}
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1041,6 +1065,8 @@ export interface RescueOutcome {
   /** The final status, or the last one seen when the tip could not be settled. */
   status: string;
   action: 'already settled' | 'settled by its claim' | 'reclaimed' | 'failed';
+  /** What the wallet screen got wrong while the funds still went back (for the annotation). */
+  note?: string;
 }
 
 /**
@@ -1051,6 +1077,7 @@ export interface RescueOutcome {
  */
 export async function rescueTip(lane: TipLane, tip: CreatedTip): Promise<RescueOutcome> {
   const base = { key: tip.key, asset: tip.asset, sender: tip.sender.name };
+  let reclaiming = false;
   try {
     let state = await publicTip(tip.tipId);
     if (!state) return { ...base, status: 'unknown to the backend', action: 'failed' };
@@ -1068,10 +1095,18 @@ export async function rescueTip(lane: TipLane, tip: CreatedTip): Promise<RescueO
       state = samples.at(-1)!;
     }
     if (!state || !RECLAIMABLE.has(state.status)) return { ...base, status: state?.status ?? 'unknown', action: 'failed' };
+    reclaiming = true;
     await reclaim(lane, tip, null);
     return { ...base, status: 'clawed_back', action: 'reclaimed' };
   } catch {
     const last = await publicTip(tip.tipId).catch(() => null);
+    // The verdict is about funds. A reclaim the backend completed is a
+    // reclaim, even when a check of the wallet's screen after it failed (on
+    // 2026-10-15 the blocked tip's row read "→ link"); the overview test owns
+    // the screen.
+    if (reclaiming && last?.status === 'clawed_back') {
+      return { ...base, status: last.status, action: 'reclaimed', note: 'the backend reads clawed_back, but a check of the wallet screen during the reclaim failed' };
+    }
     return { ...base, status: last?.status ?? 'unknown', action: 'failed' };
   }
 }
