@@ -67,7 +67,7 @@ export class GeckoSession {
   /**
    * Start geckodriver and a Firefox session.
    *
-   * `systemAccess`: Firefox 156 refuses script execution and navigation in
+   * `systemAccess`: Firefox 156 and later refuse script execution and navigation in
    * moz-extension:// pages ("System access is required") unless Firefox runs
    * with -remote-allow-system-access and geckodriver with
    * --allow-system-access. Only the disposable test profile gets it; the

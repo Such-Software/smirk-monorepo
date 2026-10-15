@@ -675,7 +675,7 @@ async function preflight(options, phases, env) {
   if (!font || !existsSync(font)) throw new Refusal('no caption font found for the encoders; set V031_FONT to a TTF');
   for (const tool of ['ffmpeg', 'unzip']) if (!has(tool, tool === 'unzip' ? ['-v'] : ['-version'])) throw new Refusal(`${tool} is not on PATH`);
   if (phases.some((p) => p.id === 'H-firefox')) {
-    if (!has('firefox', ['--version'])) throw new Refusal('H-firefox needs Firefox 156 on PATH (or pass --except H-firefox and run it where it is)');
+    if (!has('firefox', ['--version'])) throw new Refusal('H-firefox needs Firefox 156 or later on PATH (or pass --except H-firefox and run it where it is)');
     if (!has('geckodriver', ['--version'])) throw new Refusal('H-firefox needs geckodriver 0.37.1 on PATH');
   }
 
