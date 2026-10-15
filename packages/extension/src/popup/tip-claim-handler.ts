@@ -1044,6 +1044,11 @@ export async function sweepCryptonoteKeys(
     if (!(chainHeight > 0)) {
       return { ok: false, error: 'Could not read the current block height. Try again shortly.' };
     }
+    // Unlike the LWS `blockchain_height` (the newest block's height), this
+    // reading is the daemon's `get_info.height` via GET /wallet/heights: a
+    // block COUNT, one past the newest block, i.e. the height the next block
+    // will take. Consensus admits an output once `height + unlock <= count`,
+    // which is exactly this test; do not convert it to a tip height here.
     const unlock = CRYPTONOTE_UNLOCK_BLOCKS[asset];
     const settled = spendable.filter((o) => o.height > 0 && chainHeight - o.height >= unlock);
     unsettledAtomic = spendable

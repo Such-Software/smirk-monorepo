@@ -30,6 +30,7 @@ import {
   settleCryptonote,
   utxoHistoryRows,
   mergeSendJournal,
+  lwsTipHeight,
   HistoryUnavailableError,
 } from '../history-mapping';
 import { readSendJournal, sendJournalKey, type SendJournalEntry } from '../send-journal';
@@ -444,8 +445,10 @@ async function loadAssetHistory(
     if (r.error || !r.data) {
       throw new HistoryUnavailableError(r.error || 'the server returned no history');
     }
-    // `blockchain_height` is a block COUNT; the newest block is one below it.
-    if (r.data.blockchain_height > 0) onTipHeight?.(r.data.blockchain_height - 1);
+    // `blockchain_height` is the HEIGHT of the newest block (monero-lws
+    // `get_last_block().id`), not a count: it is the tip as it stands.
+    const tip = lwsTipHeight(r.data.blockchain_height);
+    if (tip !== undefined) onTipHeight?.(tip);
     const spendKeyHex = bytesToHex(wallet.keys[assetId].privateSpendKey);
     const rows: AssetDetailTxRow[] = [];
     for (const t of r.data.transactions) {

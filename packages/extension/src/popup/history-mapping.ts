@@ -35,6 +35,25 @@ export function settleCryptonote(
 }
 
 /**
+ * The chain tip an LWS history response reports, as the HEIGHT of the newest
+ * block, or undefined when the response carries none.
+ *
+ * monero-lws fills `blockchain_height` with `get_last_block().id`, the height
+ * of the newest block it holds (src/rpc/light_wallet.cpp and
+ * src/rest_server.cpp), and smirk-backend-core passes it through unchanged. It
+ * is not a block count, so there is nothing to subtract: a transaction mined in
+ * that very block has one confirmation (`tip - height + 1`). Reading it as a
+ * count put every XMR and WOW count one short and left a transaction in the
+ * newest block at "Block #N" instead of "1 confirmation". `0` is what the
+ * client substitutes when the backend omits the field, so it means unknown.
+ */
+export function lwsTipHeight(blockchainHeight: number | null | undefined): number | undefined {
+  return typeof blockchainHeight === 'number' && Number.isFinite(blockchainHeight) && blockchainHeight > 0
+    ? blockchainHeight
+    : undefined;
+}
+
+/**
  * One Electrum UTXO history row as smirk-backend-core serializes it.
  *
  * Every optional field is `Option<u64>` on the server with no
