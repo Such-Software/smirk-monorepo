@@ -5,7 +5,7 @@
  * guarded recorder running throughout.
  *
  * Lanes
- *   firefox      Firefox 156 + geckodriver 0.37.1, staged Firefox zip
+ *   firefox      Firefox 156 or later + geckodriver 0.37.1, staged Firefox zip
  *                (its pinned SHA-256) installed temporarily; the moz-extension
  *                UUID is pinned through extensions.webextensions.uuids.
  *   firefox-rfp  The same with resistFingerprinting + letterboxing, WebGL off
@@ -95,7 +95,15 @@ const AREA_DIR = 'H-cross-browser-desktop';
 /** A fixed, well-formed UUID: every Firefox lane serves the wallet at the same origin. */
 const PINNED_UUID = '5e1f0a31-0d31-4c1a-9b2e-0b0003101204';
 const POPUP = { width: 380, height: 600 };
-const EXPECT = { firefox: /^Mozilla Firefox 156\./, geckodriver: /^geckodriver 0\.37\.1\b/ };
+/**
+ * Firefox is a floor, not a pin: release Firefox updates itself, and the lane exists to prove
+ * the wallet on the Firefox users have. The version that ran is recorded in each lane's facts.
+ * geckodriver stays pinned, because the lane installs it and its protocol changes break sessions.
+ */
+const FIREFOX_FLOOR = 156;
+const EXPECT = { geckodriver: /^geckodriver 0\.37\.1\b/ };
+/** @param {string | null} version `firefox --version` output */
+const firefoxMajor = (version) => Number(/^Mozilla Firefox (\d+)\./.exec(version ?? '')?.[1] ?? NaN);
 const WINDOW_CONTROLS = Object.freeze([['Open in a browser tab', 'Open in a browser tab'], ['Open in its own window', 'Open in its own window']]);
 
 const LIBREWOLF_PREFS = {
@@ -1005,8 +1013,8 @@ async function main() {
     const firefox = toolVersion(options.firefox);
     const gecko = toolVersion(options.geckodriver);
     if (!firefox || !gecko) throw new LaneError('Firefox and geckodriver must both be installed for the Firefox lanes');
-    if (!flag('allow-version-drift') && (!EXPECT.firefox.test(firefox) || !EXPECT.geckodriver.test(gecko))) {
-      throw new LaneError(`expected Firefox 156 and geckodriver 0.37.1, found ${firefox} and ${gecko}`);
+    if (!flag('allow-version-drift') && (!(firefoxMajor(firefox) >= FIREFOX_FLOOR) || !EXPECT.geckodriver.test(gecko))) {
+      throw new LaneError(`expected Firefox ${FIREFOX_FLOOR} or later and geckodriver 0.37.1, found ${firefox} and ${gecko}`);
     }
     options.firefoxBinary = resolveFirefoxBinary(options.firefox);
     if (!options.firefoxBinary) throw new LaneError('could not find the Firefox executable behind its launcher; pass --firefox with its path');
