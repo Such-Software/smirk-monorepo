@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PREMIUM_GUARD, frameVerdict } from './G-premium-guard.mjs';
-import { GuardedFootage, SecretCanary, assertStaticLabel, footageRequested } from './G-premium-footage.ts';
+import { GuardedFootage, SecretCanary, TAP_PAUSE_MS, assertStaticLabel, footageRequested } from './G-premium-footage.ts';
 import { premiumLaneConfig } from './G-premium-config.ts';
 import { captionWindows, planLanes, validateTimeline } from '../scripts/G-premium-footage.mjs';
 
@@ -232,31 +232,58 @@ test('processing refuses a tap whose screen was never held, and an unrecorded re
 });
 
 test('an observation waits its full length unrecorded, and a timed control is tapped at once', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'smirk-G-premium-timed-'));
   const browser = await chromium.launch({ channel: 'chromium' });
   try {
     const page = await browser.newPage();
-    const footage = new GuardedFootage({ recording: false });
+    const unrecorded = new GuardedFootage({ recording: false });
     await page.setContent('<div id="root"><p>Feed</p></div>');
     let begun = Date.now();
-    await footage.observe(page, 1_500, 'No further automatic checks');
+    await unrecorded.observe(page, 1_500, 'No further automatic checks');
     assert.ok(Date.now() - begun >= 1_500, 'an unrecorded observation was cut short');
+    await unrecorded.close();
 
-    // The control removes itself on a timer, faster than the usual pause before a tap.
+    // The control takes itself away on a timer, the way the send receipt
+    // closes itself. Recording, the usual pause before a tap is TAP_PAUSE_MS,
+    // so a timer of half that leaves an immediate tap seconds to spare and a
+    // tap that paused first nothing. The timer starts on an explicit signal
+    // sent just before the tap is asked for, so loading the page and building
+    // the locator spend none of it: a loaded runner once lost a 300 ms timer,
+    // started at page load, to those alone.
+    const vanishMs = TAP_PAUSE_MS / 2;
+    const footage = new GuardedFootage({ recording: true, root });
     await page.setContent(`<div id="root"><button id="stay">Stay on this screen</button></div>
       <script>
-        document.getElementById('stay').onclick = () => { window.kept = true; };
-        setTimeout(() => document.getElementById('stay')?.remove(), 300);
+        document.getElementById('stay').onclick = () => { window.tappedAt = Date.now(); };
+        window.arm = (ms) => {
+          window.armedAt = Date.now();
+          setTimeout(() => document.getElementById('stay')?.remove(), ms);
+        };
       </script>`);
+    const stay = page.getByRole('button', { name: 'Stay on this screen' });
+    await page.evaluate((ms) => window.arm(ms), vanishMs);
+    assert.equal(await footage.tapThenHold(stay, 'Keep the receipt on screen'), true);
+    const { armedAt, tappedAt } = await page.evaluate(() => ({ armedAt: window.armedAt, tappedAt: window.tappedAt }));
+    assert.equal(typeof tappedAt, 'number', 'the timed control was not tapped');
+    assert.ok(tappedAt - armedAt < vanishMs, 'the tap landed after the control was due to go');
+    // The pause still happens, after the tap, and the timeline says so.
+    assert.ok(Date.now() - tappedAt >= TAP_PAUSE_MS, 'the pause after the tap was cut short');
+
+    await page.locator('#stay').waitFor({ state: 'detached' });
     begun = Date.now();
-    assert.equal(await footage.tapThenHold(page.getByRole('button', { name: 'Stay on this screen' }), 'Keep the receipt on screen'), true);
-    assert.equal(await page.evaluate(() => window.kept === true), true, 'the timed control was not tapped');
-    await page.waitForTimeout(500);
-    begun = Date.now();
-    assert.equal(await footage.tapThenHold(page.getByRole('button', { name: 'Stay on this screen' }), 'Keep the receipt on screen'), false);
+    assert.equal(await footage.tapThenHold(stay, 'Keep the receipt on screen'), false);
     assert.ok(Date.now() - begun < 2_500, 'a vanished control must not be waited for');
     await footage.close();
+
+    const timeline = JSON.parse(readFileSync(join(footage.runDir, 'timeline.json'), 'utf8'));
+    const holds = timeline.holds.filter((hold) => hold.label === 'Keep the receipt on screen');
+    assert.equal(holds.length, 1, 'only the tap that happened is held');
+    assert.equal(holds[0].after, true, 'the hold is marked as taken after its tap');
+    assert.ok(holds[0].ms >= TAP_PAUSE_MS);
+    assert.ok(timeline.exceptions.some((e) => e.rule === 'pause-after-tap' && e.label === holds[0].label), 'the reversal is listed');
   } finally {
     await browser.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

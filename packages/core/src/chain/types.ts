@@ -109,6 +109,8 @@ export interface LwsBalance {
   locked_balance: string;
   pending_balance: string;
   transaction_count: number;
+  /** Height of the newest block the LWS holds (monero-lws `get_last_block().id`),
+   *  not a block count. `0` when unknown. */
   blockchain_height: number;
   start_height: number;
   scanned_height: number;
@@ -176,6 +178,9 @@ export interface LwsHistory {
   asset: string;
   transactions: LwsHistoryEntry[];
   scanned_height: number;
+  /** Height of the newest block the LWS holds (monero-lws `get_last_block().id`),
+   *  not a block count: a transaction at this height has one confirmation.
+   *  `0` when the backend did not report it. */
   blockchain_height: number;
 }
 export interface LwsRegisterResult {

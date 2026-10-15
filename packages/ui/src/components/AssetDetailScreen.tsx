@@ -38,7 +38,22 @@ export interface SentRecordSummary {
   recordedAt: string;
   /** A verified tx key is on file (XMR/WOW, non-subaddress sends). */
   hasTxKey: boolean;
+  /**
+   * Known only from the in-flight entry this wallet keeps while a payment is
+   * unconfirmed, not from its send record, so whether a transaction key exists
+   * was never looked up. Absent for a send-record summary.
+   */
+  fromInFlight?: true;
 }
+
+/**
+ * What an outgoing payment was for, beyond a plain send: drives a row's copy
+ * and tap routing. Mirrors `@smirk/core`'s `PendingOutgoingContext`.
+ */
+export type OutgoingContext =
+  | { kind: 'send' }
+  | { kind: 'tip-fund'; tipId: string }
+  | { kind: 'swap-deposit'; tradeId: string; toAsset: string; provider: string; memo?: string; amountAtomic?: string; depositBeforeMs?: number };
 
 export type AssetDetailTxRow =
   | {
@@ -58,6 +73,8 @@ export type AssetDetailTxRow =
       feeAtomic?: bigint;
       /** What this wallet recorded when it made the payment, if it did. */
       sent?: SentRecordSummary;
+      /** Carried over from the in-flight entry of the same transaction. */
+      context?: OutgoingContext;
     }
   | {
       kind: 'cryptonote';
@@ -68,6 +85,8 @@ export type AssetDetailTxRow =
       timestamp: string;
       /** What this wallet recorded when it made the payment, if it did. */
       sent?: SentRecordSummary;
+      /** Carried over from the in-flight entry of the same transaction. */
+      context?: OutgoingContext;
     }
   | {
       kind: 'grin';
@@ -157,12 +176,8 @@ export type AssetDetailTxRow =
       feeAtomic: bigint;
       recipient: string;
       submittedAt: string;
-      /** Optional context: drives the row's copy and tap-routing.
-       *  Mirrors `@smirk/core`'s `PendingOutgoingContext`. */
-      context?:
-        | { kind: 'send' }
-        | { kind: 'tip-fund'; tipId: string }
-        | { kind: 'swap-deposit'; tradeId: string; toAsset: string; provider: string; memo?: string; amountAtomic?: string; depositBeforeMs?: number };
+      /** Optional context: drives the row's copy and tap-routing. */
+      context?: OutgoingContext;
     };
 
 export interface SparklinePoint {
@@ -202,6 +217,11 @@ export interface AssetDetailScreenProps {
   /** Open the chain-appropriate explorer (or, for a swap deposit, the swap
    *  status). Offered from the detail sheet, no longer on the row tap. */
   onOpenExplorer?: (row: AssetDetailTxRow) => void;
+  /** Open the swap a deposit row belongs to. Without it, the sheet's swap
+   *  action falls back to `onOpenExplorer`, which then has to route by row. A
+   *  mined deposit offers both actions, so a shell that wants both separate
+   *  passes this. */
+  onOpenSwap?: (row: AssetDetailTxRow) => void;
   /** Whether the shell has an explorer URL for this row. */
   hasExplorer?: (row: AssetDetailTxRow) => boolean;
   /** Fetch the transaction key for one of this wallet's sends, or null. */
@@ -248,6 +268,7 @@ export function AssetDetailScreen({
   historyError,
   onRetryHistory,
   onOpenExplorer,
+  onOpenSwap,
   hasExplorer,
   onRevealTxKey,
   tipHeight,
@@ -456,12 +477,12 @@ export function AssetDetailScreen({
             ...(tipHeight !== undefined ? { tipHeight } : {}),
           })}
           onClose={() => setSelected(null)}
-          {...(onOpenExplorer
-            ? {
-                onOpenExplorer: () => onOpenExplorer(selected),
-                onOpenSwap: () => onOpenExplorer(selected),
-              }
-            : {})}
+          {...(onOpenExplorer ? { onOpenExplorer: () => onOpenExplorer(selected) } : {})}
+          {...(onOpenSwap
+            ? { onOpenSwap: () => onOpenSwap(selected) }
+            : onOpenExplorer
+              ? { onOpenSwap: () => onOpenExplorer(selected) }
+              : {})}
           {...(onRevealTxKey ? { onRevealTxKey: () => onRevealTxKey(selected) } : {})}
         />
       )}
@@ -798,6 +819,8 @@ function TxRow({
           ? ` · fee ${formatAmount(row.feeAtomic, assetId, 8)}`
           : '';
       meta = `${status} · ${fee ? fee.replace(/^ · /, '') : ''}`.replace(/ · $/, '');
+      const purpose = contextLabel(row.context);
+      if (purpose) meta += ` · ${purpose}`;
       copyableId = row.txid;
       break;
     }
@@ -805,7 +828,8 @@ function TxRow({
       incoming = row.direction === 'in';
       const status =
         row.heightOrPending === 'pending' ? 'pending' : `#${row.heightOrPending}`;
-      meta = status;
+      const purpose = contextLabel(row.context);
+      meta = purpose ? `${status} · ${purpose}` : status;
       copyableId = row.txid;
       break;
     }
@@ -846,11 +870,9 @@ function TxRow({
       // swap-deposit shows the swap destination + trade id; a
       // tip-fund shows the tip id. Tap-routing for the contextful
       // variants is wired upstream via `onClick`.
-      const ctx = row.context;
-      if (ctx?.kind === 'swap-deposit') {
-        meta = `pending · swap → ${ctx.toAsset.toUpperCase()} (${truncId(ctx.tradeId)})`;
-      } else if (ctx?.kind === 'tip-fund') {
-        meta = `pending · funding tip ${truncId(ctx.tipId)}`;
+      const purpose = contextLabel(row.context);
+      if (purpose) {
+        meta = `pending · ${purpose}`;
       } else {
         // The recipient address is the other half of "did this reach them?",
         // and a truncated one cannot be checked against anything.
@@ -1235,6 +1257,13 @@ function formatPrice(usd: number): string {
 function truncId(id: string): string {
   if (id.length <= 14) return id;
   return `${id.slice(0, 6)}…${id.slice(-6)}`;
+}
+
+/** A row's purpose beyond a plain send, for its subline, or null for a plain send. */
+function contextLabel(ctx: OutgoingContext | undefined): string | null {
+  if (ctx?.kind === 'swap-deposit') return `swap → ${ctx.toAsset.toUpperCase()} (${truncId(ctx.tradeId)})`;
+  if (ctx?.kind === 'tip-fund') return `funding tip ${truncId(ctx.tipId)}`;
+  return null;
 }
 
 function formatRelative(iso: string): string {

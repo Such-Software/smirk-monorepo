@@ -103,6 +103,15 @@ export function buildTxDetail(
       if (fee !== undefined) push('Network fee', amt(fee));
       push('Time', fmtTime(row.timestamp) ?? fmtTime(row.sent?.recordedAt));
       push('Status', confirmations(row.heightOrPending));
+      // A deposit or tip funding keeps saying what it was for once the chain
+      // lists it, and the swap stays one tap away.
+      if (row.context?.kind === 'swap-deposit') {
+        push('Swap', `${ticker} to ${row.context.toAsset.toUpperCase()} via ${row.context.provider}`);
+        push('Trade ID', row.context.tradeId, true);
+        actions.push('open-swap');
+      } else if (row.context?.kind === 'tip-fund') {
+        push('Funding tip', row.context.tipId, true);
+      }
       if (row.sent) push('Sent to', row.sent.destination, true);
       push('Transaction ID', row.txid, true);
       if (opts.explorerAvailable) actions.push('explorer');
@@ -113,7 +122,9 @@ export function buildTxDetail(
           row.kind === 'cryptonote'
             ? 'This wallet has no send record for this payment (sent before v0.3.1 or from another device), so the recipient is not known. The chain does not record it.'
             : 'This wallet has no send record for this payment, so the recipient shown by an explorer may be a change address.';
-      } else if (row.kind === 'cryptonote' && row.sent && !row.sent.hasTxKey) {
+      } else if (row.kind === 'cryptonote' && row.sent && !row.sent.hasTxKey && !row.sent.fromInFlight) {
+        // Only a send record can say a key is absent; an in-flight summary
+        // never looked one up.
         note = 'No transaction key on file: subaddress payments use per-output keys, which this wallet does not store yet.';
       } else if (row.timestamp === undefined && !row.sent) {
         note = 'Block time is not available for this transaction yet.';

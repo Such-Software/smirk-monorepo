@@ -35,6 +35,25 @@ export function settleCryptonote(
 }
 
 /**
+ * The chain tip an LWS history response reports, as the HEIGHT of the newest
+ * block, or undefined when the response carries none.
+ *
+ * monero-lws fills `blockchain_height` with `get_last_block().id`, the height
+ * of the newest block it holds (src/rpc/light_wallet.cpp and
+ * src/rest_server.cpp), and smirk-backend-core passes it through unchanged. It
+ * is not a block count, so there is nothing to subtract: a transaction mined in
+ * that very block has one confirmation (`tip - height + 1`). Reading it as a
+ * count put every XMR and WOW count one short and left a transaction in the
+ * newest block at "Block #N" instead of "1 confirmation". `0` is what the
+ * client substitutes when the backend omits the field, so it means unknown.
+ */
+export function lwsTipHeight(blockchainHeight: number | null | undefined): number | undefined {
+  return typeof blockchainHeight === 'number' && Number.isFinite(blockchainHeight) && blockchainHeight > 0
+    ? blockchainHeight
+    : undefined;
+}
+
+/**
  * One Electrum UTXO history row as smirk-backend-core serializes it.
  *
  * Every optional field is `Option<u64>` on the server with no
@@ -201,4 +220,76 @@ export function mergeSendJournal(
         : {}),
     };
   });
+}
+
+type PendingOutgoingRow = Extract<AssetDetailTxRow, { kind: 'pending-outgoing' }>;
+type ChainRow = Extract<AssetDetailTxRow, { kind: 'utxo' | 'cryptonote' }>;
+
+/**
+ * Put the wallet's in-flight sends in front of the chain's rows, one row per
+ * transaction.
+ *
+ * A send exists twice while it is unconfirmed: as the in-flight entry this
+ * wallet keeps until the network settles it (the `pending-outgoing` row) and,
+ * once the backend sees it in the mempool, as a chain row. Listing both showed
+ * one BTC or LTC payment twice in Activity, and a Monero or Wownero send the
+ * same way once the LWS reported it. The chain row wins, because it is what
+ * moves on to a block and a confirmation count, but it keeps what only the
+ * in-flight entry knows, following the {@link mergeSendJournal} convention:
+ *
+ *   - the recipient and fee, when no send record supplied them (marked
+ *     `fromInFlight`, since no send record was consulted for a key);
+ *   - the amount and the outgoing direction, when the chain row cannot net
+ *     the payment yet (no amount, or only the change visible, which reads as
+ *     a receive of the change);
+ *   - the broadcast time and fee, where the chain row has none;
+ *   - what the payment was for (a swap deposit or a tip funding).
+ *
+ * An in-flight entry with no chain row stays as it is, at the top. Matching is
+ * by txid, case-insensitively; rows of other kinds are untouched.
+ */
+export function mergePendingOutgoing(
+  pending: PendingOutgoingRow[],
+  history: AssetDetailTxRow[],
+): AssetDetailTxRow[] {
+  if (pending.length === 0) return history;
+  const byTxid = new Map<string, PendingOutgoingRow>();
+  for (const p of pending) if (p.txid) byTxid.set(p.txid.toLowerCase(), p);
+  const absorbed = new Set<string>();
+  const rows = history.map((row) => {
+    if (row.kind !== 'utxo' && row.kind !== 'cryptonote') return row;
+    const key = row.txid.toLowerCase();
+    const p = byTxid.get(key);
+    if (!p) return row;
+    absorbed.add(key);
+    return absorbInFlight(row, p);
+  });
+  const remaining = pending.filter((p) => !absorbed.has(p.txid.toLowerCase()));
+  return [...remaining, ...rows];
+}
+
+function absorbInFlight(row: ChainRow, p: PendingOutgoingRow): ChainRow {
+  const sent = row.sent ?? {
+    destination: p.recipient,
+    feeAtomic: p.feeAtomic,
+    recordedAt: p.submittedAt,
+    hasTxKey: false,
+    fromInFlight: true as const,
+  };
+  const context = row.context ?? (p.context && p.context.kind !== 'send' ? p.context : undefined);
+  // We broadcast this transaction, so it spent from us. A chain row that reads
+  // it as a receive, or cannot say how much, has not seen that spend yet.
+  const unnetted = row.amountAtomic === undefined || row.direction === 'in';
+  const amountAndDirection = unnetted ? { direction: 'out' as const, amountAtomic: p.amountAtomic } : {};
+  if (row.kind === 'cryptonote') {
+    return { ...row, sent, ...amountAndDirection, ...(context ? { context } : {}) };
+  }
+  return {
+    ...row,
+    sent,
+    ...amountAndDirection,
+    ...(row.timestamp ? {} : { timestamp: p.submittedAt }),
+    ...(row.feeAtomic === undefined ? { feeAtomic: p.feeAtomic } : {}),
+    ...(context ? { context } : {}),
+  };
 }

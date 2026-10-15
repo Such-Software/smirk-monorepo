@@ -30,6 +30,8 @@ import {
   settleCryptonote,
   utxoHistoryRows,
   mergeSendJournal,
+  mergePendingOutgoing,
+  lwsTipHeight,
   HistoryUnavailableError,
 } from '../history-mapping';
 import { readSendJournal, sendJournalKey, type SendJournalEntry } from '../send-journal';
@@ -102,16 +104,16 @@ export function AssetDetailRoute({
 
   // In-flight outgoing rows: pulled live from session state so they
   // disappear cleanly when the entry ages out or reconciles, without
-  // forcing a history refetch. Renders at the top of Activity (any
-  // chain-side row of the same tx will show up at its real block
-  // height; the pending row stays a separate "still mempool" entry
-  // until the entry is reaped).
-  const pendingRows: AssetDetailTxRow[] = useMemo(() => {
+  // forcing a history refetch. Renders at the top of Activity until the
+  // chain lists the same txid; from then on the chain row stands for the
+  // payment, carrying what only the in-flight entry knew
+  // (mergePendingOutgoing).
+  const pendingRows = useMemo(() => {
     const entries = sessionState.pendingOutgoing ?? [];
     return entries
       .filter((e) => e.asset === assetId)
       .map((e) => {
-        const row: AssetDetailTxRow = {
+        const row: Extract<AssetDetailTxRow, { kind: 'pending-outgoing' }> = {
           kind: 'pending-outgoing',
           txid: e.txHash,
           amountAtomic: BigInt(e.amount),
@@ -123,6 +125,11 @@ export function AssetDetailRoute({
         return row;
       });
   }, [sessionState.pendingOutgoing, assetId]);
+
+  const mergedHistory = useMemo(
+    () => mergePendingOutgoing(pendingRows, history),
+    [pendingRows, history],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -227,7 +234,8 @@ export function AssetDetailRoute({
       // Prepend in-flight outgoing rows so the user sees their just-
       // broadcast tx immediately; Home's `↑ X sending` subline and
       // this Activity row come from the same `pendingOutgoing` source.
-      history={[...pendingRows, ...history]}
+      // One row per txid: a send the chain already lists is shown once.
+      history={mergedHistory}
       loading={loading}
       {...(historyError !== null
         ? { historyError, onRetryHistory: () => setReloadKey((k) => k + 1) }
@@ -239,16 +247,15 @@ export function AssetDetailRoute({
       {...(tipHeight !== undefined ? { tipHeight } : {})}
       hasExplorer={(row) => explorerUrlFor(assetId, row) !== null}
       onOpenExplorer={(row) => {
-        // A swap deposit routes to the Swap tab, where the provider's status
-        // page lives; everything else opens its chain explorer, through the
-        // shell plugin on desktop (a plain window.open is dropped there).
-        if (row.kind === 'pending-outgoing' && row.context?.kind === 'swap-deposit') {
-          void navigate('swap');
-          return;
-        }
+        // The chain explorer, through the shell plugin on desktop (a plain
+        // window.open is dropped there). An unmined swap deposit has none.
         const url = explorerUrlFor(assetId, row);
         if (url) void openExternal(url);
       }}
+      // A swap deposit's "swap status" routes to the Swap tab, where the
+      // provider's status page lives. Kept apart from the explorer: once the
+      // chain lists a deposit, its sheet offers both.
+      onOpenSwap={() => void navigate('swap')}
       onRevealTxKey={async (row) => {
         if (!journalKey || !('txid' in row)) return null;
         const entries = await readSendJournal(journalKey);
@@ -444,8 +451,10 @@ async function loadAssetHistory(
     if (r.error || !r.data) {
       throw new HistoryUnavailableError(r.error || 'the server returned no history');
     }
-    // `blockchain_height` is a block COUNT; the newest block is one below it.
-    if (r.data.blockchain_height > 0) onTipHeight?.(r.data.blockchain_height - 1);
+    // `blockchain_height` is the HEIGHT of the newest block (monero-lws
+    // `get_last_block().id`), not a count: it is the tip as it stands.
+    const tip = lwsTipHeight(r.data.blockchain_height);
+    if (tip !== undefined) onTipHeight?.(tip);
     const spendKeyHex = bytesToHex(wallet.keys[assetId].privateSpendKey);
     const rows: AssetDetailTxRow[] = [];
     for (const t of r.data.transactions) {
