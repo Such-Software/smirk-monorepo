@@ -8,6 +8,8 @@
  * - `maybeAutoLegacyCheck` runs once per wallet after a full password unlock or
  *   an import (it needs the phrase), reading only older addresses the server
  *   already watches. It never registers anything and never moves anything.
+ *   Every read it makes is authenticated, so it waits for this window's
+ *   sign-in: see `startLegacyWorkAfterSignIn`.
  * - `runLegacyCheck` is the manual check from Settings, optionally asking the
  *   server to scan older Monero/Wownero addresses it does not watch yet.
  * - `moveLegacyFunds` sweeps one older address into the current wallet, after
@@ -98,16 +100,47 @@ export async function runLegacyCheck(
 }
 
 /**
+ * Whether a stored result already counts as the wallet's automatic check. A
+ * probe that could not read some older address does not: it found out nothing
+ * there, so the next unlock looks again. A scan the user asked for is never
+ * replaced by a probe.
+ */
+function autoCheckDone(record: LegacyCheckRecord | null): boolean {
+  if (!record) return false;
+  return record.mode === 'scan' || !record.findings.some((f) => f.state === 'error');
+}
+
+/** One automatic check per wallet at a time; `readLegacyCheck` alone is not atomic. */
+const autoCheckInFlight = new Map<string, Promise<LegacyCheckRecord | null>>();
+
+/**
  * The once-per-wallet automatic check. Read-only (`probe`), silent, and never
  * fatal: anything that goes wrong just leaves the manual check in Settings.
+ *
+ * Runs only while this window is signed in. Lock drops the session token, and
+ * this check used to start at unlock, before sign-in had put one back: its
+ * reads were refused, and the refusals were kept as the wallet's one automatic
+ * result (BTC/LTC `error`, XMR/WOW `not-scanned`), never to be checked again.
+ * A read refused for sign-in now leaves no result at all.
  */
-export async function maybeAutoLegacyCheck(wallet: UnlockedWallet): Promise<LegacyCheckRecord | null> {
+export function maybeAutoLegacyCheck(wallet: UnlockedWallet): Promise<LegacyCheckRecord | null> {
+  const running = autoCheckInFlight.get(wallet.fingerprint);
+  if (running) return running;
+  const check = autoLegacyCheck(wallet).finally(() => autoCheckInFlight.delete(wallet.fingerprint));
+  autoCheckInFlight.set(wallet.fingerprint, check);
+  return check;
+}
+
+async function autoLegacyCheck(wallet: UnlockedWallet): Promise<LegacyCheckRecord | null> {
   try {
     if (!wallet.mnemonic) return null;
+    if (!api.getAccessToken()) return null;
     if (!(await legacyAutoCheckEnabled())) return null;
-    if (await readLegacyCheck(wallet.fingerprint)) return null;
+    if (autoCheckDone(await readLegacyCheck(wallet.fingerprint))) return null;
     return await runLegacyCheck(wallet, { mode: 'probe' });
   } catch (e) {
+    // Includes LegacySignInRequiredError: runLegacyCheck stored nothing, so
+    // the next signed-in unlock checks again.
     console.warn('[smirk] older-address check skipped', e instanceof Error ? e.message : e);
     return null;
   }

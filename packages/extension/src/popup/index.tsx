@@ -206,9 +206,9 @@ import {
   writeSessionCache,
   clearSessionCache,
   writeSessionHandoff,
-  convergeLegacySweep,
 } from './session-cache';
 import { maybeAutoLegacyCheck, readLegacyCheck } from './legacy-funds';
+import { convergeLegacySweepOnce, startLegacyWorkAfterSignIn } from './legacy-after-sign-in';
 import { LegacyFundsBanner } from './routes/legacy-funds';
 import { lockWalletContexts, subscribeWalletLock } from './session-lock';
 import { readBootstrapCache, writeBootstrapCache, clearBootstrapCache } from './bootstrap-cache';
@@ -996,6 +996,12 @@ function App() {
         }
       }
       if (!scope.current()) return;
+      // Signed in. Converge any un-swept legacy m/44' funds (in-between
+      // wallets that migrated the keystore before the sweep shipped), and once
+      // per wallet look, read-only, for funds at the older addresses earlier
+      // Smirk versions used for this phrase. Not at unlock: there is no token
+      // until here. Fire-and-forget; a find shows up on Home and in Settings.
+      startLegacyWorkAfterSignIn(wallet);
       // Progressive render: as each per-asset balance resolves, patch
       // it into session.balances immediately. UI updates one row at a
       // time, so BTC/LTC/Grin landing in 1-2s don't wait for an
@@ -1705,7 +1711,7 @@ function App() {
           const preV3 =
             legacyBlob?.derivationVersion === 1 || legacyBlob?.derivationVersion === 2;
 
-          const sweep = await convergeLegacySweep(wallet);
+          const sweep = await convergeLegacySweepOnce(wallet);
           const moved = (['btc', 'ltc'] as const).filter(
             (a) => sweep[a]?.status === 'swept',
           );
@@ -1950,14 +1956,9 @@ function App() {
           const wallet = await walletKeystore.unlock(password);
           const minutes = (await store.load()).ui.autoLockMinutes ?? 0;
           await writeSessionCache(wallet, minutes);
-          // Converge any un-swept legacy m/44' funds (in-between wallets that
-          // migrated the keystore before the sweep shipped). Fire-and-forget so
-          // unlock stays snappy; idempotent + gated on legacy state presence.
-          void convergeLegacySweep(wallet);
-          // Once per wallet: look (read-only) for funds at the older addresses
-          // earlier Smirk versions used for this phrase. Never moves anything;
-          // a find shows up on Home and in Settings.
-          void maybeAutoLegacyCheck(wallet);
+          // The legacy m/44' sweep convergence and the automatic older-address
+          // check start in startSession once sign-in completes: both read
+          // authenticated routes, and lock has dropped the token.
           await refresh();
         }}
       />

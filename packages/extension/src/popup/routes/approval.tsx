@@ -14,7 +14,7 @@ import type { ApprovalResult as DappApprovalResult } from '@such-software/smirk-
 import { store, walletKeystore, sessionStorage } from '../singletons';
 import { subscribeWalletLock } from '../session-lock';
 import { normalizePaymentAmount } from '../format';
-import { tryRestoreSessionCache, writeSessionCache, convergeLegacySweep } from '../session-cache';
+import { tryRestoreSessionCache, writeSessionCache } from '../session-cache';
 import { tryRestoreFlowGrace, startFlowGrace, clearFlowGrace, scopeOf, flowGraceSeconds } from '../flow-grace';
 import { dappPublicCacheFor } from '../dapp-public-cache';
 import { readBootstrapCache } from '../bootstrap-cache';
@@ -158,10 +158,10 @@ export function ApprovalApp({ approvalId }: ApprovalAppProps) {
               console.warn('[smirk] sign-in flow grace not started:', e);
             });
           }
-          // Converge any un-swept legacy m/44' funds (in-between wallets that
-          // migrated the keystore before the sweep shipped). Fire-and-forget so
-          // unlock stays snappy; idempotent + gated on legacy state presence.
-          void convergeLegacySweep(wallet);
+          // No legacy m/44' sweep convergence here. Its reads need a session
+          // token and this window does not sign in at unlock, so it only ever
+          // sent refused reads; the main window converges after its own
+          // password unlock signs in.
           await refresh();
         }}
       />

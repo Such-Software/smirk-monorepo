@@ -9,6 +9,7 @@ import {
   LEGACY_EPOCH_MS,
   type LegacyFinding,
 } from '../legacy-recovery';
+import * as legacy from '../legacy-recovery';
 import type { ChainProviderRegistry } from '../chain/registry';
 import type { UtxoEntry } from '../chain/types';
 import type { KeyImageVerifier } from '../wallet-flow';
@@ -227,4 +228,73 @@ test('old BTC: confirmed is spendable, unconfirmed is pending; a failed read is 
   assert.equal(b.spendableAtomic, '1000');
   assert.equal(b.pendingAtomic, '20');
   assert.equal(find(fs, 'ltc', 'm44').state, 'error');
+});
+
+// ---------------------------------------------------------------------------
+// A refused sign-in (v0.3.1 live run, 2026-10-15: the automatic check ran at
+// unlock, before the session token was back, and kept the refusals)
+// ---------------------------------------------------------------------------
+
+/** A backend that refuses every authenticated read, as it does without a session token. */
+function signedOut(): { registry: ChainProviderRegistry; registered: string[] } {
+  const refused = { error: 'Missing or invalid token', status: 401 };
+  const registered: string[] = [];
+  const registry = {
+    utxo: () => ({ listOutputs: async () => refused }),
+    lws: () => ({
+      getBalance: async () => refused,
+      getHeight: async () => ({ data: { height: 3_000_000 }, status: 200 }),
+      registerAccount: async (_u: string, address: string) => {
+        registered.push(address);
+        return refused;
+      },
+    }),
+  } as unknown as ChainProviderRegistry;
+  return { registry, registered };
+}
+
+const isSignInRequired = (e: unknown) => e instanceof legacy.LegacySignInRequiredError;
+
+test('a check refused for sign-in has no result, rather than unread or unwatched addresses', async () => {
+  const { registry } = signedOut();
+  await assert.rejects(discoverLegacyFunds(MNEMONIC, { providers: registry, mode: 'probe' }), isSignInRequired);
+});
+
+test('a Monero/Wownero read refused for sign-in is not reported as an address the server does not watch', async () => {
+  // BTC/LTC read fine; only the light-wallet reads are refused.
+  const { registry } = signedOut();
+  const providers = {
+    ...registry,
+    utxo: (asset: 'btc' | 'ltc') => ({
+      listOutputs: async (address: string) => ({ data: { asset, address, utxos: [] }, status: 200 }),
+    }),
+  } as unknown as ChainProviderRegistry;
+  await assert.rejects(discoverLegacyFunds(MNEMONIC, { providers, mode: 'probe' }), isSignInRequired);
+});
+
+test('a scan refused for sign-in never asks the server to register an older address', async () => {
+  const { registry, registered } = signedOut();
+  await assert.rejects(
+    discoverLegacyFunds(MNEMONIC, { providers: registry, mode: 'scan', userId: 'u1' }),
+    isSignInRequired,
+  );
+  assert.deepEqual(registered, []);
+});
+
+test('an unreachable server still yields per-address unknowns, not a sign-in failure', async () => {
+  const lws = { xmr: emptyLws(), wow: emptyLws() };
+  const base = providers({ lws });
+  const flaky = {
+    ...base,
+    utxo: () => ({ listOutputs: async () => ({ error: 'HTTP 503', status: 503 }) }),
+    lws: (asset: 'xmr' | 'wow') => ({
+      ...base.lws(asset),
+      getBalance: async () => {
+        throw new Error('Network error');
+      },
+    }),
+  } as unknown as ChainProviderRegistry;
+  const fs = await discoverLegacyFunds(MNEMONIC, { providers: flaky, mode: 'probe' });
+  assert.equal(fs.filter((f) => f.asset === 'btc' || f.asset === 'ltc').every((f) => f.state === 'error'), true);
+  assert.equal(fs.some((f) => f.state === 'empty' || f.state === 'funds'), false);
 });
