@@ -15,6 +15,7 @@ import {
   holdsShortened,
 } from '../fixtures/D-messaging-federation-footage.ts';
 import { check, checkHelper } from './D-messaging-federation-check-live-specs.mjs';
+import { liveWrapSubscription, wrapSubscriptionTracker } from '../fixtures/D-messaging-federation-subscriptions.ts';
 
 const PROD = 'wss://relay.smirk.cash';
 const LOCAL = 'ws://127.0.0.1:8088';
@@ -129,4 +130,39 @@ test('the helper check refuses fixed sleeps on the page clock, not polls or back
   assert.deepEqual(lines('await new Promise((resolve) => setTimeout(resolve, 250));'), []);
   assert.deepEqual(lines('await submit.click();'), []);
   assert.deepEqual(lines(' * a comment that mentions waitForTimeout( is fine'), []);
+});
+
+test('only a gift-wrap subscription that stays open counts as a screen listening, not the tip poll on the same socket', () => {
+  // 2026-10-14: the popup's tip poll and Messages share one pooled socket and
+  // send the same filter; the tip poll's querySync closes at EOSE.
+  const CAROL = 'c'.repeat(64);
+  const log = [];
+  const relayB = wrapSubscriptionTracker(log, '127.0.0.1:8089');
+  const t0 = 1_000_000;
+  const want = { host: '127.0.0.1:8089', p: CAROL, since: t0 };
+  // A tip poll every 30 s, each closed within a second.
+  for (let i = 0; i < 3; i++) {
+    relayB.req(`poll${i}`, [CAROL], t0 + i * 30_000);
+    relayB.close(`poll${i}`, t0 + i * 30_000 + 400);
+  }
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 75_000 }), false, 'tip polls alone never pass');
+  // Messages subscribes and keeps it open.
+  relayB.req('messages', [CAROL], t0 + 80_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 81_000 }), false, 'too young to tell from an in-flight query');
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 95_000 }), true, 'an open subscription held past the query window counts');
+  // Not for another key, another relay, or one opened before the mark.
+  assert.equal(liveWrapSubscription(log, { ...want, p: 'd'.repeat(64), now: t0 + 95_000 }), false);
+  assert.equal(liveWrapSubscription(log, { ...want, host: 'relay.smirk.cash', now: t0 + 95_000 }), false);
+  assert.equal(liveWrapSubscription(log, { ...want, since: t0 + 85_000, now: t0 + 95_000 }), false);
+  // Closed, or replaced by a REQ reusing its id: no longer live.
+  relayB.close('messages', t0 + 96_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 120_000 }), false);
+  relayB.req('again', [CAROL], t0 + 130_000);
+  relayB.req('again', ['e'.repeat(64)], t0 + 131_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 150_000 }), false, 'a replaced subscription is closed');
+  // A CLOSE on another socket's id does not end this socket's subscription.
+  const other = wrapSubscriptionTracker(log, 'relay.smirk.cash');
+  relayB.req('shared-id', [CAROL], t0 + 200_000);
+  other.close('shared-id', t0 + 201_000);
+  assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 215_000 }), true);
 });
