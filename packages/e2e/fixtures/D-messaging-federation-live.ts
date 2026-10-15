@@ -64,7 +64,7 @@ import { watchContext } from './failure-context.js';
 import { recoverToHome } from './wallet-recovery.js';
 import { isLocalPublishRelay, liveRelayAdmits, relayKey } from './relay-guard.js';
 import { readCapabilities } from './D-messaging-federation-nostr.js';
-import { wrapSubscriptionTracker, type WrapSubscription } from './D-messaging-federation-subscriptions.js';
+import { relayClosedSubId, wrapSubscriptionTracker, type WrapSubscription } from './D-messaging-federation-subscriptions.js';
 import {
   DFootage,
   SecretCanary,
@@ -409,6 +409,14 @@ async function installRelayGuard(context: BrowserContext, pins: readonly string[
     // Subscriptions this route answered itself (held reads): their CLOSE stays here too.
     const held = new Set<string>();
     const subscriptions = wrapSubscriptionTracker(state.wrapSubscriptions, host);
+    // Setting this handler stops Playwright forwarding the relay's frames on
+    // its own, so each is passed on unchanged. Only a CLOSED is read: a
+    // subscription the relay refused is not one the page holds.
+    server.onMessage((message) => {
+      const closed = typeof message === 'string' ? relayClosedSubId(message) : null;
+      if (closed) subscriptions.close(closed);
+      ws.send(message);
+    });
     ws.onMessage((message) => {
       // Nostr is text. A binary frame to a production relay is not something
       // the wallet sends, so it is dropped rather than inspected.

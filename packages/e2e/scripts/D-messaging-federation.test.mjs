@@ -16,7 +16,7 @@ import {
   holdsShortened,
 } from '../fixtures/D-messaging-federation-footage.ts';
 import { check, checkHelper } from './D-messaging-federation-check-live-specs.mjs';
-import { liveWrapSubscription, wrapSubscriptionTracker } from '../fixtures/D-messaging-federation-subscriptions.ts';
+import { liveWrapSubscription, relayClosedSubId, wrapSubscriptionTracker } from '../fixtures/D-messaging-federation-subscriptions.ts';
 import { expectMessagingAs, shortNpub } from '../fixtures/D-messaging-federation-flows.ts';
 import { hexToNpub } from '../fixtures/D-messaging-federation-nostr.ts';
 
@@ -168,6 +168,23 @@ test('only a gift-wrap subscription that stays open counts as a screen listening
   relayB.req('shared-id', [CAROL], t0 + 200_000);
   other.close('shared-id', t0 + 201_000);
   assert.equal(liveWrapSubscription(log, { ...want, now: t0 + 215_000 }), true);
+});
+
+test('a subscription the relay refused with CLOSED does not count as a screen listening', () => {
+  const CAROL = 'c'.repeat(64);
+  const log = [];
+  const relayB = wrapSubscriptionTracker(log, '127.0.0.1:8089');
+  const t0 = 1_000_000;
+  relayB.req('messages', [CAROL], t0);
+  const refused = relayClosedSubId(JSON.stringify(['CLOSED', 'messages', 'restricted: not accepting reads']));
+  assert.equal(refused, 'messages');
+  relayB.close(refused, t0 + 300);
+  assert.equal(liveWrapSubscription(log, { host: '127.0.0.1:8089', p: CAROL, since: t0, now: t0 + 30_000 }), false);
+  // Other relay frames end nothing, and are not mistaken for CLOSED.
+  for (const frame of [['EOSE', 'messages'], ['EVENT', 'messages', { kind: 1059, content: 'CLOSED' }], ['NOTICE', 'CLOSED'], ['OK', 'x', true, '']]) {
+    assert.equal(relayClosedSubId(JSON.stringify(frame)), null, frame[0]);
+  }
+  assert.equal(relayClosedSubId('["CLOSED"'), null, 'a malformed frame ends nothing');
 });
 
 let browser;

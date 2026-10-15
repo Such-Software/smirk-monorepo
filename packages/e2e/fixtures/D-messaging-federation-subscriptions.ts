@@ -41,11 +41,27 @@ export function wrapSubscriptionTracker(log: WrapSubscription[], host: string) {
       log.push(sub);
       open.set(subId, sub);
     },
-    /** A CLOSE: ends the subscription with that id, if this tracker opened it. */
+    /** A CLOSE from the page, or a CLOSED from the relay: ends the subscription with that id, if this tracker opened it. */
     close(subId: string, now = Date.now()): void {
       end(subId, now);
     },
   };
+}
+
+/**
+ * The subscription id a relay's CLOSED frame ends (NIP-01: the relay refused
+ * or dropped that subscription), or null for any other frame. A REQ the relay
+ * refused at once is not a screen listening, however long the page leaves it
+ * open on its side.
+ */
+export function relayClosedSubId(message: string): string | null {
+  if (!message.slice(0, 16).includes('"CLOSED"')) return null;
+  try {
+    const frame: unknown = JSON.parse(message);
+    return Array.isArray(frame) && frame[0] === 'CLOSED' && typeof frame[1] === 'string' ? frame[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 /** How long a subscription must stay open to count as a screen's, not a one-shot query. */
