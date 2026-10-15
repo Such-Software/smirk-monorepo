@@ -3419,7 +3419,9 @@ function HomeRouter({
         parseAmount={parseAmount}
         // A person tip is a link tip whose claim key rides a gift wrap to the
         // recipient's npub, so it needs no backend capability beyond tips.
-        resolveRecipient={(text) => resolveTipRecipient(text)}
+        // Passed by reference: an inline arrow is a new function on every
+        // render, and each balance poll re-ran the lookup.
+        resolveRecipient={resolveTipRecipient}
         formatUsd={(assetId, amountAtomic) => {
           const price = (session?.prices as Record<string, number | null> | null | undefined)?.[assetId];
           if (!price) return null;
