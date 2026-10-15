@@ -10,7 +10,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
-import { WalletRecoveryError, recoverToHome } from './wallet-recovery.ts';
+import { WalletRecoveryError, recoverToHome, waitForHome } from './wallet-recovery.ts';
 import { noteStep, privateContext, takeRecoveries } from './failure-context.ts';
 
 const CLAIM_LINK = 'https://smirk.cash/tip/9f1c2a7e#k=Zq8vT3mW0pLr5sXy2bN4cD6fH8jK1aQe';
@@ -78,6 +78,11 @@ function render() {
   })));
   root.append(el('div', { 'data-testid': 'app-shell-root' }, el('header', { 'data-testid': 'app-shell-header' }, 'Smirk'), el('main', {}, main()), nav), dialog());
 }
+// A restored route that replaces the first screen a moment later, as the
+// popup's session-state load does after unlock (ui/src/state/hooks.tsx).
+if (S.restoreLater) setTimeout(() => { const to = S.restoreLater.to; S.restoreLater = null; go(to); }, S.restoreLater.afterMs);
+// A sign-in that shows nothing for a while (proof of work, a rescan).
+if (S.loadingForMs) { S.loadingForever = true; setTimeout(() => { S.loadingForever = false; render(); }, S.loadingForMs); }
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && S.dialog) { press('Escape'); S.dialog = null; render(); }
 });
@@ -258,4 +263,47 @@ test('a recorded lane taps through its own helper, and the failure log keeps the
   const text = JSON.stringify(context);
   for (const secret of ['Zq8vT3mW', 'abandon', '9f1c2a7e']) assert.equal(text.includes(secret), false, secret);
   await page.close();
+});
+
+test('a Home that the restored route replaces a moment later is not taken for Home', async () => {
+  // 2026-10-14, lane B: carol's unlock painted Home, then her restored BTC coin
+  // screen; one look returned 'home' and the lane waited 10 minutes there.
+  takeRecoveries();
+  const { page } = await popup({ route: 'home', remembered: { home: 'home/asset/btc' }, restoreLater: { to: 'home/asset/btc', afterMs: 800 } });
+  const report = await recoverToHome(page, { wallet: 'carol' });
+  assert.equal(report.reached, 'home');
+  assert.ok(report.moves.length >= 1, 'a move was made to leave the restored screen');
+  assert.ok(report.from?.includes('asset-detail-back'), `from names the restored screen: ${report.from}`);
+  assert.equal(await page.getByTestId('home-total-balance').isVisible(), true, 'Home is what the page shows when recovery returns');
+  assert.equal(takeRecoveries().length, 1, 'the recovery is noted');
+  await page.close();
+});
+
+test('a wait for Home brings back a restored screen that shows after a slow sign-in, well within its budget', async () => {
+  takeRecoveries();
+  const { page } = await popup({ route: 'home/asset/btc', loadingForMs: 1_500 });
+  const started = Date.now();
+  const reached = await waitForHome(page, { wallet: 'carol', timeoutMs: 10 * 60_000 });
+  assert.equal(reached, true);
+  assert.ok(Date.now() - started < 20_000, `reached Home in ${Date.now() - started} ms`);
+  assert.equal(await page.getByTestId('home-total-balance').isVisible(), true);
+  const noted = takeRecoveries();
+  assert.ok(noted.some((r) => r.reached === 'home' && r.moves.length > 0), 'the move back is noted');
+  await page.close();
+});
+
+test('a wait for Home that never comes returns false at its budget, and a screen with no way back stops early', async () => {
+  const loading = await popup({ loadingForever: true });
+  let started = Date.now();
+  assert.equal(await waitForHome(loading.page, { wallet: 'bob', timeoutMs: 2_000 }), false);
+  assert.ok(Date.now() - started < 2_000 + 3_000, `gave up in ${Date.now() - started} ms`);
+  await loading.page.close();
+
+  takeRecoveries();
+  const stuck = await popup({ route: 'stuck', navBroken: true });
+  started = Date.now();
+  assert.equal(await waitForHome(stuck.page, { wallet: 'bob', timeoutMs: 10 * 60_000, budgetMs: 500, maxRecoveries: 1 }), false);
+  assert.ok(Date.now() - started < 30_000, `gave up in ${Date.now() - started} ms, not at the 10 min budget`);
+  assert.ok(takeRecoveries().every((r) => r.failed), 'each attempt is noted as failed');
+  await stuck.page.close();
 });

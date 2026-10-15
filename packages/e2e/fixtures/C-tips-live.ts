@@ -39,7 +39,7 @@ import { DEVICE_SCALE, GuardedFootage, VIEWPORT, footageMode } from './C-tips-fo
 import { TipLedger, type LedgerWalletName } from './C-tips-ledger.js';
 import { invocationId, privateDir, runLabel, stateDir } from './C-tips-run.mjs';
 import { watchContext } from './failure-context.js';
-import { recoverToHome } from './wallet-recovery.js';
+import { recoverToHome, waitForHome } from './wallet-recovery.js';
 
 export type WalletName = LedgerWalletName;
 /** The three demo wallets every scenario uses. `bob-fed` is bob on a second backend. */
@@ -161,9 +161,17 @@ async function popupState(page: Page, name: WalletName, firstPaintMs = 90_000): 
   return reached;
 }
 
-async function waitForBalances(page: Page): Promise<void> {
+/**
+ * Home with a real balance set. A restored screen that replaces Home during
+ * the wait (on 2026-10-15 alice's restored Sent tips route did, after
+ * recovery had returned) is brought back, rather than waited on for the whole
+ * 10 minutes.
+ */
+async function waitForBalances(page: Page, name: WalletName): Promise<void> {
   const total = page.getByTestId('home-total-balance');
-  await total.waitFor({ timeout: 10 * 60_000 });
+  if (!(await waitForHome(page, { wallet: name, timeoutMs: 10 * 60_000 }))) {
+    throw new Error('the wallet did not reach Home within 10 minutes');
+  }
   await expect
     .poll(async () => /\d/.test((await total.textContent()) ?? ''), {
       timeout: 5 * 60_000,
@@ -177,7 +185,7 @@ async function waitForBalances(page: Page): Promise<void> {
  * setup, including its capabilities-race retry, but waits on the screen's own
  * state instead of fixed sleeps.
  */
-async function importWallet(page: Page, words: string[], password: string): Promise<void> {
+async function importWallet(page: Page, words: string[], password: string, name: WalletName): Promise<void> {
   await page.getByTestId('onboarding-import-btn').click({ timeout: 60_000 });
   await page.getByTestId('onboarding-import-warning-continue').click();
   for (let i = 0; i < words.length; i++) await page.getByTestId(`onboarding-import-word-${i}`).fill(words[i]!);
@@ -215,7 +223,7 @@ async function importWallet(page: Page, words: string[], password: string): Prom
     throw new Error('the import was refused on the password step after submitting');
   }
   if (await finish.isVisible().catch(() => false)) await finish.click({ timeout: 25_000 });
-  await waitForBalances(page);
+  await waitForBalances(page, name);
 }
 
 async function unlockExisting(page: Page, password: string, name: WalletName): Promise<void> {
@@ -236,7 +244,7 @@ async function unlockExisting(page: Page, password: string, name: WalletName): P
   }
   // Signing in may solve proof of work before the wallet shows a screen.
   if ((await popupState(page, name, 3 * 60_000)) !== 'home') throw new Error('the unlocked wallet did not reach Home');
-  await waitForBalances(page);
+  await waitForBalances(page, name);
 }
 
 async function maximizeAutoLock(page: Page): Promise<void> {
@@ -403,9 +411,9 @@ export class TipLane {
         await page.goto(`chrome-extension://${extensionId}/popup.html`);
         const state = await popupState(page, name);
         // A kept profile (a restarted worker, or a rescue run) unlocks; a new one imports.
-        if (state === 'onboarding') await importWallet(page, words, password);
+        if (state === 'onboarding') await importWallet(page, words, password, name);
         else if (state === 'locked') await unlockExisting(page, password, name);
-        else await waitForBalances(page);
+        else await waitForBalances(page, name);
       } finally {
         words.fill('');
       }
@@ -416,7 +424,7 @@ export class TipLane {
         const state = await popupState(page, name);
         if (state === 'locked') await unlockExisting(page, password, name);
         else if (state !== 'home') throw new Error('the wallet showed onboarding after switching its backend');
-        await waitForBalances(page);
+        await waitForBalances(page, name);
       }
       await maximizeAutoLock(page);
       const identity = await readIdentity(page);

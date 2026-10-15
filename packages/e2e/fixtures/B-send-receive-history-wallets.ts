@@ -83,7 +83,7 @@ import {
 } from './B-send-receive-history-footage.js';
 import { LANE, laneDirs, workspaceDist } from './B-send-receive-history-dirs.js';
 import { watchContext } from './failure-context.js';
-import { WalletRecoveryError, recoverToHome } from './wallet-recovery.js';
+import { WalletRecoveryError, recoverToHome, waitForHome } from './wallet-recovery.js';
 
 export { LANE };
 export const LIVE_LANE = process.env.E2E_LIVE === '1';
@@ -266,14 +266,17 @@ async function describeStuckScreen(page: Page): Promise<string> {
  * Wait for Home to show a real balance set from the backend. A reopened
  * profile is brought back to Home first (reopenWallet, through
  * fixtures/wallet-recovery.ts, which also backs out of a Send draft a failed
- * test left open); a fresh import has no restored screen.
+ * test left open); a fresh import has no restored screen. A restored screen
+ * that replaces Home during the wait is brought back too: on 2026-10-14
+ * carol's restored BTC coin screen took Home's place after recovery had
+ * returned, and a single 10-minute wait sat on it.
  */
-async function awaitHome(page: Page): Promise<void> {
+async function awaitHome(page: Page, name: WalletName): Promise<void> {
   const total = page.getByTestId('home-total-balance');
   // A returning wallet may solve proof of work and rescan before Home shows.
-  await total.waitFor({ timeout: 10 * 60_000 }).catch(async () => {
+  if (!(await waitForHome(page, { wallet: name, timeoutMs: 10 * 60_000 }))) {
     throw new Error(`the wallet did not reach Home: ${await describeStuckScreen(page)}`);
-  });
+  }
   for (let i = 0; i < 180 && !/\d/.test((await total.textContent()) ?? ''); i++) await page.waitForTimeout(1_000);
   if (!/\d/.test((await total.textContent()) ?? '')) {
     throw new Error('the wallet never loaded a real balance set from the backend');
@@ -285,6 +288,7 @@ async function importWallet(
   extensionId: string,
   words: string[],
   password: string,
+  name: WalletName,
 ): Promise<void> {
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   await page.getByTestId('onboarding-import-btn').click({ timeout: 60_000 });
@@ -307,7 +311,7 @@ async function importWallet(
     await page.waitForTimeout(5_000);
   }
   await page.getByTestId('onboarding-setup-finish-btn').click({ timeout: 25_000 }).catch(() => {});
-  await awaitHome(page);
+  await awaitHome(page, name);
 }
 
 /**
@@ -355,7 +359,7 @@ async function reopenWallet(page: Page, extensionId: string, password: string, n
     const after = await recoverToHome(page, { wallet: name, firstPaintMs: 3 * 60_000 });
     if (after.reached !== 'home') throw new Error(`the wallet did not reach Home after unlocking: it shows ${after.reached}`);
   }
-  await awaitHome(page);
+  await awaitHome(page, name);
   return true;
 }
 
@@ -501,7 +505,7 @@ export const test = base.extend<{}, { live: LiveLane }>({
                 opened = await launchProfile(profile, extension.dir, grinTip, name);
                 contexts.push(opened.context);
               }
-              await importWallet(opened.page, opened.extensionId, words, password);
+              await importWallet(opened.page, opened.extensionId, words, password, name);
               profileId = randomBytes(8).toString('hex');
               const next: ProfileMarker = { profileId, extensionId: opened.extensionId, importedAt: new Date().toISOString() };
               writeFileSync(markerFile, `${JSON.stringify(next)}\n`, { mode: 0o600 });
