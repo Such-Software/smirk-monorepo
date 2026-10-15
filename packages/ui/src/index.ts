@@ -53,6 +53,7 @@ export { AssetDetailScreen } from './components/AssetDetailScreen';
 export type {
   AssetDetailScreenProps,
   AssetDetailTxRow,
+  OutgoingContext,
   SentRecordSummary,
   SparklinePoint,
 } from './components/AssetDetailScreen';

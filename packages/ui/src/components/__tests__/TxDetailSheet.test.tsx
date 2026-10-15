@@ -87,6 +87,38 @@ describe('buildTxDetail: chain rows', () => {
     assert.equal(value(m, 'Sent to'), 'bc1qdest');
     assert.equal(value(m, 'Status'), 'Block #7');
   });
+  it('a mined swap deposit still names its swap, and offers both the swap and the explorer', () => {
+    const row: AssetDetailTxRow = {
+      kind: 'utxo',
+      direction: 'out',
+      amountAtomic: 5154n,
+      txid: '02'.repeat(32),
+      heightOrPending: 7,
+      context: { kind: 'swap-deposit', tradeId: 'T9', toAsset: 'xmr', provider: 'trocador' },
+    };
+    const m = buildTxDetail(row, 'btc', { explorerAvailable: true, tipHeight: 7 });
+    assert.equal(value(m, 'Trade ID'), 'T9');
+    assert.match(value(m, 'Swap') ?? '', /XMR/);
+    assert.ok(m.actions.includes('open-swap'));
+    assert.ok(m.actions.includes('explorer'));
+    assert.equal(value(m, 'Status'), '1 confirmation (block #7)');
+  });
+
+  it('a recipient known only in flight says nothing about a transaction key', () => {
+    const row: AssetDetailTxRow = {
+      kind: 'cryptonote',
+      direction: 'out',
+      amountAtomic: 1n,
+      txid: '03'.repeat(32),
+      heightOrPending: 'pending',
+      timestamp: '2026-10-07T12:00:00Z',
+      sent: { destination: '4BOB', recordedAt: '2026-10-07T12:00:00Z', hasTxKey: false, fromInFlight: true },
+    };
+    const m = buildTxDetail(row, 'xmr');
+    assert.equal(value(m, 'Sent to'), '4BOB');
+    assert.ok(!m.actions.includes('reveal-tx-key'));
+    assert.doesNotMatch(m.note ?? '', /subaddress/);
+  });
 });
 
 describe('buildTxDetail: other rows', () => {
