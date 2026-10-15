@@ -7,11 +7,13 @@
  * aged out, so a user who just sent doesn't see their full balance
  * sitting in `available` and try to send again.
  *
- * Reconciliation is timing-based in v1: entries age out per-asset
- * (WOW 5 min, XMR 30 min, BTC/LTC/Grin 60 min). The LWS / Electrum
- * scan picks up the spend within ~1-2 confs and the natural balance
- * fetch starts subtracting it through the verified-key-image / UTXO-
- * absent path. The age-out is a backstop, not the primary signal.
+ * Reconciliation is evidence-first. XMR/WOW entries drop once their
+ * key images verify as spent (`reconcilePendingOutgoing`). BTC/LTC
+ * entries drop once the backend's history lists the tx as mined, or
+ * once it has stopped listing the tx at all for an hour (dropped or
+ * replaced; `reconcileUtxoPendingOutgoing`). The per-asset age-out
+ * (WOW 5 min, XMR 30 min, Grin 60 min, BTC/LTC 24 h) is a backstop
+ * for entries no evidence ever reaches, not the primary signal.
  *
  * Displayed available is clamped to ≥ 0, so any brief overlap between
  * the client-side pendingOutgoing subtraction and a spend the network
@@ -127,17 +129,23 @@ export type PendingOutgoingContext =
  *   entries that carry no `inputs`.
  * - **XMR** ~2-min blocks, 10-conf cushion → 20 min on-chain. 30 min
  *   gives the scanner room.
- * - **BTC/LTC** ~10 / ~2.5 min blocks, 1-conf shown as available →
- *   60 min covers worst case Electrum lag.
+ * - **BTC/LTC** 24 h, a last resort only. A UTXO spend can sit in the
+ *   mempool for hours when fees spike, and the backend's `confirmed`
+ *   figure keeps counting its inputs until it is mined, so a time
+ *   window short enough to feel tidy shows spent funds as available
+ *   again (the v0.3.1 rc e2e run did exactly that at 60 min). These
+ *   entries are reconciled against the backend's tx history instead
+ *   (`reconcileUtxoPendingOutgoing`); the backstop only clears an
+ *   entry whose history never arrives.
  * - **Grin** ~60 s blocks, but the lock-window cushion makes the
- *   relevant window 60 min, matching BTC/LTC for now. Revisit once
- *   we have spend telemetry from production.
+ *   relevant window 60 min. Revisit once we have spend telemetry
+ *   from production.
  */
 const AGE_OUT_MS_BY_ASSET: Record<string, number> = {
   wow: 5 * 60_000,
   xmr: 30 * 60_000,
-  btc: 60 * 60_000,
-  ltc: 60 * 60_000,
+  btc: 24 * 60 * 60_000,
+  ltc: 24 * 60 * 60_000,
   grin: 60 * 60_000,
 };
 
@@ -310,4 +318,103 @@ export function reconcilePendingOutgoing(
     const allVerifiedSpent = e.inputs.every((id) => verifiedSpent.has(id));
     return !allVerifiedSpent;
   });
+}
+
+/**
+ * How long a BTC/LTC entry may go unlisted in the backend's history
+ * before it is treated as dropped, replaced or never propagated. The
+ * old timing-only window, so a broadcast the indexer is slow to pick
+ * up is not released early.
+ */
+export const UTXO_UNLISTED_GRACE_MS = 60 * 60_000;
+
+/** One row of a BTC/LTC address history: `height > 0` means mined. */
+export interface UtxoTxStatus {
+  txid: string;
+  height: number;
+}
+
+/**
+ * UTXO reconciliation against the backend's tx history for `asset`'s
+ * addresses (an address's history lists the txs that spend from it,
+ * mempool ones included at height 0 or below).
+ *
+ * - Listed as mined: dropped. `confirmed` now reflects the spend, and
+ *   keeping the entry would subtract it twice.
+ * - Listed as unconfirmed: kept, however old. `confirmed` still counts
+ *   the inputs, so the entry is what keeps them out of available.
+ * - Not listed for {@link UTXO_UNLISTED_GRACE_MS} after submit:
+ *   dropped. The tx was evicted, replaced or never reached the
+ *   network, and its inputs are spendable again.
+ *
+ * `history` null means the read failed or was not made: unknown, so
+ * every entry is kept and only the age-out backstop applies.
+ */
+export function reconcileUtxoPendingOutgoing(
+  entries: PendingOutgoingTx[],
+  asset: string,
+  history: readonly UtxoTxStatus[] | null,
+  now: number,
+): PendingOutgoingTx[] {
+  if (!history) return entries;
+  const heights = new Map<string, number>();
+  for (const t of history) {
+    const id = t.txid.toLowerCase();
+    // The same tx can appear once per address; mined wins.
+    heights.set(id, Math.max(heights.get(id) ?? t.height, t.height));
+  }
+  return entries.filter((e) => {
+    if (e.asset !== asset) return true;
+    const height = heights.get(e.txHash.toLowerCase());
+    if (height === undefined) return now - e.submittedAt < UTXO_UNLISTED_GRACE_MS;
+    return height <= 0;
+  });
+}
+
+/**
+ * Amount to take off a BTC/LTC `confirmed` balance for display: the
+ * larger of what this wallet knows it has in flight (`amount + fee`
+ * per live entry) and the mempool debit the backend reports, its
+ * signed `unconfirmed` when negative (Electrum `get_balance`
+ * semantics, see `sumBalances`).
+ *
+ * The larger, not the sum: once the backend sees a spend in the
+ * mempool both figures describe the same coins. Taking the backend's
+ * debit as a floor keeps a spend out of available even when its
+ * entry is gone (made from another device, or past the backstop), and
+ * covers a refresh where history already reports a tx mined but the
+ * balance read predates it.
+ */
+export function utxoAvailableDeduction(
+  entries: PendingOutgoingTx[],
+  asset: string,
+  backendUnconfirmed: bigint,
+  now: number = Date.now(),
+): bigint {
+  const inFlight = pendingOutgoingTotalWithFee(entries, asset, now);
+  const mempoolDebit = backendUnconfirmed < 0n ? -backendUnconfirmed : 0n;
+  return inFlight > mempoolDebit ? inFlight : mempoolDebit;
+}
+
+/**
+ * The reconcile a balance refresh runs before storing, as one pure
+ * step: key-image reconciliation for every asset that reported
+ * `verifiedSpentInputs`, history reconciliation for every UTXO asset
+ * whose history was read, then the age-out backstop.
+ */
+export function reconcileAfterBalanceRefresh(
+  entries: PendingOutgoingTx[],
+  balances: Record<string, { verifiedSpentInputs?: string[] } | undefined>,
+  utxoHistory: Partial<Record<string, readonly UtxoTxStatus[] | null>>,
+  now: number,
+): PendingOutgoingTx[] {
+  let kept = entries;
+  for (const [assetId, b] of Object.entries(balances)) {
+    if (!b?.verifiedSpentInputs || b.verifiedSpentInputs.length === 0) continue;
+    kept = reconcilePendingOutgoing(kept, assetId, new Set(b.verifiedSpentInputs));
+  }
+  for (const [assetId, history] of Object.entries(utxoHistory)) {
+    kept = reconcileUtxoPendingOutgoing(kept, assetId, history ?? null, now);
+  }
+  return kept.filter((e) => !isStale(e, now));
 }

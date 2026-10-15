@@ -88,8 +88,12 @@ export {
   expectedLockedChange,
   recentlySpentInputs,
   reconcilePendingOutgoing,
+  reconcileUtxoPendingOutgoing,
+  reconcileAfterBalanceRefresh,
+  utxoAvailableDeduction,
+  UTXO_UNLISTED_GRACE_MS,
 } from './pending-outgoing';
-export type { PendingOutgoingTx, PendingOutgoingContext } from './pending-outgoing';
+export type { PendingOutgoingTx, PendingOutgoingContext, UtxoTxStatus } from './pending-outgoing';
 
 export {
   visibleAssetIds,
