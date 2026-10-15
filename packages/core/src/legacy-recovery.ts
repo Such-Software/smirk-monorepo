@@ -34,6 +34,9 @@
  *
  * FAIL HONEST: a check that cannot complete is reported as `error` or
  * `not-scanned`, never as `empty`. "Nothing here" must only ever mean we looked.
+ * Every read is authenticated, so a read the backend refuses for want of a
+ * sign-in (HTTP 401) voids the whole check: it throws `LegacySignInRequiredError`
+ * rather than reporting a per-address result that was never looked up.
  */
 
 import { bytesToHex } from './crypto';
@@ -41,7 +44,9 @@ import { deriveAllKeys, type DerivationVersion } from './hd';
 import { xmrAddress, wowAddress } from './address';
 import { legacyBtcLtcKey } from './migration';
 import { requiredRestorePowBits, solveRestorePow, type RestorePowPolicy } from './pow';
+import type { ApiResponse } from './api/client';
 import type { ChainProviderRegistry } from './chain/registry';
+import type { LwsBalance, UtxoListing } from './chain/types';
 import type { KeyImageVerifier } from './wallet-flow';
 
 export type LegacyAsset = 'btc' | 'ltc' | 'xmr' | 'wow';
@@ -177,6 +182,18 @@ export interface LegacyDiscoveryOptions {
   now?: () => number;
 }
 
+/**
+ * The backend refused a read because this window holds no live sign-in (HTTP
+ * 401). Says nothing about any older address, so a check that hits it has no
+ * result to report or keep.
+ */
+export class LegacySignInRequiredError extends Error {
+  constructor() {
+    super('Sign in to Smirk first, then check your older addresses again.');
+    this.name = 'LegacySignInRequiredError';
+  }
+}
+
 /** First day any Smirk wallet existed; older addresses cannot hold Smirk-era funds before it. */
 export const LEGACY_EPOCH_MS = Date.UTC(2026, 0, 1);
 
@@ -207,6 +224,8 @@ const SCAN_LAG_BLOCKS = 5;
 /**
  * Check every older address for funds. Never throws for expected failures;
  * each address gets its own state, so one bad read never hides another's money.
+ * The exception is a refused sign-in (`LegacySignInRequiredError`), which every
+ * read would hit alike.
  */
 export async function discoverLegacyFunds(
   mnemonic: string,
@@ -237,26 +256,27 @@ async function checkUtxo(
   opts: LegacyDiscoveryOptions,
 ): Promise<LegacyFinding> {
   const base = publicOf(account);
+  const failed: LegacyFinding = { ...base, state: 'error', spendableAtomic: '0', pendingAtomic: '0', detail: 'Could not read this address right now.' };
+  let r: ApiResponse<UtxoListing>;
   try {
-    const r = await opts.providers.utxo(account.asset).listOutputs(account.address);
-    if (r.error || !r.data) {
-      return { ...base, state: 'error', spendableAtomic: '0', pendingAtomic: '0', detail: 'Could not read this address right now.' };
-    }
-    let confirmed = 0n;
-    let pending = 0n;
-    for (const u of r.data.utxos) {
-      if (u.height > 0) confirmed += BigInt(u.value);
-      else pending += BigInt(u.value);
-    }
-    return {
-      ...base,
-      state: confirmed > 0n || pending > 0n ? 'funds' : 'empty',
-      spendableAtomic: confirmed.toString(),
-      pendingAtomic: pending.toString(),
-    };
+    r = await opts.providers.utxo(account.asset).listOutputs(account.address);
   } catch {
-    return { ...base, state: 'error', spendableAtomic: '0', pendingAtomic: '0', detail: 'Could not read this address right now.' };
+    return failed;
   }
+  if (r.status === 401) throw new LegacySignInRequiredError();
+  if (r.error || !r.data) return failed;
+  let confirmed = 0n;
+  let pending = 0n;
+  for (const u of r.data.utxos) {
+    if (u.height > 0) confirmed += BigInt(u.value);
+    else pending += BigInt(u.value);
+  }
+  return {
+    ...base,
+    state: confirmed > 0n || pending > 0n ? 'funds' : 'empty',
+    spendableAtomic: confirmed.toString(),
+    pendingAtomic: pending.toString(),
+  };
 }
 
 type LwsBalanceData = {
@@ -280,13 +300,16 @@ async function readBalance(
   viewKeyHex: string,
   opts: LegacyDiscoveryOptions,
 ): Promise<{ data?: LwsBalanceData; error?: string }> {
+  let r: ApiResponse<LwsBalance>;
   try {
-    const r = await opts.providers.lws(account.asset).getBalance(account.address, viewKeyHex);
-    if (r.error || !r.data) return { error: r.error ?? 'no data' };
-    return { data: r.data as unknown as LwsBalanceData };
+    r = await opts.providers.lws(account.asset).getBalance(account.address, viewKeyHex);
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'request failed' };
   }
+  // Not "the server does not watch this address": the read never got that far.
+  if (r.status === 401) throw new LegacySignInRequiredError();
+  if (r.error || !r.data) return { error: r.error ?? 'no data' };
+  return { data: r.data as unknown as LwsBalanceData };
 }
 
 async function checkCryptonote(
