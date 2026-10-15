@@ -458,7 +458,10 @@ export class GuardedFootage {
     if (!Number.isFinite(ms) || ms <= 0) throw new Error('An observation needs a positive duration.');
     this.focus(page);
     const from = Date.now();
-    await sleep(this.recording ? Math.max(ms, RESULT_HOLD_MS) : ms);
+    // sleepAtLeast, not a bare timer: Node's timers can fire a millisecond
+    // before the wall clock agrees, and an observation that is itself the
+    // check must not end short of the time it promised (hold-timer.mjs).
+    await sleepAtLeast(this.recording ? Math.max(ms, RESULT_HOLD_MS) : ms);
     this.#hold('result', label, page, from, Date.now() - from);
   }
 
