@@ -8,9 +8,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { liveGateReason } from './C-tips-live.ts';
 import { TipLedger } from './C-tips-ledger.ts';
 import * as actions from './C-tips-actions.ts';
+import * as scenario from './C-tips-scenario.ts';
 import SkipGuardReporter from '../skip-guard-reporter.ts';
 
 test('the live gate stays closed until every opt-in is set, requires recording, and refuses HEADED', (t) => {
@@ -120,4 +122,55 @@ test('a blocked delivery is recorded as a refusal, so the sender\'s row may read
   assert.equal(actions.recipientPattern(tip).test(row), false, 'a delivered person tip must name its recipient');
   assert.equal(actions.recipientPattern({ ...tip, deliveryRefused: planned.reason }).test(row), true);
   assert.equal(actions.recipientPattern({ ...tip, deliveryRefused: planned.reason }).test('0.00003 BTC → npub10sgu…txh9'), true);
+});
+
+/** A stand-in backend B answering /capabilities with `caps`; returns its API base and a closer. */
+async function fakeBackend(caps) {
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(req.url?.endsWith('/capabilities') ? caps : {}));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { url: `http://127.0.0.1:${server.address().port}/api/v1`, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+test('an acknowledged federation gap reaches the tests after a skipped federated send, and nothing else does', async (t) => {
+  // 2026-10-15: the foreign-ltc and fed-btc claim and settle tests skipped as
+  // "not created", which the skip guard refuses, although their sends had
+  // skipped for the acknowledged gap; and a loopback backend B (whose relay
+  // no sender can reach) was never treated as that gap at all.
+  assert.equal(typeof scenario.federationGapSkip, 'function', 'downstream tests ask federationGapSkip why their tip is missing');
+  const saved = { ack: process.env.E2E_LIVE_ACK_GAPS, foreign: process.env.E2E_FOREIGN_NIP05, fed: process.env.FED_BACKEND_URL };
+  const loopbackB = await fakeBackend({ features: { tips: true, targeted_tips: false }, messaging: { relay_url: 'ws://127.0.0.1:8089' } });
+  const publicB = await fakeBackend({ features: { tips: true, targeted_tips: true }, messaging: { relay_url: 'wss://relay.b.example' } });
+  t.after(async () => {
+    for (const [k, v] of [['E2E_LIVE_ACK_GAPS', saved.ack], ['E2E_FOREIGN_NIP05', saved.foreign], ['FED_BACKEND_URL', saved.fed]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await loopbackB.close();
+    await publicB.close();
+  });
+  delete process.env.E2E_FOREIGN_NIP05;
+  process.env.FED_BACKEND_URL = loopbackB.url;
+
+  process.env.E2E_LIVE_ACK_GAPS = 'federation';
+  const foreign = await scenario.federationGapSkip('foreign');
+  const fed = await scenario.federationGapSkip('second-backend');
+  for (const reason of [foreign, fed]) {
+    assert.ok(reason?.startsWith('acknowledged gap: federation'), `a prefix the lane's skip guard accepts: ${reason}`);
+  }
+  assert.match(fed, /loopback or private/, 'a loopback B is named as the gap');
+  assert.equal(await scenario.federationGapSkip('npub'), null, 'a missing non-federated tip is never excused');
+
+  process.env.FED_BACKEND_URL = publicB.url;
+  assert.equal(await scenario.federationGapSkip('second-backend'), null, 'a reachable B is no gap: a missing tip there is a real failure');
+  process.env.E2E_FOREIGN_NIP05 = 'bob@elsewhere.example';
+  assert.equal(await scenario.federationGapSkip('foreign'), null, 'a configured foreign address is no gap');
+
+  delete process.env.E2E_FOREIGN_NIP05;
+  process.env.FED_BACKEND_URL = loopbackB.url;
+  process.env.E2E_LIVE_ACK_GAPS = '';
+  assert.equal(await scenario.federationGapSkip('foreign'), null, 'unacknowledged, nothing is excused');
+  assert.equal(await scenario.federationGapSkip('second-backend'), null, 'unacknowledged, nothing is excused');
 });
