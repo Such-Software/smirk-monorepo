@@ -189,3 +189,105 @@ test('backend block times are unix seconds; junk yields none', () => {
   assert.equal(blockTimeIso('not a date'), null);
   assert.equal(blockTimeIso(undefined), null);
 });
+
+// ── UTXO, as smirk-backend-core actually sends it ────────────────────────────
+//
+// HistoryEntry's Option<u64> fields carry no skip_serializing_if, so "unknown"
+// arrives as JSON null, not as an absent key. Electrum reports a fee only for
+// mempool rows, so EVERY confirmed row has `"fee": null`, and total_sent is null
+// whenever the server did not resolve the inputs' prevouts. These fixtures are
+// parsed from JSON on purpose: a TypeScript literal would hide the nulls.
+
+type WireRow = Parameters<typeof utxoTxToRow>[0];
+const wire = (json: string): WireRow[] =>
+  (JSON.parse(json) as { transactions: WireRow[] }).transactions;
+const oneRow = (fields: string) => {
+  const [row] = wire(`{"transactions":[{"txid":"aa",${fields}}]}`).map(utxoTxToRow);
+  assert.ok(row && row.kind === 'utxo');
+  return row;
+};
+
+// Bob's address after Alice paid him 4000 sat with a 154 sat fee, still in the
+// mempool, above an older confirmed receive of 9874 sat.
+const BOB_HISTORY = `{
+  "asset": "btc",
+  "address": "bc1qbob",
+  "transactions": [
+    { "txid": "f65c", "height": 0, "fee": 154, "total_received": 4000, "total_sent": 0 },
+    { "txid": "0a0a", "height": 866100, "fee": null, "total_received": 9874, "total_sent": 0 }
+  ]
+}`;
+
+test('a backend history with confirmed rows maps without throwing', () => {
+  // BigInt(null) throws, and one confirmed row was enough to blank the list.
+  const rows = sortUtxoTxs(dedupeByTxid(wire(BOB_HISTORY))).map(utxoTxToRow);
+  assert.equal(new Set(rows.map((r) => r.kind === 'utxo' && r.txid)).size, wire(BOB_HISTORY).length);
+});
+
+test('a null fee is no fee, and a reported fee is kept', () => {
+  const rows = wire(BOB_HISTORY).map(utxoTxToRow);
+  const confirmed = rows.find((r) => r.kind === 'utxo' && r.heightOrPending !== 'pending');
+  const mempool = rows.find((r) => r.kind === 'utxo' && r.heightOrPending === 'pending');
+  assert.ok(confirmed && confirmed.kind === 'utxo');
+  assert.equal(confirmed.feeAtomic, undefined);
+  assert.ok(mempool && mempool.kind === 'utxo');
+  assert.equal(mempool.feeAtomic, 154n);
+});
+
+test('a confirmed receive from the backend is a receive, for what arrived', () => {
+  const row = oneRow('"height":866100,"fee":null,"total_received":4000,"total_sent":0');
+  assert.equal(row.direction, 'in');
+  assert.equal(row.amountAtomic, 4000n);
+});
+
+test('a confirmed send with change, both sides resolved, nets to what left', () => {
+  // 10000 in, 5846 back as change: 4154 left (4000 paid plus a 154 fee).
+  const row = oneRow('"height":866100,"fee":null,"total_received":5846,"total_sent":10000');
+  assert.equal(row.direction, 'out');
+  assert.equal(row.amountAtomic, 4154n);
+});
+
+test('a null total_sent is unknown, so a send with change never reads as its change', () => {
+  // No prevouts resolved: the server knows the change came back, not what was
+  // spent. Treating null as 0 listed the send as an incoming of the change. The
+  // mempool row carries a fee, so this holds apart from the null-fee crash.
+  for (const at of ['"height":0,"fee":154', '"height":866100,"fee":null']) {
+    const row = oneRow(`${at},"total_received":5846,"total_sent":null`);
+    assert.equal(row.amountAtomic, undefined, at);
+  }
+});
+
+test('the send record then supplies the direction and amount the chain could not', () => {
+  const [row] = mergeSendJournal(
+    [oneRow('"height":866100,"fee":null,"total_received":5846,"total_sent":null')],
+    [journalEntry('aa', { asset: 'btc', amountAtomic: '4000', feeAtomic: '154' })],
+  );
+  assert.ok(row && row.kind === 'utxo');
+  assert.equal(row.direction, 'out');
+  assert.equal(row.amountAtomic, 4000n);
+  assert.equal(row.feeAtomic, 154n);
+});
+
+test('a transaction that paid us nothing is a send, even with the debit unresolved', () => {
+  // It is in our history, so it touched our address; with nothing received,
+  // the only way it touched us is by spending from us.
+  for (const at of ['"height":0,"fee":154', '"height":866100,"fee":null']) {
+    const row = oneRow(`${at},"total_received":0,"total_sent":null`);
+    assert.equal(row.direction, 'out', at);
+    assert.equal(row.amountAtomic, undefined, at);
+  }
+});
+
+test('a row with every optional field null maps to no amount and no fee', () => {
+  const row = oneRow('"height":866100,"fee":null,"total_received":null,"total_sent":null');
+  assert.equal(row.amountAtomic, undefined);
+  assert.equal(row.feeAtomic, undefined);
+});
+
+test('dedup prefers a sighting with a fee over one whose fee is null', () => {
+  const rows = dedupeByTxid(
+    wire('{"transactions":[{"txid":"aa","height":0,"fee":null},{"txid":"aa","height":0,"fee":154}]}'),
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.fee, 154);
+});

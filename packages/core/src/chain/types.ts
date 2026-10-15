@@ -61,12 +61,18 @@ export interface UtxoBroadcastResult {
   asset: string;
   txid: string;
 }
+/**
+ * smirk-backend-core serializes each optional field as JSON `null` when it is
+ * unknown (Option<u64> with no skip_serializing_if): every confirmed row has a
+ * null fee, and total_sent is null when the server did not resolve prevouts.
+ * Null and absent mean the same thing; neither is zero.
+ */
 export interface UtxoHistoryEntry {
   txid: string;
   height: number;
-  fee?: number;
-  total_received?: number;
-  total_sent?: number;
+  fee?: number | null;
+  total_received?: number | null;
+  total_sent?: number | null;
 }
 export interface UtxoHistory {
   asset: string;

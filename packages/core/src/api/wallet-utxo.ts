@@ -65,9 +65,9 @@ export interface WalletUtxoMethods {
       transactions: Array<{
         txid: string;
         height: number;
-        fee?: number;
-        total_received?: number;
-        total_sent?: number;
+        fee?: number | null;
+        total_received?: number | null;
+        total_sent?: number | null;
       }>;
     }>
   >;
@@ -118,9 +118,9 @@ export interface WalletUtxoMethods {
       transactions: Array<{
         txid: string;
         height: number;
-        fee?: number;
-        total_received?: number;
-        total_sent?: number;
+        fee?: number | null;
+        total_received?: number | null;
+        total_sent?: number | null;
       }>;
     }>
   >;
@@ -451,9 +451,9 @@ export function createWalletUtxoMethods(client: ApiClient): WalletUtxoMethods {
         transactions: Array<{
           txid: string;
           height: number;
-          fee?: number;
-          total_received?: number;
-          total_sent?: number;
+          fee?: number | null;
+          total_received?: number | null;
+          total_sent?: number | null;
         }>;
       };
       const results = await Promise.all(
@@ -502,7 +502,13 @@ function sumBalances(
 
 /** Concatenate a set of successful history responses in request order. */
 function concatHistory<
-  E extends { txid: string; height: number; fee?: number; total_received?: number; total_sent?: number },
+  E extends {
+    txid: string;
+    height: number;
+    fee?: number | null;
+    total_received?: number | null;
+    total_sent?: number | null;
+  },
 >(
   asset: string,
   parts: Array<ApiResponse<{ transactions: E[] }>>,

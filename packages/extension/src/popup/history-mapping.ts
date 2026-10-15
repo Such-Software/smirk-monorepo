@@ -3,7 +3,8 @@
  *
  * Separated from the asset-detail route so the decisions that decide what a
  * user sees in Activity can be tested without dragging in chrome storage, wasm
- * or the network. Every function here is a total function of its arguments.
+ * or the network. Every function here is a pure function of its arguments;
+ * the one that throws does so to report a failed read, never to hide one.
  */
 
 import type { AssetDetailTxRow } from '@smirk/ui';
@@ -34,18 +35,40 @@ export function settleCryptonote(
 }
 
 /**
+ * One Electrum UTXO history row as smirk-backend-core serializes it.
+ *
+ * Every optional field is `Option<u64>` on the server with no
+ * `skip_serializing_if`, so "unknown" arrives as JSON `null`, not as a missing
+ * key: every CONFIRMED row carries `"fee": null` (Electrum reports a fee only
+ * for mempool rows), and `total_sent` is null whenever the server did not
+ * resolve the inputs' prevouts. A missing key (older backends) means the same
+ * thing. Test with `!= null`, never `!== undefined`: `BigInt(null)` throws, and
+ * a null amount treated as known nets as 0.
+ */
+export interface UtxoHistoryWireRow {
+  txid: string;
+  height: number;
+  fee?: number | null;
+  total_received?: number | null;
+  total_sent?: number | null;
+  /** Block time, unix seconds or ISO, when the backend reports one. Electrum's
+   *  `get_history` does not; a backend that resolves block headers can. */
+  timestamp?: number | string | null;
+}
+
+/**
  * One transaction touching several of our addresses comes back once PER
  * ADDRESS, because the multi-address query concatenates per-address results.
  * A send that spends two of our inputs and pays our own change therefore
  * arrived three times and was listed three times. Collapse on txid, keeping
  * the first sighting and preferring any row that carries a fee.
  */
-export function dedupeByTxid<T extends { txid: string; fee?: number }>(rows: T[]): T[] {
+export function dedupeByTxid<T extends { txid: string; fee?: number | null }>(rows: T[]): T[] {
   const byTxid = new Map<string, T>();
   for (const t of rows) {
     const seen = byTxid.get(t.txid);
     if (!seen) byTxid.set(t.txid, t);
-    else if (seen.fee === undefined && t.fee !== undefined) byTxid.set(t.txid, t);
+    else if (seen.fee == null && t.fee != null) byTxid.set(t.txid, t);
   }
   return [...byTxid.values()];
 }
@@ -61,46 +84,75 @@ export function sortUtxoTxs<T extends { height: number }>(txs: T[]): T[] {
 /**
  * Map an Electrum UTXO history row (single- or multi-address) to the UI row.
  *
- * `total_received` / `total_sent` are OPTIONAL on the wire and the namespaced
- * backend does not send them at all: Electrum's `get_history` yields only
- * txid, height and fee, and the backend passes that through. Defaulting them
- * to `0` made every row a confident "sent 0", so the amount is now left
- * undefined unless the backend actually reported it, and direction is decided
- * by the NET effect rather than by gross receipts (a send with change credits
- * us too, and used to be listed as an incoming transfer).
+ * `total_received` / `total_sent` are OPTIONAL on the wire, and null or absent
+ * whenever the backend could not determine them: Electrum's `get_history`
+ * yields only txid, height and fee, and the backend fills amounts in best
+ * effort. Defaulting them to `0` made every row a confident "sent 0", so the
+ * amount is left undefined unless the backend actually reported both sides,
+ * and direction is decided by the NET effect rather than by gross receipts (a
+ * send with change credits us too, and used to be listed as an incoming
+ * transfer).
  */
-export function utxoTxToRow(t: {
-  txid: string;
-  height: number;
-  fee?: number;
-  total_received?: number;
-  total_sent?: number;
-  /** Block time, unix seconds or ISO, when the backend reports one. Electrum's
-   *  `get_history` does not; a backend that resolves block headers can. */
-  timestamp?: number | string;
-}): AssetDetailTxRow {
+export function utxoTxToRow(t: UtxoHistoryWireRow): AssetDetailTxRow {
+  const received = t.total_received ?? null;
+  const sent = t.total_sent ?? null;
   // BOTH sides are required to net, and netting is the only way to tell a
   // receive from a send whose change came back to us. Electrum only reports the
   // spent side when the server resolved every input's prevout, which ours does
   // not, so a send would otherwise read as an incoming transfer of its own
   // change: the very bug this mapping exists to prevent. Knowing the credit
   // alone is not knowing the amount.
-  const canNet = t.total_received !== undefined && t.total_sent !== undefined;
-  const net = BigInt(t.total_received ?? 0) - BigInt(t.total_sent ?? 0);
+  const net = received !== null && sent !== null ? BigInt(received) - BigInt(sent) : null;
+  // Without a net, direction is a best reading for the arrow only; the amount
+  // stays unknown, and a send record (mergeSendJournal) overrides both. One
+  // case is certain: a row in our history that paid us nothing touched us only
+  // by spending from us.
+  const direction: 'in' | 'out' =
+    net !== null
+      ? net >= 0n ? 'in' : 'out'
+      : received === 0 || (received === null && (sent ?? 0) > 0)
+        ? 'out'
+        : 'in';
+  const time = blockTimeIso(t.timestamp);
   return {
     kind: 'utxo',
-    direction: net >= 0n ? 'in' : 'out',
-    ...(canNet ? { amountAtomic: net >= 0n ? net : -net } : {}),
+    direction,
+    ...(net !== null ? { amountAtomic: net >= 0n ? net : -net } : {}),
     txid: t.txid,
     heightOrPending: t.height > 0 ? t.height : 'pending',
-    ...(t.fee !== undefined ? { feeAtomic: BigInt(t.fee) } : {}),
-    ...(blockTimeIso(t.timestamp) ? { timestamp: blockTimeIso(t.timestamp) as string } : {}),
+    ...(t.fee != null ? { feeAtomic: BigInt(t.fee) } : {}),
+    ...(time ? { timestamp: time } : {}),
   };
+}
+
+/**
+ * A chain's history could not be read. Thrown rather than answered with `[]`,
+ * because an empty list renders as "No activity yet", which tells a user with
+ * funds that nothing ever happened; the coin screen shows this as an error
+ * with a retry instead.
+ */
+export class HistoryUnavailableError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'HistoryUnavailableError';
+  }
+}
+
+/** The rows of a UTXO history response, newest first, one per transaction. A
+ *  failed or empty-bodied response throws {@link HistoryUnavailableError}. */
+export function utxoHistoryRows(r: {
+  data?: { transactions: UtxoHistoryWireRow[] };
+  error?: string;
+}): AssetDetailTxRow[] {
+  if (r.error || !r.data) {
+    throw new HistoryUnavailableError(r.error || 'the server returned no history');
+  }
+  return sortUtxoTxs(dedupeByTxid(r.data.transactions)).map(utxoTxToRow);
 }
 
 /** A backend block time as ISO, or null when absent or unparseable. Numbers are
  *  unix SECONDS (what nodes report), not milliseconds. */
-export function blockTimeIso(v: number | string | undefined): string | null {
+export function blockTimeIso(v: number | string | null | undefined): string | null {
   if (v === undefined || v === null) return null;
   if (typeof v === 'number') {
     if (!Number.isFinite(v) || v <= 0) return null;
