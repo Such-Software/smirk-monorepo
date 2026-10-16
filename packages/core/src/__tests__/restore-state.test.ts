@@ -1,8 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { requireRestoreState } from '../restore-state';
+import { requireRestoreState, registeredRestoreState } from '../restore-state';
 
 const params = { fingerprint: 'test-fingerprint', keys: [] };
+
+test('registration must retain wallet history before onboarding can cache scan authority', async () => {
+  await assert.rejects(registeredRestoreState({ checkRestore: async () => ({ data: { exists: false } }) },
+    params, { exists: false }), /did not retain/);
+  await assert.rejects(registeredRestoreState({ checkRestore: async () => ({ error: 'unavailable' }) },
+    params, { exists: false }), /unavailable/);
+  const saved = { exists: true, keysValid: true, xmrStartHeight: 0, wowStartHeight: 200 };
+  assert.deepEqual(await registeredRestoreState({ checkRestore: async () => ({ data: saved }) }, params,
+    { exists: false }), saved);
+  assert.deepEqual(await registeredRestoreState({ checkRestore: async () => { throw new Error('unnecessary lookup'); } }, params,
+    saved), saved);
+});
 
 test('unknown restore evidence refuses instead of selecting a new birthday', async () => {
   for (const reply of [

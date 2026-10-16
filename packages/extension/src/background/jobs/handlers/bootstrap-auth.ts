@@ -37,6 +37,7 @@ import {
   NOSTR_IDENTITY_CONFLICT,
   POW_CHECK_INCOMPLETE,
   requireRestoreState,
+  registeredRestoreState,
 } from '@smirk/core';
 
 import type { JobHandler } from '../types';
@@ -252,6 +253,11 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
       throw new Error(friendlyRegisterError(result));
     }
 
+    const scanState = await registeredRestoreState(client, {
+      fingerprint: input.fingerprint,
+      keys: input.keys as Parameters<typeof client.checkRestore>[0]['keys'],
+    }, restore);
+
     return {
       bootstrap: {
         userId: result.data.user.id,
@@ -262,8 +268,8 @@ export const bootstrapAuthHandler: JobHandler<'bootstrap-auth'> = {
         // backend may nest it under user. Read both so onboarding branches right.
         isNew: result.data.isNew ?? result.data.user.isNew ?? false,
         restoreState: isKnownWallet ? 'existing' : 'new',
-        ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
-        ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+        ...(scanState.xmrStartHeight != null ? { xmrStartHeight: scanState.xmrStartHeight } : {}),
+        ...(scanState.wowStartHeight != null ? { wowStartHeight: scanState.wowStartHeight } : {}),
       },
       accessToken: result.data.accessToken,
       backendUrl: client.getBaseUrl(),

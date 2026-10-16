@@ -157,7 +157,7 @@ function fakeLws(asset: 'xmr' | 'wow', totalReceived: number, calls: string[]): 
   };
 }
 
-test('fetchAllBalances uses a swapped-in lws provider for an explicitly admitted new wallet', async () => {
+test('fetchAllBalances uses a swapped-in lws provider with an explicit scan boundary', async () => {
   const poison = new Proxy(
     {},
     {
@@ -171,7 +171,7 @@ test('fetchAllBalances uses a swapped-in lws provider for an explicitly admitted
   const providers = createChainProviders(poison);
   providers.setLws('xmr', fakeLws('xmr', 9999, calls)); // user points xmr at their own lws
 
-  const bootstrap: BootstrapAuthResult = { userId: 'u1', isNew: true, restoreState: 'new' };
+  const bootstrap: BootstrapAuthResult = { userId: 'u1', isNew: true, restoreState: 'new', xmrStartHeight: 0 };
   const balances = await fetchAllBalances(makeWallet(), bootstrap, {
     providers,
     visibleAssetIds: ['xmr'],

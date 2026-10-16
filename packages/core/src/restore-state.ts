@@ -28,3 +28,18 @@ export async function requireRestoreState(
   }
   return result.data;
 }
+
+/** Registration must leave durable scan evidence before onboarding caches it.
+ * A fresh-login label cannot survive popup close, a retry or a reinstall. */
+export async function registeredRestoreState(
+  api: Pick<SmirkApi, 'checkRestore'>,
+  params: Parameters<SmirkApi['checkRestore']>[0],
+  initial: Awaited<ReturnType<typeof requireRestoreState>>,
+) {
+  if (initial.exists && initial.xmrStartHeight != null && initial.wowStartHeight != null) return initial;
+  const persisted = await requireRestoreState(api, params);
+  if (!persisted.exists) {
+    throw new Error('The backend did not retain the registered wallet history. Reopen Smirk and retry before receiving funds.');
+  }
+  return persisted;
+}
