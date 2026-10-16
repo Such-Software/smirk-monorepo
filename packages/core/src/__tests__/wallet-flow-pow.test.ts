@@ -79,12 +79,14 @@ function withMockBackend<T>(
     }
     if (url.endsWith('/auth/extension')) {
       script.registerCalls.push(bodyJson);
+      const isNew = !script.checkRestoreExists;
+      script.checkRestoreExists = true;
       return new Response(
         JSON.stringify({
           access_token: 'tok',
           refresh_token: 'rtok',
           expires_in: 86400,
-          user: { id: 'user-1', is_new: !script.checkRestoreExists },
+          user: { id: 'user-1', is_new: isNew },
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ) as unknown as Response;
@@ -192,7 +194,7 @@ test('bootstrapAuth: NEW wallet → powSolver IS called and altcha_solution ride
   });
 
   assert.equal(solverCalls, 1, 'new-wallet path MUST invoke the PoW solver');
-  assert.equal(script.checkRestoreCalls.length, 1);
+  assert.equal(script.checkRestoreCalls.length, 2);
   assert.equal(script.registerCalls.length, 1);
   const body = script.registerCalls[0];
   assert.deepStrictEqual(

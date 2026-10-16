@@ -35,6 +35,7 @@ import {
   POW_CHECK_INCOMPLETE,
   bootstrapAuth,
   requireRestoreState,
+  registeredRestoreState,
   mergeLegacyIdentityAfterSignIn,
   legacyBtcRotationProof,
   capHasLegacyMergeV2,
@@ -325,6 +326,11 @@ async function bootstrapViaNostr(
 
   // Minted at `pinned.url`; installed only while this window is still there.
   pinned.installToken(res.data.accessToken);
+  const scanState = await registeredRestoreState(api, {
+    fingerprint: wallet.fingerprint,
+    keys: keys.map((key) => ({ asset: key.asset, publicKey: key.publicKey })),
+  }, restore);
+  pinned.assertCurrent();
   // A known wallet may have been split from its pre-v0.3 identity by an earlier
   // import; with the seed in hand, ask the backend to merge it back. Best-effort,
   // and skipped unless the server advertises the hardened merge.
@@ -336,7 +342,7 @@ async function bootstrapViaNostr(
     // backend may nest it under user. Read both so onboarding branches correctly.
     isNew: res.data.isNew ?? res.data.user.isNew ?? false,
     restoreState: isKnown ? 'existing' : 'new',
-    ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
-    ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+    ...(scanState.xmrStartHeight != null ? { xmrStartHeight: scanState.xmrStartHeight } : {}),
+    ...(scanState.wowStartHeight != null ? { wowStartHeight: scanState.wowStartHeight } : {}),
   };
 }

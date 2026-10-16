@@ -32,7 +32,7 @@
  * surface.
  */
 
-import { requireRestoreState } from './restore-state';
+import { requireRestoreState, registeredRestoreState } from './restore-state';
 import { isNostrIdentityConflict, NOSTR_IDENTITY_CONFLICT } from './nostr-identity-conflict';
 import { legacyBtcRotationProof, legacyMergeAllowed } from './legacy-rotation';
 import { signBitcoinMessage, bytesToHex } from './crypto';
@@ -240,6 +240,9 @@ export async function bootstrapAuth(
   // Only while `api` still points at the backend that minted it.
   pinned.installToken(result.data.accessToken);
 
+  const scanState = await registeredRestoreState(api, { fingerprint: wallet.fingerprint, keys }, restore);
+  pinned.assertCurrent();
+
   // Grin slatepack registration deliberately does NOT happen here.
   // A `wallets` row is what the relay's address-match join
   // (`recipient_address IN (SELECT address FROM wallets WHERE user_id
@@ -260,8 +263,8 @@ export async function bootstrapAuth(
     // backend may nest it under user. Read both so onboarding branches correctly.
     isNew: result.data.isNew ?? result.data.user.isNew ?? false,
     restoreState: isKnownWallet ? 'existing' : 'new',
-    ...(xmrStartHeight !== undefined ? { xmrStartHeight } : {}),
-    ...(wowStartHeight !== undefined ? { wowStartHeight } : {}),
+    ...(scanState.xmrStartHeight != null ? { xmrStartHeight: scanState.xmrStartHeight } : {}),
+    ...(scanState.wowStartHeight != null ? { wowStartHeight: scanState.wowStartHeight } : {}),
   };
 }
 
@@ -653,7 +656,6 @@ export async function fetchAllBalances(
             xmrViewKeyHex,
             xmrSpendKeyHex,
             bootstrap.xmrStartHeight,
-            bootstrap.restoreState === 'new' && bootstrap.isNew === true,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
             restorePolicy,
@@ -672,7 +674,6 @@ export async function fetchAllBalances(
             wowViewKeyHex,
             wowSpendKeyHex,
             bootstrap.wowStartHeight,
-            bootstrap.restoreState === 'new' && bootstrap.isNew === true,
             options.verifyKeyImage,
             options.strictSpentSubaddrIndex === true,
             restorePolicy,
@@ -784,15 +785,14 @@ async function fetchLwsBalance(
   viewKeyHex: string,
   spendKeyHex: string,
   startHeight: number | undefined,
-  allowNewRegistration: boolean,
   verifyKeyImage: KeyImageVerifier | undefined,
   strictSpentIndex: boolean,
   restorePolicy?: RestorePowPolicy | undefined,
 ): Promise<AssetBalance> {
   // A missing historical height is unknown, not permission to create at tip.
-  // Read an existing account without mutation unless a fresh new-wallet result
-  // or an explicit height admits registration. Other assets remain independent.
-  const observeExisting = startHeight === undefined && !allowNewRegistration;
+  // Read an existing account without mutation unless an explicit durable
+  // height admits registration. Other assets remain independent.
+  const observeExisting = startHeight === undefined;
   const acctKey = `${backendUrl}|${userId}|${asset}:${address}`;
   if (!observeExisting && !registeredLwsAccounts.has(acctKey)) {
     registeredLwsAccounts.add(acctKey);

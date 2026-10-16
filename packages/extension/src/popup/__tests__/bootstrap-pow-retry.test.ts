@@ -97,7 +97,9 @@ function mockBackend(
   }));
   mock('nostrRegister', async (params: Record<string, unknown>) => {
     calls.nostr.push(params);
-    return replies.nostr(params, calls.nostr.length - 1);
+    const result = replies.nostr(params, calls.nostr.length - 1);
+    if ((result as { data?: unknown }).data) exists = true;
+    return result;
   });
   mock('extensionRegister', async (params: Record<string, unknown>) => {
     calls.btc.push(params);

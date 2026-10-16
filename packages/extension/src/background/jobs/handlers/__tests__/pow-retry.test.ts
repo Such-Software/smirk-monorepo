@@ -97,8 +97,10 @@ test('a known fingerprint refused for want of PoW solves once and resends the sa
 
 test('an unknown fingerprint never sends a rotation proof', async (t) => {
   const backend = knownWallet(t);
-  backend.mock('checkRestore', async () => ({ status: 200, data: { exists: false, keysValid: null } }));
   const sent: Array<Record<string, unknown>> = [];
+  backend.mock('checkRestore', async () => ({ status: 200, data: sent.length
+    ? { exists: true, keysValid: true, xmrStartHeight: 100, wowStartHeight: 200 }
+    : { exists: false, keysValid: null } }));
   backend.mock('extensionRegister', async (params: Record<string, unknown>) => {
     sent.push(params);
     return { status: 200, data: { accessToken: 'tok', refreshToken: 'r', expiresIn: 1, isNew: true, user: { id: 'u' } } };

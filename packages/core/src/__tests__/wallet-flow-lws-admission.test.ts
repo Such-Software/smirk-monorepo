@@ -71,12 +71,12 @@ test('a cached new-account label without fresh restore evidence cannot admit a s
   assert.ok(!f.calls.includes('register'));
 });
 
-test('explicit new-wallet evidence admits its initial registration before reading balance', async () => {
+test('even a fresh wallet cannot create at tip without a durable scan boundary', async () => {
   const f = fixture();
   const result = await f.fetch({ restoreState: 'new', isNew: true });
   assert.equal(result.xmr.confirmed, 500n);
-  assert.ok(f.registeredHeights.includes(undefined));
-  assert.ok(f.calls.indexOf('register') < f.calls.indexOf('balance'));
+  assert.ok(!f.calls.includes('register'));
+  assert.ok(f.calls.includes('balance'));
 });
 
 test('an explicit historical height admits registration and preserves that exact height', async () => {
@@ -117,11 +117,11 @@ test('malformed registration success cannot admit a balance or suppress a later 
       return register(...args);
     } };
     f.providers.lws = () => sameProvider;
-    const first = await f.fetch({ restoreState: 'new', isNew: true });
+    const first = await f.fetch({ restoreState: 'new', isNew: true, xmrStartHeight: 100 });
     assert.ok(first.xmr.error);
     assert.ok(!f.calls.includes('balance'));
     malformed = false;
-    const retry = await f.fetch({ restoreState: 'new', isNew: true });
+    const retry = await f.fetch({ restoreState: 'new', isNew: true, xmrStartHeight: 100 });
     assert.equal(retry.xmr.error, undefined);
     assert.ok(f.calls.includes('register'));
   }
